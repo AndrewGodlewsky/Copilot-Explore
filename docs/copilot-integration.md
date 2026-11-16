@@ -18,7 +18,7 @@ Assessed November 16, 2026 from `A:\Claude\copilot-usage-insights` and `A:\Claud
 
 Explorer's Research and Save & explore deeper buttons deliberately queue a request in their attached chat. `/explore <topic>` authorizes the initial generation. The host owns model selection, permissions, tool availability, and billing records. The skill and queued instructions ask the agent to browse when appropriate, then complete a structured canvas action. Plain model reasoning is explicitly labeled. This route can create visible chat activity and wait behind other queued work.
 
-Enhance Prompt's automatic-send approval flow, rewrite styles, code-reading policies, vendor migrations, React build pipeline, and product-specific usage aggregation are not Explorer requirements. Neither is its project-specific instruction to automatically commit and push to main. They were not copied.
+Enhance Prompt's automatic-send approval flow, rewrite styles, code-reading policies, vendor migrations, React build pipeline, and product-specific usage aggregation are not Explorer requirements. They were not copied. Explorer's iteration and publishing workflow follows the owner's direct instructions recorded in [AGENTS.md](../AGENTS.md#complete-every-iteration).
 
 Explorer does not read repository files, launch independent models, retain another plugin's credentials, or alter either reference project. Existing conversation context is naturally available to the attached Copilot agent; Explorer only submits the map context described in its request.
 

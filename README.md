@@ -1,6 +1,6 @@
 # Explorer for GitHub Copilot
 
-**Proof of concept, v0.1.0.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need.
+**Proof of concept, v0.1.1.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need.
 
 ## Install from GitHub
 

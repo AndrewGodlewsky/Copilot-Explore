@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.1",
+    "summary": "Documented the required version-and-publish workflow so each completed iteration is available to install from main under a new plugin version."
+  },
+  {
     "version": "0.1.0",
     "summary": "Explore an idea in a branching question map inside Copilot. Research alternatives, save your answers, and export a Markdown record plus a file you can reopen."
   }

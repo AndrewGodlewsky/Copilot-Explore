@@ -26,8 +26,16 @@ Run `npm test` and `npm run check`. `npm run e2e` uses the **installed** desktop
 
 Install through Copilot's CLI. Do not hand-edit its databases or installed-plugin records. A local marketplace loads the checkout live; retain its directory and start a new session after edits. Normal distribution should use a cached GitHub marketplace install. Local installs may omit the native tab icon; see [integration notes](docs/copilot-integration.md).
 
-For version changes, synchronize `package.json`, `plugin.json`, `.github/plugin/marketplace.json`, and the extension's `package.json`. Add a newest-first entry to `release-notes.json`, with a user-facing summary of at most 400 characters. The check script enforces this. Ship the full extension, panel, skill, and logo together.
+## Complete every iteration
 
-Completion reports state the plugin version, checks actually run, whether it was installed or published, and pending manual verification. A passing runtime fixture does not prove visible desktop rendering or live research quality. Publishing, pushing, and releases require authorization in this project; the other repositories' automatic-push policy is not inherited.
+The owner has given standing authorization to commit and push each completed iteration to `main`. Unless the owner explicitly requests otherwise, every iteration that changes repository files, including documentation or instructions, must finish with these steps:
+
+1. Bump the plugin version at least one patch increment. Synchronize `package.json`, `plugin.json`, `.github/plugin/marketplace.json`, the extension's `package.json`, and the README's current version.
+2. Add a newest-first entry to `release-notes.json`, with an accurate user-facing summary of at most 400 characters. Preserve older entries and ship the complete extension, panel, skill, and logo together.
+3. Run `npm test` and `npm run check`, plus the runtime fixture when host integration changes. Fix failures before publishing.
+4. Fetch remote changes, commit the iteration, integrate it into `main` without discarding others' work, and push to `origin/main`. Do not ask for push approval again or stop at a local commit or feature-branch push. Never force-push.
+5. Verify the published commit on remote `main`. Report the plugin version, commit, checks actually run, and any pending manual verification. If publishing is blocked, state the blocker rather than claiming completion.
+
+A passing runtime fixture does not prove visible desktop rendering or live research quality. Creating tags or GitHub Releases remains separate from the authorized routine push to `main`.
 
 These rules were adapted from the owner's Usage Insights and Enhance Prompt repositories. Rationale and source pointers live in [docs/copilot-integration.md](docs/copilot-integration.md).

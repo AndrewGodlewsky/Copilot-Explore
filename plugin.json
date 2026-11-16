@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "explorer",
+  "version": "0.1.0",
+  "description": "Explore an idea through a branching map of questions, research, and decisions. Launch with /explore.",
+  "repository": "https://github.com/AndrewGodlewsky/Copilot-Explore",
+  "keywords": ["exploration", "questions", "research", "canvas"],
+  "extensions": { "com.github.copilot": { "logo": "assets/explorer.svg" } }
+}

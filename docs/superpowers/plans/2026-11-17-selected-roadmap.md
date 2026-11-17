@@ -305,13 +305,43 @@ Read .superpowers/sdd/2026-11-17-selected-roadmap/issue-14.md, task-8-design-not
 
 ### Verification and release
 
-- [ ] Focused RED/GREEN pure visibility tests for deep paths, root/leaf/nested focus, nested collapse interaction and restoration of unrelated folds; keep supported 5,000-node traversal iterative.
-- [ ] Real HTTP/jsdom tests for explicit focus/whole-map controls, out-of-focus outline reveal, drafts/state/caret retention, polling/hidden research, history removal of IDs, fit bounds and unchanged document/export/context/history.
-- [ ] Run npm test, npm run check and npm run package; installed SDK fixture only if integration changes. No paid inference or existing sessions.
-- [ ] Bump to **0.1.20**, synchronize metadata/README/release notes, document focus versus fold behavior, include controller roadmap update, self-review and commit. No merge/push/issue closure.
-- [ ] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-8-report.md with visibility/focus APIs, RED/GREEN/final commands and outputs, commit and native manual limits.
+- [x] Focused RED/GREEN pure visibility tests for deep paths, root/leaf/nested focus, nested collapse interaction and restoration of unrelated folds; keep supported 5,000-node traversal iterative.
+- [x] Real HTTP/jsdom tests for explicit focus/whole-map controls, out-of-focus outline reveal, drafts/state/caret retention, polling/hidden research, history removal of IDs, fit bounds and unchanged document/export/context/history.
+- [x] Run npm test, npm run check and npm run package; installed SDK fixture only if integration changes. No paid inference or existing sessions.
+- [x] Bump to **0.1.20**, synchronize metadata/README/release notes, document focus versus fold behavior, include controller roadmap update, self-review and commit. No merge/push/issue closure.
+- [x] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-8-report.md with visibility/focus APIs, RED/GREEN/final commands and outputs, commit and native manual limits.
 
 No nested agents or browser/desktop automation. Controller reviews and publishes. Raise concrete conflicts while continuing independent work.
+
+Published task8: **v0.1.20**, `09b60b8`, 200 tests, checks and package passed; independent review/fix review approved and remote main verified.
+
+## Task 9: Map navigation preferences (#16 / selection 18)
+
+Read .superpowers/sdd/2026-11-17-selected-roadmap/issue-18.md, task-9-design-notes.md, AGENTS.md and final task-8 focus/fix and task-6 folding reports in this workspace. BASE is09b60b8e7950b829ea5c43dcc38144870c01ae95; ship **0.1.21**. Preserve existing recoverable map bounds and answer editing.
+
+### Preferences and interaction
+
+- Add a compact Map settings entry/dialog in existing map controls. Persist Explorer-wide navigation settings in its owned data root, separately from documents/history/drafts and voice settings. Never modify Copilot settings or put preferences into AI context.
+- Version-1 settings contract: revision, wheelMode ('zoom' or 'pan', default 'zoom'), sensitivity (finite number 0.25 through 3, default 1), motion ('system', 'reduce' or 'full', default 'system'). Use labeled controls, useful descriptions, reset-to-defaults, save/cancel/error states and focus return. Reset requires an explicit save to persist.
+- Store bounded validated JSON atomically with an exclusive lock and expected revision. Preserve corrupt/unreadable files and explain the problem while leaving the map usable with safe in-memory defaults. Failed/stale saves retain field choices and permit deliberate refresh/retry; do not silently overwrite another canvas's settings. Read/write endpoints use existing instance token, Host, Origin/client header protections and a small bounded body.
+- Zoom mode retains cursor-anchored wheel zoom. Pan mode uses horizontal/vertical wheel/trackpad deltas, normalizing pixel/line/page modes. Ctrl/Meta wheel remains anchored zoom in either mode. Shift-wheel with only a vertical delta may pan horizontally; do not double-transform a device's existing horizontal delta. Sensitivity scales wheel input only; keyboard/button steps remain predictable.
+- Normal scrolling inside expanded-node controls/content must remain native unless the explicit zoom modifier is held. Keep text selection, IME, drag threshold, pointer cancellation, recoverable pan bounds and min/max zoom safeguards.
+- System motion follows prefers-reduced-motion and reacts to OS changes. Explicit Reduce/Full overrides it. Apply effective preference to existing spinner/meter transitions/scroll behavior; preserve useful nonanimated recording/status feedback. Do not add decorative movement just to demonstrate the setting.
+- Show a short current-mode hint near map controls without obscuring content. Existing microphone/model settings and configured voice shortcut remain usable. Persist settings across journey and canvas changes, not per ephemeral HTTP origin.
+
+### Implementation boundaries
+
+Keep navigation preference parsing/persistence in a small focused extension module, using storage.mjs atomic writes directly. Reuse established root/path/lock patterns where applicable without copying the older voice preference module's unbounded read or changing voice settings in this issue. Keep browser preference controls in a focused module if adding them would further tangle app.mjs; report the chosen API for later features. Register any browser asset in the existing server allowlist and real-editor fixture. Production data-root wiring may touch canvas.mjs, so inspect the installed SDK declarations and run the runtime fixture if that integration changes.
+
+### Verification and release
+
+- [ ] RED/GREEN store tests for defaults, bounds/type validation, persisted reload, same-file writers, corrupt/oversized/linked storage and failed write preservation. Keep failures recoverable without user file deletion by tests.
+- [ ] Real HTTP/jsdom tests for setting save/cancel/reset/retry, wheel mode/modifier/delta normalization, horizontal pan, sensitivity, zoom bounds, cursor anchoring, answer scroll/selection, system motion updates and explicit override. Verify docs/history/context unchanged.
+- [ ] Run npm test, npm run check and npm run package; runtime fixture only if host integration changes. No paid providers or existing sessions.
+- [ ] Bump to **0.1.21**, synchronize metadata/README/release notes, document navigation/motion behavior and limitations, include controller roadmap edit, self-review and commit. No merge/push/issue closure.
+- [ ] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-9-report.md with storage/API contracts, RED/GREEN/final checks, commit and manual hardware/visual limits.
+
+Capture native exit codes/stdout/stderr without wrapping ordinary npm notices as PowerShell test errors. No nested agents or browser/desktop automation. Controller reviews and publishes. Raise concrete conflicts while continuing independent work.
 
 ## Issue index
 

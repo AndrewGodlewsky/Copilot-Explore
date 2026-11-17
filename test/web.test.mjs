@@ -7,11 +7,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { JSDOM } from 'jsdom';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
-import { createDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { createDocument, contextFor } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
+import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
+import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
 import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 
@@ -45,6 +47,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const historyDialog = document.getElementById('history-dialog');
   historyDialog.showModal = () => { historyDialog.open = true; };
   historyDialog.close = () => { historyDialog.open = false; };
+  const navigationDialog = document.getElementById('navigation-dialog');
+  navigationDialog.showModal = () => { navigationDialog.open = true; };
+  navigationDialog.close = () => { navigationDialog.open = false; };
   const requests = new Set();
   t.after(async () => {
     window.dispatchEvent(new window.Event('pagehide'));
@@ -66,7 +71,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   map.hasPointerCapture = id => captured.has(id);
   map.releasePointerCapture = id => captured.delete(id);
   window.ResizeObserver = class { constructor(callback) { this.callback = callback; } observe(element) { observers.set(element.id, this.callback); } disconnect() {} };
-  window.matchMedia = () => ({ matches: true });
+  const motionListeners = new Set(), motionMedia = { matches: true, addEventListener: (_, fn) => motionListeners.add(fn) };
+  window.matchMedia = () => motionMedia;
   window.HTMLElement.prototype.scrollIntoView = function () {};
   window.HTMLElement.prototype.animate = () => ({ cancel() {}, finished: Promise.resolve() });
   window.fetch = (path, options) => {
@@ -90,9 +96,10 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.revealPath = revealPath;
   window.attachVoice = attachVoice;
   window.DraftClient = DraftClient;
+  window.attachNavigation = attachNavigation;
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts });
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
-  window.eval(script.replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';", ''));
+  window.eval(script.replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';", ''));
   await until(() => width ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -101,7 +108,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   };
   const type = (id, value) => { const e = document.getElementById(id); assert.ok(e, id); e.value = value; e.dispatchEvent(new window.Event('input', { bubbles: true })); };
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
-  return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, pauseAnswer: fn => { holdAnswer = fn; },
+  return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; } };
 }
@@ -441,6 +448,9 @@ test('wheel zoom anchors at the pointer, reaches 300%, resets, and respects text
   for (let i = 0; i < 20; i++) f.document.getElementById('zoom-in').click();
   assert.equal(viewOf(f).zoom, 3); assert.ok(f.document.getElementById('zoom-in').disabled);
   f.document.getElementById('zoom-level').click(); assert.equal(viewOf(f).zoom, 1);
+  for (let i = 0; i < 30; i++) wheel(f, map, 120);
+  assert.equal(viewOf(f).zoom, .1, 'wheel respects minimum zoom');
+  f.document.getElementById('zoom-level').click();
   f.open(f.explorer.doc.nodes[1].id);
   const answer = f.document.getElementById('answer'), stable = viewOf(f);
   assert.equal(wheel(f, answer, 100).defaultPrevented, false); assert.deepEqual(viewOf(f), stable);
@@ -1242,6 +1252,97 @@ test('history rejects stale preview and undo after refresh targets the latest un
   f.document.getElementById('history-restore').click();
   await until(() => f.explorer.doc.objective === '' && !f.document.getElementById('history-dialog').open, 'latest unrelated edit undone');
   assert.equal(f.explorer.doc.nodes[1].answer, 'Keep this answer');
+});
+
+test('map settings save, cancel, reset and stale retry keep documents and drafts separate', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  const original = JSON.stringify(f.explorer.doc), revision = f.explorer.doc.revision;
+  const context = JSON.stringify(contextFor(f.explorer.doc, f.explorer.doc.nodes[1].id));
+  const history = JSON.stringify(await f.explorer.readHistory(f.explorer.activeKey));
+  $('navigation-open').click(); await until(() => $('navigation-dialog').open, 'settings dialog');
+  assert.equal($('navigation-wheel').value, 'zoom');
+  $('navigation-wheel').value = 'pan'; $('navigation-cancel').click();
+  assert.equal(f.document.activeElement, $('navigation-open'));
+  $('navigation-open').click(); await until(() => $('navigation-wheel').value === 'zoom', 'cancel did not persist');
+  $('navigation-wheel').value = 'pan'; $('navigation-sensitivity').value = '2'; $('navigation-motion').value = 'full';
+  $('navigation-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => !$('navigation-dialog').open, 'settings saved');
+  assert.match($('navigation-hint').textContent, /pan/);
+  assert.equal(f.document.documentElement.dataset.motion, 'full');
+  const file = join(f.explorer.library.directory, 'navigation-settings.json'), store = new NavigationPreferences(file);
+  assert.equal((await store.read()).sensitivity, 2);
+  $('navigation-open').click(); await until(() => $('navigation-wheel').value === 'pan', 'saved settings reload');
+  $('navigation-reset').click(); assert.equal($('navigation-wheel').value, 'zoom');
+  assert.equal((await store.read()).wheelMode, 'pan', 'reset requires Save');
+  $('navigation-cancel').click(); $('navigation-open').click(); await until(() => $('navigation-wheel').value === 'pan', 'cancelled reset');
+  const external = await store.save({ wheelMode: 'zoom', sensitivity: .5, motion: 'reduce' }, 1);
+  assert.equal(external.revision, 2);
+  $('navigation-sensitivity').value = '3';
+  $('navigation-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => /another canvas/i.test($('navigation-error').textContent), 'stale writer warning');
+  assert.equal($('navigation-sensitivity').value, '3'); assert.equal((await store.read()).sensitivity, .5);
+  $('navigation-refresh').click(); await until(() => !$('navigation-refresh').hidden && $('navigation-error').hidden, 'refreshed revision');
+  assert.equal($('navigation-sensitivity').value, '3', 'choices retained for deliberate retry');
+  $('navigation-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => !$('navigation-dialog').open, 'deliberate retry');
+  assert.equal((await store.read()).sensitivity, 3);
+  assert.equal(f.explorer.doc.revision, revision); assert.equal(JSON.stringify(f.explorer.doc), original);
+  assert.equal(JSON.stringify(contextFor(f.explorer.doc, f.explorer.doc.nodes[1].id)), context);
+  assert.equal(JSON.stringify(await f.explorer.readHistory(f.explorer.activeKey)), history);
+  await f.explorer.command('start', { topic: 'A second journey', revision });
+  await until(() => $('map-title').textContent === 'A second journey', 'new journey shown');
+  assert.match($('navigation-hint').textContent, /pan/, 'navigation preference survives journey change');
+  $('navigation-open').click(); await until(() => $('navigation-dialog').open, 'reset dialog');
+  $('navigation-reset').click();
+  $('navigation-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => !$('navigation-dialog').open, 'reset saved');
+  assert.deepEqual(await store.read(), { version: 1, revision: 4, wheelMode: 'zoom', sensitivity: 1, motion: 'system' });
+});
+
+test('pan wheel normalizes deltas, keeps answer scrolling and follows motion overrides', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id), map = $('map');
+  $('navigation-open').click(); await until(() => $('navigation-dialog').open, 'settings dialog');
+  $('navigation-wheel').value = 'pan'; $('navigation-sensitivity').value = '2';
+  $('navigation-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => !$('navigation-dialog').open, 'pan saved');
+  const first = viewOf(f);
+  wheel(f, map, .01, { deltaMode: 2 });
+  const page = viewOf(f); assert.equal(page.x, first.x); assert.ok(Math.abs(page.y - first.y + 14.4) < 1e-7, 'page mode uses viewport height');
+  assert.equal(wheel(f, map, 2, { deltaX: 3, deltaMode: 1 }).defaultPrevented, true);
+  const second = viewOf(f);
+  assert.equal(second.x, page.x - 96); assert.equal(second.y, page.y - 64); assert.equal(second.zoom, page.zoom);
+  wheel(f, map, 3, { shiftKey: true, deltaMode: 1 });
+  const third = viewOf(f); assert.equal(third.x, second.x - 96); assert.equal(third.y, second.y);
+  wheel(f, map, 2, { deltaX: 1, shiftKey: true, deltaMode: 1 });
+  const fourth = viewOf(f); assert.equal(fourth.x, third.x - 32); assert.equal(fourth.y, third.y - 64);
+  wheel(f, map, -20, { ctrlKey: true }); assert.ok(viewOf(f).zoom > fourth.zoom, 'modifier anchors zoom in pan mode');
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Selected text stays selected');
+  const answer = $('answer'); answer.setSelectionRange(2, 8); const beforeAnswer = viewOf(f);
+  assert.equal(wheel(f, answer, 3).defaultPrevented, false); assert.deepEqual(viewOf(f), beforeAnswer);
+  assert.deepEqual([answer.selectionStart, answer.selectionEnd], [2, 8]);
+  assert.equal(wheel(f, answer, -10, { metaKey: true }).defaultPrevented, true);
+  assert.equal(f.document.documentElement.dataset.motion, 'reduce', 'system follows OS');
+  f.motion(false); assert.equal(f.document.documentElement.dataset.motion, 'full');
+  $('navigation-open').click(); await until(() => $('navigation-dialog').open, 'motion settings');
+  $('navigation-motion').value = 'reduce'; $('navigation-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => !$('navigation-dialog').open, 'motion override saved');
+  f.motion(true); f.motion(false); assert.equal(f.document.documentElement.dataset.motion, 'reduce');
+});
+
+test('corrupt navigation file leaves map usable and requires repair then refresh', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async explorer => {
+    await writeFile(join(dirname(explorer.file), 'navigation-settings.json'), '{broken');
+  } }), $ = id => f.document.getElementById(id);
+  await until(() => $('navigation-open'), 'settings control');
+  assert.equal(wheel(f, $('map'), -20).defaultPrevented, true, 'default map navigation remains usable');
+  $('navigation-open').click();
+  await until(() => /preserved/i.test($('navigation-error').textContent), 'corrupt settings explanation');
+  assert.equal($('navigation-save').disabled, true);
+  const file = join(dirname(f.explorer.file), 'navigation-settings.json');
+  assert.equal(await readFile(file, 'utf8'), '{broken');
+  await writeFile(file, JSON.stringify({ version: 1, revision: 0, wheelMode: 'zoom', sensitivity: 1, motion: 'system' }));
+  $('navigation-refresh').click();
+  await until(() => $('navigation-error').hidden && !$('navigation-save').disabled, 'repaired settings refreshed');
 });
 
 test('focus branch keeps drafts and folds, fits visible nodes, and whole map retains the editor', async t => {

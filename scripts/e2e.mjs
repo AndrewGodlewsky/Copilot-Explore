@@ -64,6 +64,10 @@ try {
   const opened = await session.rpc.canvas.open({ canvasId: 'explorer', instanceId, input: {} });
   assert.ok(opened.url);
   assert.match(await (await fetch(opened.url)).text(), /Explorer/);
+  const navigationUrl = opened.url + 'api/navigation-settings';
+  assert.equal((await (await fetch(navigationUrl)).json()).settings.wheelMode, 'zoom');
+  const navigationSave = await fetch(navigationUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify({ revision: 0, wheelMode: 'pan', sensitivity: 1.5, motion: 'reduce' }) });
+  assert.equal(navigationSave.status, 200, await navigationSave.clone().text());
   assert.match(await (await fetch(opened.url + 'voice.mjs')).text(), /matchesShortcut/);
   const voice = await (await fetch(opened.url + 'api/voice')).json();
   assert.equal(voice.ready, false, 'The disposable home has no configured host voice model; do not record or download.');
@@ -102,6 +106,7 @@ try {
   await session.rpc.canvas.close({ instanceId });
   const reopened = await session.rpc.canvas.open({ canvasId: 'explorer', instanceId, input: {} });
   assert.notEqual(reopened.url, opened.url);
+  assert.equal((await (await fetch(reopened.url + 'api/navigation-settings')).json()).settings.wheelMode, 'pan');
   const restored = await (await fetch(reopened.url + 'api/state')).json();
   assert.deepEqual(restored.document, exported);
   const imported = await session.rpc.canvas.open({ canvasId: 'explorer', instanceId: 'explorer-import', input: {} });

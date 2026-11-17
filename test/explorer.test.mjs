@@ -277,6 +277,34 @@ test('HTTP serves real assets and exports; protects token, origin, host and stat
   assert.deepEqual(await download.json(), explorer.doc);
   assert.match(await (await fetch(server.url + 'export.md')).text(), /Who will use it first/);
 });
+test('navigation settings HTTP uses token, origin and bounded writes with recoverable defaults', async t => {
+  const { explorer, dir } = await started(t), server = await startServer(explorer); t.after(() => server.close());
+  const endpoint = server.url + 'api/navigation-settings', origin = new URL(server.url).origin;
+  assert.equal((await fetch(new URL('/api/navigation-settings', server.url))).status, 404);
+  assert.equal((await fetch(server.url + 'navigation.mjs')).status, 200);
+  assert.deepEqual(await (await fetch(endpoint)).json(), { settings: { version: 1, revision: 0, wheelMode: 'zoom', sensitivity: 1, motion: 'system' } });
+  const input = { revision: 0, wheelMode: 'pan', sensitivity: 1.5, motion: 'reduce' };
+  const post = (value, headers = {}) => fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(value) });
+  assert.equal((await post(input)).status, 403);
+  assert.equal((await post(input, { 'X-Explorer-Client': '1', Origin: 'https://other.example' })).status, 403);
+  assert.equal((await post(input, { 'X-Explorer-Client': '1', Origin: origin })).status, 200);
+  assert.equal((await post(input, { 'X-Explorer-Client': '1', Origin: origin })).status, 400, 'stale revision');
+  assert.equal((await post({ ...input, sensitivity: 0 }, { 'X-Explorer-Client': '1', Origin: origin })).status, 400);
+  assert.equal((await post({ ...input, extra: true }, { 'X-Explorer-Client': '1', Origin: origin })).status, 400);
+  assert.equal((await post({ ...input, padding: 'x'.repeat(2000) }, { 'X-Explorer-Client': '1', Origin: origin })).status, 400);
+  assert.equal((await (await fetch(endpoint)).json()).settings.revision, 1);
+  const other = await new Explorer({ file: explorer.file }).load();
+  const secondServer = await startServer(other);
+  assert.equal((await (await fetch(secondServer.url + 'api/navigation-settings')).json()).settings.wheelMode, 'pan', 'another canvas reads same data root');
+  await secondServer.close();
+  const before = explorer.snapshot(), file = join(dir, 'navigation-settings.json');
+  await writeFile(file, '{broken');
+  const fallback = await (await fetch(endpoint)).json();
+  assert.equal(fallback.settings.wheelMode, 'zoom'); assert.match(fallback.error, /preserved/i);
+  assert.equal((await post({ ...input, revision: 0 }, { 'X-Explorer-Client': '1', Origin: origin })).status, 400);
+  assert.equal(await readFile(file, 'utf8'), '{broken');
+  assert.deepEqual(explorer.snapshot(), before, 'settings do not edit document or pending context');
+});
 test('canvas instances are independent, reopen from disk and reject cross-session actions', async t => {
   const { dir } = await fixture(t);
   const extension = explorerCanvas({ createCanvas: options => options, getSession: () => ({ sessionId: 'session', send: async () => {} }), directory: dir }); t.after(() => extension.close());

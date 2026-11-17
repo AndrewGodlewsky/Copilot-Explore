@@ -1,6 +1,7 @@
 import { layout, branchView, revealPath } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
+import { attachNavigation } from './navigation.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';
 
 const $ = id => document.getElementById(id);
@@ -24,6 +25,9 @@ const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args)
     draftClient.edit(selected, value); $('answer').value = value; $('answer').setSelectionRange(caret, caret);
     answerStatus(state.document.nodes.find(n => n.id === selected));
   }, changed: () => scheduleLayout() });
+const navigation = attachNavigation({ document, window, fetch: (...args) => fetch(...args),
+  zoom: (factor, point) => zoom(factor, point),
+  pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); } });
 const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, manualOpen: false, category: null, question: '' }); return nodeUi.get(id); };
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -805,11 +809,7 @@ $('map').addEventListener('keydown', event => {
   }
 });
 $('map').addEventListener('wheel', event => {
-  if (event.target.closest('.expanded-node') && !event.ctrlKey && !event.metaKey) return;
-  event.preventDefault(); if (!event.deltaY) return;
-  const rect = $('map').getBoundingClientRect();
-  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1);
-  zoom(Math.exp(-Math.max(-120, Math.min(120, delta)) * .002), { x: event.clientX - rect.left, y: event.clientY - rect.top });
+  navigation.wheel(event, $('map').getBoundingClientRect());
 }, { passive: false });
 window.addEventListener('beforeunload', event => { if (draftClient.pending()) { void draftClient.flush(true).catch(() => {}); event.preventDefault(); event.returnValue = ''; } });
 new ResizeObserver(() => {

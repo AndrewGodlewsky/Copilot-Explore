@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.20.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.21.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -90,6 +90,8 @@ Pan by dragging the background, a compact card, or an expanded question heading.
 Initial questions and **Save & explore deeper** are queued in the attached Copilot chat. Research uses a fresh SDK session with the same verified account and selected enabled Copilot model; normal Copilot usage applies. It receives your saved question path, answers and states with a dedicated [research skill](com.github.copilot/extensions/explorer/research/skills/explorer-research/SKILL.md), and checks web search/fetch availability before inference. The main chat receives no research transcript. Status shows preparation, search, reading and comparison; Cancel stops the research helper. Question cancellation still only discards the result, since Explorer cannot stop the main chat turn.
 
 Research has a three-minute deadline. It reads public web pages, compares practical options and validates its returned data and source URLs. A source must have been successfully fetched to be accepted; this does not guarantee every claim is correct. If pages cannot be consulted, the result is clearly labeled model reasoning. Missing account, model or search access produces an error without falling back to the main chat. Save relevant draft answers and states before research so they are included. Very large maps use a bounded context snapshot and disclose omissions.
+
+**Map settings** switches ordinary wheel/trackpad input between pointer-anchored zoom (the default) and two-axis pan. Ctrl/Command+scroll always zooms; Shift+vertical scroll pans horizontally in Pan mode when the device supplies no horizontal delta. Pixel, line and page deltas are normalized. Sensitivity from 0.25 to 3 scales wheel input only; buttons and keyboard steps remain fixed. Scrolling inside an expanded question stays native unless Ctrl/Command is held. Motion follows the operating system by default; Reduce stops the recording spinner and meter transitions and uses instant scrolling, while Full allows them even when the OS requests reduced motion. Map transforms are already instant. Settings are stored in bounded `navigation-settings.json` in Explorer's data directory, separately from journeys, drafts, history, voice settings and Copilot settings. A corrupt or unreadable settings file is preserved; the map uses safe defaults until the file is repaired and settings are refreshed. Reset to defaults requires Save.
 
 ## Voice dictation
 
@@ -214,8 +216,9 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.20, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.20**.
+- Update to v0.1.21, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.21**.
 <!-- explorer-install-check:end -->
+- Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
 - Collapse a branch with an active descendant editor, confirm focus moves to the visible ancestor, then select the hidden question from Outline. Check that its draft text and state return, the other branches stay as they were, and the compact hidden/unresolved counts remain readable in a narrow pane.
 - Focus a deep branch and a leaf, use Fit visible map, then Show whole map. Check root and ancestors remain visible during focus, unrelated branches return with their prior folds, and the answer editor and caret remain usable in a narrow pane. Select a hidden question from Outline and check focus exits.

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { toMarkdown } from './model.mjs';
 import { VoiceService } from './voice.mjs';
+import { NavigationPreferences, defaultNavigationSettings } from './navigation-preferences.mjs';
 
 const assets = new Map([
   ['', ['index.html', 'text/html; charset=utf-8']],
@@ -13,6 +14,7 @@ const assets = new Map([
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
   ['answer-state.mjs', ['answer-state.mjs', 'text/javascript; charset=utf-8']],
   ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
+  ['navigation.mjs', ['navigation.mjs', 'text/javascript; charset=utf-8']],
   ['style.css', ['style.css', 'text/css; charset=utf-8']],
 ]);
 const MAX_BODY = 10 * 1024 * 1024;
@@ -27,6 +29,7 @@ async function body(req, limit = MAX_BODY) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 export async function startServer(explorer, voice = new VoiceService({ preferencesFile: explorer.library ? join(explorer.library.directory, 'voice-settings.json') : explorer.file ? join(dirname(explorer.file), 'voice-settings.json') : undefined })) {
+  const navigation = new NavigationPreferences(explorer.library ? join(explorer.library.directory, 'navigation-settings.json') : explorer.file ? join(dirname(explorer.file), 'navigation-settings.json') : undefined);
   const { version } = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
   const token = randomBytes(24).toString('hex');
   const prefix = `/${token}/`;
@@ -42,6 +45,16 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       const url = new URL(req.url, origin);
       if (!url.pathname.startsWith(prefix)) return json(404, { error: 'Not found.' });
       const route = url.pathname.slice(prefix.length);
+      if (req.method === 'GET' && route === 'api/navigation-settings') {
+        try { return json(200, { settings: await navigation.read() }); }
+        catch (error) { return json(200, { settings: defaultNavigationSettings(), error: error.message }); }
+      }
+      if (req.method === 'POST' && route === 'api/navigation-settings') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        const input = await body(req, 1024);
+        if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'motion,revision,sensitivity,wheelMode') throw new Error('Invalid navigation settings.');
+        return json(200, { settings: await navigation.save(input, input.revision) });
+      }
       if (req.method === 'GET' && route === 'api/voice') return json(200, await voice.status());
       if (req.method === 'GET' && route === 'api/voice/settings') return json(200, await voice.options());
       if (req.method === 'POST' && route === 'api/voice/settings') {

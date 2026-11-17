@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.21",
+    "summary": "Map settings now save wheel zoom or pan, scroll sensitivity and motion preference across Explorer canvases. Ctrl/Command+scroll still zooms around the pointer, while scrolling inside a question stays native. System motion follows the OS; settings changes preserve maps, drafts and history."
+  },
+  {
     "version": "0.1.20",
     "summary": "Focus a question branch to show its root, ancestor path and subtree while hiding unrelated branches. Show whole map restores the wider view and keeps the selected question reachable. Focus preserves folds, drafts, research, exports and saved history."
   },

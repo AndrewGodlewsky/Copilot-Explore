@@ -25,7 +25,7 @@ export function contextScope(value = 'decisions') {
 
 // Count actual SDK strings, not JSON-RPC escaping or opaque provider framing.
 // Each optional record is serialized once; selection only remeasures small metadata.
-export function prepareContext(source, { instructions = '', prefix = '', scope = 'decisions', excluded = [] } = {}) {
+export function prepareContext(source, { instructions = '', prefix = '', scope = 'decisions', excluded = [], projectSources = [] } = {}) {
   scope = contextScope(scope);
   if (!Array.isArray(excluded) || excluded.length > 5000 || excluded.some(id => typeof id !== 'string' || !id.length || id.length > 100) || new Set(excluded).size !== excluded.length) throw new Error('Invalid optional context exclusions.');
   const exclusions = new Set(excluded), optional = [...source.path.slice(0, -1), ...source.decisionsElsewhere ?? []];
@@ -34,6 +34,7 @@ export function prepareContext(source, { instructions = '', prefix = '', scope =
   if (excluded.some(id => !optionalIds.has(id))) throw new Error('An optional context record changed. Refresh the review.');
   const excludedCount = optional.filter(item => exclusions.has(item.id)).length;
   const context = { ...framing(source), ...(source.identity ? { identity: structuredClone(source.identity), targetId: source.targetId } : {}),
+    ...(projectSources.length ? { projectSources: structuredClone(projectSources) } : {}),
     scope, path: source.path.length ? [structuredClone(source.path.at(-1))] : [], decisionsElsewhere: [], truncated: false,
     omitted: { path: Math.max(0, source.path.length - 1), decisionsElsewhere: source.decisionsElsewhere?.length ?? 0 },
     omissionReasons: { budget: 0, scope: scope === 'path' ? (source.decisionsElsewhere ?? []).filter(item => !exclusions.has(item.id)).length : 0, ...(excludedCount ? { excluded: excludedCount } : {}) } };
@@ -48,7 +49,7 @@ export function prepareContext(source, { instructions = '', prefix = '', scope =
   const metadataBytes = () => metadataBase + bytes(JSON.stringify({ truncated: context.truncated, omitted: context.omitted, omissionReasons: context.omissionReasons }));
   let recordsBytes = context.path.length ? bytes(JSON.stringify(context.path[0])) : 0;
   const fixedBytes = bytes(instructions) + bytes(prefix);
-  if (fixedBytes + metadataBytes() + recordsBytes > RESEARCH_CONTEXT_LIMIT) throw new Error('The mandatory target and guidance (including all pinned constraints) exceed the 128 KiB request limit. Shorten the selected answer, topic, guidance or pins; changing optional scope cannot make mandatory content fit.');
+  if (fixedBytes + metadataBytes() + recordsBytes > RESEARCH_CONTEXT_LIMIT) throw new Error('The mandatory target and guidance (including all pinned constraints), plus any selected project excerpts, exceed the 128 KiB request limit. Shorten the selected answer, topic, guidance or pins, or select fewer files; changing optional scope cannot make mandatory content fit.');
   const add = (key, item, front = false) => {
     const size = bytes(JSON.stringify(item)) + (context[key].length ? 1 : 0);
     context.omitted[key]--; update();

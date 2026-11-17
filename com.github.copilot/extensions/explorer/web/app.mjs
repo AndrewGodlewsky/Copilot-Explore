@@ -926,12 +926,25 @@ function renderResearchReview() {
   const focusedSetting = area.contains(document.activeElement) ? document.activeElement.dataset.setting : null;
   const challenge = researchReview.context?.purpose === 'challenge-review';
   $('research-review-title').textContent = challenge ? 'Challenge decisions: review selected inputs' : 'Review research context';
-  $('research-review-description').textContent = challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is consulted; prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Review the Explorer-supplied input for the isolated research helper. Choices apply only to this request. Viewing or excluding context starts no inference.';
+  $('research-review-description').textContent = challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Review the Explorer-supplied input for the isolated research helper. Choices apply only to this request. Viewing or excluding context starts no inference.';
   $('research-review-start').textContent = challenge ? 'Start reviewed challenge' : 'Start reviewed research';
-  $('research-review-start').disabled = !value || researchReview.loading || reviewStarting || (challenge && !value.prepared.canStart);
+  $('research-review-start').disabled = !value || researchReview.loading || reviewStarting || researchReview.projectDirty || (challenge && !value.prepared.canStart);
   $('research-review-refresh').disabled = researchReview.loading || reviewStarting;
   $('research-review-status').textContent = researchReview.loading ? 'Preparing context locally. No inference has started.' : researchReview.error || '';
-  if (!value) { if (!researchReview.loading) area.replaceChildren(); return; }
+  const projectControls = el('section', { class: 'review-record' }, el('h3', {}, 'Optional project files for this challenge only'));
+  if (challenge) {
+    const input = el('textarea', { id: 'project-paths', rows: '3', maxlength: '1204', 'aria-label': 'Project file paths, one relative path per line' }); input.value = researchReview.projectDraft; input.disabled = researchReview.loading || reviewStarting;
+    input.addEventListener('input', () => { researchReview.projectDraft = input.value; researchReview.projectDirty = true; $('research-review-start').disabled = true; });
+    projectControls.append(el('p', {}, 'Enter up to five text/source file paths relative to the attached session working directory, one per line (forward slashes, 240 characters each). Read/refresh approves these local reads; nothing is sent until Start reviewed challenge. Hidden paths, secret defaults and linked files are excluded. 64 KiB per file / 128 KiB total; UTF-8 prefix excerpts up to 8 KiB each / 32 KiB total.'), input,
+      button('Read / refresh selected files', () => { void researchReview.prepare({ action: 'refresh', paths: researchReview.projectDraft.split(/\r?\n/).map(path => path.trim()).filter(Boolean) }); }, { id: 'project-read', disabled: researchReview.loading || reviewStarting }),
+      button('Remove all files', () => { researchReview.projectDraft = ''; void researchReview.prepare({ action: 'refresh', paths: [] }); }, { id: 'project-clear', disabled: researchReview.loading || reviewStarting }),
+      el('p', { class: 'quiet' }, 'Only this tool-free challenge receives the reviewed excerpts. Questions, web research, follow-ups, other helpers and exports omit them. File instructions are untrusted data, not decisions or verified evidence. Explorer retains them in this transient review/result; closing the preview, replacing/cancelling the result or closing the canvas clears them. Native helper journals/logs may retain model input; no zero-log guarantee is available.'));
+  }
+  if (!value) {
+    if (!researchReview.loading || !area.children.length) area.replaceChildren(...(challenge ? [projectControls] : []));
+    if (researchReview.loading) for (const id of ['project-paths', 'project-read', 'project-clear']) { const control = $(id); if (control) control.disabled = true; }
+    return;
+  }
   const { context, coverage, bytes, limit, prompt, instructions, settings } = value.prepared;
   const display = (label, item) => el('section', { class: 'review-record' }, el('h3', {}, label), el('pre', {}, JSON.stringify(item, null, 2)));
   const { topic, objective, successCriteria, mode, pins } = context;
@@ -946,9 +959,15 @@ function renderResearchReview() {
     select.addEventListener('change', () => researchReview.settings({ ...researchReview.context.settings, [key]: select.value }));
     controls.append(el('label', {}, label, select));
   }
-  const rows = [...(challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. Records are complete; no text is clipped.`),
+    const rows = [...(challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. Saved journey records are complete; project prefixes are labeled separately.`),
     display('Required: committed journey guidance and mode', { topic, objective, successCriteria, mode, pins }),
-    display(challenge ? 'Required: journey root' : 'Required: selected question and committed answer state', context.path.at(-1))];
+      display(challenge ? 'Required: journey root' : 'Required: selected question and committed answer state', context.path.at(-1))];
+  if (challenge) {
+    rows.unshift(projectControls);
+    if (!context.projectSources?.length) rows.push(el('p', { id: 'project-empty' }, researchReview.projectDraft.trim() ? 'No files are attached to this preview. Read/refresh the entered paths or remove them before starting.' : 'No project files selected.'));
+    if (!value.prepared.projectFresh) rows.push(el('p', { id: 'project-stale', class: 'notice' }, 'Project files or working root changed or are unavailable. These are the previously reviewed excerpts. Explicitly read/refresh files and review again before starting.'));
+    for (const source of context.projectSources ?? []) rows.push(el('section', { class: 'review-record' }, el('h3', {}, `Project source: ${source.name}`), el('p', {}, `${source.excerptBytes} / ${source.bytes} UTF-8 bytes included${source.truncated ? ' (prefix excerpt)' : ' (complete file)'}. ${value.prepared.projectFresh ? 'Current at last check.' : 'Stale or unavailable.'} Source ${source.id}; SHA-256 ${source.fingerprint}`), el('pre', {}, source.excerpt)));
+  } else rows.unshift(el('p', { class: 'quiet' }, 'Project files are excluded from web research and follow-ups. Selected files are available only in an explicit Challenge decisions review.'));
   if (value.prepared.followup) rows.push(display('Follow-up: exact question, hypothetical status, original recommendation, complete optional evidence and exchanges', value.prepared.followup), display('Bounded source tracking across this history', coverage.followupTracking));
   for (const [kind, records] of [['Ancestor', context.path.slice(0, -1)], ['Other answer', context.decisionsElsewhere]]) for (const record of records) {
     const input = el('input', { type: 'checkbox', 'data-node-id': record.id }); input.checked = true;
@@ -1647,7 +1666,7 @@ const ordinaryCheckDescription = $('check-description').textContent;
 function renderCheck() {
   const challenge = checkView?.operation === 'challenge-review';
   $('check-title').textContent = challenge ? 'Challenge decisions' : 'Check answers';
-  $('check-description').textContent = challenge ? 'Tool-free model hypotheses for user review. No new evidence was consulted; prior research is excluded. Input references are user statements, not proof. Inspect existing sourced research at an original answer separately. Suggestions never change decisions. Findings and dismissals are transient; replacement, reload, journey switch or relevant source changes clear or invalidate them.' : ordinaryCheckDescription;
+  $('check-description').textContent = challenge ? 'Tool-free model hypotheses for user review. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research is excluded. Input references are user statements, not proof. Inspect existing sourced research at an original answer separately. Suggestions never change decisions. Findings and dismissals are transient; replacement, reload, journey switch or relevant source changes clear or invalidate them.' : ordinaryCheckDescription;
   const result = checkView, coverage = result?.coverage, active = result?.status === 'result';
   $('cancel-check').hidden = result?.status !== 'pending';
   $('run-check').disabled = result?.status === 'pending';
@@ -1663,6 +1682,10 @@ function renderCheck() {
       el('p', {}, finding.explanation), el('p', {}, `What may help: ${finding.resolution}`));
     for (const [index, ref] of finding.sources.entries()) {
       if (ref.kind === 'guidance') area.append(el('p', { class: 'quiet' }, `Source: global user guidance (${ref.field})`));
+      else if (ref.kind === 'project') {
+        const captured = finding.sourceStates[index], source = captured.source;
+        area.append(el('details', {}, el('summary', {}, `Project source: ${source.name}`), el('p', {}, `Quoted untrusted input; ${captured.freshness}. Source ${source.id}; SHA-256 ${source.fingerprint}. ${source.excerptBytes} / ${source.bytes} UTF-8 bytes included.`), el('pre', {}, source.excerpt)));
+      }
       else {
         const source = state.document.nodes.find(node => node.id === ref.id), captured = finding.sourceStates[index];
         area.append(el('p', { class: 'quiet' }, `Captured source: ${captured.state}${captured.review ? '; needs review' : ''} · ${ref.id}`));

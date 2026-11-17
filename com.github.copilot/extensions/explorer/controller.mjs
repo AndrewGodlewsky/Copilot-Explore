@@ -1,4 +1,5 @@
 import { followupResult, retainExchanges, sameFollowup } from './research-followup.mjs';
+import { ProjectContext } from './project-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
 import { Library } from './library.mjs';
@@ -25,11 +26,12 @@ export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
 export class Explorer {
-  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, briefHelper, checkHelper, timeoutMs = 240000 }) {
+  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, briefHelper, checkHelper, projectRoot, timeoutMs = 240000 }) {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
     this.researchReview = new ResearchReview();
+    this.projectContext = new ProjectContext(projectRoot);
     this.researcher = researcher; this.researchTasks = new Set(); this.researchTask = Promise.resolve(); this.unconfirmedResearchRelease = null; this.researchWork = null;
     this.briefHelper = briefHelper; this.briefWork = null; this.checkHelper = checkHelper; this.checkWork = null; this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
     this.library = library; this.binding = binding; this.activeKey = null;
@@ -46,6 +48,7 @@ export class Explorer {
   }
   snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
   reconcileCleanup() {
+    if (this.researchReview.selection && this.researchReview.selection.journey !== (this.activeKey ?? this.doc?.id)) this.researchReview.clear();
     const brief = this.briefWork;
     if (brief && (brief.journey !== (this.activeKey ?? this.doc?.id) || briefFreshness(brief.proposal ?? { dependencies: brief.dependencies }, this.doc) !== 'current')) { brief.abort.abort(); brief.status = 'stale'; brief.error = 'Saved brief inputs changed. Refresh the journey and regenerate.'; }
     const check = this.checkWork;
@@ -275,7 +278,7 @@ export class Explorer {
         if (this.cleanup?.status === 'pending' || this.help?.status === 'pending' || this.briefWork?.status === 'pending') throw new Error('Cancel answer cleanup, question help or the decision brief before checking answers.');
         if (this.checkWork?.status === 'pending') throw new Error('Cancel the running answer check or challenge review before starting another.');
         const prepared = challenge ? await this.researchReview.consume(this, { token: input.token, journey: input.journey, nodeId: this.doc.rootId, purpose: 'challenge-review' }) : prepareAnswerCheck(this.doc), dependencies = captureCheck(prepared);
-        const work = { id: input.id, journey: input.journey, dependencies, operation: challenge ? 'challenge-review' : 'answer-check',
+        const work = { id: input.id, journey: input.journey, dependencies, projectCapture: prepared.projectCapture, operation: challenge ? 'challenge-review' : 'answer-check',
           coverage: { scope: 'journey-summary', bytes: prepared.bytes, limit: prepared.limit, included: dependencies.records.length,
             omitted: Object.values(prepared.context.omitted).reduce((sum, count) => sum + count, 0) },
           status: 'pending', progress: challenge ? 'Preparing challenge review' : 'Preparing answer check', abort: new AbortController(), dismissed: new Set() };
@@ -285,12 +288,14 @@ export class Explorer {
           if (this.checkWork !== work || work.abort.signal.aborted) return;
           try {
             this.requireToolFreeRelease();
+            if (!await this.projectContext.fresh(work.projectCapture)) throw new Error('Project sources changed before sending. Explicitly refresh files and review again.');
+            if (this.checkWork !== work || work.abort.signal.aborted) return;
             const result = await this.checkHelper.run(prepared, { signal: work.abort.signal, onProgress: progress => { if (this.checkWork === work) work.progress = progress; } });
             const trusted = validateCheck(result, prepared);
             await this.transact(async () => {
               if (this.checkWork !== work || work.abort.signal.aborted) return;
               const disk = await this.readCurrent();
-              if (!checkFreshness(dependencies, disk) || !checkFreshness(dependencies, this.doc)) { work.status = 'stale'; work.error = 'Saved check inputs changed. Refresh and run the check again.'; return; }
+              if (!checkFreshness(dependencies, disk) || !checkFreshness(dependencies, this.doc) || !await this.projectContext.fresh(work.projectCapture)) { work.status = 'stale'; work.error = 'Saved check inputs or project sources changed. Refresh and run the check again.'; return; }
               work.findings = trusted.findings; work.status = 'result';
             });
           } catch (error) {
@@ -300,7 +305,7 @@ export class Explorer {
         });
       }
       const work = matches() ? this.checkWork : null;
-      if (work && !fresh(work)) { work.abort.abort(); work.status = 'stale'; work.error = 'Saved check inputs changed. Refresh and run the check again.'; }
+      if (work && (!fresh(work) || !await this.projectContext.fresh(work.projectCapture, { content: false }))) { work.abort.abort(); work.status = 'stale'; work.error = 'Saved check inputs or project sources changed. Explicitly refresh files and review again.'; }
       if (action === 'dismiss') {
         if (!work || work.status !== 'result' || typeof input.findingId !== 'string' || !work.findings.some(item => item.id === input.findingId)) throw new Error('This finding is stale or unavailable. Run the check again.');
         work.dismissed.add(input.findingId);
@@ -308,7 +313,7 @@ export class Explorer {
       const records = new Map(work?.dependencies.records.map(record => [record.id, record]));
       return structuredClone({ id: input.id, operation: work?.operation, status: work?.status ?? 'idle', progress: work?.progress, error: work?.error, coverage: work?.coverage,
         ...(work?.status === 'result' ? { findings: work.findings.map(item => ({ ...item, sourceStates: item.sources.map(ref => ref.kind === 'node' ?
-          { kind: 'node', id: ref.id, state: records.get(ref.id).answerState ?? (records.get(ref.id).kind === 'direction' ? 'direction' : 'idea'), review: records.get(ref.id).review } : { kind: 'guidance', field: ref.field }) })), dismissed: [...work.dismissed] } : {}) });
+          { kind: 'node', id: ref.id, state: records.get(ref.id).answerState ?? (records.get(ref.id).kind === 'direction' ? 'direction' : 'idea'), review: records.get(ref.id).review } : ref.kind === 'project' ? { kind: 'project', source: work.projectCapture.sources.find(source => source.id === ref.id), freshness: 'current at last check' } : { kind: 'guidance', field: ref.field }) })), dismissed: [...work.dismissed] } : {}) });
     });
   }
   pollSnapshot(cursor) {

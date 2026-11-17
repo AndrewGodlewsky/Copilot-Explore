@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.48",
+    "summary": "Ground an explicit Challenge Review in up to five selected project text files. Preview bounded Unicode excerpts, relative source names and hashes before sending; refresh changed files explicitly. Keep files out of web research, other helpers, saved journeys and exports. Reveal original quoted project sources in transient findings; native helper logs may retain model input."
+  },
+  {
     "version": "0.1.47",
     "summary": "Inspect local storage by category and preview old unnamed history versions before explicitly removing them. Preserve journeys, drafts, checkpoints, undo, usage and recovery evidence. Save a preview preference without automatic deletion, see partial inventory and per-file outcomes, and retry only the exact captured candidates after failures."
   },

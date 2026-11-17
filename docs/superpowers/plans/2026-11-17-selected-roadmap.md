@@ -1139,6 +1139,32 @@ Read-only preview never reconciles history. Confirmation supplies only an opaque
 
 Accepted lifecycle limit: preview/outcome ledger is canvas memory, not a durable cross-crash audit. Lost HTTP replies can retry the same controller/TTL. Replacement controller/process invalidates the ID, does not automatically resume and does not expand scope. A fresh preview does not authorize orphan files; published History recovery may separately reconcile validated unreferenced snapshots. Cooperative local-filesystem guarantees and observed junction checks do not claim hostile concurrent ancestor-swap atomicity or power-loss durability. All implementation tests use disposable roots. Task35/#42 and Task36/#41 stay blocked; deferred #44/#49 stay untouched.
 
+Published task 37: **v0.1.47**, `db121d2`, required checks recorded in the task report; independent review approved and remote main verified.
+
+## Task 38: Add explicitly selected project context (#45 / original63)
+
+Accepted implementation contract: explicit relative-file selection for Challenge Review only; ordinary no-file challenge works without a host project root. Five files/240-character paths,64KiB per file/128KiB total raw reads,8KiB per UTF-8 prefix excerpt/32KiB total excerpts. Existing128KiB instructions+prompt ceiling counts quoted excerpts; selected sources are never silently omitted. Fresh metadata cwd and full-file hashes gate selection/start/dispatch/result, bounded stat/root checks invalidate later results. Explicit refresh replaces snapshots and requires a new preview. Source IDs/names/hashes/excerpts are transient and excluded from all other operations, persisted maps, exports and diagnostics. Keep saved-answer minimum, zero-tool helper and untrusted-data framing. Cooperative filesystem checks reject observed links/replacements but do not promise atomic hostile ancestor-swap resistance. Native helper journal retention remains an unresolved #41 limitation; #41/#42 are not solved by this task.
+
+Implementation sequence: focused path/HTTP RED tests; bounded reader and exact payload/ref integration; review UI and freshness lifecycle; HTTP/jsdom and installed canvas/helper fixtures; docs/version0.1.48/release note; final test/check/package/all-byte audit; self-review and commit for independent controller review/publication.
+
+Read issue-63.md, task-38-design-notes.md, AGENTS.md and the published context-preview contract and unresolved #41/#42 limitations. BASE is `db121d239081ee6e14d925db2772ac140d5eaa06`; ship version **0.1.48**. Reconcile the published interfaces against the current implementation before editing. Propose concrete bounds, ownership, freshness and verification seams before broad edits; record the accepted contract in this task and its brief.
+
+### Behavior and boundaries
+
+- Inspect the installed SDK declarations and use metadata.snapshot().workingDirectory as the permitted project root, never session.workspacePath. Start with no selected project content. Offer bounded explicit file selection and excerpt review; no automatic recursive ingestion or implicit instructions from surrounding files.
+- Read only approved regular files under the canonical working root. Bound path length, file count, per-file bytes, aggregate bytes and excerpt size; declare exact limits before implementation. Reject traversal, symlink/junction escape, binaries, invalid encoding and default-secret file types with useful non-leaking errors. Do not read excluded content merely to decide whether it is excluded.
+- Treat approved content as quoted source data. It cannot grant tool permissions, change system instructions, select other files or trigger writes. Integrate the exact reviewed excerpts into the existing payload preparation/byte accounting and source freshness contracts, with operation-specific inclusion. No public-search disclosure enforcement has shipped: do not pass selected file content to web research under that assumption. Propose which independently safe operations can use it, show omissions explicitly, and preserve actual host permissions for any attached-session operation. Tool-free owned helpers are a possible independent scope; resolve this before broad edits.
+- Give each selected source a stable identity, safe relative display name and content fingerprint. Changed/deleted files must show stale/unavailable; require explicit refresh and another preview before silently replacing reviewed bytes. Cancellation, working-root change, journey switch and request races must not attach another journey's files or lose user drafts.
+- Define local retention and portable export inclusion explicitly. Keep absolute home/project paths out of portable artifacts and diagnostics. Source contents must not automatically appear in a later shareable viewer or unrelated helper operation. Display when an explicit operation will send selected excerpts to the model or an external search service.
+- Keep the existing SDK, no runtime dependency or project writes. Reuse prepared-request ownership rather than introducing a separate unbounded file crawler or background indexing service.
+
+### Evidence and release
+
+- Test canonical path/root changes, traversal, links/junctions, changed/deleted/renamed files, invalid encoding, file-size boundaries, secret defaults, cancellation and stale preview-to-start races with disposable roots. Canary source text must occur only in explicitly included model payloads/approved exports and stay absent from excluded tasks, diagnostics and public requests.
+- Run the installed local canvas/helper fixtures for changed host wiring, actual HTTP/jsdom selection/preview flows, npm test/check/package and focused tests. No paid providers, existing user sessions or browser/desktop automation.
+- Synchronize patch metadata/README/release note, document limits/retention/privacy, self-review and commit; no nested agents, publication or issue closure.
+- Write task-38-report.md with inspected SDK evidence, file-source schema/freshness contract, exact limits and inclusion rules, tests, SHA and owner-only checks. Controller independently reviews and publishes.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

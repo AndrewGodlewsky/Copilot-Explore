@@ -1,12 +1,13 @@
 // Installed SDK/runtime, anonymous loopback model fixture; never a paid account/session.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createAnswerCheckHelper, prepareAnswerCheck, prepareChallenge } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { ProjectContext } from '../com.github.copilot/extensions/explorer/project-context.mjs';
 
 const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_PATH;
 assert.ok(sdkDirectory && cli, 'Set COPILOT_SDK_DIR and COPILOT_CLI_PATH to the installed desktop pair.');
@@ -19,9 +20,13 @@ const [selected] = addQuestions(document, document.rootId, [{ question: 'What do
 document.pins = [{ id: 'constraint-00000000000000', text: 'Use familiar vocabulary' }];
 const challenge = process.argv.includes('--challenge');
 selected.answer = 'Use the simpler route'; selected.answerState = 'tentative';
-const prepared = challenge ? prepareChallenge(document) : prepareAnswerCheck(document);
+const project = join(temporary, 'selected-project'); await mkdir(project);
+const projectCanary = 'INSTALLED-CHALLENGE-FILE-CANARY 🌿'; await writeFile(join(project, 'design.md'), projectCanary);
+const selectedFiles = await new ProjectContext(async () => project).select(['design.md']);
+const prepared = challenge ? prepareChallenge(document, [], selectedFiles.sources) : prepareAnswerCheck(document);
 const usageLabel = challenge ? 'Explorer Challenge Review' : 'Explorer Answer Check';
 const output = { findings: [{ id: 'u', category: challenge ? 'counterargument' : 'untested-assumption', explanation: 'The saved question may need evidence.', resolution: 'Ask the user which evidence would settle it.', sources: [{ kind: 'node', id: selected.id }] }] };
+if (challenge) output.findings[0].sources.push({ kind: 'project', id: selectedFiles.sources[0].id });
 const fixture = createServer(async (req, res) => {
   let body = ''; for await (const chunk of req) body += chunk;
   const input = JSON.parse(body); prompts.push(input);
@@ -73,6 +78,7 @@ try {
     assert.equal(prompt.tools?.length ?? 0, 0);
     assert.ok(prompt.messages.some(m => m.role === 'user' && m.content.includes(selected.question)));
     assert.ok(!JSON.stringify(prompt).includes('unsaved answer'));
+    assert.equal(JSON.stringify(prompt).includes(projectCanary), challenge);
     assert.ok(prompt.messages.some(m => m.role === 'user' && m.content.includes('Use familiar vocabulary')));
   }
   const ids = await readdir(join(temporary, 'usage', 'session-state'));
@@ -82,6 +88,7 @@ try {
     const journal = await readFile(join(temporary, 'usage', 'session-state', id, 'events.jsonl'), 'utf8');
     labels.push([usageLabel].find(label => journal.includes(label)));
     assert.match(journal, /session.usage_record/); assert.ok(!journal.includes('Élodie'));
+    assert.ok(!journal.includes(projectCanary), 'project bytes excluded from retained usage receipts; native logs are not covered');
   }
   assert.deepEqual(labels.sort(), [usageLabel].sort());
   hold = true; const abort = new AbortController(), held = new Promise(resolve => { onHeld = resolve; });

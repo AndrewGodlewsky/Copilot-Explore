@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.47.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.48.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Recovery
@@ -222,7 +222,7 @@ Committed objective, success criteria and optional exploration mode are stored o
 
 Journeys autosave as versioned JSON documents under `~/.copilot/plugin-data/explorer/` (`COPILOT_HOME` is respected). `EXPLORER_DATA_DIR` can override this for testing. New filenames hash the stable journey ID; canvas/session identity is only an attachment. Legacy `.explore.json` files are discovered in place. Opening a journey from another canvas uses the same file and revision protection. Finish also saves a Markdown sibling there. Export names use an exploration identifier; every node's ID and parent relationship are preserved in the resumable file. Pin/archive/recent metadata and canvas bindings live separately in `library.json`; opening or pinning never changes the journey's edited timestamp. See the [library storage contract](docs/library.md).
 
-Question/answer/research data is stored locally as plain text. Generating questions sends only the current map context to the attached chat; the library listing is not added to that context. Research sends a bounded saved-context snapshot to its isolated Copilot session and may include relevant terms in web searches. The plugin reads no repository context and loads no external UI assets. Downloaded files contain the exploration text. Importing a journey keeps the previously open journey in the library. Local answer drafts are stored separately in plain text and never included in exports, question generation, or research input. Only explicitly saved text and states enter the map; only Decided records a user decision.
+Question/answer/research data is stored locally as plain text. Generating questions sends only the current map context to the attached chat; the library listing is not added to that context. Research sends a bounded saved-context snapshot to its isolated Copilot session and may include relevant terms in web searches. Selected project files are read only after explicit approval in Challenge decisions and sent only to that tool-free review. Other operations omit them. The plugin loads no external UI assets. Downloaded files contain the exploration text. Importing a journey keeps the previously open journey in the library. Local answer drafts are stored separately in plain text and never included in exports, question generation, or research input. Only explicitly saved text and states enter the map; only Decided records a user decision.
 
 Research usage receipts are retained under `~/.copilot/plugin-data/explorer/usage/session-state/`, respecting the same directory overrides. They contain model, token/credit metrics and accounting IDs, without prompts, answers, account names or credentials. The temporary research conversation is removed after the helper stops and usage is retained. Cleanup/accounting failures preserve recovery files rather than losing receipts; `usage/recovery-<session>.json` identifies the temporary directory when a pointer can be saved. See [integration notes](docs/copilot-integration.md#background-model-work).
 
@@ -258,7 +258,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.47, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.47**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.48, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.48**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
@@ -302,3 +302,7 @@ Large maps mount compact cards near the viewport while keeping the selected edit
 Open **Map settings > Diagnostics** for read-only host, speech and owned-helper prerequisites. **Retry checks** refreshes observations without recording, inference, sign-in prompts or downloads. Ready describes observed prerequisites; model loadability, live capture and future provider/tool access remain unknown. Installed speech component compatibility stays cached until Explorer restarts.
 
 **Export support JSON** explicitly downloads only the categories shown in the dialog. It excludes user content, identities, paths, device names and raw errors. Helper shutdown uncertainty remains a blocker even after a recovery notice is dismissed. See [the support schema and detection limits](docs/diagnostics.md). Native layout, microphone operation and live provider quality still need owner verification.
+
+### Selected project files
+
+In **Challenge decisions**, enter up to five relative text/source paths and choose **Read / refresh selected files**. Review exact Unicode excerpts, source hashes and included/total bytes before starting. Changed or missing sources require explicit refresh. Files only ground this tool-free challenge; questions, web research/follow-ups, other helpers and exports omit them. Selection/results are transient, but native SDK helper journals may retain input. [Limits, freshness and retention](docs/project-context.md).

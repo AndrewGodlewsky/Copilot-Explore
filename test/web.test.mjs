@@ -174,7 +174,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
   let explorer = options.explorer ?? await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
-    cleaner: options.cleaner, briefHelper: options.briefHelper, checkHelper: options.checkHelper,
+    cleaner: options.cleaner, briefHelper: options.briefHelper, checkHelper: options.checkHelper, projectRoot: options.projectRoot,
     questionHelper: options.questionHelper,
     researcher: { runFollowup: options.runFollowup, run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
   }).load();
@@ -2860,6 +2860,31 @@ test('challenge empty context explains absence locally and never starts inferenc
   assert.equal($('research-review-start').disabled, true); assert.equal(calls, 0); assert.equal(f.explorer.doc.mode, mode);
   assert.equal($('research-depth'), null); assert.match($('research-review-description').textContent, /No new evidence/);
   $('research-review-close').click(); assert.equal($('research-review-dialog').open, false);
+});
+
+test('selected project challenge UI requires explicit reads and refresh, reveals original source and preserves drafts', async t => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-project-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
+  const canary = 'PROJECT-UI-CANARY <script>λ</script>'; await writeFile(join(project, 'design.md'), canary);
+  let captured;
+  const f = await fixture(t, 340, undefined, false, { projectRoot: async () => project, checkHelper: { async run(prepared) {
+    captured = prepared; return { findings: [{ id: 'file', category: 'assumption', explanation: 'Check the quoted input.', resolution: 'Ask its owner.', sources: [{ kind: 'project', id: prepared.context.projectSources[0].id }] }] };
+  }, close() {} }, before: async explorer => { const doc = structuredClone(explorer.doc); doc.nodes[1].answer = 'Saved design'; await explorer.save(doc); } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep my draft'); const editor = $('answer');
+  $('challenge-decisions').click(); await until(() => $('project-paths') && !$('project-read').disabled, 'project selector');
+  assert.ok(!$('research-review-prompt').textContent.includes(canary)); assert.equal(captured, undefined);
+  f.type('project-paths', 'design.md'); assert.equal($('research-review-start').disabled, true);
+  $('project-read').click(); await until(() => !$('research-review-start').disabled && $('research-review-prompt').textContent.includes(canary), 'selected file preview');
+  assert.match($('research-review-content').textContent, /Native helper journals/); assert.equal($('research-review-content').querySelector('script'), null);
+  await writeFile(join(project, 'design.md'), 'REFRESHED-UI-CANARY'); $('research-review-refresh').click();
+  await until(() => $('project-stale'), 'stale original excerpt'); assert.equal($('research-review-start').disabled, true); assert.ok($('research-review-prompt').textContent.includes(canary));
+  $('project-read').click(); await until(() => !$('research-review-start').disabled && $('research-review-prompt').textContent.includes('REFRESHED-UI-CANARY'), 'explicit file refresh');
+  const exact = $('research-review-prompt').textContent; $('research-review-start').click();
+  await until(() => $('check-content').textContent.includes('Project source: design.md'), 'project reference reveal');
+  assert.equal(captured.prompt, exact); assert.match($('check-content').textContent, /SHA-256/); assert.match($('check-content').textContent, /REFRESHED-UI-CANARY/);
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep my draft'); assert.equal(f.explorer.doc.nodes[1].answer, 'Saved design');
+  $('close-check').click(); $('challenge-decisions').click(); await until(() => $('project-paths') && !$('project-read').disabled, 'new empty selection');
+  assert.equal($('project-paths').value, ''); assert.ok(!$('research-review-prompt').textContent.includes('REFRESHED-UI-CANARY'));
+  $('research-review-close').click(); assert.equal(editor.value, 'Keep my draft');
 });
 test('challenge start rejected during an ordinary check preserves the original cancel identity', async t => {
   let release, calls = 0;

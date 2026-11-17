@@ -75,6 +75,13 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
         starting.set(ctx.instanceId, (async () => {
           const key = createHash('sha256').update(`${ctx.sessionId}\0${ctx.instanceId}`).digest('hex').slice(0, 32);
           const explorer = await new Explorer({ library, binding: key,
+            projectRoot: async () => {
+              const session = getSession();
+              if (session.sessionId !== ctx.sessionId) throw new Error('Project session changed.');
+              const metadata = await session.rpc.metadata.snapshot();
+              if (getSession().sessionId !== ctx.sessionId || metadata.sessionId !== ctx.sessionId || metadata.isRemote !== false) throw new Error('Local project metadata unavailable.');
+              return metadata.workingDirectory;
+            },
             researcher: createResearcher(getSession(), { usageDirectory: join(directory, 'usage') }),
             cleaner: createCleaner(getSession(), { usageDirectory: join(directory, 'usage') }),
             briefHelper: createBriefHelper(getSession(), { usageDirectory: join(directory, 'usage') }),

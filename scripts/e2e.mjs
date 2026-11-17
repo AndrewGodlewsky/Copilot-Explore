@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -115,9 +115,30 @@ try {
   const coverage = await action('context-coverage', { kind: 'questions', nodeId, scope: 'path' });
   assert.equal(coverage.contextCoverage.included.pins, 1); assert.ok(coverage.contextCoverage.bytes <= 131072);
   await action('answer', { nodeId, answer: 'Neighbors', expand: false });
+  const metadata = await session.rpc.metadata.snapshot();
+  assert.equal(await realpath(metadata.workingDirectory), await realpath(project));
+  assert.notEqual(metadata.workingDirectory, metadata.workspacePath);
+  const projectCanary = 'INSTALLED-PROJECT-CONTEXT-CANARY λ'; await writeFile(join(project, 'design.md'), projectCanary);
+  const projectReviewInput = { action: 'prepare', purpose: 'challenge-review', clientId: 'fixture-project-000000000001', sequence: 1, journey: snapshot.activeKey ?? snapshot.document.id, nodeId: snapshot.document.rootId, scope: 'decisions', excluded: [], project: { action: 'refresh', paths: ['design.md'] } };
+  const projectReviewResponse = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify(projectReviewInput) });
+  assert.equal(projectReviewResponse.status, 200); const projectReview = await projectReviewResponse.json();
+  assert.equal(projectReview.prepared.context.projectSources[0].excerpt, projectCanary);
+  assert.ok(!JSON.stringify(projectReview).includes(JSON.stringify(project).slice(1, -1)));
+  assert.ok(!JSON.stringify(await session.rpc.canvas.action.invoke({ instanceId, actionName: 'get_exploration', input: {} })).includes(projectCanary));
+  assert.ok(!(await (await fetch(opened.url + 'export.json')).text()).includes(projectCanary));
+  const otherProject = join(temporary, 'other-project'); await mkdir(otherProject);
+  await session.rpc.metadata.setWorkingDirectory({ workingDirectory: otherProject });
+  const { project: ignoredProjectSelection, ...existingProjectReview } = projectReviewInput;
+  const changedRootResponse = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify({ ...existingProjectReview, sequence: 2 }) });
+  assert.equal(changedRootResponse.status, 200); const changedRootReview = await changedRootResponse.json();
+  assert.equal(changedRootReview.prepared.projectFresh, false); assert.equal(changedRootReview.prepared.canStart, false);
+  assert.equal(changedRootReview.prepared.context.projectSources[0].excerpt, projectCanary);
+  await session.rpc.metadata.setWorkingDirectory({ workingDirectory: project });
+  console.log('Installed metadata cwd selected the explicit project file; artifact workspace, native context and exports excluded it.');
   const reviewed = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin },
     body: JSON.stringify({ action: 'prepare', clientId: 'fixture-review-000000000001', sequence: 1, journey: snapshot.activeKey ?? snapshot.document.id, nodeId, scope: 'decisions', excluded: [] }) });
   assert.equal(reviewed.status, 200); const review = await reviewed.json(); assert.ok(review.prepared.prompt.includes('Neighbors'));
+  assert.ok(!review.prepared.prompt.includes(projectCanary));
   await action('research', { nodeId, journey: review.journey, token: review.token });
   snapshot = await until(state, value => !value.pending, 'research access check');
   assert.match(snapshot.error, /Sign in|enabled Copilot model|Checking Copilot access/);

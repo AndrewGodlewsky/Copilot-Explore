@@ -71,11 +71,18 @@ test('voice HTTP requires the canvas origin and rejects injected model paths and
   assert.equal((await send({ action: 'start', id }, { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' })).status, 403);
   assert.equal((await send({ action: 'start', id, modelPath: 'C:/wrong' })).status, 400);
   assert.equal((await send({ action: 'start', id: 'x'.repeat(2000) })).status, 400);
+  assert.equal((await send({ action: 'poll', id, sequence: 1 })).status, 400);
+  assert.equal((await send({ action: 'ack', id, sequence: 0 })).status, 400);
+  assert.equal((await send({ action: 'ack', id, sequence: 1.5 })).status, 400);
   assert.equal(f.launches, 0);
   const readiness = await (await fetch(server.url + 'api/voice')).json();
   assert.equal(readiness.ready, true); assert.equal(readiness.sdk, undefined); assert.equal(readiness.modelPath, undefined);
   assert.equal((await send({ action: 'start', id })).status, 200); await delay(10);
   assert.equal(f.launches, 1); f.child.emit('message', { phase: 'listening' });
+  f.child.emit('message', { phase: 'segment', sequence: 1, text: 'Local draft' });
+  assert.equal((await send({ action: 'ack', id, sequence: 1 }, { ...headers, Origin: 'http://attacker.test' })).status, 403);
+  assert.equal((await send({ action: 'ack', id, sequence: 1 })).status, 200);
+  assert.equal(f.service.poll(id).segment, undefined);
   assert.equal((await send({ action: 'cancel', id })).status, 200); assert.equal(f.child.killed, true);
 });
 
@@ -97,4 +104,51 @@ test('live levels are bounded, retain recent audio only and disappear outside li
   const listening = f.service.poll(id); assert.equal(listening.levels.length, 24); assert.equal(listening.levels.at(-1), 1); assert.equal(listening.elapsedMs, 2400);
   f.service.finish(id); assert.deepEqual(f.service.poll(id).levels, []);
   f.child.emit('message', { phase: 'level', level: .8 }); assert.deepEqual(f.service.poll(id).levels, []);
+});
+
+test('ordered voice segments remain pending until durable draft acknowledgment and duplicates never advance', async t => {
+  const f = fixture(); t.after(() => f.service.close());
+  f.service.start(id); await delay(10); f.child.emit('message', { phase: 'listening' });
+  f.child.emit('message', { phase: 'segment', sequence: 1, text: 'Sí sí — café 🌱' });
+  assert.deepEqual(f.service.poll(id).segment, { sequence: 1, text: 'Sí sí — café 🌱' });
+  f.child.emit('message', { phase: 'segment', sequence: 1, text: 'Sí sí — café 🌱' });
+  assert.equal(f.service.poll(id).segment.sequence, 1);
+  assert.throws(() => f.service.ack(id, 2), /acknowledgment/);
+  f.service.ack(id, 1); assert.deepEqual(f.child.lastMessage, { action: 'ack', sequence: 1 });
+  assert.equal(f.service.poll(id).segment, undefined);
+  f.service.ack(id, 1);
+  f.child.emit('message', { phase: 'segment', sequence: 1, text: 'Sí sí — café 🌱' });
+  assert.equal(f.service.poll(id).segment, undefined);
+  f.child.emit('message', { phase: 'segment', sequence: 3, text: 'Out of order' });
+  assert.equal(f.service.poll(id).phase, 'error'); assert.equal(f.child.killed, true);
+});
+
+test('pending voice segments survive a later failure and stop capture when draft acknowledgment stalls', async t => {
+  let now = 0; const f = fixture({ now: () => now }); t.after(() => f.service.close());
+  f.service.start(id); await delay(10); f.child.emit('message', { phase: 'listening' });
+  f.child.emit('message', { phase: 'segment', sequence: 1, text: 'Retain this' });
+  now = 5001; f.service.poll(id); f.service.tick();
+  assert.equal(f.service.poll(id).phase, 'error'); assert.match(f.service.poll(id).error, /draft/i);
+  assert.equal(f.service.poll(id).segment.text, 'Retain this'); assert.equal(f.child.killed, true);
+});
+
+test('long dictation stops capture at ten minutes and bounds final drain without discarding partial text', async t => {
+  let now = 0; const f = fixture({ now: () => now }); t.after(() => f.service.close());
+  f.service.start(id); await delay(10); f.child.emit('message', { phase: 'listening' });
+  now = 120001; f.service.poll(id); f.service.tick(); assert.equal(f.service.poll(id).phase, 'listening');
+  now = 600000; f.service.poll(id); f.service.tick(); assert.equal(f.service.poll(id).phase, 'transcribing');
+  assert.deepEqual(f.child.lastMessage, { action: 'finish' });
+  now = 645001; f.service.poll(id); f.service.tick(); assert.equal(f.service.poll(id).phase, 'error');
+  assert.equal(f.child.killed, true);
+});
+
+test('voice service enforces bounded pending records and cumulative transcript size', async t => {
+  const f = fixture(); t.after(() => f.service.close()); f.service.start(id); await delay(10); f.child.emit('message', { phase: 'listening' });
+  for (let sequence = 1; sequence <= 5; sequence++) {
+    f.child.emit('message', { phase: 'segment', sequence, text: 'x'.repeat(sequence === 5 ? 3616 : 4096) });
+    assert.equal(f.service.poll(id).phase, 'listening'); f.service.ack(id, sequence);
+  }
+  f.child.emit('message', { phase: 'segment', sequence: 6, text: 'x' });
+  assert.equal(f.service.poll(id).phase, 'error'); assert.equal(f.child.killed, true);
+  assert.equal(f.service.poll(id).acknowledged, 5);
 });

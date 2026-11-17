@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.26",
+    "summary": "Dictate for up to ten minutes with ordered text appearing in recoverable local drafts. Stop finishes captured audio; Cancel keeps inserted text. Draft failures, model lag and resource limits stop capture visibly. Repeated words and Unicode are preserved, and an abandoned Record pointer press no longer reuses an old caret for keyboard activation."
+  },
+  {
     "version": "0.1.25",
     "summary": "Record hands-free beside an answer, then Stop to transcribe or Cancel to discard during loading, listening or transcription. Voice buttons share the existing shortcut lifecycle, preserve the answer caret and draft, and keep recording controls usable by keyboard. Leaving the answer workspace still cancels recording."
   },

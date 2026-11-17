@@ -22,10 +22,11 @@ const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts
   changed: () => { const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); } },
   restored: (id, value) => { if (id === selected && $('answer') && !composing) { $('answer').value = value; if ($('answer-state')) $('answer-state').value = draftClient.state(id); } } });
 const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args),
-  context: () => `${state.document?.id}/${selected}/${expanded}`,
+  context: () => `${state.document?.id}/${selected}/${expanded}/${draftClient.state(selected)}/${draftClient.entries.get(selected)?.edits}`,
   insert: (value, caret) => {
     draftClient.edit(selected, value); $('answer').value = value; $('answer').setSelectionRange(caret, caret);
     answerStatus(state.document.nodes.find(n => n.id === selected));
+    return draftClient.flush(false, selected);
   }, changed: () => scheduleLayout() });
 const navigation = attachNavigation({ document, window, fetch: (...args) => fetch(...args),
   zoom: (factor, point) => zoom(factor, point),

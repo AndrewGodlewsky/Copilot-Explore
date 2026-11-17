@@ -66,7 +66,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     offsetWidth: { get() { return parseFloat(this.style.width) || (this.id === 'map' ? width : 220); } },
     offsetHeight: { get() { return this.id === 'node-workspace' ? Math.min(540, parseFloat(this.style.maxHeight) || 540) : 110; } },
   });
-  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null, holdHistory = null, holdNavigationRead = null, holdReferencesRead = options.holdReferencesRead, holdVoiceCancel = options.holdVoiceCancel;
+  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null, holdHistory = null, holdNavigationRead = null, holdReferencesRead = options.holdReferencesRead, holdVoiceCancel = options.holdVoiceCancel, holdVoicePoll;
   const captured = new Set(), observers = new Map();
   map.setPointerCapture = id => { captures++; captured.add(id); };
   map.hasPointerCapture = id => captured.has(id);
@@ -85,6 +85,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
       const response = await fetch(new URL(path, server.url), options);
       const body = await response.arrayBuffer();
       if (path === 'api/voice' && options?.body && JSON.parse(options.body).action === 'cancel' && holdVoiceCancel) await holdVoiceCancel();
+      if (path === 'api/voice' && options?.body && JSON.parse(options.body).action === 'poll' && holdVoicePoll) await holdVoicePoll();
       if (holdState && path === 'api/state') await holdState();
       if (holdDraftRead && path.startsWith('api/drafts?')) await holdDraftRead();
       if (holdHistory && path.startsWith('api/history?')) await holdHistory();
@@ -114,7 +115,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
   return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
-    pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
+    pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
 
 test('pinned references show committed text and state, remain optional, and jump through the map', async t => {
@@ -895,6 +896,18 @@ function activateButtonWithKeyboard(f, button) {
   if (!down.defaultPrevented) button.click(); // jsdom does not synthesize native button activation.
   button.dispatchEvent(new f.window.KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
 }
+function segmentedVoiceFixture() {
+  const voice = voiceFixture(); let job, acknowledgments = [], cancels = 0;
+  return { ...voice,
+    start(id) { return job = { id, phase: 'listening' }; }, poll() { return job; },
+    finish() { return job = { ...job, phase: 'done' }; },
+    cancel() { cancels++; return job = { ...job, phase: 'cancelled', segment: undefined }; },
+    ack(id, sequence) { acknowledgments.push(sequence); if (job.segment?.sequence === sequence) job = { ...job, segment: undefined }; return job; },
+    publish(sequence, text) { job = { ...job, segment: { sequence, text } }; },
+    fail() { job = { ...job, phase: 'error', error: 'Model failed after partial speech.' }; },
+    counts: () => ({ acknowledgments, cancels }),
+  };
+}
 
 const draftInput = (e, node = e.doc.nodes[1], text = 'Recovered 🌿\n  exact  ') => ({ journey: e.activeKey ?? e.doc.id, nodeId: node.id, text, base: { question: node.question, answer: node.answer }, revision: 0 });
 
@@ -1230,12 +1243,119 @@ test('Record and Stop preserve the answer selection and state without committing
   const answer = f.document.getElementById('answer'); answer.focus(); f.type('answer', 'For everyone nearby.'); answer.setSelectionRange(4, 12);
   const record = f.document.getElementById('voice-record'); record.dispatchEvent(new f.window.Event('pointerdown', { bubbles: true })); record.focus();
   assert.equal(voice.counts().cancels, 0, 'moving to Record keeps the answer workspace active');
-  record.click(); await until(() => f.document.getElementById('voice-stop')?.disabled === false, 'Stop ready');
+  answer.setSelectionRange(0, 0); // A pointer activation must use its pre-focus capture.
+  record.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true, detail: 1 })); await until(() => f.document.getElementById('voice-stop')?.disabled === false, 'Stop ready');
   key(f, 'keyup'); assert.equal(voice.counts().finishes, 0, 'shortcut release cannot stop button recording');
   f.document.getElementById('voice-stop').click();
   await until(() => answer.value === 'For our neighbors nearby.', 'transcript inserted at captured selection');
   assert.equal(f.document.getElementById('answer-state').value, 'needs-evidence');
   assert.equal(node.answer, ''); assert.equal(voice.counts().starts, 1); assert.equal(voice.counts().finishes, 1);
+});
+
+test('aborted Record pointer capture does not replace a later keyboard caret', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 340, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  const answer = f.document.getElementById('answer'), record = f.document.getElementById('voice-record');
+  answer.focus(); f.type('answer', 'One two three'); answer.setSelectionRange(0, 3);
+  record.dispatchEvent(new f.window.Event('pointerdown', { bubbles: true }));
+  answer.setSelectionRange(4, 7); record.focus(); record.click();
+  await until(() => !f.document.getElementById('voice-stop').disabled, 'listening');
+  f.document.getElementById('voice-stop').click();
+  await until(() => answer.value.includes('our neighbors'), 'dictated');
+  assert.equal(answer.value, 'One our neighbors three');
+});
+
+test('streamed token chunks preserve exact words Unicode and order with durable draft acknowledgments', async t => {
+  const voice = segmentedVoiceFixture(), f = await fixture(t, 340, voice), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'ready');
+  chooseState(f, 'needs-evidence'); const answer = f.document.getElementById('answer');
+  answer.focus(); f.type('answer', 'For everyone nearby.'); answer.setSelectionRange(4, 12);
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'original draft persisted');
+  f.document.getElementById('voice-record').click(); await until(() => !f.document.getElementById('voice-stop').disabled, 'listening');
+  let release; f.pauseDraftWrite(() => new Promise(resolve => { release = resolve; }));
+  voice.publish(1, 'our neigh'); await until(() => answer.value === 'For our neigh nearby.', 'first visible chunk');
+  await until(() => release, 'draft write pending'); assert.deepEqual(voice.counts().acknowledgments, []);
+  f.pauseDraftWrite(null); release(); await until(() => voice.counts().acknowledgments.length === 1, 'durable ack');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, 'For our neigh nearby.');
+  voice.publish(1, 'our neigh'); await delay(250); assert.equal(answer.value, 'For our neigh nearby.', 'duplicate ignored');
+  voice.publish(2, 'bors café 🌱 again again'); await until(() => voice.counts().acknowledgments.includes(2), 'second durable ack');
+  assert.equal(answer.value, 'For our neighbors café 🌱 again again nearby.');
+  assert.equal(f.document.getElementById('answer-state').value, 'needs-evidence'); assert.equal(node.answer, '');
+  voice.fail(); await until(() => /Model failed/.test(f.document.getElementById('voice-status').textContent), 'partial failure');
+  assert.match(f.document.getElementById('voice-status').textContent, /2.*chunk|retained/i);
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, answer.value);
+});
+
+test('voice draft failure preserves visible partial text and stops without acknowledging a save', async t => {
+  const voice = segmentedVoiceFixture(), f = await fixture(t, 340, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'ready');
+  f.document.getElementById('answer').focus(); f.document.getElementById('voice-record').click();
+  await until(() => !f.document.getElementById('voice-stop').disabled, 'listening');
+  f.explorer.draftStore.write = async () => { throw new Error('Disk full'); };
+  voice.publish(1, 'Keep these words');
+  await until(() => voice.counts().cancels === 1, 'capture stopped after save failure');
+  assert.equal(f.document.getElementById('answer').value, 'Keep these words');
+  assert.deepEqual(voice.counts().acknowledgments, []);
+  assert.equal(f.document.getElementById('answer-status').textContent, 'Draft could not be saved');
+  assert.ok(f.document.getElementById('retry-draft')); assert.match(f.document.getElementById('voice-status').textContent, /not saved|could not be saved/);
+});
+
+test('voice caret changes and out-of-order chunks cannot overwrite accepted partial text', async t => {
+  const voice = segmentedVoiceFixture(), f = await fixture(t, 340, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'ready');
+  const answer = f.document.getElementById('answer'); answer.focus(); f.document.getElementById('voice-record').click();
+  await until(() => !f.document.getElementById('voice-stop').disabled, 'listening');
+  voice.publish(1, 'Keep'); await until(() => voice.counts().acknowledgments.length === 1, 'first chunk');
+  answer.setSelectionRange(0, 0); voice.publish(2, ' stale');
+  await until(() => voice.counts().cancels === 1, 'caret move cancels'); assert.equal(answer.value, 'Keep');
+  f.document.getElementById('voice-record').click(); await until(() => !f.document.getElementById('voice-stop').disabled, 'retry');
+  voice.publish(2, 'out of order'); await until(() => voice.counts().cancels === 2, 'out of order cancels');
+  assert.equal(answer.value, 'Keep');
+});
+
+test('streamed dictation accepts the exact answer limit and rejects a whole exceeding chunk', async t => {
+  const voice = segmentedVoiceFixture(), f = await fixture(t, 340, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'ready');
+  const answer = f.document.getElementById('answer'); answer.focus(); f.type('answer', 'x'.repeat(19996) + ' '); answer.setSelectionRange(19997, 19997);
+  f.document.getElementById('voice-record').click(); await until(() => !f.document.getElementById('voice-stop').disabled, 'listening');
+  voice.publish(1, 'abc'); await until(() => voice.counts().acknowledgments.length === 1, 'exact limit persisted');
+  assert.equal(answer.value.length, 20000);
+  voice.publish(2, 'd'); await until(() => voice.counts().cancels === 1, 'over limit stopped');
+  assert.equal(answer.value.length, 20000); assert.ok(answer.value.endsWith(' abc'));
+  assert.match(f.document.getElementById('voice-status').textContent, /answer limit/);
+});
+
+test('Stop shortcut and Cancel keep accepted voice chunks as recoverable drafts', async t => {
+  const voice = segmentedVoiceFixture(), f = await fixture(t, 340, voice), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'ready');
+  const answer = f.document.getElementById('answer'); answer.focus(); f.document.getElementById('voice-record').click();
+  await until(() => !f.document.getElementById('voice-stop').disabled, 'listening');
+  voice.publish(1, 'First'); await until(() => voice.counts().acknowledgments.length === 1, 'first chunk');
+  key(f, 'keyup'); assert.equal(f.document.getElementById('voice-stop').disabled, false, 'button capture ignores key release');
+  key(f, 'keydown'); await until(() => !f.document.getElementById('voice-record').disabled, 'shortcut finished');
+  assert.equal(answer.value, 'First'); assert.equal(node.answer, '');
+  f.document.getElementById('voice-record').click(); await until(() => !f.document.getElementById('voice-stop').disabled, 'second recording');
+  voice.publish(1, 'Second'); await until(() => voice.counts().acknowledgments.length === 2, 'second draft chunk');
+  f.document.getElementById('voice-cancel').click(); await until(() => voice.counts().cancels === 1, 'cancel');
+  assert.equal(answer.value, 'First Second'); assert.match(f.document.getElementById('voice-status').textContent, /1 chunk retained/);
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, 'First Second'); assert.equal(node.answer, '');
+  voice.publish(2, 'stale'); await delay(250); assert.equal(answer.value, 'First Second');
+});
+
+test('a stale listening poll cannot regress the stopped dictation phase', async t => {
+  const voice = voiceFixture(); let id, release, phase = 'listening';
+  voice.start = value => ({ id: id = value, phase: 'listening' });
+  voice.poll = () => ({ id, phase });
+  voice.finish = () => ({ id, phase: phase = 'transcribing' });
+  const f = await fixture(t, 340, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'ready');
+  f.pauseVoicePoll(() => new Promise(resolve => { release = resolve; }));
+  f.document.getElementById('voice-record').click(); await until(() => release, 'old poll pending');
+  f.document.getElementById('voice-stop').click();
+  await until(() => f.document.getElementById('voice-feedback').dataset.phase === 'transcribing', 'capture stopped');
+  f.pauseVoicePoll(null); release(); await delay(30);
+  assert.equal(f.document.getElementById('voice-feedback').dataset.phase, 'transcribing');
+  f.document.getElementById('voice-cancel').click();
 });
 
 test('button recording can finish once by deliberate shortcut and can cancel from its controls', async t => {

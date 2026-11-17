@@ -77,7 +77,8 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     record.type = stop.type = discard.type = 'button'; voiceActions.append(record, stop, discard);
     let pointerSelection;
     record.addEventListener('pointerdown', () => { pointerSelection = { start: answer.selectionStart, end: answer.selectionEnd }; });
-    record.addEventListener('click', () => { void start('button', pointerSelection); pointerSelection = null; });
+    record.addEventListener('pointercancel', () => { pointerSelection = null; });
+    record.addEventListener('click', event => { void start('button', event.detail > 0 ? pointerSelection : null); pointerSelection = null; });
     stop.addEventListener('click', () => { void finish(); answer.focus({ preventScroll: true }); });
     discard.addEventListener('click', () => { cancel(); answer.focus({ preventScroll: true }); });
     const bar = element('div', 'voice-feedback'); bar.id = 'voice-feedback'; bar.setAttribute('aria-hidden', 'true');
@@ -100,8 +101,8 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     details.addEventListener('toggle', () => { if (!details.isConnected) return; settingsOpen = details.open; if (settingsOpen && !options) void loadOptions(); changed(); });
     paintFeedback(); paintChoices();
   }
-  const request = async (action, id, keepalive = false) => {
-    const response = await fetch('api/voice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, id }), keepalive });
+  const request = async (action, id, keepalive = false, sequence) => {
+    const response = await fetch('api/voice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, id, ...(sequence === undefined ? {} : { sequence }) }), keepalive });
     const result = await response.json(); if (!response.ok) throw new Error(result.error); return result;
   };
   async function check() {
@@ -115,31 +116,57 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     if (!recording) return;
     const old = recording; recording = null;
     pendingRelease = Promise.allSettled([pendingRelease, request('cancel', old.id, true)]).then(() => {});
-    show('Dictation cancelled. ' + hint());
+    show('Dictation cancelled. ' + retained(old) + hint());
   }
+  const retained = job => `${job.savedCount ? `${job.savedCount} chunk${job.savedCount === 1 ? '' : 's'} retained in your local draft. ` : ''}${job.lastSequence > job.savedCount ? 'Visible text is not yet confirmed saved; check draft recovery. ' : ''}`;
   function sameContext(job) {
-    return binding && job.context === context() && binding.answer.value === job.value;
+    return binding && job.context === context() && binding.answer.value === job.value && binding.answer.selectionStart === job.caretStart && binding.answer.selectionEnd === job.caretEnd;
   }
   function receive(job, result) {
     if (recording !== job) return;
+    if (result.id !== job.id) return;
     if (!sameContext(job)) return cancel();
+    if ((job.finishing || job.phase === 'transcribing') && result.phase === 'listening') result = { ...result, phase: 'transcribing' };
+    const legacy = result.phase === 'done' && typeof result.text === 'string' && !job.lastSequence;
+    const segment = result.segment || (legacy && result.text.trim() ? { sequence: 1, text: result.text.trim() } : null);
+    if (segment && segment.sequence > job.lastSequence && !job.saving) {
+      if (!Number.isSafeInteger(segment.sequence) || segment.sequence !== job.lastSequence + 1 || typeof segment.text !== 'string' || !segment.text.length || segment.text.length > (legacy ? 20000 : 4096)) {
+        cancel(); return show('Dictation stopped after an out-of-order or invalid chunk. ' + retained(job));
+      }
+      const transcript = job.transcript + segment.text;
+      const addition = `${job.before && !/\s$/.test(job.before) && !/^\s/.test(transcript) ? ' ' : ''}${transcript}${job.after && !/\s$/.test(transcript) && !/^\s|^[.,!?;:]/.test(job.after) ? ' ' : ''}`;
+      const value = job.before + addition + job.after, caret = job.before.length + addition.length;
+      if (value.length > 20000) { cancel(); return show('Dictation would exceed the answer limit. The new chunk was not inserted. ' + retained(job) + 'Shorten your draft and try again.'); }
+      job.transcript = transcript; job.lastSequence = segment.sequence; job.saving = true;
+      const saved = insert(value, caret);
+      job.value = value; job.caretStart = job.caretEnd = caret; job.context = context();
+      void Promise.resolve(saved).then(async () => {
+        job.savedCount++;
+        if (recording !== job || !sameContext(job)) { if (recording === job) cancel(); return; }
+        const next = legacy ? { id: job.id, phase: 'done' } : await request('ack', job.id, false, segment.sequence);
+        job.saving = false; receive(job, next);
+      }).catch(error => {
+        if (recording !== job) return;
+        cancel(); show(`Dictation stopped. ${job.savedCount === job.lastSequence ? 'Text was saved locally, but dictation could not acknowledge it.' : 'Visible text could not be saved.'} ${error.message} Use the draft recovery controls; review retained text before retrying.`);
+      });
+    }
+    if (job.saving) {
+      if (['listening', 'transcribing'].includes(result.phase)) job.phase = result.phase;
+      if (['done', 'error', 'cancelled'].includes(result.phase)) job.phase = 'transcribing';
+      return show(`Saving dictated text locally… ${retained(job)}${result.error || result.note || ''}`, { ...result, phase: job.phase });
+    }
     if (result.phase === 'done') {
       recording = null;
-      const text = result.text?.trim() || '';
-      if (!text) return show('No speech recognized. ' + hint());
-      const before = job.value.slice(0, job.start), after = job.value.slice(job.end);
-      const addition = `${before && !/\s$/.test(before) ? ' ' : ''}${text}${after && !/^\s|^[.,!?;:]/.test(after) ? ' ' : ''}`;
-      const value = before + addition + after;
-      if (value.length > 20000) return show('Dictation would exceed the answer limit. Shorten your draft and try again.');
-      insert(value, before.length + addition.length);
-      show('Dictation added to your draft. Review it before saving.');
-    } else if (['cancelled', 'error'].includes(result.phase)) { recording = null; show(result.error || 'Dictation stopped.'); }
-    else { job.phase = result.phase; show(result.phase === 'listening' ? `Listening… ${job.initiator === 'button' ? 'Select Stop or press ' + job.settings.label + ' to finish' : job.settings.mode === 'toggle' ? 'Press ' + job.settings.label + ' to finish' : 'Release to finish'} · Esc to cancel` : result.phase === 'transcribing' ? 'Transcribing locally… Cancel to discard.' : 'Loading local voice model… Wait for “Listening” before speaking.', result); }
+      if (!job.transcript.trim()) return show('No speech recognized. ' + hint());
+      show('Dictation added to your draft. ' + retained(job) + (result.note || '') + ' Review it before saving an answer.');
+    } else if (['cancelled', 'error'].includes(result.phase)) { recording = null; show((result.error || 'Dictation stopped.') + ' ' + retained(job) + 'Record again to retry the remaining speech.'); }
+    else { job.phase = result.phase; show(result.phase === 'listening' ? `Listening… ${job.initiator === 'button' ? 'Select Stop or press ' + job.settings.label + ' to finish' : job.settings.mode === 'toggle' ? 'Press ' + job.settings.label + ' to finish' : 'Release to finish'} · Esc to cancel · ${job.savedCount} chunks saved locally` : result.phase === 'transcribing' ? 'Finishing captured audio locally… Cancel keeps inserted draft text. ' + (result.note || '') : 'Loading local voice model… Wait for “Listening” before speaking.', result); }
   }
   async function start(initiator = 'shortcut', selection) {
     if (!settings?.ready || !binding || recording || optionsBusy) return;
     const answer = binding.answer;
-    const job = recording = { id: window.crypto.randomUUID(), settings, initiator, context: context(), value: answer.value, start: selection?.start ?? answer.selectionStart, end: selection?.end ?? answer.selectionEnd, phase: 'loading' };
+    const start = selection?.start ?? answer.selectionStart, end = selection?.end ?? answer.selectionEnd;
+    const job = recording = { id: window.crypto.randomUUID(), settings, initiator, context: context(), value: answer.value, before: answer.value.slice(0, start), after: answer.value.slice(end), caretStart: answer.selectionStart, caretEnd: answer.selectionEnd, transcript: '', lastSequence: 0, savedCount: 0, phase: 'loading' };
     show('Loading local voice model… Wait for “Listening” before speaking.', { phase: 'loading' });
     try { await pendingRelease; if (recording === job) receive(job, await request('start', job.id)); }
     catch (error) { if (recording === job) { cancel(); show(error.message); } }
@@ -185,6 +212,7 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
   return {
     cancel,
     bind(answer, root) {
+      if (recording && !sameContext(recording)) cancel();
       buildControls(answer, root);
       answer.addEventListener('focus', () => { if (!recording) void check(); });
       const leave = () => window.setTimeout(() => {
@@ -193,7 +221,6 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
       answer.addEventListener('blur', leave);
       root.addEventListener('focusout', leave);
       answer.addEventListener('input', () => { if (recording && answer.value !== recording.value) cancel(); });
-      if (recording && !sameContext(recording)) cancel();
       if (!settings) void check();
     },
   };

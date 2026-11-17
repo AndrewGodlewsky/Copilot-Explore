@@ -66,8 +66,8 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/voice') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req, 1024);
-        if (!['start', 'poll', 'finish', 'cancel'].includes(input.action) || typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || Object.keys(input).some(k => !['action', 'id'].includes(k))) throw new Error('Invalid voice request.');
-        return json(200, voice[input.action](input.id));
+        if (!['start', 'poll', 'finish', 'cancel', 'ack'].includes(input.action) || typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || Object.keys(input).some(k => !['action', 'id', ...(input.action === 'ack' ? ['sequence'] : [])].includes(k)) || (input.action === 'ack' && (!Number.isSafeInteger(input.sequence) || input.sequence < 1))) throw new Error('Invalid voice request.');
+        return json(200, voice[input.action](input.id, input.sequence));
       }
       if (req.method === 'GET' && route === 'api/state') return json(200, explorer.uiSnapshot());
       if (req.method === 'GET' && route === 'api/history') {

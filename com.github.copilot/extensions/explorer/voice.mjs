@@ -62,7 +62,7 @@ export class VoiceService {
     if (this.cancelled.has(id)) return { id, phase: 'cancelled' };
     if (this.job?.id === id) return this.poll(id);
     if (microphoneOwner || active(this.job?.phase)) throw new Error('Another Explorer recording is already active.');
-    const job = this.job = { id, phase: 'loading', started: this.now(), heartbeat: this.now(), levels: [] };
+    const job = this.job = { id, phase: 'loading', started: this.now(), heartbeat: this.now(), levels: [], sequence: 0, acknowledged: 0, characters: 0 };
     microphoneOwner = job;
     void (async () => {
       try {
@@ -75,7 +75,16 @@ export class VoiceService {
           if (this.job !== job || !active(job.phase)) return;
           if (message.phase === 'listening' && job.phase === 'loading') { job.phase = 'listening'; job.started = this.now(); }
           if (message.phase === 'level' && job.phase === 'listening' && Number.isFinite(message.level)) { job.levels.push(Math.max(0, Math.min(1, message.level))); job.levels = job.levels.slice(-24); }
+          if (message.phase === 'segment') {
+            const { sequence, text } = message;
+            if (Number.isSafeInteger(sequence) && sequence > 0 && sequence <= job.acknowledged) return;
+            if (job.segment?.sequence === sequence && job.segment.text === text) return;
+            if (!Number.isSafeInteger(sequence) || sequence !== job.sequence + 1 || job.segment || typeof text !== 'string' || !text.length || text.length > 4096 || job.characters + text.length > 20000) return this.fail(job, 'Local dictation returned an invalid or out-of-order chunk. Previously inserted text remains in your draft.');
+            job.sequence = sequence; job.characters += text.length; job.segment = { sequence, text }; job.pendingSince = this.now();
+          }
+          if (message.phase === 'transcribing' && job.phase === 'listening') { job.phase = 'transcribing'; job.started = this.now(); job.note = typeof message.note === 'string' ? message.note.slice(0, 500) : undefined; }
           if (message.phase === 'done' && job.phase === 'transcribing' && typeof message.text === 'string' && message.text.length <= 20000) { job.phase = 'done'; job.text = message.text; }
+          if (message.phase === 'done' && job.phase === 'transcribing' && message.text === undefined && !job.segment) job.phase = 'done';
           if (message.phase === 'error') { job.phase = 'error'; job.error = typeof message.error === 'string' ? message.error.slice(0, 500) : 'Local dictation failed. Check microphone access and Copilot’s downloaded model, then try again.'; }
           if (!active(job.phase)) this.stop(job);
         });
@@ -86,7 +95,16 @@ export class VoiceService {
     return this.poll(id);
   }
   current(id) { if (!this.job || this.job.id !== id) throw new Error('This recording is no longer active.'); return this.job; }
-  poll(id) { if (this.job?.id !== id && this.cancelled.has(id)) return { id, phase: 'cancelled' }; const job = this.current(id); job.heartbeat = this.now(); return { id: job.id, phase: job.phase, text: job.text, error: job.error, levels: job.phase === 'listening' ? job.levels : [], elapsedMs: job.phase === 'listening' ? Math.max(0, this.now() - job.started) : 0 }; }
+  poll(id) { if (this.job?.id !== id && this.cancelled.has(id)) return { id, phase: 'cancelled' }; const job = this.current(id); job.heartbeat = this.now(); return { id: job.id, phase: job.phase, text: job.text, segment: job.segment, acknowledged: job.acknowledged, error: job.error, note: job.note, levels: job.phase === 'listening' ? job.levels : [], elapsedMs: job.phase === 'listening' ? Math.max(0, this.now() - job.started) : 0 }; }
+  ack(id, sequence) {
+    const job = this.current(id);
+    if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence > job.sequence || (sequence > job.acknowledged && sequence !== job.segment?.sequence)) throw new Error('Invalid dictation acknowledgment.');
+    if (sequence > job.acknowledged) {
+      job.acknowledged = sequence; job.segment = undefined;
+      if (active(job.phase)) job.child.send({ action: 'ack', sequence }, error => { if (error && active(job.phase)) this.fail(job, 'Local voice connection closed. Previously inserted text remains in your draft.'); });
+    }
+    return this.poll(id);
+  }
   finish(id) {
     if (this.job?.id !== id) return this.cancel(id);
     const job = this.current(id);
@@ -101,12 +119,15 @@ export class VoiceService {
     this.cancelled.add(id);
     if (this.cancelled.size > 32) this.cancelled.delete(this.cancelled.values().next().value);
     if (this.job?.id !== id) return { id, phase: 'cancelled', error: message };
-    const job = this.current(id); job.phase = 'cancelled'; job.text = undefined; job.error = message; this.stop(job); return this.poll(id);
+    const job = this.current(id); job.phase = 'cancelled'; job.text = undefined; job.segment = undefined; job.error = message; this.stop(job); return this.poll(id);
   }
   tick() {
     const job = this.job;
     if (!job || !active(job.phase)) return;
-    if (this.now() - job.heartbeat > 5000 || this.now() - job.started > (job.phase === 'listening' ? 120000 : 60000)) this.cancel(job.id, 'Dictation stopped after a timeout or lost connection.');
+    if (this.now() - job.heartbeat > 5000) return this.cancel(job.id, 'Dictation stopped after a lost connection. Previously inserted text remains in your draft.');
+    if (job.segment && this.now() - job.pendingSince > 5000) return this.fail(job, 'Dictation stopped because the local draft was not acknowledged in time. Check the draft recovery controls before recording again.');
+    if (job.phase === 'listening' && this.now() - job.started >= 600000) { job.note = 'The ten-minute recording limit was reached. Capture stopped; finishing captured audio.'; this.finish(job.id); }
+    else if (this.now() - job.started > (job.phase === 'transcribing' ? 45000 : 60000) && job.phase !== 'listening') this.fail(job, 'Local dictation timed out. Previously inserted text remains in your draft; retry to record the remaining speech.');
   }
   close() { this.closed = true; clearInterval(this.timer); if (this.job) this.cancel(this.job.id); }
 }

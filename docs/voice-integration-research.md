@@ -66,3 +66,30 @@ Only English is downloaded on this machine. The host catalog contains more speec
 While listening, the helper computes RMS loudness from each 100 ms PCM frame, maps −60 to 0 dBFS onto a bounded 0–1 value, and sends only that scalar to the server. The server retains 24 recent measurements. The UI polls every 200 ms and displays those levels plus elapsed recording time; silence is flat. Loading and transcription use an indeterminate indicator, with text and reduced-motion support. No partial transcript is claimed.
 
 Automated coverage includes preferences/revision conflicts, unavailable devices, duplicate names, unsupported models, HTTP authorization, level bounds/history, UI save/refresh, retained settings drafts, and all bar phases. Device enumeration and synthetic audio do not open a microphone. The new controls' visual appearance, alternate device capture, and additional model families remain manual acceptance checks.
+
+## v0.1.26 continuous dictation and recoverable transport chunks
+
+Rechecked the installed components on November 17, 2026. Foundry 2.2.1 declares `speechSegment.kind` as `none`, `partial` or `final`, but declarations alone do not establish the selected model's behavior. The downloaded Nemotron English CPU v3 produced 45 `none` token fragments during a probe containing two identical synthetic sentences, each followed by five seconds of silence. All fragments arrived while the input queue was open; no final utterance, timestamp or `utteranceStart` marker appeared. The terminal aggregate exactly matched concatenated tokens. The [Foundry implementation](https://raw.githubusercontent.com/microsoft/Foundry-Local/main/sdk_v2/cpp/src/inferencing/generative/audio/audio_session.cc) deliberately emits NONE for this model's decoded tokens and builds its aggregate by concatenating them. Its PARTIAL/FINAL support remains a future model capability.
+
+Explorer therefore transports immutable token text through one continuously loaded `AudioSession` and live `ItemQueue`. It groups text at 512 UTF-16 characters or roughly one second, preserving surrogate pairs, repeated words and all token spacing. These are transport records, not speech or silence boundaries. It rejects mixed hypothesis semantics and verifies exact equality with the final aggregate; mismatch reports failure and preserves accepted draft text. It never appends the aggregate a second time or rewrites transcripts with another model.
+
+The helper assigns each record a monotonic sequence. The service retains one unacknowledged record, and the browser inserts it only into the recording's original span after checking its current context, value and caret. Its own insert advances those expectations. The existing `DraftClient.flush` must acknowledge the local revision before the browser acknowledges that sequence. Duplicate polling cannot repeat an insertion. Save failure leaves text visible with the usual draft recovery controls, stops capture and does not claim it was saved. Stop drains captured audio; Cancel keeps earlier inserts and cancels remaining work. Neither operation commits an answer.
+
+| Resource or deadline | Bound and outcome |
+| --- | --- |
+| Recording | 600,000 ms / 10 minutes; explicitly stop and drain |
+| No decoded-text progress | 180,000 ms / 3 minutes, including silence; explicitly stop and drain |
+| PCM input | 16 kHz mono PCM16, 100 ms / 3,200-byte items |
+| Native input backlog | 50 items / 5 seconds; explicitly stop capture and drain |
+| Pinned queue PCM | 19,200,000 bytes for the queue lifetime; buffers remain pinned even after consumption |
+| Recorder circular buffer | 50 frames / 160,000 bytes; independent of the queue |
+| Capture delivery stall | At least 4,000 ms; fail with potentially incomplete audio |
+| Unacknowledged text | One record; at most 4,096 UTF-16 characters across the record and buffered token text |
+| Draft acknowledgment | 5,000 ms; stop on failure or timeout |
+| Transcript and complete answer | 20,000 UTF-16 characters; reject exceeding text without truncation |
+| Loading / finishing | 60,000 ms / 45,000 ms |
+| Canvas heartbeat | 5,000 ms; release the owned worker on connection loss |
+
+These PCM bounds do not cap total process RAM, model weights, native decoder state or SDK bookkeeping. PvRecorder exposes overflow debug logging but no dropped-frame counter; the stall guard does not detect every hardware drop. Its asynchronous wrapper calls native read on a timer, so a long read/delivery delay must not be reported as complete audio. Native resources and the owned catalog are released on completion, errors or worker termination. Audio remains memory-only in the product; the existing native Foundry operational-telemetry caveat still applies.
+
+The shipped worker's synthetic smoke passed with 17.73 seconds of test PCM under Node and the installed Copilot executable, each yielding eight ordered text chunks and exact native aggregate equality. The fixture used an already-installed offline Windows speech synthesizer solely to create temporary test audio, which is separate from production microphone handling. Deterministic tests cover a simulated ten minutes, queue/text bounds, Unicode token splits, repeated words, aggregate mismatch, cancellation, deadlines and recoverable draft failures. They do not establish real microphone quality, every hardware dropout, additional model-family behavior or visible desktop rendering.

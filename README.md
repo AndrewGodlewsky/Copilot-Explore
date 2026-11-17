@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.25.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.26.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -101,17 +101,21 @@ Research has a three-minute deadline. It reads public web pages, compares practi
 
 ## Voice dictation
 
-Select **Record** beside **Your answer**, wait for **Listening**, then speak hands-free. Select **Stop** to transcribe, or **Cancel** to discard the recording, including while the model loads or transcribes. **Stop** is available only after Listening begins; cancelling during loading captures no audio. You can also focus the answer and use your Copilot voice shortcut (for example **Ctrl+Space**): hold and release in push-to-talk mode, or press twice in toggle mode. A deliberate shortcut press can finish a button-started recording; releasing a shortcut key cannot stop one. Explorer reads your shortcut and recording mode from Copilot without changing either setting. Review the text before saving.
+Select **Record** beside **Your answer**, wait for **Listening**, then speak hands-free. Text appears in your local draft as the model decodes it. **Stop** ends capture and finishes buffered audio; **Cancel** stops remaining work and keeps text already inserted. Cancelling during loading captures no audio. You can also focus the answer and use your Copilot voice shortcut (for example **Ctrl+Space**): hold and release in push-to-talk mode, or press twice in toggle mode. A deliberate shortcut press can finish a button-started recording; releasing a shortcut key cannot stop one. Explorer reads your shortcut and recording mode from Copilot without changing either setting. Review the text before saving an answer.
 
 The bar beneath the answer distinguishes three stages:
 
 | Stage | What you see | What is happening |
 | --- | --- | --- |
 | Loading model | Loading indicator and a reminder to wait | The helper loads the selected local model. The microphone has not started yet. |
-| Listening | Moving audio bars and elapsed recording time | Your microphone is recording. The bars reflect measured input loudness; silence stays flat. |
-| Transcribing | Transcription indicator | The microphone has stopped. The local model is converting the recording into text. |
+| Listening | Moving audio bars, elapsed recording time and saved chunk count | Your microphone is recording while the local model decodes speech. Silence stays flat. |
+| Transcribing | Finishing indicator and any stop reason | The microphone has stopped. Buffered audio and pending draft writes are finishing. |
 
-There is no live partial transcript: the complete text appears after transcription finishes. The indicators respect reduced-motion preferences, and recording states are also provided as text. Each recording loads the model afresh. Escape, leaving the answer and voice controls, editing the draft, or switching questions cancels dictation. Releasing the shortcut during loading cancels startup. No speech, errors and timeouts leave your draft intact so you can retry. Recordings are limited to two minutes.
+One model load and continuous audio request serve each recording. Ordered text chunks arrive about once a second or after 512 characters, without splitting a Unicode surrogate pair. These are transport chunks, not complete words or finalized utterances: the installed model exposes decoded tokens but no speech-boundary markers. Repeated words and the model's spacing are preserved. The final aggregate is checked against those tokens and never inserted again.
+
+**Saving draft** and **Draft saved locally** distinguish visible text from recoverable text. Explorer acknowledges a chunk only after the existing local draft store accepts it. A failed write keeps the visible text, stops further dictation and exposes **Retry saving draft** or the existing conflict recovery controls. Chunks never commit an answer or add answer history. Cancel, Escape, edits, caret moves, leaving the answer and voice controls, or switching questions stop remaining work and retain inserted text. The indicators respect reduced-motion preferences.
+
+Recordings end at **10 minutes**, or after **3 minutes without decoded text** (including silence). Capture also stops explicitly if the model falls five seconds behind, a draft chunk is not acknowledged within five seconds, or text buffering reaches its limit. A four-second audio-delivery stall reports potentially incomplete audio; the recorder cannot detect every hardware drop. Finishing captured audio has a 45-second limit. The complete answer remains limited to **20,000 characters**; an exceeding chunk is rejected whole. Review retained text and record the remainder after a failure. See the [technical bounds](docs/voice-integration-research.md#v0126-continuous-dictation-and-recoverable-transport-chunks).
 
 ### Microphone and model settings
 
@@ -136,6 +140,7 @@ sequenceDiagram
     participant Files as Settings and model files
     participant Helper as Explorer voice helper
     participant Mic as Selected microphone
+    participant Draft as Local draft store
 
     You->>UI: Focus the answer box
     UI->>Server: Check voice availability
@@ -155,32 +160,33 @@ sequenceDiagram
 
     loop While you speak
         Mic->>Helper: Audio frames, kept in memory
+        Helper->>Helper: Stream 100 ms PCM frames through one loaded model
         Helper-->>Server: Measured audio level
         UI->>Server: Poll recording status
-        Server-->>UI: Listening, recent levels and elapsed time
-        UI-->>You: Show input bars and recording time
+        Helper-->>Server: One ordered decoded-token chunk
+        Server-->>UI: Pending chunk, levels and elapsed time
+        UI->>UI: Check context, draft and caret; update owned insertion
+        UI->>Server: Persist local draft with revision
+        Server->>Draft: Atomic draft write
+        Draft-->>UI: Durable draft acknowledgment through server
+        UI->>Server: Acknowledge chunk sequence
+        Server->>Helper: Release pending chunk
+        UI-->>You: Text and local draft save status
     end
 
     You->>UI: Release Space or Ctrl
     UI->>Server: Finish this recording
-    Server->>Helper: Stop capture and transcribe
+    Server->>Helper: Stop capture and drain
     Helper->>Mic: Stop and release microphone
-    Helper->>Helper: Feed PCM in 100 ms frames to Foundry Local
-    Helper->>Helper: Selected Nemotron model converts speech into text
-    Helper-->>Server: Final transcript
+    Helper->>Helper: Verify final aggregate equals decoded tokens
+    Helper-->>Server: Completed, or visible failure with prior chunks retained
     Server->>Helper: End process and clean temporary catalog
     UI->>Server: Poll for completed result
-    Server-->>UI: Transcript for this recording ID
-
-    alt Same question and unchanged draft
-        UI->>UI: Insert text at the remembered cursor or selection
-        UI-->>You: Editable, unsaved answer
-    else Cancelled or draft changed
-        UI->>UI: Discard stale transcript
-    end
+    Server-->>UI: Completion for this recording ID
+    UI-->>You: Review the local draft before saving an answer
 ```
 
-PvRecorder captures mono, 16-bit PCM audio at 16 kHz. Foundry Local runs the speech model on your computer after capture ends. Only loudness measurements, status, and the final transcript travel between Explorer's helper, local server, and answer UI; raw audio stays in the helper's memory. The transcript is inserted directly into the draft, without submitting it to chat or saving the answer. Lost connections and timeouts stop capture, and recording IDs prevent late results from entering another question.
+PvRecorder captures mono, 16-bit PCM audio at 16 kHz. Foundry Local runs the speech model while capture continues. Only loudness measurements, status and text chunks travel between Explorer's helper, local server and answer UI; raw audio stays in the helper's memory. Queue lifetime PCM is capped at 19.2 MB, with a separate 160 KB recorder buffer; these are audio limits, not a total process-memory guarantee. Lost connections and timeouts stop capture, and recording IDs plus chunk sequences prevent stale or repeated insertion.
 
 ## Files and privacy
 
@@ -222,14 +228,14 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.25, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.25**.
+- Update to v0.1.26, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.26**.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
 - Pin a saved question, open another question, and expand References in a narrow pane. Check long answer disclosure, source jump with an unsent draft, keyboard focus after Remove reference, and unavailable-source text after restoring an earlier history version.
 - Collapse a branch with an active descendant editor, confirm focus moves to the visible ancestor, then select the hidden question from Outline. Check that its draft text and state return, the other branches stay as they were, and the compact hidden/unresolved counts remain readable in a narrow pane.
 - Focus a deep branch and a leaf, use Fit visible map, then Show whole map. Check root and ancestors remain visible during focus, unrelated branches return with their prior folds, and the answer editor and caret remain usable in a narrow pane. Select a hidden question from Outline and check focus exits.
-- Focus the answer, select **Record**, wait for **Listening**, speak, then select **Stop**. Confirm the text enters the draft at the earlier caret and is not saved automatically. Repeat with the configured voice shortcut, and check Cancel during loading/listening/transcribing, Escape, Tab through controls, moving to References or another question, and narrow-pane button focus.
+- Focus the answer, select **Record**, wait for **Listening**, and speak for more than two minutes. Confirm ordered text appears at the earlier caret, becomes **Draft saved locally**, and never commits an answer. Stop should finish buffered speech; Cancel should keep inserted text. Repeat with the configured shortcut, silence, deliberate repeated words, caret changes, model lag and draft recovery. Check Escape, Tab through controls, moving to References or another question, and narrow-pane button focus. Automated synthetic audio does not establish these microphone/UI checks.
 - Open **Voice settings**, choose a microphone and downloaded model, save, and reopen Explorer to check persistence. Disconnect a selected device and confirm Explorer explains the problem. Check that the recording bars respond to your speech, stay flat in silence, and stop during transcription.
 - Answer a question and confirm relevant deeper questions appear.
 - Research another question; confirm progress appears in the node and the main chat stays quiet. Inspect relevance, source links and uncertainty. Add a recommendation and selected details to an existing draft, undo an addition, then save explicitly. Cancel another research run and confirm your answer is preserved.

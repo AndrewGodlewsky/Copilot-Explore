@@ -13,14 +13,20 @@ const directory = await mkdtemp(join(tmpdir(), 'explorer-voice-smoke-'));
 let child;
 try {
   child = spawnVoiceWorker();
-  const result = await new Promise((resolve, reject) => {
+  const segments = [];
+  await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Native voice smoke timed out.')), 55000);
-    child.on('message', message => { clearTimeout(timer); message.phase === 'done' ? resolve(message) : reject(new Error(JSON.stringify(message))); });
+    child.on('message', message => {
+      if (message.phase === 'segment') {
+        try { assert.equal(message.sequence, segments.length + 1); segments.push(message.text); child.send({ action: 'ack', sequence: message.sequence }); }
+        catch (error) { clearTimeout(timer); reject(error); }
+      } else if (message.phase === 'done' || message.phase === 'error') { clearTimeout(timer); message.phase === 'done' ? resolve(message) : reject(new Error(JSON.stringify(message))); }
+    });
     child.once('error', error => { clearTimeout(timer); reject(error); });
     child.once('exit', code => { clearTimeout(timer); reject(new Error(`Voice worker exited ${code}`)); });
     child.send({ action: 'start', config: { ...config, directory }, pcm });
   });
-  console.log(`PASS native local voice: ${JSON.stringify(result.text)}. Existing model, separate catalog, no microphone or download.`);
+  console.log(`PASS native local voice: ${JSON.stringify(segments.join(''))}; ${segments.length} ordered chunks, native aggregate matched. Existing model, separate catalog, no microphone or download.`);
 } finally {
   if (child && child.exitCode === null) { const exited = new Promise(resolve => child.once('exit', resolve)); child.kill(); await exited; }
   assert.equal(dirname(resolve(directory)), resolve(tmpdir()));

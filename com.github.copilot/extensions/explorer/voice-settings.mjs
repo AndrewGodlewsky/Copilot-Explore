@@ -29,7 +29,8 @@ export async function readVoiceJson(file, max = 65536) {
   const handle = await open(file, 'r');
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.size > max) throw limitError();
+    if (!info.isFile()) throw new Error('Voice metadata is not a regular file.');
+    if (info.size > max) throw limitError();
     const buffer = Buffer.alloc(max + 1), { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     if (bytesRead > max) throw limitError();
     return JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
@@ -85,9 +86,10 @@ export async function inspectVoice() {
     if (error.code || error instanceof SyntaxError) throw Object.assign(new Error('Could not read Copilot’s voice settings. Set up Voice dictation in Copilot and reopen Explorer.'), { code: 'VOICE_UNAVAILABLE' });
     throw error;
   }
-  const models = await downloadedModels(join(homedir(), '.github-copilot-cli', 'cache', 'models'));
+  let modelDiscoveryError = 'none';
+  const models = await downloadedModels(join(homedir(), '.github-copilot-cli', 'cache', 'models'), category => { modelDiscoveryError = category; });
   if (!installed) installed = dependencies(process.env.LOCALAPPDATA).catch(error => { installed = null; throw error; });
-  return { ...settings, ...await installed, models };
+  return { ...settings, ...await installed, models, modelDiscoveryError };
 }
 
 async function directories(path, budget) {
@@ -113,16 +115,19 @@ async function hasModelAssets(folder, config) {
   try { return (await Promise.all(assets.map(name => stat(join(folder, name))))).every(file => file.isFile() && file.size > 0); }
   catch { return false; }
 }
-export async function downloadedModels(root) {
+export async function downloadedModels(root, reportFailure = () => {}) {
   const result = [], budget = { entries: 500 };
   for (const publisher of await directories(root, budget)) for (const name of await directories(join(root, publisher), budget)) {
     const base = join(root, publisher, name);
     for (const folder of [base, ...(await directories(base, budget)).map(v => join(base, v))]) {
+      let speech = false;
       try {
         const config = await json(join(folder, 'genai_config.json'));
         const type = config.model?.type;
         if (typeof type !== 'string' || !/speech|whisper|parakeet|asr/i.test(type)) continue;
+        speech = true;
         const metadata = await json(join(folder, 'inference_model.json'));
+        if (typeof metadata?.Name !== 'string' || !metadata.Name.trim()) throw new Error('Speech model identity metadata is invalid.');
         const family = families.find(f => new RegExp(`^${f.variant.replaceAll('.', '\\.')}[:-]\\d+$`).test(metadata.Name));
         const compatible = !!family && type === 'nemotron_speech' && config.model.sample_rate === 16000;
         const supported = compatible && await hasModelAssets(folder, config);
@@ -130,7 +135,10 @@ export async function downloadedModels(root) {
         result.push({ id, path: folder, type, alias: family?.alias, supported, readiness: supported ? 'ready' : compatible ? 'unavailable' : 'unsupported',
           label: family ? `${family.label} · CPU · ${metadata.Name.split(/[:-]/).at(-1)}` : String(metadata.Name).slice(0, 200),
           reason: supported ? '' : compatible ? 'This model download is incomplete or has an unfamiliar file layout. Complete it in Copilot, then refresh.' : 'This downloaded speech model is not supported by Explorer’s streaming audio engine.' });
-      } catch (error) { if (error.code === 'DIAGNOSTIC_LIMIT') throw error; /* Unidentified metadata. */ }
+      } catch (error) {
+        if (error.code === 'DIAGNOSTIC_LIMIT') throw error;
+        if (speech || error.code !== 'ENOENT') reportFailure('inspection-failed');
+      }
     }
   }
   return result.sort((a, b) => b.label.localeCompare(a.label, undefined, { numeric: true }));

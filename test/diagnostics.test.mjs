@@ -127,6 +127,42 @@ test('speech metadata and preference reads enforce byte and traversal bounds', a
   await assert.rejects(new VoicePreferences(preferences).read(), { code: 'DIAGNOSTIC_LIMIT' });
 });
 
+test('real speech discovery preserves unknown metadata failures while absence and non-speech remain clean', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'explorer-speech-discovery-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const voice = voiceFixture(t, { inspect: async () => {
+    let modelDiscoveryError = 'none';
+    const models = await downloadedModels(root, category => { modelDiscoveryError = category; });
+    return { ...inventory, selectedModel: 'nemotron-speech-streaming-en-0.6b', models, modelDiscoveryError };
+  } });
+  const check = async (model, error) => {
+    const speech = await voice.diagnostics();
+    assert.equal(speech.model, model); assert.equal(speech.error, error);
+    assert.equal(speech.runtime, 'ready'); assert.equal(speech.microphone, 'ready');
+    const bytes = supportBundle({ speech });
+    assert.equal(JSON.parse(bytes).speech.error, error);
+    assert.ok(!bytes.includes('PRIVATE-CANARY')); assert.ok(!bytes.includes(root)); assert.ok(!bytes.includes('private.test'));
+  };
+  await check('unavailable', 'none'); // No installed package.
+  const folder = join(root, 'publisher', 'model'); await mkdir(folder, { recursive: true });
+  const config = join(folder, 'genai_config.json'), metadata = join(folder, 'inference_model.json');
+  await writeFile(config, JSON.stringify({ model: { type: 'phi3' } }));
+  await writeFile(metadata, '{"Name":' + canary);
+  await check('unavailable', 'none'); // Non-speech metadata is irrelevant.
+  await writeFile(config, JSON.stringify({ model: { type: 'nemotron_speech', sample_rate: 16000 } }));
+  await check('unknown', 'inspection-failed'); // Truncated known speech metadata.
+  await rm(metadata); await mkdir(metadata);
+  await check('unknown', 'inspection-failed'); // Known metadata is not readable as a file.
+  await rm(metadata, { recursive: true });
+  await check('unknown', 'inspection-failed'); // Known speech package has missing identity metadata.
+  await writeFile(metadata, JSON.stringify({ Name: null, private: canary }));
+  await check('unknown', 'inspection-failed'); // Parsed JSON still lacks usable identity.
+  await writeFile(metadata, JSON.stringify({ Name: 'nemotron-speech-streaming-en-0.6b-generic-cpu:3' }));
+  await check('unavailable', 'none'); // Readable known model with missing assets is genuinely unavailable.
+  assert.equal((await voice.diagnostics()).modelCount, 1);
+  await writeFile(config, '{"model":' + canary);
+  await check('unknown', 'inspection-failed'); // Unreadable configuration cannot establish non-speech status.
+});
+
 test('private diagnostics and explicit support HTTP export enforce origin, schema, safe failure and snapshot isolation', async t => {
   const explorer = new Explorer({}), original = explorer.snapshot(), cursor = explorer.pollSnapshot().cursor;
   let reads = 0;

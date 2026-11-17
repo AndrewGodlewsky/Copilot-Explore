@@ -40,10 +40,11 @@ export class VoiceService {
     try {
       const preferences = await this.preferences.read(), inventory = await this.inspect();
       result.runtime = 'ready'; result.modelCount = inventory.models.length;
+      if (inventory.modelDiscoveryError === 'inspection-failed') result.error = 'inspection-failed';
       const model = preferences.model === 'copilot'
         ? inventory.models.find(m => m.alias === inventory.selectedModel && m.supported) ?? inventory.models.find(m => m.alias === inventory.selectedModel)
         : inventory.models.find(m => m.id === preferences.model);
-      result.model = !model ? 'unavailable' : model.readiness ?? (model.supported === true ? 'ready' : model.supported === false ? 'unsupported' : 'unknown');
+      result.model = !model ? result.error === 'inspection-failed' ? 'unknown' : 'unavailable' : model.readiness ?? (model.supported === true ? 'ready' : model.supported === false ? 'unsupported' : 'unknown');
       const names = await this.devices(inventory.recorder); result.deviceCount = names.length;
       result.microphone = !names.length ? 'unavailable' : 'ready';
       try { microphoneIndex(preferences.microphone, names); }

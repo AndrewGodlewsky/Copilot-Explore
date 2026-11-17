@@ -189,7 +189,8 @@ export class StorageManagement {
     const history = new History(this.directory, record.key, record.id);
     const manifest = await this.read(join(directory, 'manifest.json'), 128 * 1024, { root });
     const value = history.validate(JSON.parse(manifest.text));
-    if (value.head.hash !== hash(JSON.stringify(document, null, 2))) throw new Error('History needs recovery.');
+    const currentRow = history.row(document, value.head.label);
+    if (['hash', 'revision', 'time', 'bytes'].some(field => value.head[field] !== currentRow[field]) || value.head.checkpoints.length) throw new Error('History needs recovery.');
     return { root, current, document, directory, history, manifest, value };
   }
   async preview(records, keepHistory) {

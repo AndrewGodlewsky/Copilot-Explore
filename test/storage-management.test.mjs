@@ -317,3 +317,32 @@ test('cleanup checks newest recovery document identity, not just a matching cont
   assert.equal(result.results[0].status, 'ineligible');
   assert.ok(await lstat(join(f.directory, 'history', f.key, `${preview.candidates[0].hash}.json`)));
 });
+
+for (const timing of ['before preview', 'before confirmation']) for (const field of ['revision', 'time', 'bytes', 'checkpoints']) {
+  test(`storage preserves unrecovered head ${field} changed ${timing}`, async t => {
+    const f = await fixture(t), history = await f.explorer.history(f.explorer.doc.id);
+    const directory = join(f.directory, 'history', f.key), manifestPath = join(directory, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    const snapshots = await Promise.all(manifest.entries.map(async row => [join(directory, `${row.hash}.json`), await readFile(join(directory, `${row.hash}.json`), 'utf8')]));
+    const preview = timing === 'before confirmation' ? await f.store.preview([f.record], 5) : null;
+    if (preview) assert.equal(preview.candidates.length, 3);
+    if (field === 'revision') manifest.head.revision++;
+    if (field === 'time') manifest.head.time = new Date(Date.parse(manifest.head.time) + 1).toISOString();
+    if (field === 'bytes') manifest.head.bytes++;
+    if (field === 'checkpoints') manifest.head.checkpoints = ['Invalid head protection'];
+    assert.doesNotThrow(() => history.validate(manifest), 'structural validation alone accepts the malformed head');
+    const damaged = JSON.stringify(manifest); await writeFile(manifestPath, damaged);
+    await assert.rejects(f.explorer.readHistory(f.explorer.doc.id), /History recovery required/);
+    if (preview) {
+      const result = await f.store.clean(preview.id);
+      assert.equal(result.results.filter(row => row.status === 'removed').length, 0);
+      assert.ok(result.results.every(row => /History needs recovery/.test(row.message)), 'confirmation uses the same recovery-required guard');
+    } else {
+      const result = await f.store.preview([f.record], 5);
+      assert.equal(result.candidates.length, 0);
+      assert.ok(result.issues.some(issue => /History needs recovery/.test(issue)));
+    }
+    assert.equal(await readFile(manifestPath, 'utf8'), damaged, 'malformed manifest retained exactly');
+    for (const [path, content] of snapshots) assert.equal(await readFile(path, 'utf8'), content, 'snapshot retained exactly');
+  });
+}

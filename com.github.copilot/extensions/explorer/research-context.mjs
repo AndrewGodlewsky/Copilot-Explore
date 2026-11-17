@@ -25,17 +25,23 @@ export function contextScope(value = 'decisions') {
 
 // Count actual SDK strings, not JSON-RPC escaping or opaque provider framing.
 // Each optional record is serialized once; selection only remeasures small metadata.
-export function prepareContext(source, { instructions = '', prefix = '', scope = 'decisions' } = {}) {
+export function prepareContext(source, { instructions = '', prefix = '', scope = 'decisions', excluded = [] } = {}) {
   scope = contextScope(scope);
+  if (!Array.isArray(excluded) || excluded.length > 5000 || excluded.some(id => typeof id !== 'string' || !id.length || id.length > 100) || new Set(excluded).size !== excluded.length) throw new Error('Invalid optional context exclusions.');
+  const exclusions = new Set(excluded), optional = [...source.path.slice(0, -1), ...source.decisionsElsewhere ?? []];
+  if (exclusions.has(source.path.at(-1)?.id)) throw new Error('The selected target is required context and cannot be excluded.');
+  const optionalIds = new Set(optional.map(item => item.id));
+  if (excluded.some(id => !optionalIds.has(id))) throw new Error('An optional context record changed. Refresh the review.');
+  const excludedCount = optional.filter(item => exclusions.has(item.id)).length;
   const context = { ...framing(source), ...(source.identity ? { identity: structuredClone(source.identity), targetId: source.targetId } : {}),
     scope, path: source.path.length ? [structuredClone(source.path.at(-1))] : [], decisionsElsewhere: [], truncated: false,
     omitted: { path: Math.max(0, source.path.length - 1), decisionsElsewhere: source.decisionsElsewhere?.length ?? 0 },
-    omissionReasons: { budget: 0, scope: scope === 'path' ? source.decisionsElsewhere?.length ?? 0 : 0 } };
+    omissionReasons: { budget: 0, scope: scope === 'path' ? (source.decisionsElsewhere ?? []).filter(item => !exclusions.has(item.id)).length : 0, ...(excludedCount ? { excluded: excludedCount } : {}) } };
   if (source.generationContext) {
     context.generationContext = []; context.omitted.generationContext = source.generationContext.length;
     if (scope === 'path') context.omissionReasons.scope += source.generationContext.filter(item => item.relation === 'child').length;
   }
-  const update = () => { const omitted = Object.values(context.omitted).reduce((sum, n) => sum + n, 0); context.truncated = !!omitted; context.omissionReasons.budget = omitted - context.omissionReasons.scope; };
+  const update = () => { const omitted = Object.values(context.omitted).reduce((sum, n) => sum + n, 0); context.truncated = !!omitted; context.omissionReasons.budget = omitted - context.omissionReasons.scope - excludedCount; };
   update();
   const { truncated, omitted, omissionReasons, ...fixed } = context;
   const metadataBase = bytes(JSON.stringify({ ...fixed, path: [], decisionsElsewhere: [] })) - 1;
@@ -50,8 +56,8 @@ export function prepareContext(source, { instructions = '', prefix = '', scope =
       front ? context[key].unshift(structuredClone(item)) : context[key].push(structuredClone(item)); recordsBytes += size;
     } else { context.omitted[key]++; update(); }
   };
-  for (let i = source.path.length - 2; i >= 0; i--) add('path', source.path[i], true);
-  if (scope === 'decisions') for (const item of source.decisionsElsewhere ?? []) add('decisionsElsewhere', item);
+  for (let i = source.path.length - 2; i >= 0; i--) if (!exclusions.has(source.path[i].id)) add('path', source.path[i], true);
+  if (scope === 'decisions') for (const item of source.decisionsElsewhere ?? []) if (!exclusions.has(item.id)) add('decisionsElsewhere', item);
   for (const item of source.generationContext ?? []) if (scope === 'decisions' || item.relation === 'path') add('generationContext', item);
   const prompt = prefix + JSON.stringify(context), size = bytes(instructions) + bytes(prompt);
   return immutable({ context, instructions, prompt, bytes: size, limit: RESEARCH_CONTEXT_LIMIT,

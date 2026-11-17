@@ -1,3 +1,4 @@
+import { startResearch } from './helpers/research-review.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -92,7 +93,7 @@ test('brief acceptance and research completion preserve both artifacts in either
   let finish;const explorer=await controller(t,{async run(prepared){return parseBrief(JSON.stringify(output(explorer.doc)),prepared);},close(){}});
   const finding={basis:'reasoning',summary:'Choices',options:[{title:'A',description:'First',pros:[],cons:[]},{title:'B',description:'Second',pros:[],cons:[]}],recommendation:'Consider A',uncertainty:'No sources',sources:[]};
   explorer.researcher={run(){return new Promise(resolve=>{finish=()=>resolve(finding);});}};
-  const request=base(explorer);await proposal(explorer,request);await explorer.command('research',{revision:explorer.doc.revision,nodeId:explorer.doc.nodes[1].id});await new Promise(setImmediate);
+  const request=base(explorer);await proposal(explorer,request);await startResearch(explorer, {revision:explorer.doc.revision,nodeId:explorer.doc.nodes[1].id});await new Promise(setImmediate);
   const accept=()=>explorer.briefRequest({...request,action:'accept',revision:explorer.doc.revision,edits:[]});const researched=async()=>{finish();await Promise.all([...explorer.researchTasks]);};
   if(first==='brief'){await accept();await researched();}else{await researched();await accept();}
   assert.deepEqual(explorer.doc.nodes[1].research,finding);assert.ok(explorer.doc.brief);assert.equal(briefFreshness(explorer.doc.brief,explorer.doc),'current');assert.equal(explorer.doc.revision,2);

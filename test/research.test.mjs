@@ -1,3 +1,4 @@
+import { startResearch } from './helpers/research-review.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -33,7 +34,7 @@ test('research is isolated, abortable, rejects chat callbacks and preserves answ
   await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: explorer.preview.questions.map((q, index) => ({ index, question: q.question })) });
   const nodeId = explorer.doc.nodes[1].id;
   await explorer.command('answer', { revision: explorer.doc.revision, nodeId, answer: 'My decision' });
-  const begin = () => explorer.command('research', { revision: explorer.doc.revision, nodeId });
+  const begin = () => startResearch(explorer, { revision: explorer.doc.revision, nodeId });
   await begin(); await delay(0);
   assert.equal(messages.length, 1); assert.equal(context.path.at(-1).answer, 'My decision');
   assert.equal(explorer.pending.progress, 'Reading sources');

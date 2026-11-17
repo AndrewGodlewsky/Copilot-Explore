@@ -17,6 +17,7 @@ import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
 import { CleanupClient } from '../com.github.copilot/extensions/explorer/web/cleanup.mjs';
 import { QuestionHelpClient } from '../com.github.copilot/extensions/explorer/web/question-help-client.mjs';
+import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/web/research-review-client.mjs';
 import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
 import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
 import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
@@ -31,6 +32,11 @@ const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', op
 async function until(read, label) {
   for (let i = 0; i < 250; i++) { const result = read(); if (result) return result; await delay(10); }
   assert.fail('Timed out: ' + label);
+}
+
+async function startReviewedResearch(f) {
+  await until(() => !f.document.getElementById('research-review-start').disabled, 'review ready');
+  f.document.getElementById('research-review-start').click();
 }
 
 async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false, options = {}) {
@@ -68,6 +74,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   if (recoveryDialog) { recoveryDialog.showModal = () => { recoveryDialog.open = true; }; recoveryDialog.close = () => { recoveryDialog.open = false; }; }
   const diagnosticsDialog = document.getElementById('diagnostics-dialog');
   if (diagnosticsDialog) { diagnosticsDialog.showModal = () => { diagnosticsDialog.open = true; }; diagnosticsDialog.close = () => { diagnosticsDialog.open = false; }; }
+  const reviewDialog = document.getElementById('research-review-dialog');
+  if (reviewDialog) { reviewDialog.showModal = () => { reviewDialog.open = true; }; reviewDialog.close = () => { reviewDialog.open = false; }; }
   const navigationDialog = document.getElementById('navigation-dialog');
   navigationDialog.showModal = () => { navigationDialog.open = true; };
   navigationDialog.close = () => { navigationDialog.open = false; };
@@ -128,10 +136,11 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.DraftClient = DraftClient;
   window.CleanupClient = CleanupClient;
   window.QuestionHelpClient = QuestionHelpClient;
+  window.ResearchReviewClient = ResearchReviewClient;
   window.attachNavigation = attachNavigation;
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, scene: () => ({ positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; transform(); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -144,6 +153,78 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
+
+test('research review preserves draft state, caret and composition, sends only the explicitly reviewed context', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    await e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[2].id, answer: 'OPTIONAL-SECRET<script>\ud83c\udf3f' });
+  } }), $ = id => f.document.getElementById(id);
+  const target = f.explorer.doc.nodes[1]; f.open(target.id); f.type('answer', 'RAW-DRAFT-CANARY');
+  $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  const answer = $('answer'); answer.focus(); answer.setSelectionRange(2, 6);
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  $('research-request').focus(); $('research-request').click();
+  await until(() => $('research-review-start') && !$('research-review-start').disabled, 'context reviewed without inference');
+  assert.equal(f.explorer.pending, null); assert.equal($('answer'), answer); assert.equal(answer.value, 'RAW-DRAFT-CANARY');
+  assert.equal(answer.selectionStart, 2); assert.equal(answer.selectionEnd, 6); assert.equal($('answer-state').value, 'assumption');
+  assert.ok(!$('research-review-content').textContent.includes('RAW-DRAFT-CANARY'));
+  assert.match($('research-review-dialog').textContent, /No project files/);
+  assert.equal($('research-review-content').querySelectorAll('script').length, 0);
+  const optional = [...$('research-review-content').querySelectorAll('input[type=checkbox]')].find(n => n.dataset.nodeId === f.explorer.doc.nodes[2].id);
+  optional.checked = false; optional.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  await until(() => !$('research-review-start').disabled && !$('research-review-prompt').textContent.includes('OPTIONAL-SECRET'), 'excluded exact bytes');
+  const prompt = $('research-review-prompt').textContent;
+  $('research-review-close').click(); assert.equal(f.explorer.pending, null); assert.equal(f.document.activeElement.id, 'research-request');
+  assert.equal($('answer'), answer); assert.equal(answer.selectionStart, 2);
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  $('research-request').click(); await until(() => !$('research-review-start').disabled, 'new review resets choices');
+  assert.ok($('research-review-prompt').textContent.includes('OPTIONAL-SECRET'));
+  assert.notEqual($('research-review-prompt').textContent, prompt);
+  $('research-review-start').click(); await until(() => f.explorer.pending?.kind === 'research', 'explicit reviewed start');
+  assert.equal($('research-review-dialog').open, false); assert.equal($('answer'), answer); f.resolveResearch(findings);
+});
+
+test('research review cancels voice and ignores late HTTP preview and start responses after replacement or dismissal', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 340, voice), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Private draft');
+  await until(() => !$('voice-record').disabled, 'voice ready'); $('voice-record').click();
+  await until(() => voice.counts().starts === 1, 'voice running');
+  const original = f.window.fetch, held = []; let holdPrepare = true, holdStart = false;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options), input = options?.body ? JSON.parse(options.body) : null;
+    if (holdPrepare && path === 'api/research-review' && input.action === 'prepare' || holdStart && path === 'api/action' && input?.action === 'research') await new Promise(resolve => held.push(resolve));
+    return response;
+  };
+  t.after(() => { for (const release of held) release(); });
+  $('research-request').click(); await until(() => held.length === 1, 'held first preview');
+  await until(() => voice.counts().cancels === 1, 'review cancels voice');
+  $('research-review-close').click(); holdPrepare = false;
+  $('research-request').click(); await until(() => !$('research-review-start').disabled, 'new preview');
+  const newest = f.explorer.researchReview.current.token; held[0](); await delay(20);
+  assert.equal(f.explorer.researchReview.current.token, newest); assert.equal($('research-review-dialog').open, true); assert.equal(f.explorer.pending, null);
+  holdStart = true; $('research-review-start').click(); await until(() => held.length === 2, 'held start response');
+  $('research-review-close').click(); held[1](); await delay(20);
+  assert.equal($('research-review-dialog').open, false); assert.equal($('answer').value, 'Private draft');
+  await f.explorer.command('cancel');
+});
+
+test('late failed research start does not leave a replacement review disabled', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id), target = f.explorer.doc.nodes[1]; f.open(target.id);
+  $('research-request').click(); await until(() => !$('research-review-start').disabled, 'first review');
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: target.id, answer: 'Changed committed source' });
+  const original = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/action' && JSON.parse(options.body).action === 'research') await new Promise(resolve => { release = resolve; });
+    return response;
+  };
+  t.after(() => release?.());
+  $('research-review-start').click(); await until(() => release, 'held failed start');
+  $('research-review-close').click(); $('research-request').click();
+  await until(() => $('research-review-prompt')?.textContent.includes('Changed committed source'), 'replacement review');
+  release(); await until(() => !$('research-review-start').disabled, 'replacement review enabled');
+  assert.equal($('research-review-dialog').open, true); assert.equal(f.explorer.pending, null);
+  $('research-review-close').click();
+});
 
 test('diagnostics settings disclosure previews support categories, retries and downloads without changing drafts', async t => {
   let reads = 0;
@@ -219,7 +300,7 @@ test('constraint editing and scope coverage preserve active drafts, caret, help 
   assert.equal(f.explorer.doc.pins[0].text, pinInput.value); assert.equal($('answer').value, 'Unsaved draft 🌿'); assert.equal($('answer').selectionStart, 2);
   $('check-research-context').click(); await until(() => $('context-coverage').textContent.includes('Preview of saved research'), 'research coverage');
   assert.match($('context-coverage').textContent, /Included 1 user constraints/); assert.equal(f.explorer.pending, null);
-  $('research-request').click(); await until(() => f.explorer.pending?.kind === 'research', 'explicit research action');
+  $('research-request').click(); await startReviewedResearch(f); await until(() => f.explorer.pending?.kind === 'research', 'explicit research action');
   assert.equal(f.explorer.contextCoverage.scope, 'path'); assert.equal($('answer').value, 'Unsaved draft 🌿');
   f.resolveResearch(findings); await until(() => !f.explorer.pending, 'research completion');
 });
@@ -243,7 +324,7 @@ test('research allows independent answer save through HTTP and preserves editor 
     { question: 'Independent branch?', category: 'Other', rationale: 'Explain the other branch.' },
   ] });
   const $ = id => f.document.getElementById(id), target = f.explorer.doc.nodes[1].id, other = f.explorer.doc.nodes[2].id;
-  f.open(target); $('research-request').click(); await until(() => f.explorer.pending?.kind === 'research', 'research running');
+  f.open(target); $('research-request').click(); await startReviewedResearch(f); await until(() => f.explorer.pending?.kind === 'research', 'research running');
   f.open(other); f.type('answer', 'Independent saved choice 🌿');
   $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
   $('references').open = true; $('question-rationale').open = true;
@@ -627,7 +708,7 @@ test('answer state draft reload and text-only research insertion preserve a deli
   await until(() => f.document.getElementById('answer-state')?.value === 'needs-evidence', 'state-only draft reload');
   f.document.getElementById('finish').click(); await until(() => /draft/i.test(f.document.getElementById('notice').textContent), 'finish blocked by state draft');
   f.type('answer', 'A draft note'); assert.equal(f.document.getElementById('answer-state').value, 'needs-evidence');
-  f.document.getElementById('research-request').click();
+  f.document.getElementById('research-request').click(); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research started');
   f.resolveResearch({ ...findings, proposedAnswer: 'AI proposal' });
   await until(() => f.document.getElementById('use-recommendation'), 'research rendered');
@@ -1050,7 +1131,7 @@ test('late background reads cannot undo a completed save in the UI', async t => 
 
 test('adding research scrolls only the answer pane, without native scrolling of the map', async t => {
   const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id);
-  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options');
+  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research request'); f.resolveResearch(findings);
   await until(() => f.document.getElementById('use-recommendation'), 'research rendered');
   const answer = f.document.getElementById('answer'), pane = f.document.querySelector('.node-content'), before = viewOf(f);
@@ -1119,7 +1200,7 @@ test('branch controls hide only descendants, preserve active draft and reveal fr
 test('folded research completion and root folding keep saved content and full exports', async t => {
   const f = await fixture(t, 340, undefined, false, { before: e => e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, category: 'People', question: 'Invite nearby?' }) });
   const [root, a, , child] = f.explorer.doc.nodes;
-  f.open(child.id); f.document.querySelector('.research-disclosure summary').click(); f.click('Research options');
+  f.open(child.id); f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research started');
   f.document.querySelector(`[data-branch-id="${a.id}"]`).click();
   assert.equal(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), null);
@@ -1162,7 +1243,7 @@ test('research callbacks and follow-ups work inside a narrow expanded node witho
   f.open(a.id); f.type('answer', 'My own thought');
   f.document.querySelector('.research-disclosure summary').click();
   assert.ok(f.document.querySelector('.research-disclosure').open);
-  f.click('Research options');
+  f.click('Research options'); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research requested');
   f.type('answer', 'My own thought, still editing');
   f.resolveResearch(findings);
@@ -1199,7 +1280,7 @@ test('typing while saving survives the response and editing does not drag the ca
 test('recommendations and selected details append to editable drafts with safe undo', async t => {
   const f = await fixture(t, 340), a = f.explorer.doc.nodes[1]; f.open(a.id);
   f.type('answer', 'My own words');
-  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options');
+  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research requested');
   const richer = structuredClone(findings); richer.proposedAnswer = 'I will run a pilot.';
   richer.options[0].proposedAnswer = 'I will start on my block.';
@@ -1229,7 +1310,7 @@ test('recommendations and selected details append to editable drafts with safe u
 test('pending work remains reachable from the whole map and cancellation preserves drafts', async t => {
   const f = await fixture(t), a = f.explorer.doc.nodes[1]; f.open(a.id);
   f.type('answer', 'Keep this while researching');
-  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options');
+  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
   await until(() => !f.document.getElementById('request-status').hidden, 'request status');
   f.document.getElementById('fit').click();
   f.document.getElementById('request-status').click();
@@ -1272,7 +1353,7 @@ test('keyboard focus survives research, cancellation, and background map updates
   const f = await fixture(t), [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
   f.document.querySelector('.research-disclosure summary').click();
   const research = [...f.document.querySelectorAll('#node-workspace button')].find(e => e.textContent === 'Research options');
-  research.focus(); research.click();
+  research.focus(); research.click(); await startReviewedResearch(f);
   await until(() => f.document.querySelector('#node-workspace .pending'), 'pending controls');
   assert.equal(f.document.activeElement.textContent, 'Cancel request');
   f.click('Cancel request'); await until(() => !f.document.querySelector('#node-workspace .pending'), 'cancellation rendered');
@@ -1639,7 +1720,7 @@ test('dictated text and recommendation undo persist without committing an answer
   await until(() => /^Listening/.test(f.document.getElementById('voice-status').textContent), 'listening'); key(f, 'keyup');
   await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'dictation persisted');
   assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, 'our neighbors');
-  f.click('Research options'); await until(() => f.explorer.pending?.kind === 'research', 'research pending');
+  f.click('Research options'); await startReviewedResearch(f); await until(() => f.explorer.pending?.kind === 'research', 'research pending');
   f.resolveResearch(findings); await until(() => f.document.getElementById('use-recommendation'), 'recommendation ready');
   f.document.getElementById('use-recommendation').click();
   await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'addition persisted');
@@ -2288,7 +2369,7 @@ test('collapsing an ancestor exits focus safely and hidden research does not ret
     await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[2].id, category: 'Trust', question: 'Repair tools?' });
   } });
   const [root, a, b, a1, b1] = f.explorer.doc.nodes;
-  f.open(b1.id); f.document.querySelector('.research-disclosure summary').click(); f.click('Research options');
+  f.open(b1.id); f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research started');
   f.open(a1.id); f.type('answer', 'Keep this draft'); chooseState(f, 'needs-evidence');
   f.document.getElementById('focus-branch').click();

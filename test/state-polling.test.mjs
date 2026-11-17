@@ -1,3 +1,4 @@
+import { startResearch } from './helpers/research-review.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
@@ -92,9 +93,9 @@ test('conditional snapshots follow real preview accept dismiss stale cancellatio
   await command('questions', { nodeId }); const obsolete = e.pending.id; await read(true); await command('cancel'); assert.equal((await read(true)).pending, null);
   await command('questions', { nodeId }); await read(true); await assert.rejects(e.receive('questions', { requestId: obsolete, questions: [] }), /cancelled|replaced/); await read(false);
   await e.receive('fail', { requestId: e.pending.id, message: 'Question failure' }); assert.equal((await read(true)).error, 'Question failure');
-  await command('research', { nodeId }); await read(true); await delay(0); work.onProgress('Reading sources'); assert.equal((await read(true)).pending.progress, 'Reading sources');
+  await startResearch(e, { nodeId }); await read(true); await delay(0); work.onProgress('Reading sources'); assert.equal((await read(true)).pending.progress, 'Reading sources');
   work.reject(new Error('Research failure')); await Promise.allSettled([...e.researchTasks]); assert.equal((await read(true)).error, 'Research failure');
-  await command('research', { nodeId }); await read(true); await delay(0);
+  await startResearch(e, { nodeId }); await read(true); await delay(0);
   work.resolve({ basis: 'reasoning', summary: 'Summary', options: [{ title: 'Option', description: 'Description', pros: [], cons: [] }, { title: 'Other option', description: 'Other description', pros: [], cons: [] }], recommendation: 'Consider', uncertainty: 'Unverified', sources: [] });
   await Promise.allSettled([...e.researchTasks]); next = await read(true); assert.equal(next.pending, null); assert.equal(next.document.nodes[1].research.summary, 'Summary');
   const history = await e.history(e.doc.id); let manifests = 0;

@@ -18,6 +18,7 @@ const assets = new Map([
   ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
   ['cleanup.mjs', ['cleanup.mjs', 'text/javascript; charset=utf-8']],
   ['question-help-client.mjs', ['question-help-client.mjs', 'text/javascript; charset=utf-8']],
+  ['research-review-client.mjs', ['research-review-client.mjs', 'text/javascript; charset=utf-8']],
   ['question-help-context.mjs', ['question-help-context.mjs', 'text/javascript; charset=utf-8']],
   ['modes.mjs', ['modes.mjs', 'text/javascript; charset=utf-8']],
   ['navigation.mjs', ['navigation.mjs', 'text/javascript; charset=utf-8']],
@@ -52,6 +53,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       const url = new URL(req.url, origin);
       if (!url.pathname.startsWith(prefix)) return json(404, { error: 'Not found.' });
       const route = url.pathname.slice(prefix.length);
+      if (req.method === 'POST' && route === 'api/research-review') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.reviewResearch(await body(req, 512 * 1024)));
+      }
       if (['api/diagnostics', 'api/support'].includes(route) && (req.method === 'POST' || route === 'api/diagnostics' && req.method === 'GET')) {
         if (req.method === 'POST' && (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
         try {
@@ -143,7 +148,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req);
-        if (['restore', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        if (['research', 'restore', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
       if (req.method === 'GET' && ['export.json', 'export.md', 'brief.md'].includes(route)) {

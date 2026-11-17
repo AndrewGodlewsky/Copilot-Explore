@@ -18,6 +18,7 @@ import { ANSWER_CONTEXT_GUIDANCE, effectiveAnswerState, isQuestion } from './web
 import { effectiveMode, validMode, modePolicy } from './web/modes.mjs';
 import { researchFraming } from './research.mjs';
 import { contextScope, prepareResearch, sameResearchSources, sameResearchDestination } from './research-context.mjs';
+import { ResearchReview } from './research-review.mjs';
 export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
@@ -26,6 +27,7 @@ export class Explorer {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
+    this.researchReview = new ResearchReview();
     this.researcher = researcher; this.researchTasks = new Set(); this.researchTask = Promise.resolve(); this.unconfirmedResearchRelease = null; this.researchWork = null;
     this.briefHelper = briefHelper; this.briefWork = null; this.checkHelper = checkHelper; this.checkWork = null; this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
     this.library = library; this.binding = binding; this.activeKey = null;
@@ -336,6 +338,7 @@ export class Explorer {
     }
   }
   async attach(key) {
+    this.researchReview.clear();
     const record = await this.library.opened(key, this.binding);
     this.file = record.file; this.doc = record.document; this.activeKey = key;
     this.recoveryNotice = null; this.exportObservation = null;
@@ -544,9 +547,11 @@ export class Explorer {
     }).catch(() => {});
   }
   clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; }
-  request(kind, nodeId, scope) {
+  reviewResearch(input) { return this.transact(() => this.researchReview.prepare(this, input)); }
+  request(kind, nodeId, scope, reviewed) {
     const id = randomUUID();
-    const prepared = this.prepareRequest(kind, nodeId, id, scope);
+    if (kind === 'research' && !reviewed) throw new Error('Review research context before starting.');
+    const prepared = reviewed ?? this.prepareRequest(kind, nodeId, id, scope);
     if (kind === 'research') this.requireResearchRelease();
     this.contextCoverage = { journey: this.activeKey ?? this.doc.id, kind, nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage };
     this.pending = { id, kind, nodeId, startedAt: new Date().toISOString() };
@@ -612,7 +617,17 @@ export class Explorer {
         const prepared = this.prepareRequest(input.kind, input.nodeId, undefined, contextScope(input.scope));
         return { ...this.uiSnapshot(), contextCoverage: { kind: input.kind, nodeId: input.nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage } };
       }
-      if (action === 'cancel') { this.clearPending(); this.error = ''; return this.uiSnapshot(); }
+      if (action === 'cancel') { this.researchReview.clear(); this.clearPending(); this.error = ''; return this.uiSnapshot(); }
+      if (action === 'research') {
+        if (!isQuestion(findNode(this.doc, input.nodeId))) throw new Error('Select a question to research.');
+        if (this.pending) throw new Error('Wait for Copilot or cancel the current request first.');
+        this.requireResearchRelease();
+        await this.withDocumentLock(async () => {
+          const prepared = await this.researchReview.consume(this, input);
+          this.request('research', input.nodeId, undefined, prepared);
+        });
+        return this.uiSnapshot();
+      }
       if (action === 'dismiss-questions') {
         if (!this.preview || input.batchId !== this.preview.id) throw new Error('This question preview is no longer available.');
         this.preview = null; this.questionSource = null; this.error = ''; return this.uiSnapshot();
@@ -678,9 +693,7 @@ export class Explorer {
           if (input.expand === true) this.request('questions', input.nodeId, input.scope);
           break;
         case 'questions':
-        case 'research':
           findNode(next, input.nodeId);
-          if (action === 'research' && !isQuestion(findNode(next, input.nodeId))) throw new Error('Select a question to research.');
           if (action === 'questions' && isQuestion(findNode(next, input.nodeId)) && effectiveAnswerState(findNode(next, input.nodeId)) === 'unanswered') throw new Error('Save an answer before exploring deeper.');
           await this.fresh();
           this.request(action, input.nodeId, input.scope);
@@ -761,5 +774,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.pollStamp = null; this.pollCursor = null; this.closed = true; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
+  async close() { this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
 }

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.41",
+    "summary": "Review the exact context before starting isolated research. Exclude optional ancestors and other answers, inspect whole-record omissions and byte limits, and send only the reviewed snapshot. Changed saved sources require a fresh review. Preserve drafts, reject obsolete review tokens, and harden answer-check scope tracking."
+  },
+  {
     "version": "0.1.40",
     "summary": "Add read-only Diagnostics in Map settings with honest host, speech and helper prerequisites, explicit retries, and a strictly allowlisted support export. Preserve uncertain helper shutdown blockers, bound voice metadata inspection, and improve malformed release-metadata diagnostics."
   },

@@ -17,9 +17,9 @@ export function prepareAnswerCheck(doc) {
 }
 export function captureCheck(prepared) {
   const { identity, framing, nodeId, records } = prepared.dependencies;
-  return structuredClone({ identity, framing, nodeId, records });
+  return structuredClone({ identity, framing, nodeId, records, scope: prepared.context.scope });
 }
-export function checkFreshness(dependencies, doc) { return sameResearchSources(dependencies, doc); }
+export function checkFreshness(dependencies, doc) { return dependencies?.scope === 'decisions' && sameResearchSources(dependencies, doc); }
 export function validateCheck(value, prepared) {
   if (fields(value) !== 'findings' || !Array.isArray(value.findings) || value.findings.length > 12) invalid();
   const records = new Map(prepared.dependencies.records.map(item => [item.id, item]));

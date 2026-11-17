@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.40.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.41.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Recovery
@@ -252,7 +252,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.40, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.40**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.41, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.41**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
@@ -279,6 +279,8 @@ Suggest a missing direction from a branch's **Missing a direction?** disclosure.
 ### Pinned constraints and AI request scope
 
 Edit guidance to add up to ten user-supplied constraints, each with up to 1,000 JavaScript characters. Text stays exact; these statements are not verified facts or answers. They are separate from private visual reference pins and remain in native files, history and complete Markdown. Empty legacy metadata stays absent. Guidance changes require cancelling an active generation/research request; staged questions and help are invalidated when their captured sources change.
+
+**Research options** now opens a local context review before an explicit **Start reviewed research** action. Inspect required guidance, pins and the selected question, exclude optional ancestors or other answers, and inspect the exact prompt and instructions. Choices are request-local and expire after ten minutes; changed saved sources require refresh and a new explicit start. No project files or source attachments are included. Drafts remain untouched. See [research context review](docs/research-context-review.md) for limits and lifecycle.
 
 AI request context offers ancestor-path-only or additional-decision scope for the next request. Checking coverage or changing scope does not start inference. Topic, objective, success criteria, mode, all constraints and the active node are mandatory. Nearest ancestors are considered first, then other saved stateful questions by tree distance and stable ID. Optional records are omitted whole with counts and reasons; no answer or constraint is truncated. Mandatory overflow requires shortening the selected answer or guidance/pins.
 

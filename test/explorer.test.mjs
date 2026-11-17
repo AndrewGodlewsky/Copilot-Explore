@@ -1,3 +1,4 @@
+import { startResearch } from './helpers/research-review.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
@@ -220,7 +221,7 @@ test('queued generation and isolated research persist across reopen', async t =>
   assert.match(messages.at(-1).prompt, /Neighbors/);
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ question: 'How will neighbors join?', category: 'Access' }] });
   await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: [{ index: 0, question: explorer.preview.questions[0].question }] });
-  await explorer.command('research', { revision: explorer.doc.revision, nodeId: node.id });
+  await startResearch(explorer, { revision: explorer.doc.revision, nodeId: node.id });
   await Promise.all([...explorer.researchTasks]);
   const reopened = await new Explorer({ file: explorer.file }).load();
   assert.deepEqual(reopened.doc, explorer.doc); assert.equal(reopened.doc.nodes[1].answer, 'Neighbors');

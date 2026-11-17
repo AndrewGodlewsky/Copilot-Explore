@@ -91,7 +91,7 @@ try {
   const state = async () => (await fetch(opened.url + 'api/state')).json();
   const action = async (name, input = {}) => {
     const current = await state();
-    const response = await fetch(opened.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: name, revision: current.document?.revision, ...input }) });
+    const response = await fetch(opened.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify({ action: name, revision: current.document?.revision, ...input }) });
     assert.equal(response.status, 200, await response.clone().text()); return response.json();
   };
   await action('start', { topic: 'Synthetic garden fixture' });
@@ -115,7 +115,10 @@ try {
   const coverage = await action('context-coverage', { kind: 'questions', nodeId, scope: 'path' });
   assert.equal(coverage.contextCoverage.included.pins, 1); assert.ok(coverage.contextCoverage.bytes <= 131072);
   await action('answer', { nodeId, answer: 'Neighbors', expand: false });
-  await action('research', { nodeId });
+  const reviewed = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin },
+    body: JSON.stringify({ action: 'prepare', clientId: 'fixture-review-000000000001', sequence: 1, journey: snapshot.activeKey ?? snapshot.document.id, nodeId, scope: 'decisions', excluded: [] }) });
+  assert.equal(reviewed.status, 200); const review = await reviewed.json(); assert.ok(review.prepared.prompt.includes('Neighbors'));
+  await action('research', { nodeId, journey: review.journey, token: review.token });
   snapshot = await until(state, value => !value.pending, 'research access check');
   assert.match(snapshot.error, /Sign in|enabled Copilot model|Checking Copilot access/);
   const researchAction = await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_research', input: {} }).catch(error => ({ error: error.message }));

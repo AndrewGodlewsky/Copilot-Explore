@@ -1,3 +1,4 @@
+import { startResearch } from './helpers/research-review.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
@@ -19,7 +20,7 @@ async function fixture(t) {
   const runs = [], e = await new Explorer({ file, send: async () => {}, researcher: { run(context, options) { const d = deferred(); runs.push({ ...d, context, ...options }); return d.promise; } } }).load();
   t.after(async () => { for (const run of runs) run.resolve(result); await e.close(); await rm(dir, { recursive: true, force: true }); });
   const command = (action, input = {}) => e.command(action, { revision: e.doc.revision, ...input });
-  const begin = async () => { await command('research', { nodeId: doc.nodes[1].id }); await new Promise(setImmediate); };
+  const begin = async () => { await startResearch(e, { nodeId: doc.nodes[1].id }); await new Promise(setImmediate); };
   const finish = async () => { runs.at(-1).resolve(result); await Promise.all([...e.researchTasks]); };
   return { dir, file, doc, e, runs, command, begin, finish };
 }

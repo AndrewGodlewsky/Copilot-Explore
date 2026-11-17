@@ -11,9 +11,11 @@ test('research helper sends the exact prepared context without reselecting or cl
   const { researcher, calls } = await fixture(t), doc = createDocument('Unicode 🌿');
   addQuestions(doc, doc.rootId, [{ question: 'Target?', category: 'Target' }]);
   for (let i = 0; i < 8; i++) doc.nodes.push({ ...structuredClone(doc.nodes[1]), id: `source-${i}`, answer: '🌿'.repeat(10000) });
-  const prepared = prepareResearch(doc, doc.nodes[1].id, researchFraming(doc));
+  doc.nodes[2].answer = 'EXCLUDED-SDK-CANARY\u0000\ud83c\udf3f<script>';
+  const prepared = prepareResearch(doc, doc.nodes[1].id, { ...researchFraming(doc), excluded: [doc.nodes[2].id] });
   await researcher.run(prepared.context, { prepared });
   assert.equal(calls.prompt, prepared.prompt);
+  assert.ok(!calls.prompt.includes('EXCLUDED-SDK-CANARY'));
   assert.equal(calls.config.systemMessage.content, prepared.instructions);
   assert.equal(Buffer.byteLength(calls.prompt) + Buffer.byteLength(calls.config.systemMessage.content), prepared.bytes);
   assert.equal(calls.prompt.split('EXPLORATION DATA\n')[1], JSON.stringify(prepared.context));

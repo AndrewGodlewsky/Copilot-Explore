@@ -3,11 +3,14 @@ import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
 import { CleanupClient } from './cleanup.mjs';
 import { QuestionHelpClient } from './question-help-client.mjs';
+import { ResearchReviewClient } from './research-review-client.mjs';
 import { effectiveMode, MODES } from './modes.mjs';
 import { attachNavigation } from './navigation.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
 
 const $ = id => document.getElementById(id);
+let researchReviewReturn = null, reviewStarting = false;
+const researchReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: () => renderResearchReview() });
 const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'];
 let state = { document: null, pending: null, error: '' };
 let selected = null, expanded = false, signature = '', positions = new Map(), busy = false, firstFit = true;
@@ -116,6 +119,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    closeResearchReview();
     closeBrief();
     closeCheck();
     lastCoverage = ''; $('context-coverage').textContent = 'Check the selected node or start a request to see coverage.';
@@ -789,7 +793,7 @@ function renderWorkspace() {
       if (root || !isQuestion(node)) return;
       const research = el('details', { class: 'research-disclosure' }, el('summary', { id: 'research-summary' }, 'Explore options')); research.open = ui.researchOpen;
       research.addEventListener('toggle', () => { if (research.isConnected) { ui.researchOpen = research.open; scheduleLayout(); } });
-      research.append(el('p', { class: 'quiet' }, 'A separate researcher compares possibilities using your saved answers and states. Suggestions stay separate from your answer; normal Copilot usage applies.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; void api('research', { nodeId: node.id }); }, { id: 'research-request', disabled: pending }));
+      research.append(el('p', { class: 'quiet' }, 'A separate researcher compares possibilities using your saved answers and states. Review its context before starting. Suggestions stay separate from your answer; normal Copilot usage applies.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; openResearchReview(node.id); }, { id: 'research-request', disabled: pending }));
       if (node.research) research.append(renderResearch(node));
       return research;
     });
@@ -895,6 +899,58 @@ function renderQuestionPreview() {
   }, { id: 'preview-retry' }); retry.hidden = !batch.stale; section.append(retry);
   return section;
 }
+function openResearchReview(nodeId) {
+  voice.cancel(); researchReviewReturn = document.activeElement;
+  $('research-review-content').replaceChildren();
+  $('research-review-dialog').showModal(); $('research-review-close').focus();
+  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: $('context-scope').value });
+}
+function closeResearchReview() {
+  researchReview.close();
+  if ($('research-review-dialog').open) { $('research-review-dialog').close(); if (researchReviewReturn?.isConnected) researchReviewReturn.focus({ preventScroll: true }); }
+}
+function renderResearchReview() {
+  const area = $('research-review-content'), value = researchReview.value;
+  const focusedId = area.contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
+  $('research-review-start').disabled = !value || researchReview.loading || reviewStarting;
+  $('research-review-refresh').disabled = researchReview.loading || reviewStarting;
+  $('research-review-status').textContent = researchReview.loading ? 'Preparing context locally. No inference has started.' : researchReview.error || '';
+  if (!value) { if (!researchReview.loading) area.replaceChildren(); return; }
+  const { context, coverage, bytes, limit, prompt, instructions } = value.prepared;
+  const display = (label, item) => el('section', { class: 'review-record' }, el('h3', {}, label), el('pre', {}, JSON.stringify(item, null, 2)));
+  const { topic, objective, successCriteria, mode, pins } = context;
+  const rows = [el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. Records are complete; no text is clipped.`),
+    display('Required: committed journey guidance and mode', { topic, objective, successCriteria, mode, pins }),
+    display('Required: selected question and committed answer state', context.path.at(-1))];
+  for (const [kind, records] of [['Ancestor', context.path.slice(0, -1)], ['Other answer', context.decisionsElsewhere]]) for (const record of records) {
+    const input = el('input', { type: 'checkbox', 'data-node-id': record.id }); input.checked = true;
+    input.addEventListener('change', () => researchReview.exclude(record.id, !input.checked));
+    rows.push(el('section', { class: 'review-record' }, el('label', {}, input, ` Include optional ${kind.toLowerCase()}: ${record.question}`), el('pre', {}, JSON.stringify(record, null, 2))));
+  }
+  for (const id of value.excluded) {
+    const input = el('input', { type: 'checkbox', 'data-node-id': id });
+    input.addEventListener('change', () => researchReview.exclude(id, !input.checked));
+    rows.push(el('label', {}, input, ` Re-include excluded record ${id}`));
+  }
+  rows.push(el('details', {}, el('summary', {}, 'Exact Explorer input strings'), el('h3', {}, 'Instructions'), el('pre', { id: 'research-review-instructions' }, instructions), el('h3', {}, 'Prompt'), el('pre', { id: 'research-review-prompt' }, prompt)));
+  area.replaceChildren(...rows);
+  if (focusedId) [...area.querySelectorAll('input')].find(input => input.dataset.nodeId === focusedId)?.focus({ preventScroll: true });
+}
+$('research-review-close').addEventListener('click', closeResearchReview);
+$('research-review-dialog').addEventListener('cancel', event => { event.preventDefault(); closeResearchReview(); });
+$('research-review-refresh').addEventListener('click', () => { void researchReview.prepare(); });
+$('research-review-start').addEventListener('click', async () => {
+  const value = researchReview.value;
+  if (!value || reviewStarting || researchReview.loading) return;
+  reviewStarting = true; renderResearchReview();
+  const sequence = researchReview.sequence;
+  const result = await api('research', { journey: value.journey, nodeId: value.nodeId, token: value.token });
+  reviewStarting = false;
+  if (sequence !== researchReview.sequence) { if (researchReview.context) renderResearchReview(); return; }
+  if (result) { closeResearchReview(); $('cancel-request')?.focus({ preventScroll: true }); }
+  else { researchReview.value = null; researchReview.error = $('notice').textContent || 'Refresh and review context before starting.'; renderResearchReview(); }
+});
+
 function renderResearch(node) {
   const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r);
   if (ui.researchKey !== key) { ui.researchKey = key; ui.selectedDetails = new Set(); }
@@ -1504,6 +1560,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  closeResearchReview();
   suspended = true; pageEpoch++; actionEpoch++; stopPolling(); actionAbort?.abort(); actionAbort = null; busy = false;
   if ($('diagnostics-dialog').open) closeDiagnostics();
   cleanup.cancel();

@@ -80,10 +80,12 @@ try {
   const progress = [];
   const context = { topic: 'Synthetic garden', objective: 'Choose a shared garden 🌿', successCriteria: 'Neighbors agree on one place', path: [{ kind: 'direction', origin: 'user', question: '  Access for everyone  ', answer: '', review: false }, { question: 'Who should join?', answer: 'Neighbors only', answerState: 'assumption', review: true }], decisionsElsewhere: [{ question: 'When?', answer: '', answerState: 'revisit-later', review: false }] };
   context.pins = [{ id: 'constraint-00000000000000', text: 'Preserve the user constraint exactly' }];
-  const prepared = prepareContext(context, researchFraming(context));
+  context.decisionsElsewhere.push({ id: 'excluded-source', question: 'Secret source?', answer: 'EXCLUDED-INSTALLED-CANARY\u0000\ud83c\udf3f<script>' });
+  const prepared = prepareContext(context, { ...researchFraming(context), excluded: ['excluded-source'] });
   assert.deepEqual(await researcher.run(prepared.context, { prepared, onProgress: value => progress.push(value) }), findings);
   assert.ok(JSON.stringify(prompts).includes('Preserve the user constraint exactly'));
   assert.deepEqual(captured[0], { instructions: prepared.instructions, prompt: prepared.prompt });
+  assert.ok(!captured[0].prompt.includes('EXCLUDED-INSTALLED-CANARY')); assert.ok(!JSON.stringify(prompts[0]).includes('EXCLUDED-INSTALLED-CANARY'));
   assert.ok(prompts[0].messages.some(m => m.role === 'user' && m.content.includes(prepared.prompt)));
   assert.equal(Buffer.byteLength(captured[0].instructions) + Buffer.byteLength(captured[0].prompt), prepared.bytes);
   assert.equal(prepared.bytes, Buffer.byteLength(prepared.instructions) + Buffer.byteLength(prepared.prompt));

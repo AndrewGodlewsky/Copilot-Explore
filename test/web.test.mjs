@@ -1361,6 +1361,35 @@ test('history removal of the focused selection returns to whole map and keeps su
   assert.equal(f.document.querySelector('#nodes .node.selected')?.dataset.nodeId, root.id, 'removed selection falls back to root');
 });
 
+test('history removal of focus keeps a surviving selected ancestor editor and draft', async t => {
+  const f = await fixture(t, 340), [root, ancestor] = f.explorer.doc.nodes;
+  const baseline = f.explorer.doc.revision;
+  await f.explorer.command('add', { revision: baseline, nodeId: ancestor.id, category: 'People', question: 'Temporary focused child?' });
+  await until(() => [...f.document.querySelectorAll('#nodes .node')].some(node => node.title === 'Temporary focused child?'), 'temporary child polled');
+  const child = f.explorer.doc.nodes.at(-1);
+  f.open(child.id); f.document.getElementById('focus-branch').click();
+  f.document.getElementById(`ancestor-${ancestor.id}`).click();
+  assert.match(f.document.getElementById('focus-status').textContent, /Temporary focused child/);
+  assert.equal(f.document.getElementById('expanded-title').textContent, ancestor.question);
+  f.type('answer', 'Keep ancestor draft'); chooseState(f, 'assumption');
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'ancestor draft stored');
+  const answer = f.document.getElementById('answer'); answer.focus(); answer.setSelectionRange(2, 8, 'backward');
+  f.document.getElementById('history-open').click();
+  await until(() => f.document.querySelector(`[data-history-revision="${baseline}"]`), 'baseline history');
+  f.document.querySelector(`[data-history-revision="${baseline}"]`).click();
+  await until(() => !f.document.getElementById('history-restore').disabled, 'restore preview');
+  f.document.getElementById('history-restore').click();
+  await until(() => !f.document.getElementById('history-dialog').open && !f.explorer.doc.nodes.some(node => node.id === child.id), 'focused child removed');
+  assert.equal(f.document.getElementById('show-whole-map').hidden, true);
+  assert.equal(f.document.getElementById('node-workspace').hidden, false, 'surviving editor stays open');
+  assert.equal(f.document.getElementById('expanded-title').textContent, ancestor.question);
+  assert.equal(f.document.getElementById('answer').value, 'Keep ancestor draft');
+  assert.equal(f.document.getElementById('answer-state').value, 'assumption');
+  assert.deepEqual([f.document.getElementById('answer').selectionStart, f.document.getElementById('answer').selectionEnd, f.document.getElementById('answer').selectionDirection], [2, 8, 'backward']);
+  assert.equal(f.document.querySelector('#nodes .node.selected'), null, 'selected ancestor is rendered as the expanded node');
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${root.id}"]`));
+});
+
 test('opening another journey clears branch focus', async t => {
   const f = await fixture(t, 340, undefined, true), first = f.explorer.activeKey;
   await f.explorer.library.import(createDocument('Another focus journey'));

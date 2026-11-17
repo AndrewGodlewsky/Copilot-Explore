@@ -85,7 +85,8 @@ function apply(next, reset = false) {
   const doc = state.document;
   if (doc) {
     const ids = new Set(doc.nodes.map(node => node.id));
-    if (!ids.has(selected) || (focusId && !ids.has(focusId))) { selected = doc.rootId; expanded = false; focusId = null; wholeView = null; }
+    if (!ids.has(selected)) { selected = doc.rootId; expanded = false; focusId = null; wholeView = null; }
+    else if (focusId && !ids.has(focusId)) { focusId = null; wholeView = null; }
     collapsed = new Set([...collapsed].filter(id => ids.has(id)));
     branches = branchView(doc.nodes, doc.rootId, collapsed, focusId);
   }
@@ -426,6 +427,8 @@ function renderWorkspace() {
   const doc = state.document, node = doc.nodes.find(n => n.id === selected), ui = uiFor(node.id), root = node.id === doc.rootId, pending = !!state.pending;
   const active = document.activeElement, sameNode = panel.dataset.nodeId === node.id;
   const focus = sameNode && active?.id && panel.contains(active) ? { id: active.id, start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection } : null;
+  const oldAnswer = sameNode ? panel.querySelector('#answer') : null;
+  const answerCaret = oldAnswer ? { start: oldAnswer.selectionStart, end: oldAnswer.selectionEnd, direction: oldAnswer.selectionDirection } : null;
   const textScroll = new Map(sameNode ? [...panel.querySelectorAll('textarea')].map(e => [e.id, { top: e.scrollTop, left: e.scrollLeft, height: e.style.height }]) : []);
   panel.dataset.nodeId = node.id; panel.replaceChildren();
   const path = [], byId = new Map(doc.nodes.map(n => [n.id, n]));
@@ -517,6 +520,7 @@ function renderWorkspace() {
     restoringFocus = true; restored.focus({ preventScroll: true }); restoringFocus = false;
     if (restored === target && typeof focus.start === 'number') restored.setSelectionRange(focus.start, focus.end, focus.direction);
   }
+  if (answerCaret && $('answer')) $('answer').setSelectionRange(answerCaret.start, answerCaret.end, answerCaret.direction);
   for (const [id, scroll] of textScroll) { const input = $(id); if (input) { input.style.height = scroll.height; input.scrollTop = scroll.top; input.scrollLeft = scroll.left; } }
   content.scrollTop = ui.scroll;
 }

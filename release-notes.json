@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.6",
+    "summary": "Added a small version label at the bottom of Explorer, visible on the welcome screen and exploration map. The label uses the installed plugin package version. The expanding-node prototype also displays its version in the bottom bar."
+  },
+  {
     "version": "0.1.5",
     "summary": "Refined the selected expanding-node design with expansion in its branch, research below a preserved draft, answer previews on collapsed nodes, and connected follow-up navigation. The new prototype is the default for npm run prototype:layouts. The installed canvas is unchanged."
   },

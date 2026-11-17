@@ -22,6 +22,7 @@ async function body(req) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 export async function startServer(explorer) {
+  const { version } = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
   const token = randomBytes(24).toString('hex');
   const prefix = `/${token}/`;
   let origin;
@@ -51,7 +52,8 @@ export async function startServer(explorer) {
       }
       if (req.method === 'GET' && assets.has(route)) {
         const [name, type] = assets.get(route);
-        const content = await readFile(fileURLToPath(new URL(`./web/${name}`, import.meta.url)));
+        let content = await readFile(fileURLToPath(new URL(`./web/${name}`, import.meta.url)));
+        if (name === 'index.html') content = content.toString('utf8').replace('{{EXPLORER_VERSION}}', version);
         res.writeHead(200, { 'Content-Type': type }); return res.end(content);
       }
       json(404, { error: 'Not found.' });

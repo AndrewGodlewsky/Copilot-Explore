@@ -39,6 +39,13 @@ async function fixture(t, changes = {}) {
   return root;
 }
 
+for (const [file, field] of [['plugin.json', 'version'], ['package.json', 'version'], ['package-lock.json', 'version'], ['.github/plugin/marketplace.json', 'plugins[0].version'], ['com.github.copilot/extensions/explorer/package.json', 'version'], ['release-notes.json', '[0].version']]) {
+  test(`rejects JSON null in ${file} with an actionable field diagnostic`, async t => {
+    const root = await fixture(t, { [file]: null });
+    await assert.rejects(checkReleaseMetadata(root), error => !(error instanceof TypeError) && error.message.includes(file) && error.message.includes(field) && /expected/i.test(error.message));
+  });
+}
+
 test('accepts matching release metadata while preserving historical README references', async t => {
   const root = await fixture(t);
   assert.equal(await checkReleaseMetadata(root), version);

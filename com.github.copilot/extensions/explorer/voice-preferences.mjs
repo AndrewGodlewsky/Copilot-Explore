@@ -1,5 +1,6 @@
 import { acquireLock } from './owned-lock.mjs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
+import { readVoiceJson } from './voice-settings.mjs';
 import { dirname } from 'node:path';
 import { atomicWrite } from './controller.mjs';
 
@@ -12,12 +13,13 @@ export class VoicePreferences {
   async read() {
     if (!this.file) return defaults();
     try {
-      const value = JSON.parse(await readFile(this.file, 'utf8'));
+      const value = await readVoiceJson(this.file, 4096);
       validatePreferences(value);
       if (value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0) throw new Error('Invalid format');
       return value;
     } catch (error) {
       if (error.code === 'ENOENT') return defaults();
+      if (error.code === 'DIAGNOSTIC_LIMIT') throw error;
       throw new Error('Saved voice settings could not be read. The file has been preserved.');
     }
   }

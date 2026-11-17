@@ -7,6 +7,7 @@ import { toMarkdown } from './model.mjs';
 import { briefMarkdown } from './decision-brief.mjs';
 import { VoiceService } from './voice.mjs';
 import { NavigationPreferences, defaultNavigationSettings } from './navigation-preferences.mjs';
+import { Diagnostics, supportBundle } from './diagnostics.mjs';
 
 const assets = new Map([
   ['', ['index.html', 'text/html; charset=utf-8']],
@@ -33,9 +34,10 @@ async function body(req, limit = MAX_BODY) {
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
-export async function startServer(explorer, voice = new VoiceService({ preferencesFile: explorer.library ? join(explorer.library.directory, 'voice-settings.json') : explorer.file ? join(dirname(explorer.file), 'voice-settings.json') : undefined })) {
+export async function startServer(explorer, voice = new VoiceService({ preferencesFile: explorer.library ? join(explorer.library.directory, 'voice-settings.json') : explorer.file ? join(dirname(explorer.file), 'voice-settings.json') : undefined }), { readHost } = {}) {
   const navigation = new NavigationPreferences(explorer.library ? join(explorer.library.directory, 'navigation-settings.json') : explorer.file ? join(dirname(explorer.file), 'navigation-settings.json') : undefined);
   const { version } = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
+  const diagnostics = new Diagnostics({ version, explorer, voice, readHost });
   const token = randomBytes(24).toString('hex');
   const prefix = `/${token}/`;
   let origin;
@@ -50,6 +52,23 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       const url = new URL(req.url, origin);
       if (!url.pathname.startsWith(prefix)) return json(404, { error: 'Not found.' });
       const route = url.pathname.slice(prefix.length);
+      if (['api/diagnostics', 'api/support'].includes(route) && (req.method === 'POST' || route === 'api/diagnostics' && req.method === 'GET')) {
+        if (req.method === 'POST' && (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
+        try {
+          if (req.method === 'POST') {
+            const input = await body(req, 1024);
+            if (!input || typeof input !== 'object' || Array.isArray(input) || (route === 'api/support' ? Object.keys(input).length !== 0 : Object.keys(input).join(',') !== 'action' || input.action !== 'retry')) throw new Error('Invalid diagnostics request.');
+          }
+          const value = await diagnostics.inspect(req.method === 'POST' && route === 'api/diagnostics');
+          if (route === 'api/diagnostics') return json(200, value);
+          const content = supportBundle(value);
+          if (Buffer.byteLength(content) > 4096) throw new Error('Support size limit.');
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Disposition': 'attachment; filename="explorer-support.json"' });
+          return res.end(content);
+        } catch {
+          return json(400, { error: route === 'api/support' ? 'Support export failed. Retry diagnostics, then explicitly export again. No private paths or logs were collected.' : 'Diagnostics inspection failed. Retry when Copilot and local storage are available.' });
+        }
+      }
       if (req.method === 'GET' && route === 'api/navigation-settings') {
         try { return json(200, { settings: await navigation.read() }); }
         catch (error) { return json(200, { settings: defaultNavigationSettings(), error: error.message }); }

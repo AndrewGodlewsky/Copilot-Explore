@@ -950,6 +950,63 @@ function renderOutline() {
   $('outline-list').scrollTop = scroll;
   if (focusedBranch) [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === focusedBranch)?.focus({ preventScroll: true });
 }
+let diagnosticsEpoch = 0, diagnosticsAbort = null;
+function closeDiagnostics() {
+  diagnosticsEpoch++; diagnosticsAbort?.abort(); diagnosticsAbort = null;
+  $('diagnostics-dialog').close(); $('diagnostics-open').focus({ preventScroll: true });
+}
+async function loadDiagnostics(action) {
+  if (diagnosticsAbort) return;
+  const epoch = ++diagnosticsEpoch, page = pageEpoch, abort = new AbortController(); diagnosticsAbort = abort;
+  const current = () => !closed && !suspended && epoch === diagnosticsEpoch && page === pageEpoch && $('diagnostics-dialog').open;
+  const timer = setTimeout(() => abort.abort(), 15000);
+  $('diagnostics-retry').disabled = $('diagnostics-export').disabled = true;
+  $('diagnostics-status').textContent = action === 'export' ? 'Preparing the approved support fields…' : 'Checking prerequisites without recording or inference…';
+  try {
+    const response = await fetch(action === 'export' ? 'api/support' : 'api/diagnostics', { signal: abort.signal,
+      ...(action ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(action === 'export' ? {} : { action: 'retry' }) } : {}) });
+    if (!response.ok) throw new Error('Diagnostics request failed.');
+    if (action === 'export') {
+      const blob = await response.blob(); if (!current()) return;
+      const url = URL.createObjectURL(blob), link = el('a', { href: url, download: 'explorer-support.json' });
+      try { document.body.append(link); link.click(); }
+      finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+      $('diagnostics-status').textContent = 'Support download requested. Explorer cannot confirm that your browser saved it.';
+    } else {
+      const value = await response.json(); if (!current()) return;
+      const rows = [
+        ['Explorer', value.pluginVersion], ['Desktop version', value.desktopVersion], ['Installed runtime', value.host.runtime],
+        ['SDK helper API', value.host.sdk], ['SDK protocol', value.host.protocol ?? 'unknown'], ['Account prerequisite', value.host.account], ['Selected model prerequisite', value.host.model],
+        ['Speech runtime', value.speech.runtime], ['Voice model assets', value.speech.model], ['Selected microphone discovery', value.speech.microphone],
+        ['Discovered speech models / devices', `${value.speech.modelCount} / ${value.speech.deviceCount}`], ['Speech inspection', value.speech.error],
+        ['Research prerequisites', value.helpers.research], ['Tool-free helper prerequisites', value.helpers.toolFree],
+        ['Research release', value.helpers.researchRelease], ['Tool-free helper release', value.helpers.toolFreeRelease],
+        ['Save recovery observation', value.recovery.save], ['Export response observation', value.recovery.export],
+      ];
+      $('diagnostics-results').replaceChildren(...rows.map(([label, result]) => el('div', {}, el('dt', {}, label), el('dd', {}, String(result)))));
+      $('diagnostics-status').textContent = 'Prerequisite results are cached until Retry checks. Current helper-release blockers are checked on every read and export.';
+    }
+  } catch {
+    if (current()) $('diagnostics-status').textContent = action === 'export' ? 'Support export failed. Retry diagnostics, then explicitly export again. No private paths or logs were collected.' : 'Diagnostics could not complete. Retry when Copilot and local storage are available.';
+  } finally {
+    clearTimeout(timer); if (diagnosticsAbort === abort) diagnosticsAbort = null;
+    if (current()) $('diagnostics-retry').disabled = $('diagnostics-export').disabled = false;
+  }
+}
+$('diagnostics-open').addEventListener('click', () => {
+  $('diagnostics-dialog').showModal(); $('diagnostics-close').focus(); void loadDiagnostics();
+});
+$('diagnostics-close').addEventListener('click', closeDiagnostics);
+$('diagnostics-dialog').addEventListener('cancel', event => { event.preventDefault(); closeDiagnostics(); });
+$('diagnostics-retry').addEventListener('click', () => void loadDiagnostics('retry'));
+$('diagnostics-export').addEventListener('click', () => void loadDiagnostics('export'));
+$('diagnostics-voice').addEventListener('click', () => {
+  const settings = $('voice-settings');
+  if (!settings) { $('diagnostics-status').textContent = 'Expand a question, then open Voice settings beside its answer editor.'; return; }
+  closeDiagnostics(); $('navigation-dialog').close(); settings.open = true; settings.querySelector('summary').focus();
+});
+$('diagnostics-recovery').addEventListener('click', () => { closeDiagnostics(); $('navigation-dialog').close(); $('recovery-open').click(); });
+
 let recoveryEpoch = 0, recoverySelection = null, recoveryContext = null, recoveryReturn = null;
 function closeRecovery() {
   recoveryEpoch++; $('recovery-dialog').close();
@@ -1448,6 +1505,7 @@ const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
   suspended = true; pageEpoch++; actionEpoch++; stopPolling(); actionAbort?.abort(); actionAbort = null; busy = false;
+  if ($('diagnostics-dialog').open) closeDiagnostics();
   cleanup.cancel();
   closeBrief();
   closeCheck();

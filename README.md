@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.39.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.40.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Recovery
@@ -252,7 +252,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.39, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.39**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.40, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.40**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
@@ -287,3 +287,9 @@ The 128 KiB (131,072 byte) ceiling measures UTF-8 bytes in the actual Explorer-a
 Question help retains its smaller 16,000 serialized-character input bound, adding only explicit pinned guidance and matching freshness checks; it can fail if mandatory guidance cannot fit. It still excludes the selected answer and other branches. Clean My Answer remains answer-only. Visible native layout, microphone behavior and live model quality require manual checks.
 
 Large maps mount compact cards near the viewport while keeping the selected editor and the current keyboard-focused control connected. Pan and zoom reuse stable layout geometry; resizing, folding and changed editor dimensions refresh it. Use **Outline** to reach any logical node and **Fit** to recover the visible map. Existing document/node limits still apply; fitting an entire map can mount every visible card.
+
+### Diagnostics and support
+
+Open **Map settings > Diagnostics** for read-only host, speech and owned-helper prerequisites. **Retry checks** refreshes observations without recording, inference, sign-in prompts or downloads. Ready describes observed prerequisites; model loadability, live capture and future provider/tool access remain unknown. Installed speech component compatibility stays cached until Explorer restarts.
+
+**Export support JSON** explicitly downloads only the categories shown in the dialog. It excludes user content, identities, paths, device names and raw errors. Helper shutdown uncertainty remains a blocker even after a recovery notice is dismissed. See [the support schema and detection limits](docs/diagnostics.md). Native layout, microphone operation and live provider quality still need owner verification.

@@ -5,6 +5,7 @@ import { discoverVoice, inspectVoice, selectVoice } from './voice-settings.mjs';
 import { spawnVoiceWorker, listVoiceDevices } from './voice-process.mjs';
 import { VoicePreferences, validatePreferences } from './voice-preferences.mjs';
 import { microphoneIndex } from './voice-audio.mjs';
+import { diagnosticError } from './diagnostics.mjs';
 
 const active = phase => ['loading', 'listening', 'transcribing'].includes(phase);
 let microphoneOwner;
@@ -33,6 +34,26 @@ export class VoiceService {
   async status() {
     try { const { shortcut, label, mode } = await this.discover(await this.preferences.read()); return { ready: true, shortcut, label, mode }; }
     catch (error) { return { ready: false, error: error.message }; }
+  }
+  async diagnostics() {
+    const result = { runtime: 'unknown', model: 'unknown', microphone: 'unknown', loadability: 'unknown', capture: 'unknown', modelCount: 0, deviceCount: 0, error: 'none' };
+    try {
+      const preferences = await this.preferences.read(), inventory = await this.inspect();
+      result.runtime = 'ready'; result.modelCount = inventory.models.length;
+      const model = preferences.model === 'copilot'
+        ? inventory.models.find(m => m.alias === inventory.selectedModel && m.supported) ?? inventory.models.find(m => m.alias === inventory.selectedModel)
+        : inventory.models.find(m => m.id === preferences.model);
+      result.model = !model ? 'unavailable' : model.readiness ?? (model.supported === true ? 'ready' : model.supported === false ? 'unsupported' : 'unknown');
+      const names = await this.devices(inventory.recorder); result.deviceCount = names.length;
+      result.microphone = !names.length ? 'unavailable' : 'ready';
+      try { microphoneIndex(preferences.microphone, names); }
+      catch (error) { result.microphone = 'unavailable'; result.error = diagnosticError(error); }
+    } catch (error) {
+      result.error = diagnosticError(error);
+      if (error?.code === 'VOICE_UNSUPPORTED') result.runtime = 'unsupported';
+      if (error?.code === 'VOICE_UNAVAILABLE') result.runtime = 'unavailable';
+    }
+    return result;
   }
   async options() {
     const preferences = await this.preferences.read(), inventory = await this.inspect();

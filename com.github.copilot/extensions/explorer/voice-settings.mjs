@@ -1,4 +1,4 @@
-import { readFile, readdir, access, stat } from 'node:fs/promises';
+import { opendir, open, access, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -24,43 +24,65 @@ export function parseVoiceSettings(value) {
   return { shortcut, label: [...parts.map(p => names[p]), code.replace(/^(Key|Digit)/, '')].join(' + '), mode: s.recordingMode, language: s.dictationLanguage, selectedModel: s.selectedModelId.replace(/^nvidia\//, '') };
 }
 
-async function digest(file) {
+const limitError = () => Object.assign(new Error('Voice inspection reached its source limit. Existing files are preserved.'), { code: 'DIAGNOSTIC_LIMIT' });
+export async function readVoiceJson(file, max = 65536) {
+  const handle = await open(file, 'r');
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > max) throw limitError();
+    const buffer = Buffer.alloc(max + 1), { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead > max) throw limitError();
+    return JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
+  } finally { await handle.close(); }
+}
+async function digest(file, budget) {
   const hash = createHash('sha256');
-  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  for await (const chunk of createReadStream(file)) {
+    budget.bytes -= chunk.length;
+    if (budget.bytes < 0) throw limitError();
+    hash.update(chunk);
+  }
   return hash.digest('hex');
 }
-const json = async file => JSON.parse(await readFile(file, 'utf8'));
+const json = readVoiceJson;
 let installed;
 async function dependencies(local) {
+  const budget = { entries: 500, bytes: 512 * 1024 * 1024 };
   const libraryPath = join(local, 'Programs', 'GitHub Copilot');
-  const desktopHash = await digest(join(libraryPath, 'foundry_local.dll'));
+  const desktopHash = await digest(join(libraryPath, 'foundry_local.dll'), budget);
   const packages = join(local, 'copilot', 'pkg', 'win32-x64');
-  for (const entry of (await readdir(packages, { withFileTypes: true })).filter(e => e.isDirectory() && !e.name.startsWith('.')).reverse()) {
-    const base = join(packages, entry.name);
+  for (const entry of (await directories(packages, budget)).filter(name => !name.startsWith('.')).reverse()) {
+    const base = join(packages, entry);
     const sdk = join(base, 'foundry-local-sdk', 'node_modules', 'foundry-local-sdk');
     const recorder = join(base, 'pvrecorder', 'node_modules', '@picovoice', 'pvrecorder-node');
     try {
       // shortcut: only the inspected native ABI is supported; revalidate when Copilot updates it.
       if ((await json(join(sdk, 'package.json'))).version !== '2.2.1' || (await json(join(recorder, 'package.json'))).version !== '1.2.9') continue;
-      if (await digest(join(sdk, 'prebuilds', 'win32-x64', 'foundry_local.dll')) !== desktopHash) continue;
+      if (await digest(join(sdk, 'prebuilds', 'win32-x64', 'foundry_local.dll'), budget) !== desktopHash) continue;
       await access(join(recorder, 'dist', 'index.js'));
       return { libraryPath, sdk: join(sdk, 'dist', 'index.js'), recorder: join(recorder, 'dist', 'index.js') };
-    } catch { /* An older or incomplete installed package is not a candidate. */ }
+    } catch (error) { if (error.code === 'DIAGNOSTIC_LIMIT') throw error; /* Older or incomplete package. */ }
   }
-  throw new Error('Compatible Copilot local voice components were not found. Explorer does not download replacements.');
+  throw Object.assign(new Error('Compatible Copilot local voice components were not found. Explorer does not download replacements.'), { code: 'VOICE_UNAVAILABLE' });
 }
 
 export async function inspectVoice() {
-  if (process.env.COPILOT_EXTENSION_SANDBOXED === '1') throw new Error('Local dictation is not available in a sandboxed Explorer session.');
-  if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('Explorer local dictation currently supports Windows x64.');
+  if (process.env.COPILOT_EXTENSION_SANDBOXED === '1') throw Object.assign(new Error('Local dictation is not available in a sandboxed Explorer session.'), { code: 'VOICE_UNSUPPORTED' });
+  if (process.platform !== 'win32' || process.arch !== 'x64') throw Object.assign(new Error('Explorer local dictation currently supports Windows x64.'), { code: 'VOICE_UNSUPPORTED' });
   let settings;
   try {
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(join(process.env.COPILOT_HOME || join(homedir(), '.copilot'), 'data.db'), { readOnly: true });
-    try { settings = parseVoiceSettings(JSON.parse(db.prepare("SELECT value FROM app_state WHERE key = 'voice-mode-settings'").get()?.value || 'null')); }
+    try {
+      const row = db.prepare("SELECT CASE WHEN length(CAST(value AS BLOB)) <= 65536 THEN value END AS value, length(CAST(value AS BLOB)) AS bytes FROM app_state WHERE key = 'voice-mode-settings'").get();
+      if (row?.bytes > 65536) throw limitError();
+      try { settings = parseVoiceSettings(JSON.parse(row?.value || 'null')); }
+      catch (error) { if (!(error instanceof SyntaxError)) error.code = 'VOICE_UNSUPPORTED'; throw error; }
+    }
     finally { db.close(); }
   } catch (error) {
-    if (error.code || error instanceof SyntaxError) throw new Error('Could not read Copilot’s voice settings. Set up Voice dictation in Copilot and reopen Explorer.');
+    if (['DIAGNOSTIC_LIMIT', 'VOICE_UNSUPPORTED'].includes(error.code)) throw error;
+    if (error.code || error instanceof SyntaxError) throw Object.assign(new Error('Could not read Copilot’s voice settings. Set up Voice dictation in Copilot and reopen Explorer.'), { code: 'VOICE_UNAVAILABLE' });
     throw error;
   }
   const models = await downloadedModels(join(homedir(), '.github-copilot-cli', 'cache', 'models'));
@@ -68,8 +90,15 @@ export async function inspectVoice() {
   return { ...settings, ...await installed, models };
 }
 
-async function directories(path) {
-  try { return (await readdir(path, { withFileTypes: true })).filter(e => e.isDirectory() && !e.isSymbolicLink()).slice(0, 500).map(e => e.name); }
+async function directories(path, budget) {
+  try {
+    const names = [];
+    for await (const entry of await opendir(path)) {
+      if (--budget.entries < 0) throw limitError();
+      if (entry.isDirectory() && !entry.isSymbolicLink()) names.push(entry.name);
+    }
+    return names;
+  }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
 async function hasModelAssets(folder, config) {
@@ -85,10 +114,10 @@ async function hasModelAssets(folder, config) {
   catch { return false; }
 }
 export async function downloadedModels(root) {
-  const result = [];
-  for (const publisher of await directories(root)) for (const name of await directories(join(root, publisher))) {
+  const result = [], budget = { entries: 500 };
+  for (const publisher of await directories(root, budget)) for (const name of await directories(join(root, publisher), budget)) {
     const base = join(root, publisher, name);
-    for (const folder of [base, ...(await directories(base)).map(v => join(base, v))]) {
+    for (const folder of [base, ...(await directories(base, budget)).map(v => join(base, v))]) {
       try {
         const config = await json(join(folder, 'genai_config.json'));
         const type = config.model?.type;
@@ -98,10 +127,10 @@ export async function downloadedModels(root) {
         const compatible = !!family && type === 'nemotron_speech' && config.model.sample_rate === 16000;
         const supported = compatible && await hasModelAssets(folder, config);
         const id = createHash('sha256').update(relative(root, folder).replaceAll('\\', '/')).digest('hex').slice(0, 24);
-        result.push({ id, path: folder, type, alias: family?.alias, supported,
+        result.push({ id, path: folder, type, alias: family?.alias, supported, readiness: supported ? 'ready' : compatible ? 'unavailable' : 'unsupported',
           label: family ? `${family.label} · CPU · ${metadata.Name.split(/[:-]/).at(-1)}` : String(metadata.Name).slice(0, 200),
           reason: supported ? '' : compatible ? 'This model download is incomplete or has an unfamiliar file layout. Complete it in Copilot, then refresh.' : 'This downloaded speech model is not supported by Explorer’s streaming audio engine.' });
-      } catch { /* Packages without readable metadata cannot be identified. */ }
+      } catch (error) { if (error.code === 'DIAGNOSTIC_LIMIT') throw error; /* Unidentified metadata. */ }
     }
   }
   return result.sort((a, b) => b.label.localeCompare(a.label, undefined, { numeric: true }));

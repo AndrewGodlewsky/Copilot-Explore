@@ -8,6 +8,37 @@ import { startServer } from './server.mjs';
 import { createResearcher } from './research.mjs';
 import { createCleaner } from './cleanup.mjs';
 import { createQuestionHelper } from './question-help.mjs';
+import { hostRuntime } from './owned-helper.mjs';
+
+async function installedCapabilities() {
+  try { hostRuntime(); } catch { return { runtime: 'unsupported', supported: false }; }
+  const sdk = await import('@github/copilot-sdk');
+  return { supported: typeof sdk.CopilotClient === 'function' && typeof sdk.RuntimeConnection?.forStdio === 'function' };
+}
+export async function readHostReadiness(parent, capabilities = installedCapabilities) {
+  const result = { runtime: 'unknown', sdk: 'unknown', protocol: null, account: 'unknown', model: 'unknown' };
+  const failure = error => ['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND', 'ENOENT'].includes(error?.code) ? 'unavailable' : error?.code === -32601 ? 'unsupported' : 'unknown';
+  try {
+    const capability = await capabilities();
+    result.runtime = capability.runtime ?? 'ready'; result.sdk = capability.supported ? 'ready' : 'unsupported'; result.protocol = capability.protocol ?? null;
+  } catch (error) { result.sdk = failure(error); return result; }
+  const rpc = parent?.rpc;
+  if (!rpc?.model?.getCurrent || !rpc?.model?.list || !rpc?.gitHubAuth?.getStatus) { result.sdk = 'unsupported'; return result; }
+  const [auth, model] = await Promise.allSettled([
+    rpc.gitHubAuth.getStatus(),
+    Promise.all([rpc.model.getCurrent(), rpc.model.list({ refresh: false })]),
+  ]);
+  result.account = auth.status === 'fulfilled' ? auth.value?.isAuthenticated === true ? 'ready' : auth.value?.isAuthenticated === false ? 'unavailable' : 'unknown' : failure(auth.reason);
+  if (model.status === 'rejected') result.model = failure(model.reason);
+  else {
+    const [selected, catalog] = model.value;
+    if (typeof selected?.modelId === 'string' && Array.isArray(catalog?.list) && catalog.list.length <= 500) {
+      const found = catalog.list.find(m => m?.id === selected.modelId);
+      result.model = !found ? 'unavailable' : found.provider?.kind !== 'copilot' ? 'unsupported' : found.policy && found.policy.state !== 'enabled' ? 'unavailable' : 'ready';
+    }
+  }
+  return result;
+}
 
 const string = (maxLength = 5000) => ({ type: 'string', minLength: 1, maxLength });
 const array = (items, maxItems) => ({ type: 'array', items, maxItems });
@@ -55,7 +86,7 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
               catch { throw new Error('The attached Copilot session is unavailable'); }
             },
           }).load();
-          const server = await startServer(explorer);
+          const server = await startServer(explorer, undefined, { readHost: () => readHostReadiness(getSession()) });
           const entry = { explorer, server };
           instances.set(ctx.instanceId, entry);
           try {

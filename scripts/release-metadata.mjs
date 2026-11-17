@@ -34,7 +34,7 @@ function checkReadmeVersions(readme, name, version) {
 
 export async function checkReleaseMetadata(root) {
   const plugin = await readJson(root, 'plugin.json');
-  const version = plugin.version;
+  const version = plugin?.version;
   if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)) {
     throw new Error(`plugin.json version: expected a numeric major.minor.patch version, found ${JSON.stringify(version)}.`);
   }
@@ -49,6 +49,10 @@ export async function checkReleaseMetadata(root) {
   const cache = new Map();
   for (const [file, field, select] of files) {
     if (!cache.has(file)) cache.set(file, await readJson(root, file));
+    const data = cache.get(file);
+    if (data === null || typeof data !== 'object' || (file === 'release-notes.json' ? !Array.isArray(data) : Array.isArray(data))) {
+      throw new Error(`${file} ${field}: expected ${file === 'release-notes.json' ? 'an array of release entries' : 'a metadata object'}. Update all current release metadata together.`);
+    }
     matchVersion(select(cache.get(file)), version, file, field);
   }
   const notes = cache.get('release-notes.json');

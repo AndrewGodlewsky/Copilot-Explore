@@ -75,6 +75,15 @@ try {
   const voiceOptions = await fetch(opened.url + 'api/voice/settings');
   assert.equal(voiceOptions.status, 400, 'Settings explain missing host configuration without enumerating or recording devices.');
   assert.ok((await voiceOptions.json()).error);
+  const readiness = await (await fetch(opened.url + 'api/diagnostics')).json();
+  assert.equal(readiness.host.runtime, 'ready'); assert.equal(readiness.host.sdk, 'ready'); assert.equal(readiness.host.protocol, null, 'Installed SDK has no authoritative public protocol-version export.');
+  assert.equal(readiness.desktopVersion, 'unknown'); assert.equal(readiness.speech.capture, 'unknown'); assert.equal(readiness.speech.loadability, 'unknown');
+  assert.notEqual(readiness.helpers.research, 'ready', 'Disposable fixture has no authenticated Copilot provider prerequisite.');
+  const support = await fetch(opened.url + 'api/support', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: '{}' });
+  assert.equal(support.status, 200); assert.equal(support.headers.get('content-disposition'), 'attachment; filename="explorer-support.json"');
+  const supportBytes = await support.text(); assert.ok(Buffer.byteLength(supportBytes) < 4096); assert.ok(!supportBytes.includes(temporary)); assert.ok(!supportBytes.includes(session.sessionId));
+  assert.equal(requests.length, 0, 'Readiness and support export perform no inference.');
+  console.log('Installed read-only diagnostics detected runtime/SDK capabilities and exported only safe prerequisites without inference.');
   const firstState = await fetch(opened.url + 'api/state');
   const cursor = firstState.headers.get('X-Explorer-State'); assert.ok(cursor); assert.equal((await firstState.json()).document, null);
   const unchanged = await fetch(opened.url + 'api/state', { headers: { 'X-Explorer-State': cursor } });

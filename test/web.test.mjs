@@ -66,6 +66,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   historyDialog.close = () => { historyDialog.open = false; };
   const recoveryDialog = document.getElementById('recovery-dialog');
   if (recoveryDialog) { recoveryDialog.showModal = () => { recoveryDialog.open = true; }; recoveryDialog.close = () => { recoveryDialog.open = false; }; }
+  const diagnosticsDialog = document.getElementById('diagnostics-dialog');
+  if (diagnosticsDialog) { diagnosticsDialog.showModal = () => { diagnosticsDialog.open = true; }; diagnosticsDialog.close = () => { diagnosticsDialog.open = false; }; }
   const navigationDialog = document.getElementById('navigation-dialog');
   navigationDialog.showModal = () => { navigationDialog.open = true; };
   navigationDialog.close = () => { navigationDialog.open = false; };
@@ -142,6 +144,63 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
+
+test('diagnostics settings disclosure previews support categories, retries and downloads without changing drafts', async t => {
+  let reads = 0;
+  const voice = { status: async () => ({ ready: false }), diagnostics: async () => { reads++; return { runtime: 'ready', model: 'unavailable', microphone: 'unknown', error: 'none' }; }, close() {} };
+  const f = await fixture(t, 340, voice), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Draft stays private');
+  $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'saved draft');
+  const answer = $('answer'); answer.focus(); answer.setSelectionRange(3, 8);
+  const before = JSON.stringify(f.explorer.doc);
+  $('navigation-open').click();
+  assert.ok($('diagnostics-open'), 'diagnostics reachable from settings');
+  $('diagnostics-open').focus(); $('diagnostics-open').click();
+  await until(() => $('diagnostics-results').textContent.includes('Voice model assets'), 'diagnostics results');
+  assert.equal($('diagnostics-dialog').open, true); assert.equal(reads, 1);
+  assert.match($('diagnostics-dialog').textContent, /Versions, readiness categories, capability states, bounded counts and recovery states/);
+  assert.match($('diagnostics-dialog').textContent, /loadability and live capture remain unknown/);
+  assert.ok(!$('diagnostics-results').textContent.includes('Draft stays private'));
+  $('diagnostics-retry').click(); await until(() => reads === 2 && !$('diagnostics-retry').disabled, 'explicit retry');
+  let downloaded = null, revoked = false;
+  f.window.URL.createObjectURL = () => 'blob:support-fixture'; f.window.URL.revokeObjectURL = () => { revoked = true; };
+  f.window.HTMLAnchorElement.prototype.click = function () { downloaded = { filename: this.download, href: this.href }; };
+  $('diagnostics-export').click(); await until(() => downloaded, 'explicit support download');
+  assert.deepEqual(downloaded, { filename: 'explorer-support.json', href: 'blob:support-fixture' });
+  assert.match($('diagnostics-status').textContent, /cannot confirm.*saved/i);
+  assert.equal(JSON.stringify(f.explorer.doc), before); assert.equal($('answer').value, 'Draft stays private'); assert.equal(reads, 2);
+  assert.equal($('answer'), answer); assert.equal(answer.selectionStart, 3); assert.equal(answer.selectionEnd, 8); assert.equal($('answer-state').value, 'assumption');
+  f.window.URL.createObjectURL = () => { throw new Error('PRIVATE-CANARY\nC:/Users/private'); };
+  $('diagnostics-export').click(); await until(() => /Support export failed/.test($('diagnostics-status').textContent), 'safe download failure');
+  assert.ok(!$('diagnostics-status').textContent.includes('PRIVATE-CANARY'));
+  $('diagnostics-close').click(); assert.equal($('diagnostics-dialog').open, false); assert.equal(f.document.activeElement.id, 'diagnostics-open');
+  await until(() => revoked, 'blob release');
+});
+
+test('diagnostics ignores held responses after closing or hiding the page and reports real HTTP export failure', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id), originalFetch = f.window.fetch;
+  $('navigation-open').click();
+  let release, observedAbort = false;
+  f.window.fetch = async (path, options) => {
+    const response = await originalFetch(path, options);
+    if (path === 'api/diagnostics') { options.signal.addEventListener('abort', () => { observedAbort = true; }); await new Promise(resolve => { release = resolve; }); }
+    return response;
+  };
+  $('diagnostics-open').click(); await until(() => release, 'held readiness');
+  $('diagnostics-close').click(); release(); await delay(20);
+  assert.equal(observedAbort, true); assert.equal($('diagnostics-results').textContent, '');
+  release = null; $('diagnostics-open').click(); await until(() => release, 'held reopened readiness');
+  const hide = new f.window.Event('pagehide'); Object.defineProperty(hide, 'persisted', { value: true }); f.window.dispatchEvent(hide);
+  release(); await delay(20); assert.equal($('diagnostics-results').textContent, ''); assert.equal($('diagnostics-dialog').open, false, 'page restoration cannot strand a disabled dialog');
+  const show = new f.window.Event('pageshow'); Object.defineProperty(show, 'persisted', { value: true }); f.window.dispatchEvent(show);
+  $('diagnostics-close').click(); f.window.fetch = originalFetch; $('diagnostics-open').click();
+  await until(() => $('diagnostics-results').textContent.includes('Voice model assets'), 'fresh view');
+  Object.defineProperty(f.explorer, 'unconfirmedResearchRelease', { configurable: true, get() { throw new Error('PRIVATE-CANARY\nC:/Users/private'); } });
+  $('diagnostics-export').click(); await until(() => /Support export failed/.test($('diagnostics-status').textContent), 'real HTTP export failure');
+  assert.ok(!$('diagnostics-status').textContent.includes('PRIVATE-CANARY'));
+  Object.defineProperty(f.explorer, 'unconfirmedResearchRelease', { value: null, writable: true });
+});
 
 test('constraint editing and scope coverage preserve active drafts, caret, help and request intent over HTTP', async t => {
   const f = await fixture(t, 340, undefined, false, { questionHelper: { run: async () => 'Helpful explanation', close() {} } }), $ = id => f.document.getElementById(id);

@@ -1,3 +1,4 @@
+import { parseFollowup } from './research-followup.mjs';
 import { readFile } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -37,7 +38,7 @@ export async function publicUrl(value, resolve = host => lookup(host, { all: tru
 const sourceKey = value => { const url = new URL(value); url.hash = ''; return url.href; };
 
 export function createResearcher(parent, options = {}) {
-  const helper = createOwnedHelper(parent, 'research', async (prepared, { controller, progress, stopWith, fail, eligible }) => {
+  const prepare = async (prepared, { controller, progress, stopWith, fail, eligible }) => {
     if (Buffer.byteLength(prepared.instructions) + Buffer.byteLength(prepared.prompt) > RESEARCH_CONTEXT_LIMIT) throw fail('The prepared research request exceeds its limit.');
     const pages = new Map(), reads = new Map(), readIds = new Set(); let toolCalls = 0;
     return {
@@ -90,6 +91,9 @@ export function createResearcher(parent, options = {}) {
       stage: 'Researching this question',
       prompt: prepared.prompt,
       parse(content) {
+        if (prepared.followup) {
+          try { return parseFollowup(content, prepared, pages); } catch (error) { throw fail(error.message); }
+        }
         let result;
         try {
           if (typeof content !== 'string' || content.length > 80000 || Buffer.byteLength(content) > MAX_RESEARCH_BYTES) throw new Error();
@@ -104,10 +108,15 @@ export function createResearcher(parent, options = {}) {
         return result;
       },
     };
-  }, options);
-  return { run(context, options = {}) {
+  };
+  const helper = createOwnedHelper(parent, 'research', prepare, options);
+  const followup = createOwnedHelper(parent, 'research-follow-up', prepare, options);
+  return { runFollowup(context, options = {}) {
+    if (!options.prepared?.followup) throw new Error('Review the follow-up before starting.');
+    return followup.run(options.prepared, options);
+  }, run(context, options = {}) {
     const settings = researchSettings(options.prepared?.settings ?? options.settings);
     const prepared = Object.freeze({ ...(options.prepared ?? prepareContext(context, researchFraming(context, settings))), settings, limits: researchLimits(settings) });
     return helper.run(prepared, options);
-  }, close: () => helper.close() };
+  }, close: () => Promise.allSettled([helper.close(), followup.close()]) };
 }

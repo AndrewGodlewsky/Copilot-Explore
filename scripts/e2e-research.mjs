@@ -5,6 +5,8 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { prepareFollowup } from '../com.github.copilot/extensions/explorer/research-followup.mjs';
+import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { prepareContext } from '../com.github.copilot/extensions/explorer/research-context.mjs';
 import { createResearcher, researchFraming } from '../com.github.copilot/extensions/explorer/research.mjs';
 
@@ -20,7 +22,7 @@ const findings = { basis: 'reasoning', summary: 'Synthetic local comparison.', o
   { id: 'c1', text: 'A pilot could help learning.', basis: 'reasoning', evidence: [], limitations: 'Model judgment; no page fetched.' },
   { id: 'c2', text: 'Local cost is unknown.', basis: 'unknown', evidence: [], limitations: 'Search snippets do not establish fetched evidence.' },
 ] };
-let hold = false, onHeld, falseCitation = false;
+let hold = false, onHeld, falseCitation = false, followupMode = false;
 const fixture = createServer(async (req, res) => {
   try {
     let body = ''; for await (const chunk of req) body += chunk;
@@ -41,7 +43,7 @@ const fixture = createServer(async (req, res) => {
     if (hold) { onHeld?.(); return; }
     const searched = input.messages.some(m => m.role === 'tool');
     const searchName = input.tools.find(t => t.function.name.includes('web_search')).function.name;
-    const output = falseCitation ? { ...findings, basis: 'sources', sources: [{ id: 's1', title: 'Unread search result', url: 'https://example.com/unread', retrievedAt: '1900-01-01T00:00:00.000Z', provenance: 'recorded-read' }], claims: [{ id: 'c1', text: 'Unsupported claim', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Invented support' }], limitations: 'Fixture' }] } : findings;
+    const output = followupMode ? { answer: 'A prior source can inform the hypothetical.', uncertainty: 'Prior imported metadata; no new read.', claims: [{ id: 'c1', text: 'Prior support only', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Previously recorded support' }], limitations: 'Historical evidence, not a new fetch' }], sources: falseCitation ? [{ id: 's1', title: 'Unread new source', url: 'https://example.com/unread' }] : [{ id: 's1', prior: { origin: 'original', sourceId: 's1' } }] } : falseCitation ? { ...findings, basis: 'sources', sources: [{ id: 's1', title: 'Unread search result', url: 'https://example.com/unread', retrievedAt: '1900-01-01T00:00:00.000Z', provenance: 'recorded-read' }], claims: [{ id: 'c1', text: 'Unsupported claim', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Invented support' }], limitations: 'Fixture' }] } : findings;
     const message = searched ? { role: 'assistant', content: JSON.stringify(output) } : {
       role: 'assistant', content: null, tool_calls: [{ id: 'search-fixture', type: 'function', function: { name: searchName, arguments: JSON.stringify({ query: 'synthetic pilot options' }) } }],
     };
@@ -79,7 +81,7 @@ const runtime = async () => ({ path: cli, sdk: { RuntimeConnection: sdk.RuntimeC
   }
 } } });
 const researcher = createResearcher(parent, { runtime, usageDirectory: join(temporary, 'usage') });
-const deadline = setTimeout(() => { for (const client of owned) void client.forceStop(); }, 55000);
+const deadline = setTimeout(() => { for (const client of owned) void client.forceStop(); }, 90000);
 try {
   const progress = [];
   const context = { topic: 'Synthetic garden', objective: 'Choose a shared garden 🌿', successCriteria: 'Neighbors agree on one place', path: [{ kind: 'direction', origin: 'user', question: '  Access for everyone  ', answer: '', review: false }, { question: 'Who should join?', answer: 'Neighbors only', answerState: 'assumption', review: true }], decisionsElsewhere: [{ question: 'When?', answer: '', answerState: 'revisit-later', review: false }] };
@@ -129,14 +131,30 @@ try {
   assert.equal(rejectedOperation.operation, 'research'); assert.equal(rejectedOperation.status, 'failed');
   assert.match(await readFile(join(temporary, 'usage', 'session-state', rejectedId, 'events.jsonl'), 'utf8'), /session.usage_record/);
   falseCitation = false;
+  followupMode = true;
+  const doc = createDocument('Scoped follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why pilot?', category: 'Target' }]);
+  doc.nodes[1].research = { ...findings, basis: 'sources', sources: [{ id: 's1', title: 'Earlier imported source', url: 'https://example.com/prior', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported' }] };
+  const followup = prepareFollowup(doc, doc.nodes[1].id, { question: 'What if the budget doubles? ??', hypothetical: true }, { settings });
+  const startIndex = captured.length;
+  const followupResult = await researcher.runFollowup(followup.context, { prepared: followup });
+  assert.deepEqual(captured[startIndex], { instructions: followup.instructions, prompt: followup.prompt });
+  assert.ok(sendTimeouts[startIndex] > 0 && sendTimeouts[startIndex] < 60000);
+  assert.equal(followupResult.sources[0].retrievedAt, '2020-01-01T00:00:00.000Z'); assert.equal(followupResult.sources[0].provenance, 'imported'); assert.equal(followupResult.sources[0].evidenceOrigin.origin, 'original');
+  falseCitation = true;
+  await assert.rejects(researcher.runFollowup(followup.context, { prepared: followup }), /new source.*successfully read/);
+  falseCitation = false;
+  const followupReceipts = [];
+  for (const id of await readdir(join(temporary, 'usage', 'session-state'))) followupReceipts.push(JSON.parse(await readFile(join(temporary, 'usage', 'session-state', id, 'operation.json'), 'utf8')));
+  assert.deepEqual(followupReceipts.filter(item => item.operation === 'research-follow-up').map(item => item.status).sort(), ['completed', 'failed']);
+  assert.ok(toolCalls.length >= 4); assert.ok(toolCalls.every(call => call.name === 'web_search'));
   hold = true;
   const controller = new AbortController();
   const held = new Promise(resolve => { onHeld = resolve; });
-  const cancelled = researcher.run(context, { signal: controller.signal });
+  const cancelled = researcher.runFollowup(followup.context, { prepared: followup, signal: controller.signal });
   const rejected = assert.rejects(cancelled, /cancelled/);
   await held; controller.abort(); await rejected;
-  assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 3);
-  console.log('PASS isolated research: real installed MCP search, reasoning/unknown claims, rejection of search-only fabricated source/time, exact reviewed inputs, retained completed/failed receipts and cancellation/release. Successful builtin web_fetch is NOT exercised; deterministic hook tests separately cover successful read provenance. No paid provider or user session.');
+  assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 5);
+  console.log('PASS isolated research and scoped follow-up: historical imported evidence unchanged, unread new source rejected, separate completed/failed/cancelled operation receipts, real installed MCP search, reasoning/unknown claims, rejection of search-only fabricated source/time, exact reviewed inputs, retained completed/failed receipts and cancellation/release. Successful builtin web_fetch is NOT exercised; deterministic hook tests separately cover successful read provenance. No paid provider or user session.');
 } finally {
   clearTimeout(deadline); await researcher.close();
   await Promise.allSettled([...owned].map(client => client.forceStop()));

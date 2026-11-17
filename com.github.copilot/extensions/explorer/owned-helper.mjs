@@ -29,8 +29,9 @@ const sameAccount = (a, b) => a?.isAuthenticated === true && b?.isAuthenticated 
 
 // Only fixtures inject a runtime. Production resolves the pair supplied by the desktop bootstrap.
 export function createOwnedHelper(parent, operation, prepare, { usageDirectory, runtime = desktopRuntime, usageRecorder = createUsageRecorder, stopTimeoutMs = 10000, clock = { now: () => performance.now(), setTimeout, clearTimeout } } = {}) {
-  if (!['research', 'decision-brief', 'answer-check', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
-  const label = { 'decision-brief': 'Decision brief', 'answer-check': 'Answer check', research: 'Research', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
+  if (!['research', 'research-follow-up', 'decision-brief', 'answer-check', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
+  const webResearch = operation === 'research' || operation === 'research-follow-up';
+  const label = { 'decision-brief': 'Decision brief', 'answer-check': 'Answer check', research: 'Research', 'research-follow-up': 'Research follow-up', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
   const fail = message => new HelperError(message.replaceAll('Research', label).replaceAll('research', label.toLowerCase()));
   const cancelled = () => fail('Research was cancelled or timed out. Your answers are saved.');
   const active = new Map();
@@ -44,11 +45,11 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
     return task;
   }
   async function execute(context, controller, progress) {
-    const timeLimitMs = operation === 'research' ? context.limits.timeLimitMs : 180000;
+    const timeLimitMs = webResearch ? context.limits.timeLimitMs : 180000;
     const started = clock.now();
     const remaining = () => Math.max(0, timeLimitMs - (clock.now() - started));
     let ended = false;
-    const operationEligible = () => { if (operation === 'research' && remaining() <= 0) controller.abort(); return !ended && !controller.signal.aborted; };
+    const operationEligible = () => { if (webResearch && remaining() <= 0) controller.abort(); return !ended && !controller.signal.aborted; };
     let client, directory, usage, stop, stopAttempt, phase = 'preparing the SDK', outcome = 'failed';
     const sessionId = randomUUID();
     let terminalFailure;
@@ -101,7 +102,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       if (!sameAccount(auth, helperAuth)) throw fail('The research account differs from the main Copilot account. Check your Copilot sign-in.');
       if (!helperModels.list?.some(m => eligible(m) && m.id === model.id)) throw fail('The selected model is unavailable for research. Choose an enabled Copilot model.');
       if (metadata.isRemote !== false || await realpath(metadata.workingDirectory) !== await realpath(workspace)) throw fail('Copilot could not isolate the research workspace.');
-      stage(operation === 'research' ? 'Checking web research tools' : `Verifying ${label.toLowerCase()} has no tools`);
+      stage(webResearch ? 'Checking web research tools' : `Verifying ${label.toLowerCase()} has no tools`);
       await deadline(session.rpc.tools.initializeAndValidate(), 30000); check();
       const [tools, current, parentAuth, currentHelperAuth] = await deadline(Promise.all([
         session.rpc.tools.getCurrentMetadata(), session.rpc.model.getCurrent(), parent.rpc.gitHubAuth.getStatus(), session.rpc.gitHubAuth.getStatus(),
@@ -109,7 +110,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       work.validateTools(tools);
       if (current.modelId !== model.id || !sameAccount(auth, parentAuth) || !sameAccount(auth, currentHelperAuth)) throw fail('The Copilot account or model changed while research was starting. Try again.');
       stage(work.stage);
-      const response = await session.sendAndWait({ prompt: work.prompt }, operation === 'research' ? remaining() : 180000);
+      const response = await session.sendAndWait({ prompt: work.prompt }, webResearch ? remaining() : 180000);
       check(); stage('Checking result');
       const result = work.parse(response?.data?.content); outcome = 'completed'; return result;
     } catch (error) {

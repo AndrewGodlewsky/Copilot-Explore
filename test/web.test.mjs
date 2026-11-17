@@ -40,6 +40,42 @@ async function startReviewedResearch(f) {
   f.document.getElementById('research-review-start').click();
 }
 
+test('research follow-up keeps typing and focus during polling, renders prior evidence and retains node-scoped history on navigation', async t => {
+  let finish;
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = findings; await e.command('import', { revision: e.doc.revision, document: doc }); }, runFollowup: () => new Promise(resolve => { finish = resolve; }) });
+  const node = f.explorer.doc.nodes[1]; f.open(node.id);
+  const question = f.document.getElementById('followup-question'); assert.ok(question);
+  question.value = 'What if <script>cost</script> doubles?'; question.dispatchEvent(new f.window.Event('input', { bubbles: true }));
+  f.document.getElementById('followup-hypothetical').click(); f.document.getElementById('followup-review').click();
+  await until(() => !f.document.getElementById('research-review-start').disabled, 'follow-up review');
+  assert.match(f.document.getElementById('research-review-prompt').textContent, /What if <script>cost<\/script> doubles/);
+  await startReviewedResearch(f); await until(() => finish, 'follow-up started');
+  question.value = 'Next question 🌿'; question.dispatchEvent(new f.window.Event('input', { bubbles: true })); question.focus(); question.setSelectionRange(2, 5);
+  const answer = f.document.getElementById('answer'); answer.value = 'Uncommitted answer'; answer.dispatchEvent(new f.window.Event('input', { bubbles: true }));
+  finish({ answer: 'Consider a pilot <script>literal</script>', uncertainty: 'Hypothetical', claims: [{ id: 'c1', text: 'Prior reasoning', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Prior paraphrase' }], limitations: 'Old evidence' }], sources: [{ id: 's1', title: 'Prior source', url: 'https://example.com/prior', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported', evidenceOrigin: { origin: 'original', sourceId: 's1' } }] });
+  await until(() => f.document.getElementById('followup-history').textContent.includes('Consider a pilot'), 'follow-up result');
+  assert.equal(f.document.getElementById('followup-question'), question); assert.equal(question.value, 'Next question 🌿'); assert.equal(f.document.activeElement, question); assert.equal(question.selectionStart, 2);
+  assert.equal(f.document.getElementById('answer'), answer); assert.equal(answer.value, 'Uncommitted answer'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  const history = f.document.getElementById('followup-history'); assert.equal(history.querySelector('script'), null); assert.match(history.textContent, /Prior evidence/); assert.match(history.textContent, /2020-01-01/);
+  const link = history.querySelector('a'); assert.equal(link.href, 'https://example.com/prior'); assert.equal(link.rel, 'noopener noreferrer');
+  f.open(f.explorer.doc.nodes[2].id); f.open(node.id); assert.match(f.document.getElementById('followup-history').textContent, /Consider a pilot/); assert.equal(f.document.getElementById('followup-question').value, 'Next question 🌿');
+});
+
+test('follow-up panel reload reconnects to one pending operation and history without adopting old-page polling', async t => {
+  let finish, runs = 0;
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = findings; await e.command('import', { revision: e.doc.revision, document: doc }); }, runFollowup: () => { runs++; return new Promise(resolve => { finish = resolve; }); } });
+  const id = f.explorer.doc.nodes[1].id; f.open(id); f.type('followup-question', 'Why this?'); f.document.getElementById('followup-review').click(); await startReviewedResearch(f); await until(() => finish, 'started');
+  let release, arrived; const held = new Promise(resolve => { release = resolve; }), pending = new Promise(resolve => { arrived = resolve; });
+  f.pauseState(async () => { arrived(); await held; }); const oldPoll = f.poll(); await pending;
+  f.window.dispatchEvent(new f.window.Event('pagehide'));
+  const reloaded = await fixture(t, 340, undefined, false, { explorer: f.explorer }); reloaded.open(id);
+  assert.equal(reloaded.document.getElementById('followup-question').value, ''); assert.equal(runs, 1); assert.ok(reloaded.document.getElementById('cancel-request'));
+  finish({ answer: 'One completed follow-up', uncertainty: 'No external evidence', sources: [], claims: [{ id: 'c1', text: 'Reasoning', basis: 'reasoning', evidence: [], limitations: 'Fixture' }] });
+  await until(() => reloaded.document.getElementById('followup-history').textContent.includes('One completed'), 'reconnected result');
+  release(); await oldPoll; assert.equal(runs, 1); assert.equal(f.document.getElementById('followup-history').textContent.includes('One completed'), false);
+  assert.equal(reloaded.explorer.followup.exchanges.length, 1);
+});
+
 test('claim evidence disclosure shows literal support, source navigation and imported provenance beside the claim', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {
     const doc = structuredClone(e.doc);
@@ -67,16 +103,18 @@ test('claim evidence disclosure shows literal support, source navigation and imp
 async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
-  let explorer = await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
+  let explorer = options.explorer ?? await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
     cleaner: options.cleaner, briefHelper: options.briefHelper, checkHelper: options.checkHelper,
     questionHelper: options.questionHelper,
-    researcher: { run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
+    researcher: { runFollowup: options.runFollowup, run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
   }).load();
+  if (!options.explorer) {
   await explorer.command('start', { topic: 'A tool library' });
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: options.questions ?? [
     { category: 'People', question: 'Who should borrow first?' }, { category: 'Trust', question: 'What if a tool breaks?' },
   ] });
   if (!options.preview) await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: explorer.preview.questions.map((q, index) => ({ index, question: q.question })) });
+  }
   await options.before?.(explorer);
   if (options.cold) { await explorer.close(); explorer = await new Explorer({ library: new Library(dir), binding: 'dom' }).load(); }
   const server = await startServer(explorer, voice);

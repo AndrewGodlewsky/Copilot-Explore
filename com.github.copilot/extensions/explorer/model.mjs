@@ -89,10 +89,9 @@ function evidenceId(value, seen, name) {
 function evidenceKeys(value, keys) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(k => !keys.includes(k))) throw new Error('Invalid research evidence fields.');
 }
-export function research(value) {
+export function researchEvidence(value) {
   if (!value || !['sources', 'reasoning'].includes(value.basis)) throw new Error('Research needs a basis: sources or reasoning.');
   const hasClaims = Object.hasOwn(value, 'claims'), sourceIds = new Set(), sourceUrls = new Set(), claimIds = new Set();
-  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims']);
   if (hasClaims && Buffer.byteLength(JSON.stringify(value)) > MAX_RESEARCH_BYTES) throw new Error('Research evidence exceeds its serialized limit.');
   const sources = list(value.sources, 'sources', 15, source => {
     const url = new URL(text(source?.url, 'Source URL', 2000));
@@ -127,6 +126,12 @@ export function research(value) {
     });
     if (!claims.length) throw new Error('Research needs at least one claim.');
   }
+  return { sources, ...(hasClaims ? { claims } : {}) };
+}
+export function research(value) {
+  const hasClaims = Object.hasOwn(value ?? {}, 'claims');
+  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims']);
+  const { sources, claims } = researchEvidence(value);
   const options = list(value.options, 'options', 4, option => ({
     title: text(option?.title, 'Option title', 150),
     description: text(option.description, 'Option description', 3000),

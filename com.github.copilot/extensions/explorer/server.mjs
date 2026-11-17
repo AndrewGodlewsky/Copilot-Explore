@@ -149,7 +149,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req);
-        if (['research', 'restore', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        if (['research', 'research-follow-up', 'restore', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
       if (req.method === 'GET' && ['export.json', 'export.md', 'brief.md'].includes(route)) {

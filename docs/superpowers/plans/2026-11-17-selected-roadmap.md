@@ -956,6 +956,42 @@ Read issue-37.md, task-31-design-notes.md, AGENTS.md and the final task30 resear
 - Run npm test/check/package and applicable installed fixtures. Synchronize the confirmed patch metadata/README/release notes, include controller plan changes, self-review and commit. No nested agents, merge/push or issue closure.
 - Write task-31-report.md with the final schema, bounds, source and retrieval contracts, legacy behavior, exact evidence/commit and semantic-quality/native-UI limitations. Controller independently reviews and publishes.
 
+Published task 31: **v0.1.43**, `c6e7e25`, required checks and claim-evidence provenance retained; independent review approved and remote main verified.
+
+## Task 32: Scoped follow-up questions on research (#27 / original35)
+
+Read issue-35.md, task-32-design-notes.md, AGENTS.md and the final task29–31 context/research/evidence reports. BASE is `c6e7e25f8a35093108ae199e49cd4345c2e75bef`; ship version **0.1.44**. Reconcile final task31 claim/source evidence and task30 research budgets with task29 immutable reviewed-context contracts. Preserve actual-release ownership, receipts and current-disk freshness. Define concrete bounded exchange and output limits before implementation.
+
+### Behavior
+
+- Add an explicit node-scoped way to ask why a recommendation was made, request clarification, or explore a changed assumption. Keep the original research visible and unchanged. Follow-up questions and results belong to the selected research result, not the attached chat or a new permanent conversation product.
+- Use owned isolated SDK work and the existing actual-release research ownership, permissions, tool/deadline budget and retained usage receipts. No indefinite hidden session, parallel helper pool, background auto-retry or changes to the attached session's model. Each explicit request must have bounded inputs, output, lifetime and cancellation.
+- Tie the history to journey/node plus the exact research identity/content and captured source context. Relevant changes invalidate a pending result and mark existing follow-ups historical or clear them with an explanation. Unrelated metadata edits must not discard current follow-up text/history or overwrite newer work. Rerun/replacement/cancellation tokens must prevent late results from entering a different node's history.
+- A changed assumption is hypothetical unless the user explicitly commits it through the existing answer/guidance flow. Label hypothetical inputs and distinguish them from saved constraints. Never silently change answers, answer states, guidance, research or the accepted brief. If offering apply, seed only an editable draft through the existing explicit mechanism.
+- Reuse the actual prepared-context preview and byte limits. Include the user's complete current follow-up, relevant committed context, the bounded original recommendation/evidence and a bounded history of complete exchanges. Omit optional whole records/exchanges deterministically with visible coverage, never silently truncate the current question or pretend omitted history was read.
+- Define explicit limits for question length, retained exchanges, history bytes and structured response before coding. Prefer a small transient history for the active journey/node; disclose reload/navigation retention. Do not introduce a new persistent chat database or duplicate full research records for every turn.
+- Reuse the claim/evidence schema from task31 where genuinely applicable. Previously consulted sources retain their original retrieval provenance and are labeled prior evidence; they are not new successful fetches. New factual claims require evidence from a permissible source or an explicit reasoning/unknown label. Do not fabricate fresh retrieval dates for old sources.
+- Keep sources, limitations, progress, cancel and retry visible within the research flow. Preserve answer drafts, caret, focus and source navigation. Render all text safely; links and IDs follow existing validation rules.
+
+### Approved concrete bounds and state
+
+- Preserve the complete nonblank current question, at most 4,000 UTF-16 code units. Changes described by a follow-up are hypothetical until saved separately.
+- Each raw structured response is at most 12,000 UTF-16 code units and 24,576 UTF-8 serialized bytes; validate the normalized result including trusted metadata against the byte ceiling. Answer text allows 5,000 code units and uncertainty 3,000. Reuse task31 bounded claim/source validation without synthesizing fake options.
+- Retain one transient active journey/node/research conversation, at most four complete exchanges and 65,536 serialized UTF-8 bytes including exact questions and metadata. Drop only oldest complete exchanges with a clear retention/omission notice. Navigation can hide it; asking on a different node replaces it. Completed history may reconnect after a web-panel reload while the same canvas controller remains alive; canvas close/restart discards it. Unsent typed questions are browser-only and reload clears them. Disclose and test this distinction without duplicate inference.
+- Keep a separate source-dependency union of at most 5,000 actually transmitted record fingerprints and 4 MiB serialized UTF-8 bytes, plus identity/framing/original-research fingerprints within that cap. Show actual tracking count/bytes in review coverage; reject overflow before inference. This is separate from the 65,536-byte complete-exchange history and never duplicates full research or prepared contexts per exchange.
+- The immutable review includes the exact current question, hypothetical marker, original recommendation and mandatory committed target/guidance. Optional whole original evidence/options/summary, then newest complete exchanges, then optional committed context are admitted deterministically under the existing actual instruction-plus-prompt byte ceiling, with honest coverage counts.
+- Prior evidence references use the original result or a retained exchange UUID plus its exact result-local source ID. Resolve only included prior sources; unknown or omitted references reject. Trusted parsing copies prior metadata unchanged and labels it prior, preserving imported origin and original dates. Newly consulted evidence must come from this run's successful-fetch map.
+- Reuse the single-use ResearchReview and shared research release queue. A distinct research-follow-up operation must reconcile time/tool-budget branches, usage labels and recovery evidence. Original research and answers remain unchanged; no follow-up draft-apply feature is required.
+
+### Verification and completion
+
+- Carry the task31 Minor from open-minors.md: correct README.md:86 `claim?s` to `claim's` with an encoding-safe edit while updating documentation.
+
+- Test repeated exchanges and exact limits, omitted history, changed hypothetical versus committed assumptions, missing/invalid input and structured output, relevant/unrelated changes, replacement research, duplicate/late/cancelled results, release contention and receipts. Verify the original research and answers remain byte-for-byte unchanged unless the user uses an existing explicit save operation.
+- Use actual HTTP/jsdom for typing during polling, source links and navigation/reopen behavior. Use installed SDK/local tool fixtures for captured strings, budgets, prior versus newly retrieved evidence, tools, cancellation and receipts. No paid provider, existing session, real microphone or desktop/browser automation.
+- Run npm test/check/package and applicable installed fixtures; synchronize confirmed version metadata/release notes/README, include controller plan changes, self-review and commit. No nested agents, merge/push or issue closure.
+- Write task-32-report.md with final bounds, state/ownership/provenance contracts, exact evidence and commit, plus manual native-UI and live-model limitations. Controller independently reviews and publishes.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

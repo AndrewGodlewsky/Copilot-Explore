@@ -11,6 +11,7 @@ import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, 
 
 const $ = id => document.getElementById(id);
 let researchReviewReturn = null, reviewStarting = false;
+let followupDraft = null;
 const researchReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: () => renderResearchReview() });
 const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'];
 let state = { document: null, pending: null, error: '' };
@@ -173,7 +174,7 @@ function apply(next, reset = false) {
   if (state.preview) $('request-status').textContent = `${state.preview.questions.length} questions to review (not saved)`;
   if (state.pending) {
     const work = doc.nodes.find(n => n.id === state.pending.nodeId);
-    $('request-status').textContent = `${state.pending.kind === 'research' ? 'Researching' : 'Finding questions for'} ${work?.category ?? 'this map'}…`;
+    $('request-status').textContent = `${['research', 'research-follow-up'].includes(state.pending.kind) ? 'Researching' : 'Finding questions for'} ${work?.category ?? 'this map'}…`;
   }
   renderWorkspace(); refreshScene(anchor); renderOutline();
   if (compactFocused && changedDocument) $('map').focus({ preventScroll: true });
@@ -711,7 +712,7 @@ function renderWorkspace() {
       button('Clean My Answer', () => { voice.cancel(); void cleanup.start(); }, { id: 'clean-answer', disabled: !answer.value.trim() }),
       el('div', { id: 'cleanup-review', 'aria-live': 'polite' }),
       el('div', { class: 'answer-state-field' }, el('label', { for: 'answer-state' }, 'Answer state'), answerState), el('p', { id: 'answer-state-help', class: 'quiet' }, 'Text and state stay a draft until you save. Decided, Tentative and Assumption need text; other states can have no note.'),
-      el('div', { class: 'actions' }, button('Save answer', () => { voice.cancel(); void save(false); }, { id: 'save-answer', disabled: pending && state.pending.kind !== 'research' }), el('button', { type: 'submit', id: 'save-deeper', class: 'primary', disabled: pending }, 'Save & explore deeper')));
+      el('div', { class: 'actions' }, button('Save answer', () => { voice.cancel(); void save(false); }, { id: 'save-answer', disabled: pending && !['research', 'research-follow-up'].includes(state.pending.kind) }), el('button', { type: 'submit', id: 'save-deeper', class: 'primary', disabled: pending }, 'Save & explore deeper')));
     const researchNote = el('p', { id: 'research-save-note', class: 'quiet' }, 'Save answer is available during research. Saving its source context discards that research. Wait or cancel research before Save & explore deeper.'); form.append(researchNote);
     form.append(button('Undo addition', () => {
       const addition = ui.addition;
@@ -723,6 +724,7 @@ function renderWorkspace() {
     content.append(form); answerStatus(node); renderDraftRecovery(node); renderCleanup(); renderQuestionHelp();
   }
   region('research');
+  region('followup');
   region('children');
   const details = el('details', { class: 'manual' }, el('summary', { id: 'manual-summary' }, 'Missing a direction?')); details.open = ui.manualOpen;
   details.addEventListener('toggle', () => { if (details.isConnected) { ui.manualOpen = details.open; scheduleLayout(); } });
@@ -776,7 +778,7 @@ function renderWorkspace() {
     update('pending', [state.pending, byId.get(state.pending?.nodeId)?.category], () => {
       if (pending) {
         const workNode = byId.get(state.pending.nodeId);
-        return el('div', { class: 'pending', role: 'status' }, el('strong', {}, state.pending.kind === 'research' ? `${state.pending.progress ?? 'Researching'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, state.pending.kind === 'research' ? 'Research runs separately from your chat. Cancelling stops its helper.' : 'Cancelling discards the result; the chat turn may still finish.'));
+        return el('div', { class: 'pending', role: 'status' }, el('strong', {}, ['research', 'research-follow-up'].includes(state.pending.kind) ? `${state.pending.progress ?? 'Researching'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, ['research', 'research-follow-up'].includes(state.pending.kind) ? 'Research runs separately from your chat. Cancelling stops its helper.' : 'Cancelling discards the result; the chat turn may still finish.'));
       }
     });
     update('review', [node.review, isQuestion(node)], () => node.review ? el('p', { class: 'note' }, isQuestion(node) ? 'An earlier answer changed. Review this question and save your answer again when it still fits.' : 'An earlier answer changed. Review this direction and generate fresh questions when needed.') : null);
@@ -802,9 +804,11 @@ function renderWorkspace() {
       const children = doc.nodes.filter(n => n.parentId === node.id);
       if (children.length) return el('div', { class: 'followups' }, el('h3', {}, root ? 'Explore a direction' : 'Explore this branch'), el('p', { class: 'quiet' }, 'Connected below this node.'), children.map(child => button(child.question, () => select(child.id), { id: `followup-${child.id}`, class: 'followup' })));
     });
-    for (const id of ['research-request', 'save-deeper']) if ($(id)) $(id).disabled = pending;
-    if ($('research-save-note')) $('research-save-note').hidden = state.pending?.kind !== 'research';
-    if ($('save-answer')) $('save-answer').disabled = pending && state.pending.kind !== 'research';
+    update('followup', !!node.research, () => node.research ? renderFollowup(node) : null);
+    updateFollowupHistory(node);
+    for (const id of ['research-request', 'followup-review', 'save-deeper']) if ($(id)) $(id).disabled = pending;
+    if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up'].includes(state.pending?.kind);
+    if ($('save-answer')) $('save-answer').disabled = pending && !['research', 'research-follow-up'].includes(state.pending.kind);
     for (const id of ['generate-questions', 'add-direction']) if ($(id)) $(id).disabled = pending || !!state.preview;
     if (root && $('generate-questions')) $('generate-questions').textContent = doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions';
     if ($('manual-question').value !== ui.question) $('manual-question').value = ui.question;
@@ -900,11 +904,11 @@ function renderQuestionPreview() {
   }, { id: 'preview-retry' }); retry.hidden = !batch.stale; section.append(retry);
   return section;
 }
-function openResearchReview(nodeId) {
+function openResearchReview(nodeId, followup) {
   voice.cancel(); researchReviewReturn = document.activeElement;
   $('research-review-content').replaceChildren();
   $('research-review-dialog').showModal(); $('research-review-close').focus();
-  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: $('context-scope').value });
+  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: $('context-scope').value, ...(followup ? { followup } : {}) });
 }
 function closeResearchReview() {
   researchReview.close();
@@ -935,6 +939,7 @@ function renderResearchReview() {
   const rows = [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings)), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. Records are complete; no text is clipped.`),
     display('Required: committed journey guidance and mode', { topic, objective, successCriteria, mode, pins }),
     display('Required: selected question and committed answer state', context.path.at(-1))];
+  if (value.prepared.followup) rows.push(display('Follow-up: exact question, hypothetical status, original recommendation, complete optional evidence and exchanges', value.prepared.followup), display('Bounded source tracking across this history', coverage.followupTracking));
   for (const [kind, records] of [['Ancestor', context.path.slice(0, -1)], ['Other answer', context.decisionsElsewhere]]) for (const record of records) {
     const input = el('input', { type: 'checkbox', 'data-node-id': record.id }); input.checked = true;
     input.addEventListener('change', () => researchReview.exclude(record.id, !input.checked));
@@ -958,12 +963,51 @@ $('research-review-start').addEventListener('click', async () => {
   if (!value || reviewStarting || researchReview.loading) return;
   reviewStarting = true; renderResearchReview();
   const sequence = researchReview.sequence;
-  const result = await api('research', { journey: value.journey, nodeId: value.nodeId, token: value.token });
+  const result = await api(value.prepared.followup ? 'research-follow-up' : 'research', { journey: value.journey, nodeId: value.nodeId, token: value.token });
   reviewStarting = false;
   if (sequence !== researchReview.sequence) { if (researchReview.context) renderResearchReview(); return; }
   if (result) { closeResearchReview(); $('cancel-request')?.focus({ preventScroll: true }); }
   else { researchReview.value = null; researchReview.error = $('notice').textContent || 'Refresh and review context before starting.'; renderResearchReview(); }
 });
+
+function renderFollowup(node) {
+  const journey = state.activeKey ?? state.document.id;
+  const draft = followupDraft?.journey === journey && followupDraft.nodeId === node.id ? followupDraft : null;
+  const question = el('textarea', { id: 'followup-question', rows: '3', maxlength: '4000' }); question.value = draft?.question ?? '';
+  const hypothetical = el('input', { id: 'followup-hypothetical', type: 'checkbox' }); hypothetical.checked = draft?.hypothetical ?? false;
+  const remember = () => { followupDraft = { journey, nodeId: node.id, question: question.value, hypothetical: hypothetical.checked }; };
+  question.addEventListener('input', remember); hypothetical.addEventListener('change', remember);
+  return el('section', { class: 'research-followup' }, el('h3', {}, 'Ask about this research'),
+    el('p', { class: 'quiet' }, 'Ask why, clarify a recommendation, or explore a changed assumption. Changes described here are hypothetical; saved answers and guidance stay unchanged. Up to four complete exchanges (64 KiB) stay in this canvas until it closes or restarts. Navigation hides this history; asking on another node replaces it. Reload clears the typed question but can reconnect to history while this canvas remains open. Started work continues until it finishes or you cancel; a reload never starts another request.'),
+    el('label', { for: 'followup-question' }, 'Follow-up question (4,000 characters maximum)'), question,
+    el('label', {}, hypothetical, ' Explore a hypothetical assumption'),
+    button('Review follow-up context', () => { remember(); if (!question.value.trim()) return notice('Enter a follow-up question.'); openResearchReview(node.id, { question: question.value, hypothetical: hypothetical.checked }); }, { id: 'followup-review' }),
+    el('div', { id: 'followup-history', 'aria-live': 'polite' }));
+}
+function updateFollowupHistory(node) {
+  const area = $('followup-history'); if (!area) return;
+  const value = state.followup?.nodeId === node.id && state.followup.journey === (state.activeKey ?? state.document.id) ? state.followup : null;
+  const signature = JSON.stringify(value); if (area.dataset.value === signature) return; area.dataset.value = signature;
+  const rows = [];
+  if (value) {
+    rows.push(el('p', { class: 'quiet' }, value.historical ? 'Historical follow-ups: saved source context or original research changed. A new request starts a fresh history.' : 'Follow-ups to this original research; saved answers are unchanged.'));
+    if (value.dropped) rows.push(el('p', { class: 'quiet' }, `${value.dropped} older complete exchanges omitted by the four-exchange / 64 KiB retention limit.`));
+    for (const exchange of value.exchanges) {
+      const result = exchange.result, block = el('section', { class: 'research-claim' }, el('h4', {}, exchange.hypothetical ? 'Hypothetical follow-up' : 'Follow-up question'), el('p', {}, exchange.question), el('p', {}, result.answer), el('p', {}, `Uncertainty: ${result.uncertainty}`));
+      for (const claim of result.claims) {
+        const detail = el('details', {}, el('summary', {}, `${claim.text} (${claim.basis === 'sources' ? 'source-linked model interpretation' : claim.basis})`), el('p', {}, `Limitations: ${claim.limitations}`));
+        for (const reference of claim.evidence) {
+          const source = result.sources.find(item => item.id === reference.sourceId);
+          detail.append(el('p', {}, reference.paraphrase), el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, source.title), el('p', { class: 'quiet' }, `${source.evidenceOrigin.origin === 'current' ? 'Newly consulted in this exchange' : 'Prior evidence from ' + source.evidenceOrigin.origin + '/' + source.evidenceOrigin.sourceId}. ${source.provenance === 'imported' ? 'Imported metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt ?? 'Retrieval time unknown'}. Redirect destination and publication date unknown.`));
+        }
+        block.append(detail);
+      }
+      if (result.sources.length) block.append(el('details', {}, el('summary', {}, 'All response sources'), ...result.sources.map(source => el('div', {}, el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `${source.id}: ${source.title}`), el('p', { class: 'quiet' }, `${source.evidenceOrigin.origin === 'current' ? 'Newly consulted in this exchange' : 'Prior evidence from ' + source.evidenceOrigin.origin + '/' + source.evidenceOrigin.sourceId}; ${source.provenance}; ${source.retrievedAt ?? 'Retrieval time unknown'}.`)))));
+      rows.push(block);
+    }
+  }
+  area.replaceChildren(...rows);
+}
 
 function renderResearch(node) {
   const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r);

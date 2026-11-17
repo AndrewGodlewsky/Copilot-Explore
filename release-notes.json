@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.44",
+    "summary": "Ask scoped follow-ups about a research recommendation or hypothetical assumption. Review exact bounded context, keep original research and saved answers unchanged, and inspect prior versus newly read evidence. Retain a small canvas-local history with explicit omissions, freshness checks, cancellation and separately attributed usage receipts."
+  },
+  {
     "version": "0.1.43",
     "summary": "Inspect selected research claims with source-linked supporting paraphrases, limitations and actual successful-read times. Distinguish model reasoning and unknown support from consulted pages. Preserve evidence in exports and history, label imported metadata honestly, and reject fabricated references or oversized results without replacing prior research."
   },

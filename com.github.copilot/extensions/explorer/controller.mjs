@@ -1,3 +1,4 @@
+import { followupResult, retainExchanges, sameFollowup } from './research-followup.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
 import { Library } from './library.mjs';
@@ -313,7 +314,7 @@ export class Explorer {
     // The only in-place public mutations are pending.progress and preview.stale.
     const stamp = [this.doc, this.activeKey, !!this.library, this.error,
       JSON.stringify(this.pending), this.preview, this.preview?.stale,
-      this.questionSource, this.contextCoverage, this.recoveryNotice, this.exportObservation];
+      this.questionSource, this.contextCoverage, this.recoveryNotice, this.exportObservation, this.followup];
     if (!this.pollStamp || stamp.some((value, index) => value !== this.pollStamp[index])) {
       this.pollStamp = stamp; this.pollCursor = randomUUID();
     }
@@ -326,7 +327,7 @@ export class Explorer {
       catch { stale = true; } // Another canvas can remove the parent before an explicit refresh.
     }
     const preview = this.preview ? { ...this.preview, stale } : null;
-    return { ...this.snapshot(), preview: structuredClone(preview), recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
+    return { ...this.snapshot(), followup: this.followupSnapshot(), preview: structuredClone(preview), recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
   }
   async checkQuestionSource(nodeId) {
     try {
@@ -338,7 +339,7 @@ export class Explorer {
     }
   }
   async attach(key) {
-    this.researchReview.clear();
+    this.researchReview.clear(); this.followup = null;
     const record = await this.library.opened(key, this.binding);
     this.file = record.file; this.doc = record.document; this.activeKey = key;
     this.recoveryNotice = null; this.exportObservation = null;
@@ -530,9 +531,21 @@ export class Explorer {
     }
     return true;
   }
+  currentFollowup(doc = this.doc, nodeId = this.followup?.nodeId) {
+    const value = this.followup;
+    if (!value || value.historical || value.nodeId !== nodeId || value.journey !== (this.activeKey ?? doc?.id)) return null;
+    if (sameFollowup(value.dependencies, doc, nodeId)) return value;
+    this.followup = { ...value, historical: true }; return null;
+  }
+  followupSnapshot() {
+    if (!this.followup) return null;
+    const { dependencies, ...value } = this.followup;
+    return structuredClone({ ...value, historical: !this.currentFollowup() });
+  }
   reconcileResearch() {
+    if (this.followup && !this.currentFollowup()) this.followup = { ...this.followup, historical: true };
     const work = this.researchWork;
-    if (work && !sameResearchSources(work.dependencies, this.doc)) {
+    if (work && (!sameResearchSources(work.dependencies, this.doc) || work.followup && (!sameResearchDestination(work.dependencies, this.doc) || work.historyId && !this.currentFollowup(this.doc, work.dependencies.nodeId)))) {
       this.clearPending(); this.error = 'Research discarded because its saved source context changed. Your newer answers are saved; research again when ready.';
     }
   }
@@ -549,20 +562,20 @@ export class Explorer {
   clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; }
   reviewResearch(input) { return this.transact(() => this.researchReview.prepare(this, input)); }
   request(kind, nodeId, scope, reviewed) {
-    const id = randomUUID();
-    if (kind === 'research' && !reviewed) throw new Error('Review research context before starting.');
+    const id = randomUUID(), webResearch = kind === 'research' || kind === 'research-follow-up';
+    if (webResearch && !reviewed) throw new Error('Review research context before starting.');
     const prepared = reviewed ?? this.prepareRequest(kind, nodeId, id, scope);
-    if (kind === 'research') this.requireResearchRelease();
+    if (webResearch) this.requireResearchRelease();
     this.contextCoverage = { journey: this.activeKey ?? this.doc.id, kind, nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage };
     this.pending = { id, kind, nodeId, startedAt: new Date().toISOString() };
     this.error = '';
     // Research owns its execution timer; waiting for release does not spend that allowance.
-    this.timer = kind === 'research' ? null : setTimeout(() => void this.transact(() => {
+    this.timer = webResearch ? null : setTimeout(() => void this.transact(() => {
       if (this.pending?.id === id) { this.clearPending(); this.error = 'Copilot has not returned a result yet. Check the chat, then try again. Your answers are saved.'; }
     }), this.timeoutMs);
     this.timer?.unref?.();
     if (kind === 'questions') this.questionSource = { journey: this.activeKey ?? this.doc.id, dependencies: prepared.dependencies };
-    if (kind === 'research') {
+    if (webResearch) {
       const controller = new AbortController(); this.researchAbort = controller;
       const work = { ...prepared, file: this.file, key: this.activeKey, abort: controller }; this.researchWork = work;
       const active = () => !this.closed && this.pending?.id === id && this.researchWork === work && !controller.signal.aborted;
@@ -571,7 +584,7 @@ export class Explorer {
         if (!active()) return;
         this.requireResearchRelease();
         if (!this.researcher) throw new Error('Research requires the installed Copilot desktop SDK.');
-        return this.researcher.run(prepared.context, { prepared, signal: controller.signal, onProgress: progress => {
+        return this.researcher[prepared.followup ? 'runFollowup' : 'run'](prepared.context, { prepared, signal: controller.signal, onProgress: progress => {
           if (active()) this.pending.progress = progress;
         } });
       });
@@ -584,10 +597,21 @@ export class Explorer {
         if (!sameResearchSources(work.dependencies, current)) throw new Error('The saved research source context changed. The result was discarded; refresh the journey and research again.');
         if (!sameResearchDestination(work.dependencies, current)) throw new Error('Saved research changed in another canvas. The conflicting result was discarded; refresh the journey.');
         if (!active()) return;
+        if (prepared.followup) {
+          const previous = this.currentFollowup(current, nodeId);
+          if ((previous?.id ?? null) !== prepared.historyId) throw new Error('Follow-up history changed. Review and ask again.');
+          const exchange = { id: randomUUID(), question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, result: followupResult(result) };
+          const all = [...previous?.exchanges ?? [], exchange], exchanges = retainExchanges(all);
+          const dependencies = prepared.followupDependencies;
+          this.doc = current;
+          this.followup = { id: randomUUID(), journey: this.activeKey ?? current.id, nodeId, dependencies, exchanges, dropped: (previous?.dropped ?? 0) + all.length - exchanges.length, historical: false };
+          this.clearPending(); this.error = ''; return;
+        }
         const next = structuredClone(current); findNode(next, nodeId).research = research({ ...result, settings: prepared.settings });
         await this.commitCurrentLocked(current, next, 'Research replaced', () => {
           if (!active()) throw new Error('Research was cancelled before saving.');
         });
+        if (this.followup?.nodeId === nodeId) this.followup = { ...this.followup, historical: true };
         if (active()) { this.clearPending(); this.error = ''; }
       }))).catch(error => this.transact(() => {
         if (active()) { this.clearPending(); this.error = error.message; }
@@ -619,13 +643,13 @@ export class Explorer {
         return { ...this.uiSnapshot(), contextCoverage: { kind: input.kind, nodeId: input.nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage } };
       }
       if (action === 'cancel') { this.researchReview.clear(); this.clearPending(); this.error = ''; return this.uiSnapshot(); }
-      if (action === 'research') {
+      if (action === 'research' || action === 'research-follow-up') {
         if (!isQuestion(findNode(this.doc, input.nodeId))) throw new Error('Select a question to research.');
         if (this.pending) throw new Error('Wait for Copilot or cancel the current request first.');
         this.requireResearchRelease();
         await this.withDocumentLock(async () => {
-          const prepared = await this.researchReview.consume(this, input);
-          this.request('research', input.nodeId, undefined, prepared);
+          const prepared = await this.researchReview.consume(this, { ...input, purpose: action });
+          this.request(action, input.nodeId, undefined, prepared);
         });
         return this.uiSnapshot();
       }
@@ -636,7 +660,7 @@ export class Explorer {
       if (action === 'library-update' && this.library) {
         await this.library.update(input.key, input.patch, input.metadataRevision); return this.uiSnapshot();
       }
-      if (this.pending && !(this.pending.kind === 'research' && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
+      if (this.pending && !(['research', 'research-follow-up'].includes(this.pending.kind) && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
       if (this.preview && (['start', 'open', 'import', 'restore', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
       if (this.doc && input.revision !== this.doc.revision) throw new Error('The map changed. Refresh and try again; your draft is still here.');
       const next = structuredClone(this.doc);
@@ -764,7 +788,7 @@ export class Explorer {
     return this.transact(async () => {
       const pending = this.pending;
       if (!pending || pending.id !== input?.requestId) throw new Error('This request was cancelled, replaced, or already completed. Do not retry it.');
-      if (pending.kind === 'research') throw new Error('Research is owned by the isolated helper, not the attached chat.');
+      if (['research', 'research-follow-up'].includes(pending.kind)) throw new Error('Research is owned by the isolated helper, not the attached chat.');
       if (kind === 'fail') { this.error = text(input.message, 'Error message', 2000); this.clearPending(); return { saved: false }; }
       if (pending.kind !== kind) throw new Error('The response type does not match this request.');
       try { await this.checkQuestionSource(pending.nodeId); }
@@ -775,5 +799,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
+  async close() { this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
 }

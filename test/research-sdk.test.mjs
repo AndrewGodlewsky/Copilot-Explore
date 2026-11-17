@@ -7,6 +7,40 @@ import { createResearcher, researchFraming, publicUrl, boundedContext, hostRunti
 import { prepareResearch } from '../com.github.copilot/extensions/explorer/research-context.mjs';
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { researchSettings, researchLimits } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
+import { prepareFollowup } from '../com.github.copilot/extensions/explorer/research-followup.mjs';
+import { operationEvidence } from '../com.github.copilot/extensions/explorer/operation-recovery.mjs';
+
+test('owned research follow-up sends reviewed strings, credits prior and current sources separately and attributes retained receipts', async t => {
+  const doc = createDocument('Follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Target' }]);
+  doc.nodes[1].research = { ...result, sources: [{ id: 's1', title: 'Old', url: 'https://example.com/old', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported' }], basis: 'sources' };
+  const prepared = prepareFollowup(doc, doc.nodes[1].id, { question: 'What if 🌿 doubles?', hypothetical: true }, { settings: { depth: 'quick', sourceFocus: 'primary', recency: 'recent' } });
+  const content = { answer: 'Prior and new evidence remain separate.', uncertainty: 'Model interpretations.', claims: [{ id: 'c1', text: 'Consider both', basis: 'sources', evidence: [{ sourceId: 'old', paraphrase: 'Old' }, { sourceId: 'new', paraphrase: 'New' }], limitations: 'Unverified relevance' }], sources: [{ id: 'old', prior: { origin: 'original', sourceId: 's1' } }, { id: 'new', title: 'New', url: 'https://example.com/new' }] };
+  const f = await fixture(t, { result: content, resolve: async () => [{ address: '93.184.216.34' }], send: async calls => {
+    assert.deepEqual(await calls.config.hooks.onPreToolUse({ toolName: 'web_fetch', toolCallId: 'new', toolArgs: { url: 'https://example.com/new' } }), {});
+    calls.config.hooks.onPostToolUse({ toolName: 'web_fetch', toolCallId: 'new', toolResult: { resultType: 'success', textResultForLlm: 'New read' } });
+  } });
+  const answer = await f.researcher.runFollowup(prepared.context, { prepared });
+  assert.equal(f.calls.prompt, prepared.prompt); assert.equal(f.calls.config.systemMessage.content, prepared.instructions); assert.ok(f.calls.timeout > 0 && f.calls.timeout < 60000);
+  assert.equal(answer.sources[0].retrievedAt, '2020-01-01T00:00:00.000Z'); assert.equal(answer.sources[0].provenance, 'imported'); assert.equal(answer.sources[0].evidenceOrigin.origin, 'original');
+  assert.equal(answer.sources[1].evidenceOrigin.origin, 'current'); assert.equal(answer.sources[1].provenance, 'recorded-read');
+  const [id] = await readdir(join(f.dir, 'usage', 'session-state'));
+  const receipt = JSON.parse(await readFile(join(f.dir, 'usage', 'session-state', id, 'operation.json'), 'utf8'));
+  assert.equal(receipt.operation, 'research-follow-up'); assert.equal(receipt.status, 'completed');
+  assert.deepEqual(await operationEvidence(f.dir), []);
+});
+
+test('follow-up attempt and startup budgets count denied attempts and startup time, with cancelled receipts', async t => {
+  const doc = createDocument('Budget'); addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Target' }]); doc.nodes[1].research = result;
+  const prepared = prepareFollowup(doc, doc.nodes[1].id, { question: 'Why?', hypothetical: false }, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' } });
+  let now = 0; const timers = []; const clock = { now: () => now, setTimeout(fn, ms) { timers.push(ms); return { unref() {} }; }, clearTimeout() {} };
+  const f = await fixture(t, { clock, start: () => { now = 59000; }, send: async calls => { for (let i = 0; i < 9; i++) assert.equal((await calls.config.hooks.onPreToolUse({ toolName: 'denied' })).permissionDecision, 'deny'); } });
+  await assert.rejects(f.researcher.runFollowup(prepared.context, { prepared }), /cancelled/);
+  assert.equal(f.calls.timeout, 1000); assert.deepEqual(timers, [60000]); assert.equal(f.calls.stops, 1);
+  const [id] = await readdir(join(f.dir, 'usage', 'session-state'));
+  const receipt = JSON.parse(await readFile(join(f.dir, 'usage', 'session-state', id, 'operation.json'), 'utf8'));
+  assert.equal(receipt.operation, 'research-follow-up'); assert.equal(receipt.status, 'cancelled');
+  assert.deepEqual(await operationEvidence(f.dir), []);
+});
 
 test('research helper sends the exact prepared context without reselecting or clipping sources', async t => {
   const { researcher, calls } = await fixture(t), doc = createDocument('Unicode 🌿');

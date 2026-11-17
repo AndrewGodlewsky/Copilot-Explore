@@ -4,7 +4,7 @@ import { ownerStatus, validLockOwner } from './owned-lock.mjs';
 import { activeUsageOwner } from './research-usage.mjs';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-export const helperOperations = ['research', 'decision-brief', 'answer-check', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'];
+export const helperOperations = ['research', 'research-follow-up', 'decision-brief', 'answer-check', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'];
 export async function operationEvidence(directory) {
   const operations = [], root = join(directory, 'usage');
   let names;

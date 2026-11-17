@@ -556,10 +556,11 @@ export class Explorer {
     this.contextCoverage = { journey: this.activeKey ?? this.doc.id, kind, nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage };
     this.pending = { id, kind, nodeId, startedAt: new Date().toISOString() };
     this.error = '';
-    this.timer = setTimeout(() => void this.transact(() => {
-      if (this.pending?.id === id) { this.clearPending(); this.error = kind === 'research' ? 'Research timed out. Your answers are saved; you can try again.' : 'Copilot has not returned a result yet. Check the chat, then try again. Your answers are saved.'; }
+    // Research owns its execution timer; waiting for release does not spend that allowance.
+    this.timer = kind === 'research' ? null : setTimeout(() => void this.transact(() => {
+      if (this.pending?.id === id) { this.clearPending(); this.error = 'Copilot has not returned a result yet. Check the chat, then try again. Your answers are saved.'; }
     }), this.timeoutMs);
-    this.timer.unref?.();
+    this.timer?.unref?.();
     if (kind === 'questions') this.questionSource = { journey: this.activeKey ?? this.doc.id, dependencies: prepared.dependencies };
     if (kind === 'research') {
       const controller = new AbortController(); this.researchAbort = controller;
@@ -583,7 +584,7 @@ export class Explorer {
         if (!sameResearchSources(work.dependencies, current)) throw new Error('The saved research source context changed. The result was discarded; refresh the journey and research again.');
         if (!sameResearchDestination(work.dependencies, current)) throw new Error('Saved research changed in another canvas. The conflicting result was discarded; refresh the journey.');
         if (!active()) return;
-        const next = structuredClone(current); findNode(next, nodeId).research = research(result);
+        const next = structuredClone(current); findNode(next, nodeId).research = research({ ...result, settings: prepared.settings });
         await this.commitCurrentLocked(current, next, 'Research replaced', () => {
           if (!active()) throw new Error('Research was cancelled before saving.');
         });

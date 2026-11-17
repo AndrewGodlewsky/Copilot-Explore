@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
-import { research, createDocument, addQuestions, toMarkdown } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { research, createDocument, addQuestions, toMarkdown, validateDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
 
 export const findings = { basis: 'reasoning', summary: 'Compare audiences.', options: [
   { title: 'Individuals', description: 'Start small.', pros: ['Simple'], cons: ['Limited reach'], proposedAnswer: 'I will start with individuals.', details: [{ label: 'Pilot size', value: 'Ten people' }] },
@@ -21,6 +21,13 @@ test('research preserves optional draft suggestions in files and Markdown, accep
   assert.throws(() => research({ ...findings, proposedAnswer: 'a'.repeat(20001) }));
   const doc = createDocument('Pilot'); addQuestions(doc, doc.rootId, [{ question: 'Who first?', category: 'People' }])[0].research = findings;
   assert.match(toMarkdown(doc), /Ten people/); assert.match(toMarkdown(doc), /I will run a small pilot/);
+  assert.match(toMarkdown(doc), /settings unknown/); assert.ok(!Object.hasOwn(validateDocument(doc).nodes[1].research, 'settings'));
+  const settings = { depth: 'deeper', sourceFocus: 'primary', recency: 'recent' };
+  doc.nodes[1].research = research({ ...findings, settings });
+  assert.deepEqual(validateDocument(JSON.parse(JSON.stringify(doc))).nodes[1].research.settings, settings);
+  assert.match(toMarkdown(doc), /Deeper: 300 seconds.*40 tool attempts/); assert.match(toMarkdown(doc), /unknown publication dates stay unknown/);
+  assert.throws(() => research({ ...findings, settings: { ...settings, depth: '<script>' } }), /settings/);
+  assert.throws(() => research({ ...findings, settings: null }), /settings/);
 });
 
 test('research is isolated, abortable, rejects chat callbacks and preserves answers on late completion or failure', async t => {
@@ -44,7 +51,7 @@ test('research is isolated, abortable, rejects chat callbacks and preserves answ
   resolveRun(findings); await delay(10); assert.equal(explorer.doc.nodes[1].research, null);
   await begin(); await delay(0); rejectRun(new Error('Research unavailable')); await delay(10);
   assert.equal(explorer.pending, null); assert.match(explorer.error, /Research unavailable/); assert.equal(explorer.doc.nodes[1].answer, 'My decision');
-  await begin(); await delay(0); resolveRun(findings); await Promise.all([...explorer.researchTasks]);
-  assert.equal(explorer.pending, null); assert.deepEqual(explorer.doc.nodes[1].research, findings);
+  await begin(); await delay(0); resolveRun({ ...findings, settings: { depth: 'quick', sourceFocus: 'primary', recency: 'recent' } }); await Promise.all([...explorer.researchTasks]);
+  assert.equal(explorer.pending, null); assert.deepEqual(explorer.doc.nodes[1].research, { ...findings, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });
   assert.equal(messages.length, 1);
 });

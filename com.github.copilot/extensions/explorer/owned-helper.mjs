@@ -28,7 +28,7 @@ const eligible = model => model?.provider?.kind === 'copilot' && typeof model.id
 const sameAccount = (a, b) => a?.isAuthenticated === true && b?.isAuthenticated === true && !!a.login && !!a.host && a.login.toLowerCase() === b.login?.toLowerCase() && a.host.toLowerCase() === b.host?.toLowerCase();
 
 // Only fixtures inject a runtime. Production resolves the pair supplied by the desktop bootstrap.
-export function createOwnedHelper(parent, operation, prepare, { usageDirectory, runtime = desktopRuntime, usageRecorder = createUsageRecorder, stopTimeoutMs = 10000 } = {}) {
+export function createOwnedHelper(parent, operation, prepare, { usageDirectory, runtime = desktopRuntime, usageRecorder = createUsageRecorder, stopTimeoutMs = 10000, clock = { now: () => performance.now(), setTimeout, clearTimeout } } = {}) {
   if (!['research', 'decision-brief', 'answer-check', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
   const label = { 'decision-brief': 'Decision brief', 'answer-check': 'Answer check', research: 'Research', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
   const fail = message => new HelperError(message.replaceAll('Research', label).replaceAll('research', label.toLowerCase()));
@@ -44,11 +44,16 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
     return task;
   }
   async function execute(context, controller, progress) {
+    const timeLimitMs = operation === 'research' ? context.limits.timeLimitMs : 180000;
+    const started = clock.now();
+    const remaining = () => Math.max(0, timeLimitMs - (clock.now() - started));
+    let ended = false;
+    const operationEligible = () => { if (operation === 'research' && remaining() <= 0) controller.abort(); return !ended && !controller.signal.aborted; };
     let client, directory, usage, stop, stopAttempt, phase = 'preparing the SDK', outcome = 'failed';
     const sessionId = randomUUID();
     let terminalFailure;
     const stopWith = message => { terminalFailure ??= fail(message); controller.abort(); };
-    const check = () => { if (terminalFailure) throw terminalFailure; if (controller.signal.aborted) throw cancelled(); };
+    const check = () => { if (terminalFailure) throw terminalFailure; if (!operationEligible()) throw cancelled(); };
     const stopClient = () => {
       if (client && !stop) {
         stopAttempt = Promise.resolve().then(() => client.forceStop()).then(() => true, () => false);
@@ -57,7 +62,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       return stop;
     };
     controller.signal.addEventListener('abort', () => void stopClient(), { once: true });
-    const timer = setTimeout(() => controller.abort(), 180000); timer.unref?.();
+    const timer = clock.setTimeout(() => controller.abort(), timeLimitMs); timer.unref?.();
     const stage = value => { phase = value; progress(value); check(); };
     try {
       check(); stage('Checking Copilot access');
@@ -68,7 +73,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       const model = catalog.list?.find(m => eligible(m) && m.id === selected.modelId);
       if (!auth.isAuthenticated) throw fail('Sign in to Copilot before using this helper.');
       if (!model) throw fail('Research needs an enabled Copilot model. Select one in the main chat and try again.');
-      const work = await prepare(context, { controller, progress, stopWith, fail });
+      const work = await prepare(context, { controller, progress, stopWith, fail, eligible: operationEligible });
       directory = await mkdtemp(join(tmpdir(), `explorer-${operation}-`));
       const workspace = join(directory, 'workspace'), home = join(directory, 'home');
       await mkdir(workspace); check();
@@ -104,7 +109,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       work.validateTools(tools);
       if (current.modelId !== model.id || !sameAccount(auth, parentAuth) || !sameAccount(auth, currentHelperAuth)) throw fail('The Copilot account or model changed while research was starting. Try again.');
       stage(work.stage);
-      const response = await session.sendAndWait({ prompt: work.prompt }, 180000);
+      const response = await session.sendAndWait({ prompt: work.prompt }, operation === 'research' ? remaining() : 180000);
       check(); stage('Checking result');
       const result = work.parse(response?.data?.content); outcome = 'completed'; return result;
     } catch (error) {
@@ -114,7 +119,8 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       // SDK errors may contain prompts or credentials; only our stage labels reach the UI.
       throw fail(`Research could not finish: ${phase}. Your answers are saved; try again after checking Copilot.`);
     } finally {
-      clearTimeout(timer);
+      ended = true;
+      clock.clearTimeout(timer);
       const stopped = await stopClient();
       try {
         if (usage) {

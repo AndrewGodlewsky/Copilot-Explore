@@ -6,6 +6,7 @@ import { join, dirname, resolve } from 'node:path';
 import { createResearcher, researchFraming, publicUrl, boundedContext, hostRuntime } from '../com.github.copilot/extensions/explorer/research.mjs';
 import { prepareResearch } from '../com.github.copilot/extensions/explorer/research-context.mjs';
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { researchSettings, researchLimits } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 
 test('research helper sends the exact prepared context without reselecting or clipping sources', async t => {
   const { researcher, calls } = await fixture(t), doc = createDocument('Unicode 🌿');
@@ -71,7 +72,7 @@ test('research receives each fixed exploration strategy in its isolated prompt',
 async function fixture(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-sdk-test-'));
   const calls = { sends: 0, stops: 0 };
-  const parent = { rpc: { model: { getCurrent: async () => ({ modelId: model.id }), list: async () => ({ list: [model] }) }, gitHubAuth: { getStatus: async () => auth } } };
+  const parent = { rpc: { model: { getCurrent: async () => ({ modelId: model.id }), list: async () => ({ list: options.models ?? [model] }) }, gitHubAuth: { getStatus: async () => auth } } };
   const runtime = async () => ({ path: process.execPath, sdk: { RuntimeConnection: { forStdio: value => value }, CopilotClient: class {
     constructor(config) { calls.client = config; }
     async start() { await options.start?.(calls); }
@@ -82,10 +83,10 @@ async function fixture(t, options = {}) {
         gitHubAuth: { getStatus: async () => options.auth ?? auth },
         metadata: { snapshot: async () => ({ workingDirectory: calls.client.workingDirectory, isRemote: false }) },
         tools: { initializeAndValidate: async () => {}, getCurrentMetadata: async () => ({ tools: options.tools ?? expectedTools }) },
-      }, sendAndWait: async input => { calls.sends++; calls.prompt = input.prompt; await options.send?.(calls); return { data: { content: JSON.stringify(options.result ?? result) } }; } };
+      }, sendAndWait: async (input, timeout) => { calls.sends++; calls.prompt = input.prompt; calls.timeout = timeout; await options.send?.(calls); return { data: { content: JSON.stringify(options.result ?? result) } }; } };
     }
   } } });
-  const researcher = createResearcher(parent, { usageDirectory: join(dir, 'usage'), runtime, ...(options.usageRecorder ? { usageRecorder: options.usageRecorder } : {}) });
+  const researcher = createResearcher(parent, { usageDirectory: join(dir, 'usage'), runtime, ...(options.usageRecorder ? { usageRecorder: options.usageRecorder } : {}), ...(options.clock ? { clock: options.clock } : {}), ...(options.resolve ? { resolve: options.resolve } : {}), ...(options.stopTimeoutMs ? { stopTimeoutMs: options.stopTimeoutMs } : {}) });
   t.after(async () => {
     await researcher.close();
     if (calls.client) { const owned = dirname(calls.client.workingDirectory); assert.equal(dirname(resolve(owned)), resolve(tmpdir())); assert.match(owned, /explorer-research-/); await rm(owned, { recursive: true, force: true }); }
@@ -96,7 +97,8 @@ async function fixture(t, options = {}) {
 
 test('helper uses isolated configuration, explicit research instructions, exact tools and no parent send', async t => {
   const { researcher, calls } = await fixture(t);
-  assert.deepEqual(await researcher.run(context), result);
+  assert.deepEqual(await researcher.run(context), { ...result, settings: researchSettings() });
+  assert.ok(calls.timeout > 170000 && calls.timeout <= 180000);
   assert.equal(calls.sends, 1); assert.equal(calls.stops, 1);
   assert.equal(calls.config.requestExtensions, false); assert.equal(calls.config.enableFileHooks, false);
   assert.equal(calls.config.enableConfigDiscovery, true); assert.equal(calls.client.useLoggedInUser, true);
@@ -129,7 +131,7 @@ test('unread citations are rejected; successful page reads are required for sour
     assert.notEqual((await config.hooks.onPreToolUse(input))?.permissionDecision, 'deny');
     await config.hooks.onPostToolUse({ ...input, toolResult: { resultType: 'success', textResultForLlm: 'Reference content' } });
   } });
-  assert.deepEqual(await good.researcher.run(context), sourced);
+  assert.deepEqual(await good.researcher.run(context), { ...sourced, settings: researchSettings() });
 });
 
 test('overlapping fetches without hook IDs cannot credit an unread page', async t => {
@@ -200,4 +202,81 @@ test('failed page reads cannot validate sources and arbitrary SDK errors stay ou
   await assert.rejects(researcher.run(context), /sources/);
   const unsafe = await fixture(t, { send: () => { throw new Error('SECRET prompt endpoint token'); } });
   await assert.rejects(unsafe.researcher.run(context), error => !error.message.includes('SECRET') && /could not finish/.test(error.message));
+});
+test('operation eligibility never replaces the enabled Copilot model checks', async t => {
+  for (const candidate of [{ ...model, provider: { kind: 'external' } }, { ...model, policy: { state: 'disabled' } }]) {
+    const { researcher, calls } = await fixture(t, { models: [candidate] });
+    await assert.rejects(researcher.run(context), /enabled Copilot model/); assert.equal(calls.sends, 0); assert.equal(calls.config, undefined);
+  }
+});
+
+function manualClock() {
+  let now = 0, timer;
+  return { now: () => now, setTimeout(fn, ms) { timer = { fn, ms }; return timer; }, clearTimeout(value) { assert.equal(value, timer); },
+    advance(ms, fire = false) { now += ms; if (fire) timer.fn(); }, get limit() { return timer.ms; } };
+}
+for (const depth of ['quick', 'standard', 'deeper']) {
+  const settings = researchSettings({ depth, sourceFocus: 'primary', recency: 'recent' }), limits = researchLimits(settings);
+  test(`${depth} counts startup and sends only remaining milliseconds with trusted settings`, async t => {
+    const clock = manualClock();
+    const { researcher, calls } = await fixture(t, { clock, start: () => clock.advance(1234), result: { ...result, settings: { depth: 'forged' } } });
+    const output = await researcher.run(context, { settings });
+    assert.equal(clock.limit, limits.timeLimitMs); assert.equal(calls.timeout, limits.timeLimitMs - 1234);
+    assert.deepEqual(output.settings, settings); assert.equal(calls.sends, 1);
+    assert.match(calls.config.systemMessage.content, new RegExp(`${limits.toolAttemptLimit} tool attempts`));
+    assert.match(calls.config.systemMessage.content, /Prioritize original studies/); assert.match(calls.config.systemMessage.content, /do not.*invent dates/);
+    assert.doesNotMatch(calls.config.systemMessage.content, /at most 4 searches/);
+  });
+  test(`${depth} rejects at the exact startup deadline and allows one millisecond before`, async t => {
+    for (const delta of [-1, 0, 1]) {
+      const clock = manualClock(), f = await fixture(t, { clock, start: () => clock.advance(limits.timeLimitMs + delta) });
+      if (delta < 0) { await f.researcher.run(context, { settings }); assert.equal(f.calls.timeout, 1); }
+      else { await assert.rejects(f.researcher.run(context, { settings }), /timed out/); assert.equal(f.calls.sends, 0); }
+      assert.equal(f.calls.stops, 1);
+    }
+  });
+  test(`${depth} inference timer cancels and rejects late results without retry`, async t => {
+    const clock = manualClock(), f = await fixture(t, { clock, send: () => clock.advance(limits.timeLimitMs, true) });
+    await assert.rejects(f.researcher.run(context, { settings }), /timed out/); assert.equal(f.calls.sends, 1); assert.equal(f.calls.stops, 1);
+  });
+  test(`${depth} allows exactly the attempt ceiling and counts denied attempts`, async t => {
+    for (const denied of [false, true]) {
+      const f = await fixture(t, { send: async ({ config }) => {
+        const hook = config.hooks.onPreToolUse;
+        for (let i = 1; i <= limits.toolAttemptLimit; i++) {
+          const response = await hook({ toolName: denied && i === 1 ? 'shell' : 'web_search' });
+          assert.equal(response.permissionDecision, denied && i === 1 ? 'deny' : undefined);
+        }
+        assert.equal((await hook({ toolName: 'web_search' })).permissionDecision, 'deny');
+      } });
+      await assert.rejects(f.researcher.run(context, { settings }), /cancelled/); assert.equal(f.calls.sends, 1); assert.equal(f.calls.stops, 1);
+    }
+    const atLimit = await fixture(t, { send: async ({ config }) => { for (let i = 0; i < limits.toolAttemptLimit; i++) assert.deepEqual(await config.hooks.onPreToolUse({ toolName: 'web_search' }), {}); } });
+    await atLimit.researcher.run(context, { settings });
+  });
+}
+test('held DNS callbacks cannot approve after deadline, explicit cancellation or an overlapping over-budget attempt', async t => {
+  for (const reason of ['timeout', 'cancel', 'attempts']) {
+    const clock = manualClock(), controller = new AbortController(), releases = [];
+    const f = await fixture(t, { clock, resolve: () => new Promise(resolve => releases.push(() => resolve([{ address: '8.8.8.8' }]))), send: async ({ config }) => {
+      const fetch = config.hooks.onPreToolUse({ toolName: 'web_fetch', toolCallId: 'held', toolArgs: { url: 'https://public.example/read' } });
+      const permission = config.onPermissionRequest({ kind: 'url', url: 'https://public.example/read' });
+      assert.equal(releases.length, 2);
+      if (reason === 'timeout') clock.advance(60000);
+      if (reason === 'cancel') controller.abort();
+      if (reason === 'attempts') for (let i = 0; i < 8; i++) await config.hooks.onPreToolUse({ toolName: 'shell' });
+      releases.forEach(release => release());
+      assert.equal((await fetch).permissionDecision, 'deny'); assert.equal((await permission).kind, 'denied-by-rules');
+    } });
+    await assert.rejects(f.researcher.run(context, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' }, signal: controller.signal }), /cancelled/);
+    assert.equal(f.calls.sends, 1); assert.equal(f.calls.stops, 1);
+  }
+});
+test('a timed-out research run exposes late actual release instead of retrying inference', async t => {
+  const clock = manualClock(); let release;
+  const f = await fixture(t, { clock, stopTimeoutMs: 5, stop: () => new Promise(resolve => { release = resolve; }), send: () => clock.advance(60000, true) });
+  let error;
+  try { await f.researcher.run(context, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' } }); } catch (value) { error = value; }
+  assert.match(error.message, /cleanup or usage accounting/); assert.ok(error.releaseConfirmed); assert.equal(f.calls.sends, 1);
+  release(); assert.equal(await error.releaseConfirmed, true); assert.equal(f.calls.stops, 1);
 });

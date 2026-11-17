@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.42",
+    "summary": "Choose Quick, Standard or Deeper research with enforced time and tool-attempt ceilings. Review source-focus and recency preferences in the exact request before starting, and retain chosen settings with results. Preserve legacy unknown settings, cancellation, usage receipts and explicit retry; close late permission-approval races."
+  },
+  {
     "version": "0.1.41",
     "summary": "Review the exact context before starting isolated research. Exclude optional ancestors and other answers, inspect whole-record omissions and byte limits, and send only the reviewed snapshot. Changed saved sources require a fresh review. Preserve drafts, reject obsolete review tokens, and harden answer-check scope tracking."
   },

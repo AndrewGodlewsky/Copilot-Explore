@@ -57,6 +57,33 @@ test('start consumes one reviewed immutable payload, rejects legacy starts and p
   assert.ok(!f.runs[0].prepared.prompt.includes('EXCLUDED-CANARY'));
   await f.e.command('cancel'); await assert.rejects(f.start(review), /review/i);
 });
+test('settings replace reviewed tokens, are frozen with exact strings and reject invalid requests before inference', async t => {
+  const f = await fixture(t), previous = await f.review();
+  const settings = { depth: 'quick', sourceFocus: 'primary', recency: 'recent' };
+  const reviewed = await f.review({ settings }); settings.depth = 'deeper';
+  await assert.rejects(f.start(previous), /review/); assert.equal(f.runs.length, 0);
+  assert.equal(reviewed.prepared.settings.depth, 'quick'); assert.equal(reviewed.prepared.limits.timeLimitMs, 60000);
+  assert.match(reviewed.prepared.instructions, /Quick: 60 seconds/);
+  await f.start(reviewed); await new Promise(setImmediate);
+  assert.deepEqual(f.runs[0].prepared.settings, reviewed.prepared.settings); assert.ok(Object.isFrozen(f.runs[0].prepared.settings));
+  assert.ok(Object.isFrozen(f.runs[0].prepared)); assert.ok(Object.isFrozen(f.runs[0].prepared.limits));
+  await f.e.command('cancel');
+  for (const settings of [null, {}, { depth: 'quick', sourceFocus: 'primary', recency: 'recent', allowance: 999 }]) await assert.rejects(f.review({ settings }), /settings/i);
+  assert.equal(f.runs.length, 1);
+});
+test('research does not spend its owned allowance on a controller watchdog or queued release wait', async t => {
+  const f = await fixture(t); f.e.timeoutMs = 5;
+  let release; f.e.researchTask = new Promise(resolve => { release = resolve; });
+  const review = await f.review({ settings: { depth: 'deeper', sourceFocus: 'balanced', recency: 'any' } });
+  await f.start(review);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  try { assert.equal(f.e.pending?.kind, 'research'); assert.equal(f.runs.length, 0); }
+  finally { release(); }
+  release(); await new Promise(setImmediate);
+  assert.equal(f.runs.length, 1); assert.equal(f.runs[0].prepared.limits.timeLimitMs, 300000);
+  await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(f.e.pending?.kind, 'research');
+  await f.e.command('cancel');
+});
 test('source changes require an explicit fresh review; old, replaced, cross-journey and cancelled tokens cannot send', async t => {
   const f = await fixture(t), old = await f.review(), next = await f.review();
   await assert.rejects(f.start(old), /review/i);

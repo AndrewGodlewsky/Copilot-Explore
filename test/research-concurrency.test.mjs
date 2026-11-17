@@ -29,7 +29,7 @@ test('research accepts a new unrelated answer and records both actual transition
   const f = await fixture(t); await f.begin();
   await f.command('answer', { nodeId: f.doc.nodes[2].id, answer: 'New independent answer', answerState: 'assumption' });
   assert.ok(f.e.pending); assert.equal(f.runs[0].signal.aborted, false);
-  await f.finish(); assert.equal(f.e.doc.nodes[2].answer, 'New independent answer'); assert.deepEqual(f.e.doc.nodes[1].research, result);
+  await f.finish(); assert.equal(f.e.doc.nodes[2].answer, 'New independent answer'); assert.deepEqual(f.e.doc.nodes[1].research, { ...result, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });
   assert.equal(f.e.doc.revision, 2);
   const history = await f.e.readHistory(f.e.doc.id, 1); assert.equal(history.document.nodes[2].answer, 'New independent answer'); assert.equal(history.document.nodes[1].research, null);
 });
@@ -37,7 +37,7 @@ test('research accepts a new unrelated answer and records both actual transition
 test('external pin edits discard research, while absent and empty pin defaults are equivalent', async t => {
   const f = await fixture(t); await f.begin();
   const same = JSON.parse(await readFile(f.file, 'utf8')); same.pins = []; same.revision++;
-  await writeFile(f.file, JSON.stringify(same)); await f.finish(); assert.deepEqual(f.e.doc.nodes[1].research, result);
+  await writeFile(f.file, JSON.stringify(same)); await f.finish(); assert.deepEqual(f.e.doc.nodes[1].research, { ...result, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });
   await f.begin(); const changed = JSON.parse(await readFile(f.file, 'utf8'));
   changed.pins = [{ id: 'pin-00000000000000000000', text: 'New user constraint' }]; changed.revision++;
   await writeFile(f.file, JSON.stringify(changed)); await f.finish();
@@ -94,7 +94,7 @@ test('captured sources reject target, ancestry, state, guidance, effective mode 
 test('research completion then source save preserves completed history and new answer', async t => {
   const f = await fixture(t); await f.begin(); await f.finish();
   await f.command('answer', { nodeId: f.doc.nodes[1].id, answer: 'Later decision' });
-  assert.equal(f.e.doc.nodes[1].answer, 'Later decision'); assert.deepEqual(f.e.doc.nodes[1].research, result);
+  assert.equal(f.e.doc.nodes[1].answer, 'Later decision'); assert.deepEqual(f.e.doc.nodes[1].research, { ...result, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });
   assert.equal((await f.e.readHistory(f.e.doc.id, 1)).document.nodes[1].answer, '');
 });
 
@@ -111,7 +111,7 @@ test('research replacement queues behind actual release and ignores old completi
   await f.command('cancel'); await f.begin(); assert.equal(f.runs.length, 1);
   const replacement = f.e.pending.id; old.resolve(result); await new Promise(setImmediate);
   assert.equal(f.runs.length, 2); assert.equal(f.e.pending.id, replacement); assert.equal(f.e.doc.nodes[1].research, null);
-  old.reject(Error('Duplicate late error')); await f.finish(); assert.deepEqual(f.e.doc.nodes[1].research, result);
+  old.reject(Error('Duplicate late error')); await f.finish(); assert.deepEqual(f.e.doc.nodes[1].research, { ...result, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });
 });
 
 test('failed or unconfirmed research shutdown blocks queued and new work until true and explicit retry', async t => {
@@ -181,7 +181,7 @@ test('external guidance/source edits discard completion, but explicit legacy Und
     if (change === 'understand') next.mode = 'understand';
     await other.save(next); await f.finish();
     const disk = JSON.parse(await readFile(f.file, 'utf8'));
-    if (change === 'understand') { assert.equal(f.e.error, ''); assert.deepEqual(disk.nodes[1].research, result); }
+    if (change === 'understand') { assert.equal(f.e.error, ''); assert.deepEqual(disk.nodes[1].research, { ...result, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } }); }
     else { assert.match(f.e.error, /source context changed/); assert.equal(disk.nodes[1].research, null); }
   }
 });

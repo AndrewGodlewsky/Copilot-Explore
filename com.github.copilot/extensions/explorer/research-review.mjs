@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isQuestion } from './web/answer-state.mjs';
 import { findNode } from './model.mjs';
 import { researchFraming } from './research.mjs';
+import { researchSettings, researchLimits } from './web/research-policy.mjs';
 import { prepareResearch, sameResearchSources, sameResearchDestination } from './research-context.mjs';
 
 export const REVIEW_RESPONSE_LIMIT = 1024 * 1024;
@@ -15,11 +16,12 @@ export class ResearchReview {
   clear() { clearTimeout(this.timer); this.timer = null; this.current = null; }
   async prepare(explorer, input) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || !['prepare', 'cancel'].includes(input.action) ||
-      Object.keys(input).sort().join(',') !== 'action,clientId,excluded,journey,nodeId,scope,sequence' ||
+      !['action,clientId,excluded,journey,nodeId,scope,sequence', 'action,clientId,excluded,journey,nodeId,scope,sequence,settings'].includes(Object.keys(input).sort().join(',')) ||
       typeof input.clientId !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.clientId) ||
       !Number.isSafeInteger(input.sequence) || input.sequence < 1 ||
       typeof input.journey !== 'string' || input.journey.length > 100 || typeof input.nodeId !== 'string' || input.nodeId.length > 100 ||
       !Array.isArray(input.excluded) || input.excluded.length > 5000 || input.excluded.some(id => typeof id !== 'string' || id.length > 100)) invalid();
+    const settings = researchSettings(input.settings);
     if (this.order?.clientId === input.clientId && this.order.sequence >= input.sequence) obsolete();
     if (input.action === 'cancel' && this.order && this.order.clientId !== input.clientId) return { status: 'cancelled' };
     this.order = { clientId: input.clientId, sequence: input.sequence }; const order = this.order;
@@ -31,10 +33,10 @@ export class ResearchReview {
     const current = await explorer.readCurrent();
     if (explorer.closed || this.order !== order || explorer.file !== file || explorer.activeKey !== key) obsolete();
     if (!isQuestion(findNode(current, input.nodeId))) throw new Error('Select a question to research.');
-    const prepared = prepareResearch(current, input.nodeId, { ...researchFraming(current), scope: input.scope, excluded: input.excluded });
+    const prepared = Object.freeze({ ...prepareResearch(current, input.nodeId, { ...researchFraming(current, settings), scope: input.scope, excluded: input.excluded }), settings, limits: researchLimits(settings) });
     const token = randomUUID(), expiresAt = Date.now() + REVIEW_TTL;
     const response = { token, journey: input.journey, nodeId: input.nodeId, clientId: input.clientId, sequence: input.sequence, expiresAt,
-      excluded: [...input.excluded], prepared: { context: prepared.context, instructions: prepared.instructions, prompt: prepared.prompt, bytes: prepared.bytes, limit: prepared.limit, coverage: prepared.coverage } };
+      excluded: [...input.excluded], prepared: { context: prepared.context, instructions: prepared.instructions, prompt: prepared.prompt, bytes: prepared.bytes, limit: prepared.limit, coverage: prepared.coverage, settings, limits: prepared.limits } };
     if (Buffer.byteLength(JSON.stringify(response), 'utf8') > REVIEW_RESPONSE_LIMIT) throw new Error('The research review exceeds its 1 MiB response limit. Reduce optional exclusions or choose a narrower scope.');
     this.current = { token, journey: input.journey, nodeId: input.nodeId, file, key, prepared, expiresAt };
     this.timer = setTimeout(() => this.clear(), REVIEW_TTL); this.timer.unref?.();

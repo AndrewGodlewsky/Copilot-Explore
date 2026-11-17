@@ -18,6 +18,7 @@ import { DraftClient } from '../com.github.copilot/extensions/explorer/web/draft
 import { CleanupClient } from '../com.github.copilot/extensions/explorer/web/cleanup.mjs';
 import { QuestionHelpClient } from '../com.github.copilot/extensions/explorer/web/question-help-client.mjs';
 import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/web/research-review-client.mjs';
+import { researchSettingsText } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
 import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
 import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
@@ -137,10 +138,11 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.CleanupClient = CleanupClient;
   window.QuestionHelpClient = QuestionHelpClient;
   window.ResearchReviewClient = ResearchReviewClient;
+  window.researchSettingsText = researchSettingsText;
   window.attachNavigation = attachNavigation;
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, scene: () => ({ positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; transform(); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -169,6 +171,15 @@ test('research review preserves draft state, caret and composition, sends only t
   assert.ok(!$('research-review-content').textContent.includes('RAW-DRAFT-CANARY'));
   assert.match($('research-review-dialog').textContent, /No project files/);
   assert.equal($('research-review-content').querySelectorAll('script').length, 0);
+  for (const [key, value] of [['depth', 'deeper'], ['sourceFocus', 'primary'], ['recency', 'recent']]) {
+    const select = $(`research-${key}`); select.focus(); select.value = value; select.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+    assert.equal($('research-review-start').disabled, true);
+    await until(() => !$('research-review-start').disabled, 'preference review updated');
+    assert.equal(f.document.activeElement.id, `research-${key}`); assert.equal(f.explorer.pending, null);
+  }
+  assert.match($('research-settings-summary').textContent, /Deeper: 300 seconds.*40 tool attempts/);
+  assert.match($('research-review-instructions').textContent, /Prioritize original studies/);
+  assert.match($('research-review-instructions').textContent, /Prefer recently published/);
   const optional = [...$('research-review-content').querySelectorAll('input[type=checkbox]')].find(n => n.dataset.nodeId === f.explorer.doc.nodes[2].id);
   optional.checked = false; optional.dispatchEvent(new f.window.Event('change', { bubbles: true }));
   await until(() => !$('research-review-start').disabled && !$('research-review-prompt').textContent.includes('OPTIONAL-SECRET'), 'excluded exact bytes');

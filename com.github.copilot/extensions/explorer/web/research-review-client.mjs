@@ -1,9 +1,14 @@
+import { researchSettings } from './research-policy.mjs';
 export class ResearchReviewClient {
   constructor({ fetch, changed }) {
     this.fetch = fetch; this.changed = changed; this.clientId = globalThis.crypto.randomUUID(); this.sequence = 0;
     this.context = null; this.value = null; this.loading = false; this.error = ''; this.abort = null;
   }
-  open(context) { this.close(); this.context = { ...context, excluded: [] }; void this.prepare(); }
+  open(context) { this.close(); this.context = { ...context, settings: researchSettings(), excluded: [] }; void this.prepare(); }
+  settings(value) {
+    if (!this.context) return;
+    this.context = { ...this.context, settings: researchSettings(value) }; void this.prepare();
+  }
   async prepare() {
     if (!this.context) return;
     this.abort?.abort(); const abort = new AbortController(); this.abort = abort;

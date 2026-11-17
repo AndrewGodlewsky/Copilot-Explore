@@ -12,7 +12,7 @@ const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_
 assert.ok(sdkDirectory && cli, 'Set COPILOT_SDK_DIR and COPILOT_CLI_PATH to the installed desktop SDK/runtime.');
 const sdk = await import(pathToFileURL(join(sdkDirectory, 'index.js')).href);
 const temporary = await mkdtemp(join(tmpdir(), 'explorer-research-fixture-'));
-const calls = [], toolCalls = [], prompts = [], captured = [];
+const calls = [], toolCalls = [], prompts = [], captured = [], sendTimeouts = [];
 const findings = { basis: 'reasoning', summary: 'Synthetic local comparison.', options: [
   { title: 'Pilot', description: 'Small first step.', pros: ['Learn'], cons: ['Limited'] , proposedAnswer: 'I will run a pilot.', details: [{ label: 'Size', value: 'Ten people' }] },
   { title: 'Launch', description: 'Broad first step.', pros: ['Reach'], cons: ['Cost'], proposedAnswer: 'I will launch broadly.', details: [] },
@@ -68,7 +68,7 @@ const runtime = async () => ({ path: cli, sdk: { RuntimeConnection: sdk.RuntimeC
     });
     // The local provider deliberately has no GitHub identity/catalog. Only these read-only checks
     // are substituted; session configuration, tools, inference, hooks and journals are real.
-    return { sessionId: session.sessionId, sendAndWait: (...args) => { captured.push({ instructions: config.systemMessage.content, prompt: args[0].prompt }); return session.sendAndWait(...args); }, rpc: {
+    return { sessionId: session.sessionId, sendAndWait: (...args) => { captured.push({ instructions: config.systemMessage.content, prompt: args[0].prompt }); sendTimeouts.push(args[1]); return session.sendAndWait(...args); }, rpc: {
       ...session.rpc, gitHubAuth: parent.rpc.gitHubAuth,
       model: { ...session.rpc.model, list: parent.rpc.model.list },
     } };
@@ -81,8 +81,12 @@ try {
   const context = { topic: 'Synthetic garden', objective: 'Choose a shared garden 🌿', successCriteria: 'Neighbors agree on one place', path: [{ kind: 'direction', origin: 'user', question: '  Access for everyone  ', answer: '', review: false }, { question: 'Who should join?', answer: 'Neighbors only', answerState: 'assumption', review: true }], decisionsElsewhere: [{ question: 'When?', answer: '', answerState: 'revisit-later', review: false }] };
   context.pins = [{ id: 'constraint-00000000000000', text: 'Preserve the user constraint exactly' }];
   context.decisionsElsewhere.push({ id: 'excluded-source', question: 'Secret source?', answer: 'EXCLUDED-INSTALLED-CANARY\u0000\ud83c\udf3f<script>' });
-  const prepared = prepareContext(context, { ...researchFraming(context), excluded: ['excluded-source'] });
-  assert.deepEqual(await researcher.run(prepared.context, { prepared, onProgress: value => progress.push(value) }), findings);
+  const settings = Object.freeze({ depth: 'quick', sourceFocus: 'primary', recency: 'recent' });
+  const prepared = Object.freeze({ ...prepareContext(context, { ...researchFraming(context, settings), excluded: ['excluded-source'] }), settings });
+  assert.deepEqual(await researcher.run(prepared.context, { prepared, onProgress: value => progress.push(value) }), { ...findings, settings });
+  assert.match(prepared.instructions, /Quick: 60 seconds.*8 tool attempts/);
+  assert.match(prepared.instructions, /Prefer recently published/);
+  assert.ok(sendTimeouts[0] > 0 && sendTimeouts[0] < 60000);
   assert.ok(JSON.stringify(prompts).includes('Preserve the user constraint exactly'));
   assert.deepEqual(captured[0], { instructions: prepared.instructions, prompt: prepared.prompt });
   assert.ok(!captured[0].prompt.includes('EXCLUDED-INSTALLED-CANARY')); assert.ok(!JSON.stringify(prompts[0]).includes('EXCLUDED-INSTALLED-CANARY'));
@@ -108,6 +112,8 @@ try {
   const sessions = await readdir(join(temporary, 'usage', 'session-state'));
   assert.equal(sessions.length, 1);
   const journal = await readFile(join(temporary, 'usage', 'session-state', sessions[0], 'events.jsonl'), 'utf8');
+  const operation = JSON.parse(await readFile(join(temporary, 'usage', 'session-state', sessions[0], 'operation.json'), 'utf8'));
+  assert.equal(operation.operation, 'research'); assert.equal(operation.status, 'completed');
   assert.match(journal, /session.usage_record/); assert.ok(!journal.includes('Neighbors only')); assert.ok(!journal.includes('Synthetic garden'));
   hold = true;
   const controller = new AbortController();

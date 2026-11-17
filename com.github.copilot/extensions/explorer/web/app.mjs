@@ -4,6 +4,7 @@ import { DraftClient } from './drafts.mjs';
 import { CleanupClient } from './cleanup.mjs';
 import { QuestionHelpClient } from './question-help-client.mjs';
 import { ResearchReviewClient } from './research-review-client.mjs';
+import { researchSettingsText } from './research-policy.mjs';
 import { effectiveMode, MODES } from './modes.mjs';
 import { attachNavigation } from './navigation.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
@@ -912,14 +913,26 @@ function closeResearchReview() {
 function renderResearchReview() {
   const area = $('research-review-content'), value = researchReview.value;
   const focusedId = area.contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
+  const focusedSetting = area.contains(document.activeElement) ? document.activeElement.dataset.setting : null;
   $('research-review-start').disabled = !value || researchReview.loading || reviewStarting;
   $('research-review-refresh').disabled = researchReview.loading || reviewStarting;
   $('research-review-status').textContent = researchReview.loading ? 'Preparing context locally. No inference has started.' : researchReview.error || '';
   if (!value) { if (!researchReview.loading) area.replaceChildren(); return; }
-  const { context, coverage, bytes, limit, prompt, instructions } = value.prepared;
+  const { context, coverage, bytes, limit, prompt, instructions, settings } = value.prepared;
   const display = (label, item) => el('section', { class: 'review-record' }, el('h3', {}, label), el('pre', {}, JSON.stringify(item, null, 2)));
   const { topic, objective, successCriteria, mode, pins } = context;
-  const rows = [el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. Records are complete; no text is clipped.`),
+  const controls = el('section', { class: 'review-record research-preferences' }, el('h3', {}, 'Research preferences'));
+  for (const [key, label, choices] of [
+    ['depth', 'Depth', [['quick', 'Quick - 60 seconds / 8 tool attempts'], ['standard', 'Standard - 180 seconds / 24 tool attempts'], ['deeper', 'Deeper - 300 seconds / 40 tool attempts']]],
+    ['sourceFocus', 'Source focus', [['balanced', 'Balanced evidence'], ['primary', 'Prefer primary sources']]],
+    ['recency', 'Recency', [['any', 'No recency preference'], ['recent', 'Prefer recent sources when relevant']]],
+  ]) {
+    const select = el('select', { 'data-setting': key, id: `research-${key}` }, ...choices.map(([id, title]) => el('option', { value: id }, title)));
+    select.value = settings[key]; select.disabled = reviewStarting;
+    select.addEventListener('change', () => researchReview.settings({ ...researchReview.context.settings, [key]: select.value }));
+    controls.append(el('label', {}, label, select));
+  }
+  const rows = [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings)), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. Records are complete; no text is clipped.`),
     display('Required: committed journey guidance and mode', { topic, objective, successCriteria, mode, pins }),
     display('Required: selected question and committed answer state', context.path.at(-1))];
   for (const [kind, records] of [['Ancestor', context.path.slice(0, -1)], ['Other answer', context.decisionsElsewhere]]) for (const record of records) {
@@ -935,6 +948,7 @@ function renderResearchReview() {
   rows.push(el('details', {}, el('summary', {}, 'Exact Explorer input strings'), el('h3', {}, 'Instructions'), el('pre', { id: 'research-review-instructions' }, instructions), el('h3', {}, 'Prompt'), el('pre', { id: 'research-review-prompt' }, prompt)));
   area.replaceChildren(...rows);
   if (focusedId) [...area.querySelectorAll('input')].find(input => input.dataset.nodeId === focusedId)?.focus({ preventScroll: true });
+  if (focusedSetting) [...area.querySelectorAll('select')].find(select => select.dataset.setting === focusedSetting)?.focus({ preventScroll: true });
 }
 $('research-review-close').addEventListener('click', closeResearchReview);
 $('research-review-dialog').addEventListener('cancel', event => { event.preventDefault(); closeResearchReview(); });
@@ -968,7 +982,7 @@ function renderResearch(node) {
     content.scrollTop += (answer.getBoundingClientRect().top - content.getBoundingClientRect().top) / view.zoom - 40;
     notice('Added to your draft. Edit it before saving, or undo the addition.');
   };
-  const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'), el('p', {}, r.summary));
+  const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'), el('p', { class: 'quiet' }, researchSettingsText(r.settings)), el('p', {}, r.summary));
   section.append(el('div', { class: 'recommendation' }, el('h3', {}, 'Recommendation'), el('p', {}, r.recommendation), button('Use recommendation', () => add(r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation' })));
   const details = [];
   for (const [index, o] of r.options.entries()) {

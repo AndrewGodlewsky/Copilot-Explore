@@ -1,5 +1,6 @@
 import { validateBrief, briefMarkdown } from './decision-brief.mjs';
 import { randomUUID } from 'node:crypto';
+import { researchSettings, researchSettingsText } from './web/research-policy.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './web/answer-state.mjs';
 import { effectiveMode, validMode, MODES } from './web/modes.mjs';
 export { effectiveMode } from './web/modes.mjs';
@@ -98,6 +99,7 @@ export function research(value) {
   }));
   if (options.length < 2) throw new Error('Compare at least two options.');
   return { basis: value.basis, summary: text(value.summary, 'Research summary', 5000), options,
+    ...(Object.hasOwn(value, 'settings') ? { settings: researchSettings(value.settings) } : {}),
     recommendation: text(value.recommendation, 'Recommendation', 5000),
     ...(value.proposedAnswer !== undefined ? { proposedAnswer: text(value.proposedAnswer, 'Proposed answer', 5000) } : {}),
     uncertainty: text(value.uncertainty, 'Uncertainty', 3000), sources };
@@ -263,7 +265,7 @@ export function toMarkdown(doc) {
     }
     if (n.research) {
       const r = n.research;
-      lines.push('### AI research', '', `Basis: ${r.basis === 'sources' ? 'Consulted sources' : 'Model reasoning; not externally verified'}.`, '', md(r.summary), '');
+      lines.push('### AI research', '', `Basis: ${r.basis === 'sources' ? 'Consulted sources' : 'Model reasoning; not externally verified'}.`, '', researchSettingsText(r.settings), '', md(r.summary), '');
       for (const o of r.options) {
         lines.push(`#### ${md(o.title)}`, '', md(o.description), '', '**Pros**', '', ...o.pros.map(p => `- ${md(p)}`), '', '**Cons**', '', ...o.cons.map(p => `- ${md(p)}`), '');
         if (o.proposedAnswer) lines.push('Suggested draft: ' + md(o.proposedAnswer), '');

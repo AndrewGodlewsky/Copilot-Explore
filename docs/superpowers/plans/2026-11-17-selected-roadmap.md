@@ -909,6 +909,29 @@ Read issue-52.md, task-29-design-notes.md, AGENTS.md and the final task20 contex
 - Test actual final helper prompt bytes for excluded canaries, Unicode/escaping/limit boundaries, whole-record omissions, changed sources between review/start, unrelated commits, invalid/old tokens, out-of-order previews, cancellation and rapid replacement. Real HTTP/jsdom tests preserve draft/state/caret/composition, keyboard focus and voice cancellation while reviewing context. No browser/desktop automation, real mic, paid provider or existing session.
 - Run npm test/check/package and applicable installed research/canvas fixtures. Synchronize confirmed patch metadata/README/release note and controller plan update, self-review and commit; no nested agents/publication. Write task-29-report.md with preview token/source lifecycle, exact sent-versus-displayed contract, tests/SHA and native/manual limits.
 
+Published task 29: **v0.1.41**, `8f0af45`, required checks and context-review evidence retained; independent review approved and remote main verified.
+
+## Task 30: Research depth and source preferences (#26 / original34)
+
+Read issue-34.md, task-30-design-notes.md, AGENTS.md and the published task20/task29 context-preparation reports. BASE is `8f0af4544e5f01449a70e06409d8f7938ae165ba`; ship version **0.1.42**. Reconcile the final task29 reviewed-context token and exact payload contracts before implementation. Preserve task27 lifecycle/ownership evidence and task28 diagnostic readiness limits. Exact research ceilings are defined below and do not change tool-free helper defaults.
+
+### Request behavior
+
+- Add Quick, Standard and Deeper choices beside the reviewed research context, with visible time/tool ceilings before an explicit start. Changing a preference or inspecting scope must never start inference or change the main chat's selected model.
+- Inspect the then-current owned helper timer and tool gate before setting budgets. At v0.1.31 Standard used a 180,000 ms overall operation timer and at most 24 attempted tool calls. Preserve Standard unless a measured reason justifies a documented change. Use Quick = 60,000 ms / 8 attempted tool calls, Standard = 180,000 ms / 24 attempted calls, and Deeper = 300,000 ms / 40 attempted calls. The elapsed limit starts at owned execution, including runtime/account/model/tool setup; cancellation/accounting/shutdown may continue afterward. Count every attempted tool call, including denied attempts, at the existing pre-tool gate. Do not silently multiply only a prompt instruction.
+- Enforce the selected elapsed-time limit and tool allowance at actual owned-session execution boundaries. Define whether startup counts and whether denied calls count; use one honest definition for UI, code, tests and retained provenance. Existing bounded shutdown/accounting may continue after the operation timer; do not promise a hard process-wall-clock finish if shutdown cannot be confirmed.
+- Keep actual-release ownership, cancellation invalidation, exact captured dependencies, current-disk merge and conflict checks. A timeout does not grant permission to overlap a replacement run, approve managed permissions, use a different account/model, widen tools, or retry inference automatically.
+- Offer a small, validated source-focus choice such as balanced versus primary-source preference, and an optional recent-source preference where useful. Preferences guide retrieval; they do not prove that sources exist, are current or are correct. Unknown publication dates remain unknown. Avoid an elaborate filtering query language.
+- Include actual chosen settings in the captured immutable request, budget accounting, helper instructions and structured research provenance. Imported legacy research without settings stays unknown, not retrospectively Standard. Preserve existing user answers and earlier saved research on failure.
+- Integrate the selection with task29's actual context preview so the preview and request cannot disagree. Relevant edits after review require the existing refresh/review path. Scope and source preferences are distinct controls: a recency preference does not widen access to omitted map data.
+
+### Verification and release
+
+- Test every exact time/tool boundary with deterministic local fixtures, attempted/denied call counting, cancel during startup and inference, stop failure/late release, unsupported/invalid preferences, stale context and no automatic retry. Do not wait for real multi-minute timers in ordinary tests; inject a narrow clock/timer seam if needed and verify real production defaults independently.
+- Inspect actual isolated SDK configuration and transmitted instruction/prompt strings; assert no parent model change and retained operation-specific usage/provenance. Verify legacy import/history/Markdown behavior and safe text rendering. Do not invent historical settings or publication dates in local fixtures.
+- Run focused tests, npm test/check/package and applicable installed local runtime fixtures. No paid provider, existing user session, browser/desktop automation, microphone or new runtime dependency.
+- Synchronize confirmed version/release metadata/README, include controller roadmap change, self-review and commit. No nested agents, push/merge/issue closure. Write task-30-report.md with exact budgets/units, enforcement and provenance contracts, evidence/SHA and native/live-quality limits. Root reviews and publishes.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

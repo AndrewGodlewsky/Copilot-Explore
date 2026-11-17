@@ -133,8 +133,8 @@ async function replace(file, content) {
     await rename(temporary, file);
 }
 export async function createUsageRecorder(sessionId, root, operation = 'research') {
-    if (!['research', 'cleanup'].includes(operation)) throw new Error('Invalid helper operation.');
-    const label = operation === 'research' ? 'Explorer Research' : 'Explorer Answer Cleanup';
+    if (!['research', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
+    const label = { research: 'Explorer Research', cleanup: 'Explorer Answer Cleanup', 'question-help-rephrase': 'Explorer Question Rephrase', 'question-help-example': 'Explorer Question Example', 'question-help-terms': 'Explorer Question Terms' }[operation];
     if (!uuid.test(sessionId)) throw new Error('Invalid usage session ID.');
     const directory = join(root, 'session-state', sessionId);
     const file = join(directory, 'events.jsonl');

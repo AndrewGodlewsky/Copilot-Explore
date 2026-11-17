@@ -65,6 +65,10 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .question-rationale { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
 .candidate-rationale { margin-top: 5px; font-size: 12px; overflow-wrap: anywhere; }
 .question-rationale p,.candidate-rationale p { margin: 7px 0 0; }
+.question-help { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
+.question-help .help-actions { justify-content: flex-start; }
+.question-help .help-result { border-top: 1px solid var(--line); padding: 8px 0; }
+.question-help .help-result h3 { margin: 0; font-size: 12px; }
 .node.new-question { border: 3px solid var(--blue); }
 #question-feedback:empty { display: none; }
 .references-area { border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 16px; font-size: 12px; overflow-wrap: anywhere; }

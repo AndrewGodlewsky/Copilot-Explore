@@ -2,6 +2,7 @@ import { layout, branchView, revealPath } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
 import { CleanupClient } from './cleanup.mjs';
+import { QuestionHelpClient } from './question-help-client.mjs';
 import { attachNavigation } from './navigation.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
 
@@ -30,7 +31,14 @@ const cleanup = new CleanupClient({ fetch: (...args) => fetch(...args),
   edit: text => {
     voice.cancel(); draftClient.edit(selected, text);
     const answer = $('answer'); answer.value = text; answer.focus({ preventScroll: true }); answer.setSelectionRange(text.length, text.length);
-  }, changed: () => { renderCleanup(); scheduleLayout(); } });
+  }, changed: () => { renderCleanup(); renderQuestionHelp(); scheduleLayout(); } });
+const questionHelp = new QuestionHelpClient({ fetch: (...args) => fetch(...args),
+  source: () => state.document,
+  context: () => {
+    const node = state.document?.nodes.find(n => n.id === selected);
+    return !closed && expanded && !libraryView && node && isQuestion(node) ? { journey: state.activeKey ?? state.document.id, nodeId: selected } : null;
+  },
+  changed: () => { renderQuestionHelp(); renderCleanup(); scheduleLayout(); } });
 const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args),
   context: () => `${state.document?.id}/${selected}/${expanded}/${draftClient.state(selected)}/${draftClient.entries.get(selected)?.edits}`,
   insert: (value, caret) => {
@@ -41,7 +49,7 @@ const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args)
 const navigation = attachNavigation({ document, window, fetch: (...args) => fetch(...args),
   zoom: (factor, point) => zoom(factor, point),
   pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); } });
-const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, rationaleOpen: false, manualOpen: false, question: '' }); return nodeUi.get(id); };
+const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, rationaleOpen: false, helpOpen: false, manualOpen: false, question: '' }); return nodeUi.get(id); };
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -78,6 +86,7 @@ function captureWorkspace() {
     ui.scroll = content.scrollTop;
     ui.researchOpen = panel.querySelector('.research-disclosure')?.open ?? false;
     ui.rationaleOpen = panel.querySelector('#question-rationale')?.open ?? false;
+    ui.helpOpen = panel.querySelector('#question-help')?.open ?? false;
     ui.manualOpen = panel.querySelector('.manual')?.open ?? false;
     if (!references.error) references.open = panel.querySelector('#references')?.open ?? references.open;
   }
@@ -91,6 +100,7 @@ function apply(next, reset = false) {
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
     cleanup.cancel();
+    questionHelp.sync();
     voice.cancel();
     drafts.clear(); nodeUi.clear(); positions.clear(); collapsed.clear(); branches = null; focusId = null; wholeView = null; $('node-workspace').replaceChildren();
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
@@ -220,6 +230,7 @@ function renderReferences(active) {
 }
 function showView() {
   cleanup.sync();
+  questionHelp.sync();
   const home = !state.document || libraryView;
   $('welcome').hidden = !home; $('workspace').hidden = home;
   $('library-toggle').hidden = !state.library;
@@ -530,6 +541,7 @@ function renderDraftSummary() {
 }
 function renderWorkspace() {
   cleanup.sync();
+  questionHelp.sync();
   const panel = $('node-workspace'); captureWorkspace(); panel.hidden = !expanded;
   if (!expanded) return;
   if (composing?.isConnected && panel.dataset.nodeId === selected) { workspaceDirty = true; return; }
@@ -559,6 +571,18 @@ function renderWorkspace() {
     why.open = ui.rationaleOpen;
     why.addEventListener('toggle', () => { if (why.isConnected) ui.rationaleOpen = why.open; });
     content.append(why);
+  }
+  if (!root && isQuestion(node)) {
+    const help = el('details', { id: 'question-help', class: 'question-help' }, el('summary', { id: 'question-help-summary' }, 'Help with this question'),
+      el('p', { class: 'quiet' }, 'Model help explains this saved question. Your question and answer stay unchanged. For sourced or current information, use Explore options.'),
+      el('div', { class: 'actions help-actions' },
+        button('Rephrase', () => { voice.cancel(); void questionHelp.start('rephrase'); }, { id: 'help-rephrase' }),
+        button('Give an example', () => { voice.cancel(); void questionHelp.start('example'); }, { id: 'help-example' }),
+        button('Explain terms', () => { voice.cancel(); void questionHelp.start('terms'); }, { id: 'help-terms' })),
+      el('div', { id: 'question-help-results', 'aria-live': 'polite' }));
+    help.open = ui.helpOpen;
+    help.addEventListener('toggle', () => { if (help.isConnected) ui.helpOpen = help.open; });
+    content.append(help);
   }
   content.append(renderReferences(node));
   if (pending) {
@@ -621,7 +645,7 @@ function renderWorkspace() {
       answerStatus(node); answer.focus({ preventScroll: true }); notice('Addition undone. Your earlier draft is restored.');
     }, { id: 'undo-addition', class: 'undo-addition' }));
     form.append(el('div', { id: 'draft-recovery', 'aria-live': 'polite' }));
-    content.append(form); answerStatus(node); renderDraftRecovery(node); renderCleanup();
+    content.append(form); answerStatus(node); renderDraftRecovery(node); renderCleanup(); renderQuestionHelp();
     const research = el('details', { class: 'research-disclosure' }, el('summary', { id: 'research-summary' }, 'Explore options')); research.open = ui.researchOpen;
     research.addEventListener('toggle', () => { if (research.isConnected) { ui.researchOpen = research.open; scheduleLayout(); } });
     research.append(el('p', { class: 'quiet' }, 'A separate researcher compares possibilities using your saved answers and states. Suggestions stay separate from your answer; normal Copilot usage applies.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; void api('research', { nodeId: node.id }); }, { id: 'research-request', disabled: pending }));
@@ -662,7 +686,7 @@ function renderWorkspace() {
 }
 function renderCleanup() {
   const area = $('cleanup-review'), start = $('clean-answer'); if (!area || !start) return;
-  start.disabled = !cleanup.context()?.text.trim() || !!composing;
+  start.disabled = !cleanup.context()?.text.trim() || !!composing || questionHelp.work?.status === 'pending';
   const work = cleanup.work, signature = JSON.stringify(work);
   if (area.dataset.signature === signature) return;
   const focus = area.contains(document.activeElement) ? document.activeElement.id : null;
@@ -676,6 +700,26 @@ function renderCleanup() {
   else if (work?.status === 'undo') area.append(button('Undo cleanup', () => cleanup.undo(), { id: 'undo-cleanup' }));
   else if (work?.status === 'error') area.append(el('p', { role: 'status' }, `${work.error} Your current draft is unchanged. Use Clean My Answer to retry.`));
   if (focus) ($(focus) ?? $('answer'))?.focus({ preventScroll: true });
+}
+function renderQuestionHelp() {
+  const area = $('question-help-results'); if (!area) return;
+  const running = questionHelp.work?.status === 'pending';
+  for (const id of ['help-rephrase', 'help-example', 'help-terms']) if ($(id)) $(id).disabled = running || cleanup.work?.status === 'pending';
+  const stamp = JSON.stringify({ work: questionHelp.work, results: [...questionHelp.results] });
+  if (area.dataset.signature === stamp) return;
+  const focus = area.contains(document.activeElement) ? document.activeElement.id : null;
+  area.dataset.signature = stamp; area.replaceChildren();
+  if (running) area.append(el('p', { role: 'status' }, `${questionHelp.work.progress ?? 'Helping with the question'}… Your draft stays editable. Cancel this before Clean My Answer.`),
+    button('Cancel question help', () => { questionHelp.cancel(); $('question-help-summary')?.focus({ preventScroll: true }); }, { id: 'cancel-question-help' }));
+  else if (questionHelp.work?.status === 'error') {
+    const changedSource = /saved question context changed|saved journey changed|another canvas updated/i.test(questionHelp.work.error);
+    area.append(el('p', { role: 'status' }, changedSource ? questionHelp.work.error : `${questionHelp.work.error} Choose an action to try again.`));
+    if (changedSource) area.append(button('Refresh saved journey', () => { void api('refresh-answer'); }, { id: 'refresh-question-help' }));
+  }
+  const labels = { rephrase: 'Rephrase', example: 'Illustrative example', terms: 'Explain terms' };
+  for (const [operation, value] of questionHelp.results) area.append(el('section', { class: 'help-result' },
+    el('h3', {}, labels[operation]), el('p', { class: 'cleanup-text', tabindex: '0' }, value.text)));
+  if (focus) ($(focus) ?? $('question-help-summary'))?.focus({ preventScroll: true });
 }
 function renderQuestionFeedback() {
   let feedback = $('question-feedback');
@@ -1023,6 +1067,7 @@ new ResizeObserver(() => {
 new ResizeObserver(() => { if (expanded) scheduleLayout(); }).observe($('node-workspace'));
 window.addEventListener('pagehide', event => {
   cleanup.cancel();
+  questionHelp.cancel();
   void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;
   closed = true; clearTimeout(pollTimer); cancelAnimationFrame(layoutFrame); endDrag();

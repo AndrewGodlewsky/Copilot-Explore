@@ -13,6 +13,7 @@ import { layout, branchView, revealPath } from '../com.github.copilot/extensions
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
 import { CleanupClient } from '../com.github.copilot/extensions/explorer/web/cleanup.mjs';
+import { QuestionHelpClient } from '../com.github.copilot/extensions/explorer/web/question-help-client.mjs';
 import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
 import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
 import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
@@ -33,6 +34,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   let resolveResearch;
   const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
     cleaner: options.cleaner,
+    questionHelper: options.questionHelper,
     researcher: { run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
   }).load();
   await explorer.command('start', { topic: 'A tool library' });
@@ -104,10 +106,11 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.attachVoice = attachVoice;
   window.DraftClient = DraftClient;
   window.CleanupClient = CleanupClient;
+  window.QuestionHelpClient = QuestionHelpClient;
   window.attachNavigation = attachNavigation;
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus });
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
-  window.eval(script.replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", ''));
+  window.eval(script.replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", ''));
   await until(() => width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -147,6 +150,101 @@ test('historical question rationale is disclosed near expanded question without 
   await until(() => $('answer') !== composingAnswer, 'composition-safe rerender');
   assert.equal($('answer').value, 'Local draft'); assert.equal($('question-rationale').open, true);
   assert.equal(f.explorer.pending, null);
+});
+
+test('focusing the rationale summary cancels synthetic recording without late insertion', async t => {
+  const voice = voiceFixture(); let id;
+  voice.start = recordingId => { id = recordingId; return { id, phase: 'listening' }; };
+  voice.poll = () => ({ id, phase: voice.counts().cancels ? 'done' : 'listening', text: 'late dictated words' });
+  const f = await fixture(t, 340, voice, false, { questions: [{ question: 'Who starts?', category: 'People', rationale: 'The first audience matters.' }] });
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep this draft');
+  await until(() => !f.document.getElementById('voice-record').disabled, 'record ready');
+  f.document.getElementById('answer').focus(); f.document.getElementById('voice-record').click();
+  await until(() => !f.document.getElementById('voice-stop').disabled, 'recording');
+  f.document.getElementById('question-rationale-summary').focus();
+  await until(() => voice.counts().cancels === 1, 'rationale focus cancels recording');
+  await delay(250);
+  assert.equal(f.document.activeElement.id, 'question-rationale-summary');
+  assert.equal(f.document.getElementById('answer').value, 'Keep this draft');
+  assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
+
+test('question help actions keep the draft and question intact and discard late node results', async t => {
+  const runs = [];
+  const helper = { run: (operation, context, options) => new Promise(resolve => {
+    runs.push({ operation, context, ...options, resolve }); options.signal.addEventListener('abort', () => resolve('late'));
+  }), close() {} };
+  const f = await fixture(t, 340, undefined, false, { questionHelper: helper }), [node, other] = f.explorer.doc.nodes.slice(1);
+  f.open(node.id); f.type('answer', 'Unsent draft'); chooseState(f, 'assumption');
+  const $ = id => f.document.getElementById(id);
+  $('question-help').open = true;
+  assert.equal($('question-help-summary').textContent, 'Help with this question');
+  $('help-rephrase').click(); await until(() => runs.length === 1, 'rephrase starts');
+  assert.equal(runs[0].operation, 'rephrase'); assert.ok(!JSON.stringify(runs[0].context).includes('Unsent draft'));
+  assert.equal($('help-example').disabled, true); assert.equal($('clean-answer').disabled, true);
+  f.type('answer', 'Edited while helping');
+  const editor = $('answer'); editor.focus(); editor.setSelectionRange(5, 5);
+  editor.dispatchEvent(new f.window.Event('compositionstart', { bubbles: true }));
+  runs[0].resolve('<img src=x onerror=alert(1)> λ');
+  await until(() => /λ/.test($('question-help-results').textContent), 'rephrase result');
+  assert.equal($('answer'), editor); assert.equal(editor.selectionStart, 5);
+  editor.dispatchEvent(new f.window.Event('compositionend', { bubbles: true }));
+  assert.equal($('question-help-results').querySelector('img'), null);
+  assert.equal($('answer').value, 'Edited while helping'); assert.equal($('answer-state').value, 'assumption');
+  $('help-example').click(); await until(() => runs.length === 2, 'example starts');
+  runs[1].resolve('For illustration only.'); await until(() => /For illustration only/.test($('question-help-results').textContent), 'example result');
+  assert.match($('question-help-results').textContent, /Illustrative example/);
+  const next = structuredClone(f.explorer.doc); next.nodes[2].answer = 'Other branch changed'; next.nodes[2].answerState = 'tentative'; await f.explorer.save(next, 'Other branch');
+  await until(() => $('question-help')?.open && /For illustration only/.test($('question-help-results').textContent), 'same-node results survive polling');
+  const relevant = structuredClone(f.explorer.doc); relevant.objective = 'New saved objective';
+  await f.explorer.save(relevant, 'Objective changed');
+  await until(() => $('question-help-results')?.textContent === '', 'completed help clears after relevant saved edit');
+  assert.equal($('answer').value, 'Edited while helping'); assert.equal($('answer-state').value, 'assumption');
+  $('help-terms').click(); await until(() => runs.length === 3, 'terms starts');
+  f.open(other.id); await until(() => runs[2].signal.aborted, 'node change cancels help');
+  f.open(node.id); assert.equal($('question-help-results').textContent, '');
+  assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.equal(f.explorer.doc.nodes[1].question, node.question);
+});
+
+test('question help shows a bounded error and permits explicit keyboard retry', async t => {
+  let count = 0;
+  const helper = { async run() { return ++count === 1 ? ' ' : 'A plain-language explanation.'; }, close() {} };
+  const f = await fixture(t, 340, undefined, false, { questionHelper: helper }); f.open(f.explorer.doc.nodes[1].id);
+  const $ = id => f.document.getElementById(id);
+  $('question-help').open = true;
+  $('help-terms').focus(); $('help-terms').click();
+  await until(() => /nonblank text/.test($('question-help-results').textContent), 'help error');
+  assert.equal($('answer').value, ''); assert.equal($('question-help-results').querySelector('a'), null);
+  $('help-terms').focus(); $('help-terms').click();
+  await until(() => /A plain-language explanation/.test($('question-help-results').textContent), 'explicit retry');
+  assert.equal(count, 2);
+  assert.equal($('question-help-results').querySelector('p.cleanup-text').tabIndex, 0);
+  assert.equal($('question-help-summary').closest('#node-workspace') !== null, true);
+});
+
+test('question help refreshes an external source change before explicit retry', async t => {
+  let resolveFirst; const runs = [];
+  const helper = { run: (operation, context) => {
+    runs.push({ operation, context });
+    return runs.length === 1 ? new Promise(resolve => { resolveFirst = resolve; }) : Promise.resolve('Explanation for the refreshed goal.');
+  }, close() {} };
+  const f = await fixture(t, 340, undefined, false, { questionHelper: helper });
+  const node = f.explorer.doc.nodes[1]; f.open(node.id); f.type('answer', 'Unsent draft'); chooseState(f, 'assumption');
+  const $ = id => f.document.getElementById(id); $('question-help').open = true;
+  $('help-rephrase').click(); await until(() => runs.length === 1, 'help starts on old source');
+  const other = await new Explorer({ file: f.explorer.file }).load();
+  await other.command('guidance', { revision: other.doc.revision, objective: 'A new saved goal', successCriteria: '' });
+  resolveFirst('Explanation for old goal.');
+  await until(() => $('refresh-question-help'), 'external change offers refresh');
+  assert.doesNotMatch($('question-help-results').textContent, /Explanation for old goal/);
+  $('refresh-question-help').click();
+  await until(() => f.explorer.doc.objective === 'A new saved goal' && $('help-rephrase'), 'saved journey refreshed');
+  assert.equal(runs.length, 1, 'refresh does not start inference');
+  assert.equal($('answer').value, 'Unsent draft'); assert.equal($('answer-state').value, 'assumption');
+  assert.equal($('question-help').open, true);
+  $('help-rephrase').click();
+  await until(() => /Explanation for the refreshed goal/.test($('question-help-results').textContent), 'explicit retry succeeds');
+  assert.equal(runs.length, 2); assert.equal(runs[1].context.objective, 'A new saved goal');
 });
 
 test('candidate rationale follows original wording through edited preview and legacy absence', async t => {

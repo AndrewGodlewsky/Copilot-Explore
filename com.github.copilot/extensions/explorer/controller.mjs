@@ -7,17 +7,18 @@ import { History } from './history.mjs';
 import { Drafts, draftBase, draftHash, matchesDraftBase } from './drafts.mjs';
 import { References, emptyReferences, validateReferenceIds } from './references.mjs';
 import { cleanupText } from './cleanup.mjs';
+import { HELP_OPERATIONS, helpContext, helpText, sameHelpContext } from './question-help.mjs';
 import { ANSWER_CONTEXT_GUIDANCE, effectiveAnswerState, isQuestion } from './web/answer-state.mjs';
 export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
 export class Explorer {
-  constructor({ file, library, binding, send, target, researcher, cleaner, timeoutMs = 240000 }) {
+  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, timeoutMs = 240000 }) {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
     this.researcher = researcher; this.researchTasks = new Set();
-    this.cleaner = cleaner; this.cleanup = null; this.cleanupTask = Promise.resolve(); this.closed = false;
+    this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.closed = false;
     this.library = library; this.binding = binding; this.activeKey = null;
   }
   async load() {
@@ -36,6 +37,10 @@ export class Explorer {
     if (work && (work.journey !== (this.activeKey ?? this.doc?.id) || !this.doc?.nodes.some(n => n.id === work.nodeId && isQuestion(n)))) {
       work.abort.abort(); this.cleanup = null;
     }
+    const help = this.help;
+    if (help && (help.journey !== (this.activeKey ?? this.doc?.id) || !sameHelpContext(help.context, this.doc))) {
+      help.abort.abort(); this.help = null;
+    }
   }
   cleanupRequest(input) {
     return this.transact(() => {
@@ -53,11 +58,12 @@ export class Explorer {
       if (input.action === 'start') {
         const text = cleanupText(input.text);
         if (!this.cleaner) throw new Error('Clean My Answer requires the installed Copilot desktop SDK.');
+        if (this.help?.status === 'pending') throw new Error('Cancel question help before cleaning your answer.');
         this.cleanup?.abort.abort();
         const work = { id: input.id, journey: input.journey, nodeId: input.nodeId, mutation: input.mutation, status: 'pending', progress: 'Preparing answer cleanup', abort: new AbortController() };
         this.cleanup = work;
         // Wait for release of the previous owned session, without blocking edits or HTTP cancellation.
-        this.cleanupTask = this.cleanupTask.then(async () => {
+        this.toolFreeTask = this.toolFreeTask.then(async () => {
           if (this.cleanup !== work || work.abort.signal.aborted || !current()) return;
           try {
             const result = await this.cleaner.run(text, { signal: work.abort.signal, onProgress: progress => { if (this.cleanup === work) work.progress = progress; } });
@@ -69,6 +75,54 @@ export class Explorer {
       }
       const work = this.cleanup;
       return matches(work) ? { id: work.id, status: work.status, progress: work.progress, ...(work.text !== undefined ? { text: work.text } : {}), ...(work.error ? { error: work.error } : {}) } : { id: input.id, status: 'cancelled' };
+    });
+  }
+  helpRequest(input) {
+    return this.transact(async () => {
+      if (this.closed || !input || typeof input !== 'object' || Array.isArray(input) || !['start', 'poll', 'cancel'].includes(input.action) ||
+        Object.keys(input).sort().join(',') !== (input.action === 'start' ? 'action,id,journey,nodeId,operation' : 'action,id,journey,nodeId,operation') ||
+        typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || typeof input.journey !== 'string' || input.journey.length > 100 ||
+        typeof input.nodeId !== 'string' || input.nodeId.length > 100 || !HELP_OPERATIONS.includes(input.operation)) throw new Error('Invalid question help request.');
+      const matches = work => work && ['id', 'journey', 'nodeId', 'operation'].every(key => work[key] === input[key]);
+      if (input.action === 'cancel') {
+        if (matches(this.help)) { this.help.abort.abort(); this.help = null; }
+        return { id: input.id, operation: input.operation, status: 'cancelled' };
+      }
+      if (input.action === 'start') {
+        if (!this.questionHelper) throw new Error('Question help requires the installed Copilot desktop SDK.');
+        if (this.cleanup?.status === 'pending') throw new Error('Cancel answer cleanup before starting question help.');
+        if (!this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw new Error('The selected journey changed. Refresh it and try again.');
+        const context = helpContext(this.doc, input.nodeId);
+        let current;
+        try { current = await this.readCurrent(); } catch { throw new Error('The saved journey changed. Refresh it before asking for question help.'); }
+        if (!sameHelpContext(context, current)) throw new Error('The saved question context changed. Refresh the journey and try again.');
+        this.help?.abort.abort();
+        const work = { id: input.id, journey: input.journey, nodeId: input.nodeId, operation: input.operation, context, status: 'pending', progress: 'Preparing question help', abort: new AbortController() };
+        this.help = work;
+        this.toolFreeTask = this.toolFreeTask.then(async () => {
+          if (this.help !== work || work.abort.signal.aborted) return;
+          try {
+            const result = await this.questionHelper.run(work.operation, work.context, { signal: work.abort.signal, onProgress: progress => { if (this.help === work) work.progress = progress; } });
+            if (this.help === work && !work.abort.signal.aborted) { work.text = helpText(result); work.status = 'result'; }
+          } catch (error) {
+            if (this.help === work && !work.abort.signal.aborted) { work.error = error.message; work.status = 'error'; }
+          }
+        });
+      }
+      const work = this.help;
+      if (!matches(work)) return { id: input.id, operation: input.operation, status: 'cancelled' };
+      try {
+        const current = await this.readCurrent();
+        if (work.journey !== (this.activeKey ?? this.doc?.id) || !sameHelpContext(work.context, this.doc) || !sameHelpContext(work.context, current)) throw new Error();
+      } catch {
+        work.abort.abort(); this.help = null;
+        return { id: input.id, operation: input.operation, status: 'error', error: 'The saved question context changed. Refresh the journey and try again.' };
+      }
+      const response = { id: work.id, operation: work.operation, status: work.status, progress: work.progress,
+        ...(input.action === 'start' || work.status === 'result' ? { context: work.context } : {}),
+        ...(work.text !== undefined ? { text: work.text } : {}), ...(work.error ? { error: work.error } : {}) };
+      if (Buffer.byteLength(JSON.stringify(response)) > 96 * 1024) throw new Error('Question help response exceeds its transport limit.');
+      return response;
     });
   }
   uiSnapshot() {
@@ -391,5 +445,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.closed = true; this.cleanup?.abort.abort(); this.cleanup = null; this.clearPending(); await Promise.allSettled([...this.researchTasks, this.cleanupTask]); await this.cleaner?.close(); await this.queue; this.preview = null; this.questionSource = null; }
+  async close() { this.closed = true; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
 }

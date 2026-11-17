@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.29",
+    "summary": "An expanded question now offers Rephrase, Give an example, and Explain terms. Model help uses bounded saved context in a separate tool-free helper; examples are illustrative. Explanations stay beside the question until you switch nodes or reload, without changing your question, answer or draft. Cancel help before cleaning an answer, or vice versa."
+  },
+  {
     "version": "0.1.28",
     "summary": "Suggested questions can explain the uncertainty they explore and why it matters to your goal. Review the explanation in the preview or expanded question; it remains tied to the original suggestion if wording or context changes. Legacy questions remain unchanged, and explanations appear in exports and history."
   },

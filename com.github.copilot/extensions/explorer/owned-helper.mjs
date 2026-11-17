@@ -29,8 +29,9 @@ const sameAccount = (a, b) => a?.isAuthenticated === true && b?.isAuthenticated 
 
 // Only fixtures inject a runtime. Production resolves the pair supplied by the desktop bootstrap.
 export function createOwnedHelper(parent, operation, prepare, { usageDirectory, runtime = desktopRuntime, usageRecorder = createUsageRecorder } = {}) {
-  const label = operation === 'research' ? 'Research' : 'Answer cleanup';
-  const fail = message => new HelperError(message.replaceAll('Research', label).replaceAll('research', operation === 'research' ? 'research' : 'answer cleanup'));
+  if (!['research', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
+  const label = { research: 'Research', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
+  const fail = message => new HelperError(message.replaceAll('Research', label).replaceAll('research', label.toLowerCase()));
   const cancelled = () => fail('Research was cancelled or timed out. Your answers are saved.');
   const active = new Map();
   function run(context, { signal, onProgress = () => {} } = {}) {
@@ -89,7 +90,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       if (!sameAccount(auth, helperAuth)) throw fail('The research account differs from the main Copilot account. Check your Copilot sign-in.');
       if (!helperModels.list?.some(m => eligible(m) && m.id === model.id)) throw fail('The selected model is unavailable for research. Choose an enabled Copilot model.');
       if (metadata.isRemote !== false || await realpath(metadata.workingDirectory) !== await realpath(workspace)) throw fail('Copilot could not isolate the research workspace.');
-      stage(operation === 'research' ? 'Checking web research tools' : 'Verifying cleanup has no tools');
+      stage(operation === 'research' ? 'Checking web research tools' : `Verifying ${label.toLowerCase()} has no tools`);
       await deadline(session.rpc.tools.initializeAndValidate(), 30000); check();
       const [tools, current, parentAuth, currentHelperAuth] = await deadline(Promise.all([
         session.rpc.tools.getCurrentMetadata(), session.rpc.model.getCurrent(), parent.rpc.gitHubAuth.getStatus(), session.rpc.gitHubAuth.getStatus(),

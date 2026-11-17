@@ -9,7 +9,7 @@ import { Explorer } from '../com.github.copilot/extensions/explorer/controller.m
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
 import { createDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
-import { layout } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
+import { layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
 import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
@@ -82,11 +82,13 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     return request;
   };
   window.layout = layout;
+  window.branchView = branchView;
+  window.revealPath = revealPath;
   window.attachVoice = attachVoice;
   window.DraftClient = DraftClient;
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts });
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
-  window.eval(script.replace("import { layout } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';", ''));
+  window.eval(script.replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';", ''));
   await until(() => width ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -571,6 +573,84 @@ test('installed questions expand inside the map, preserve drafts, and collapse t
   assert.match(f.document.getElementById('nodes').textContent, /Neighbors on our block/);
   f.open(a.id); assert.equal(f.document.getElementById('answer').value, 'Neighbors on our block');
   f.document.getElementById('fit').click(); assert.ok(f.document.getElementById('node-workspace').hidden);
+});
+
+test('branch controls hide only descendants, preserve active draft and reveal from the full outline', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const a = e.doc.nodes[1];
+    await e.command('add', { revision: e.doc.revision, nodeId: a.id, category: 'People', question: 'Invite nearby?' });
+    await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes.at(-1).id, category: 'People', question: 'Send a letter?' });
+  } });
+  const [root, a, b, child, grandchild] = f.explorer.doc.nodes;
+  f.open(grandchild.id); f.type('answer', 'Private draft'); chooseState(f, 'assumption');
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'draft stored');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries.find(e => e.nodeId === grandchild.id).stateSelected, true);
+  f.document.querySelector('.manual summary').click(); f.type('manual-question', 'Private follow-up');
+  const revision = f.explorer.doc.revision;
+  const toggle = f.document.querySelector(`[data-branch-id="${a.id}"]`);
+  assert.equal(toggle?.getAttribute('aria-label'), 'Collapse branch: Who should borrow first?');
+  toggle.focus(); toggle.click();
+  assert.equal(f.document.getElementById('node-workspace').hidden, true, 'hidden descendant editor closes');
+  assert.equal(f.document.activeElement.dataset.nodeId, a.id, 'focus moves to visible ancestor');
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), null);
+  assert.equal(f.document.querySelectorAll('#edges path').length, 2);
+  assert.match(f.document.querySelector(`[data-node-id="${a.id}"]`).textContent, /2 hidden.*2 unresolved/);
+  assert.equal(f.document.querySelector(`[data-branch-id="${a.id}"]`).getAttribute('aria-expanded'), 'false');
+  assert.equal(f.explorer.doc.revision, revision);
+  await delay(1350);
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), null, 'poll retains fold');
+  f.document.getElementById('outline-toggle').click();
+  const row = [...f.document.querySelectorAll('#outline-list [data-node-id]')].find(e => e.dataset.nodeId === grandchild.id);
+  assert.ok(row, 'hidden question is discoverable'); row.click();
+  assert.equal(f.document.getElementById('expanded-title').textContent, grandchild.question);
+  assert.equal(f.document.getElementById('answer').value, 'Private draft');
+  assert.equal(f.document.getElementById('answer-state').value, 'assumption');
+  assert.equal(f.document.getElementById('manual-question').value, 'Private follow-up');
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), 'ancestor path revealed');
+  assert.equal(f.explorer.doc.revision, revision);
+  assert.equal(f.document.querySelector(`[data-branch-id="${b.id}"]`), null, 'unrelated leaf stays unchanged');
+  assert.ok(f.document.querySelector(`[data-branch-id="${root.id}"]`));
+});
+
+test('folded research completion and root folding keep saved content and full exports', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: e => e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, category: 'People', question: 'Invite nearby?' }) });
+  const [root, a, , child] = f.explorer.doc.nodes;
+  f.open(child.id); f.document.querySelector('.research-disclosure summary').click(); f.click('Research options');
+  await until(() => f.explorer.pending?.kind === 'research', 'research started');
+  f.document.querySelector(`[data-branch-id="${a.id}"]`).click();
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), null);
+  f.resolveResearch(findings);
+  await until(() => !!f.explorer.doc.nodes.find(n => n.id === child.id).research, 'research saved');
+  await until(() => f.document.getElementById('request-status').hidden, 'research completion applied to canvas');
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), null, 'completion does not reveal branch');
+  const revision = f.explorer.doc.revision;
+  f.document.querySelector(`[data-branch-id="${root.id}"]`).click();
+  assert.equal(f.document.querySelectorAll('#nodes .node').length, 1);
+  assert.equal(f.document.querySelectorAll('#edges path').length, 0);
+  assert.equal(f.explorer.doc.revision, revision, 'view fold does not save');
+  f.document.querySelector(`[data-branch-id="${root.id}"]`).click();
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${a.id}"]`));
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), null, 'nested fold remains');
+  const saved = await (await f.window.fetch('export.json')).json();
+  assert.equal(saved.nodes.find(n => n.id === child.id).research.summary, findings.summary);
+  assert.match(await (await f.window.fetch('export.md')).text(), /Invite nearby\?/);
+});
+
+test('folding the expanded node keeps its editor while outline branch focus stays in the outline', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: e => e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, category: 'People', question: 'Invite nearby?' }) });
+  const a = f.explorer.doc.nodes[1], child = f.explorer.doc.nodes.at(-1);
+  f.open(a.id); f.type('answer', 'Keep editing');
+  f.document.getElementById('branch-workspace').click();
+  assert.equal(f.document.getElementById('node-workspace').hidden, false);
+  assert.equal(f.document.getElementById('answer').value, 'Keep editing');
+  assert.equal(f.document.activeElement.id, 'branch-workspace');
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), null);
+  f.document.getElementById('outline-toggle').click();
+  const outlineToggle = f.document.querySelector(`#outline-list [data-branch-id="${a.id}"]`);
+  outlineToggle.focus(); outlineToggle.click();
+  assert.equal(f.document.activeElement.closest('#outline-list')?.id, 'outline-list');
+  assert.equal(f.document.activeElement.getAttribute('aria-expanded'), 'true');
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`));
 });
 
 test('research callbacks and follow-ups work inside a narrow expanded node without replacing a draft', async t => {

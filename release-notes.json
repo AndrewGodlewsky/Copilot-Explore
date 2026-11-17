@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.18",
+    "summary": "Collapse any branch to hide its descendants while keeping hidden-question and unresolved counts visible. Expand from the map or full outline; selecting a hidden question reveals its path. Folding preserves answers, drafts, research, exports and saved revisions."
+  },
+  {
     "version": "0.1.17",
     "summary": "Answers now distinguish Decided, Tentative, Assumption, Need evidence, Not relevant and Revisit later. Text and state save together only when you choose Save, with local draft recovery and conflict choices. Maps, outlines, exports and AI context preserve states; counts separate answered, resolved, deferred and unresolved questions."
   },

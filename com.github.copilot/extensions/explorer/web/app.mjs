@@ -1,4 +1,4 @@
-import { layout } from './layout.mjs';
+import { layout, branchView, revealPath } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';
@@ -11,6 +11,7 @@ let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame, viewportSize;
 let suppressClick = false, restoringFocus = false, composing = null, workspaceDirty = false;
 let actionEpoch = 0, closed = false, pollTimer;
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
+let collapsed = new Set(), branches = null;
 let guidanceReturn = null, guidanceBase = null, guidanceNeedsChoice = false, guidanceNeedsRefresh = false;
 const drafts = new Map(), nodeUi = new Map();
 const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
@@ -70,7 +71,7 @@ function apply(next, reset = false) {
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
     voice.cancel();
-    drafts.clear(); nodeUi.clear(); positions.clear(); $('node-workspace').replaceChildren();
+    drafts.clear(); nodeUi.clear(); positions.clear(); collapsed.clear(); branches = null; $('node-workspace').replaceChildren();
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
     $('start-objective').value = ''; $('start-criteria').value = ''; $('start-guidance').open = false;
     if ($('guidance-dialog').open) $('guidance-dialog').close();
@@ -81,6 +82,7 @@ function apply(next, reset = false) {
   if (state.library && !state.document) void refreshLibrary();
   const doc = state.document;
   if (doc && !doc.nodes.some(n => n.id === selected)) { selected = doc.rootId; expanded = false; }
+  if (doc) branches = branchView(doc.nodes, doc.rootId, collapsed);
   showView();
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('edit-guidance').disabled = !!state.pending;
@@ -167,10 +169,41 @@ function select(id) {
   if (!state.document?.nodes.some(n => n.id === id)) return;
   endDrag();
   voice.cancel();
+  collapsed = revealPath(state.document.nodes, collapsed, id);
+  branches = branchView(state.document.nodes, state.document.rootId, collapsed);
   const rect = $('map').getBoundingClientRect(), width = Math.min(560, rect.width - 32), old = anchorPoint(id);
   const anchor = { id, x: Math.max(width / 2 + 16, Math.min(rect.width - width / 2 - 16, old?.x ?? rect.width / 2)), y: focusTop(id, rect.height) };
   captureWorkspace(); selected = id; expanded = true; view.zoom = 1;
-  renderWorkspace(); refreshScene(anchor); $('expanded-title').focus({ preventScroll: true });
+  renderWorkspace(); refreshScene(anchor); renderOutline(); $('expanded-title').focus({ preventScroll: true });
+}
+function toggleBranch(id, source) {
+  const node = state.document?.nodes.find(n => n.id === id);
+  if (!node || !branches.descendants.get(id)?.total) return;
+  endDrag();
+  const folding = !collapsed.has(id), anchor = anchorPoint(id);
+  if (folding) collapsed.add(id); else collapsed.delete(id);
+  let moved = false;
+  if (folding && selected !== id) {
+    const parents = new Map(state.document.nodes.map(n => [n.id, n.parentId]));
+    for (let parent = parents.get(selected); parent != null; parent = parents.get(parent)) {
+      if (parent !== id) continue;
+      voice.cancel(); captureWorkspace(); selected = id; expanded = false; moved = true; break;
+    }
+  }
+  branches = branchView(state.document.nodes, state.document.rootId, collapsed);
+  renderWorkspace(); refreshScene(anchor); renderOutline();
+  const focus = moved ? [...$('nodes').children].find(e => e.dataset.nodeId === id) :
+    source === 'outline' ? [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === id) :
+    expanded && selected === id ? $('branch-workspace') :
+      [...$('nodes').children].find(e => e.dataset.branchId === id);
+  focus?.focus({ preventScroll: true });
+}
+function branchButton(node, workspace = false) {
+  if (!branches.descendants.get(node.id)?.total) return null;
+  const folded = collapsed.has(node.id), label = `${folded ? 'Expand' : 'Collapse'} branch`;
+  return button(label, event => toggleBranch(node.id, event.currentTarget.closest('.outline') ? 'outline' : 'map'), { ...(workspace ? { id: 'branch-workspace' } : {}),
+    class: workspace ? 'workspace-branch-toggle' : 'branch-toggle', 'data-branch-id': node.id,
+    'aria-label': `${label}: ${node.question}`, 'aria-expanded': String(!folded) });
 }
 function collapseNode(focus = true) {
   endDrag();
@@ -189,9 +222,9 @@ function refreshScene(anchor = anchorPoint()) {
   const height = Math.max(80, rect.height - focusTop(selected, rect.height) - 16) / scale;
   panel.style.width = `${width}px`; panel.style.maxHeight = `${height}px`;
   panel.style.setProperty('--heading-limit', `${Math.min(190, height * .42)}px`);
-  const sizes = new Map(state.document.nodes.map(n => [n.id, { width: 220, height: n.answer ? 150 : 110 }]));
+  const sizes = new Map(branches.nodes.map(n => [n.id, { width: 220, height: n.answer ? 150 : 110 }]));
   if (expanded) sizes.set(selected, { width, height: panel.offsetHeight });
-  positions = layout(state.document.nodes, state.document.rootId, sizes);
+  positions = layout(branches.nodes, state.document.rootId, sizes);
   if (anchor && positions.has(anchor.id)) {
     const p = positions.get(anchor.id);
     view.x = anchor.x - (p.x + p.width / 2) * view.zoom; view.y = anchor.y - p.y * view.zoom;
@@ -203,18 +236,25 @@ function scheduleLayout() { if (!closed) { cancelAnimationFrame(layoutFrame); la
 function renderMap() {
   const doc = state.document, fragment = document.createDocumentFragment();
   const focused = $('nodes').contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
+  const focusedBranch = $('nodes').contains(document.activeElement) ? document.activeElement.dataset.branchId : null;
   $('edges').replaceChildren(); $('map-hint').hidden = expanded;
-  for (const n of doc.nodes) {
+  for (const n of branches.nodes) {
     const p = positions.get(n.id), root = n.id === doc.rootId;
     if (!expanded || n.id !== selected) {
-      const node = button('', () => select(n.id), { class: `node ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''}`,
-        title: n.question, 'data-node-id': n.id, 'aria-expanded': 'false', 'aria-label': `${n.category}: ${n.question}. ${root ? 'Central idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}` });
+      const hidden = collapsed.has(n.id) ? branches.descendants.get(n.id) : null;
+      const node = button('', () => select(n.id), { class: `node ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''} ${branches.descendants.get(n.id).total ? 'has-branch' : ''}`,
+        title: n.question, 'data-node-id': n.id, 'aria-expanded': 'false', 'aria-label': `${n.category}: ${n.question}. ${root ? 'Central idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden.total} hidden, ${hidden.unresolved} unresolved` : ''}` });
       node.style.left = `${p.x}px`; node.style.top = `${p.y}px`; node.style.width = `${p.width}px`; node.style.height = `${p.height}px`; node.style.setProperty('--branch', colors[p.branch % colors.length]);
       node.addEventListener('focus', () => { if (!restoringFocus) revealNode(n.id); });
       node.append(el('span', { class: 'category' }, n.category), el('span', { class: 'question' }, n.question));
       if (n.answer) node.append(el('span', { class: 'answer-preview' }, n.answer));
-      node.append(el('span', { class: 'status' }, root ? `${doc.nodes.length - 1} questions` : `${ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}`));
+      node.append(el('span', { class: 'status' }, hidden ? `${hidden.total} hidden · ${hidden.unresolved} unresolved` : root ? `${doc.nodes.length - 1} questions` : `${ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}`));
       fragment.append(node);
+      const toggle = branchButton(n);
+      if (toggle) {
+        toggle.style.left = `${p.x + p.width - 106}px`; toggle.style.top = `${p.y + p.height - 36}px`;
+        fragment.append(toggle);
+      }
     }
     if (!root) {
       const parent = positions.get(n.parentId), x1 = parent.x + parent.width / 2, y1 = parent.y + parent.height, x2 = p.x + p.width / 2, y2 = p.y;
@@ -227,6 +267,7 @@ function renderMap() {
   $('nodes').replaceChildren(fragment);
   restoringFocus = true;
   if (focused) [...$('nodes').children].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
+  if (focusedBranch) [...$('nodes').children].find(e => e.dataset.branchId === focusedBranch)?.focus({ preventScroll: true });
   restoringFocus = false;
 }
 function bounds() {
@@ -344,7 +385,8 @@ function renderWorkspace() {
     if (crumbs.childNodes.length) crumbs.append(el('span', {}, '/'));
     crumbs.append(button(n.id === doc.rootId ? 'Your idea' : n.category, () => select(n.id), { id: `ancestor-${n.id}`, title: n.question }));
   }
-  const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.category), button('Collapse node', () => collapseNode(), { id: 'collapse-node' })), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
+  const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.category), el('div', { class: 'node-head-actions' }, branchButton(node, true), button('Collapse node', () => collapseNode(), { id: 'collapse-node' }))), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
+  if (collapsed.has(node.id)) { const count = branches.descendants.get(node.id); heading.append(el('p', { class: 'branch-count' }, `${count.total} hidden · ${count.unresolved} unresolved`)); }
   const content = el('div', { class: 'node-content' }); panel.append(heading, content);
   if (pending) {
     const workNode = byId.get(state.pending.nodeId);
@@ -466,10 +508,14 @@ function renderResearch(node) {
 function renderOutline() {
   if (!state.document) return;
   const focused = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
+  const focusedBranch = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.branchId : null;
   const query = $('search').value.toLowerCase();
   const nodes = state.document.nodes.filter(n => `${n.question} ${n.answer} ${n.category}`.toLowerCase().includes(query));
-  $('outline-list').replaceChildren(...nodes.map(n => button([n.question, el('small', {}, `${n.category} · ${n.id === state.document.rootId ? 'Idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id })));
-  if (focused) [...$('outline-list').children].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
+  $('outline-list').replaceChildren(...nodes.map(n => el('div', { class: 'outline-row' },
+    button([n.question, el('small', {}, `${n.category} · ${n.id === state.document.rootId ? 'Idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}${collapsed.has(n.id) ? ` · ${branches.descendants.get(n.id).total} hidden · ${branches.descendants.get(n.id).unresolved} unresolved` : ''}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id }),
+    branchButton(n))));
+  if (focused) [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
+  if (focusedBranch) [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === focusedBranch)?.focus({ preventScroll: true });
 }
 function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) || draftClient.entries.get(n.id)?.conflict) ?? []; }
 $('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value, objective: $('start-objective').value, successCriteria: $('start-criteria').value }); });

@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.17.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
+**Proof of concept, v0.1.18.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -70,6 +70,7 @@ While creating a journey, open **Add an objective and success criteria** if you 
 
 1. Use `/explore` to open your library, or `/explore <idea>` to start a journey. Search saved topics, pin favorites, or show archived journeys. **Open** continues a journey in the current chat; **New exploration** starts another without replacing the saved map. Copilot creates questions in several directions around a new idea.
 2. Select a question in the map or searchable **Outline**. The node expands in its branch; its answer, research, and follow-up controls are inside it.
+   Use **Collapse branch** to hide a node's descendants while keeping the node and its hidden-question and unresolved counts visible. **Expand branch** restores that branch. **Collapse node** closes the answer editor instead. The Outline keeps every question available; selecting a hidden question reveals its ancestor path. Branch folding changes only this canvas view and keeps saved content, drafts, research and exports intact.
 3. Open **Explore options**, then use **Research options** for alternatives, pros/cons, a recommendation, and uncertainty. A separate Copilot researcher works inside this node. Consulted sources are numbered and linked; unsourced reasoning is labeled. **Use recommendation**, **Use this option**, or **Add selected details** appends suggestions to your editable draft. **Undo addition** restores the previous draft until you edit it. Nothing is saved as your answer until you click Save.
 4. Write your answer and choose its **Answer state**. New text defaults to Tentative. **Save answer** records text and state together; **Save & explore deeper** also generates follow-up questions on that branch. You can add a question manually.
 5. **Finish exploration** saves the record and offers two downloads: Markdown and `.explore.json`. Use **Library** to reopen it from any canvas/session, or **Open file** to import an exported journey.
@@ -213,9 +214,10 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.17, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.17**.
+- Update to v0.1.18, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.18**.
 <!-- explorer-install-check:end -->
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
+- Collapse a branch with an active descendant editor, confirm focus moves to the visible ancestor, then select the hidden question from Outline. Check that its draft text and state return, the other branches stay as they were, and the compact hidden/unresolved counts remain readable in a narrow pane.
 - Focus the answer, hold your configured voice shortcut until **Listening**, speak, then release. Confirm the text enters the draft and is not saved automatically. Check Escape cancellation and switching questions.
 - Open **Voice settings**, choose a microphone and downloaded model, save, and reopen Explorer to check persistence. Disconnect a selected device and confirm Explorer explains the problem. Check that the recording bars respond to your speech, stay flat in silence, and stop during transcription.
 - Answer a question and confirm relevant deeper questions appear.

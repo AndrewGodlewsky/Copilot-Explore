@@ -214,13 +214,41 @@ Read .superpowers/sdd/2026-11-17-selected-roadmap/issue-5.md, AGENTS.md, docs/dr
 
 Likely model/controller/research prompt, browser rendering and draft modules, corresponding tests and docs. No new runtime dependencies or broad unrelated restructuring.
 
-- [ ] Focused RED/GREEN tests for every state and empty-text rule, conservative legacy import, malformed values, root exclusion, shared counts/review flags, state-only and no-op saves, descendants, native/Markdown/context round trips.
-- [ ] Real HTTP/jsdom tests for choose/save, text-only draft insertion preserving choice, state-only reload, legacy draft recovery, stale state conflicts, click-time state capture/later edits, failure preservation and exported/context draft exclusion.
-- [ ] Verify existing question generation/research remains attached/isolated as before. Run npm test, npm run check, npm run package and local research fixture for changed context/prompt. Use installed runtime and disposable/local provider only; no paid calls or existing sessions.
-- [ ] Bump to **0.1.17**, synchronize metadata/README/release notes, document semantics and draft migration, include controller roadmap update, self-review and commit on the current isolated branch. No push/merge/issue close.
-- [ ] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-5-report.md with exact APIs/migration, RED/GREEN/commands/results, commit and native manual limits. Return concise status.
+- [x] Focused RED/GREEN tests for every state and empty-text rule, conservative legacy import, malformed values, root exclusion, shared counts/review flags, state-only and no-op saves, descendants, native/Markdown/context round trips.
+- [x] Real HTTP/jsdom tests for choose/save, text-only draft insertion preserving choice, state-only reload, legacy draft recovery, stale state conflicts, click-time state capture/later edits, failure preservation and exported/context draft exclusion.
+- [x] Verify existing question generation/research remains attached/isolated as before. Run npm test, npm run check, npm run package and local research fixture for changed context/prompt. Use installed runtime and disposable/local provider only; no paid calls or existing sessions.
+- [x] Bump to **0.1.17**, synchronize metadata/README/release notes, document semantics and draft migration, include controller roadmap update, self-review and commit on the current isolated branch. No push/merge/issue close.
+- [x] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-5-report.md with exact APIs/migration, RED/GREEN/commands/results, commit and native manual limits. Return concise status.
 
 No nested agents or browser/desktop automation. Raise concrete conflicts to controller while continuing independent work. Controller reviews and publishes.
+
+Published task 5: **v0.1.17**, `3e84bbc`, 161 tests, check, package and installed local research fixture passed; review approved and remote main verified. Minor orphan-state label follow-up assigned to task 7.
+
+## Task 6: Collapse and expand branches (#5 / selection 6)
+
+Read .superpowers/sdd/2026-11-17-selected-roadmap/issue-6.md, AGENTS.md, docs/answer-states.md, and .superpowers/sdd/2026-11-17-selected-roadmap/task-5-report.md for final answer-state count APIs. BASE is 3e84bbc179c9fa8ca553407da203fe9fa7a45c47; ship **0.1.18**. This changes map visibility, never the exploration's saved content.
+
+### Behavior
+
+- Provide explicit branch collapse/expand controls. Distinguish them from closing the expanded node editor. A collapsed branch keeps its own node visible and hides all descendants/edges, with hidden-question and unresolved-descendant counts. Use task 5's shared effectiveAnswerState/questionCounts semantics (web/answer-state.mjs); do not count nonempty answers as automatically resolved.
+- Keep collapsed IDs stable during polling, answer/research changes and layout recalculation. Do not open or close unrelated branches as a side effect. A fresh journey starts with its own view state. View folding must not write document revisions or remove answers/research.
+- Build visibility and subtree counts through iterative traversal suitable for supported deep/wide 5,000-node maps. Compute each node's contribution once and aggregate postorder, avoiding repeated whole-subtree scans. A small shared resolved predicate is permitted if needed to keep counts consistent. Lay out only visible nodes and edges. Use one focused pure helper in the existing layout area or a small browser branch module; no graph dependency or broad rendering refactor.
+- If an ancestor of the selected node is collapsed, preserve the descendant's draft text, state selection (including stateSelected) and editor state, cancel dictation, and move visible selection/focus to the ancestor. Never leave the expanded editor floating for a hidden node. Navigation via outline to a hidden node expands only its ancestor path and reveals it.
+- Keep the complete outline available, with collapsed indicators and accessible branch controls, so hidden questions remain discoverable before the later full search feature. No content deletion or manual tree editing.
+- Keep controls usable by keyboard with clear labels and visible focus; avoid nested buttons inside node buttons. Preserve panning/selection guards, zoom and expanding-node geometry. Compact nodes communicate hidden counts using text, not color alone.
+- Existing drafts, source research, pending requests and native/Markdown exports must retain the full document irrespective of view folding. Completion under a folded branch updates its content without forcing visibility.
+
+### Work and verification
+
+Likely web/app.mjs, web/layout.mjs or a focused branch helper, web/style.css, relevant layout/web tests. Register any new asset in server/check/real-module DOM fixture.
+
+- [x] Write failing pure tests for deep/wide/nested folds, descendant/unresolved counts, visible edges, root folding and path reveal. Include maximum supported depth without recursive overflow.
+- [x] Real HTTP/jsdom regressions for fold/unfold, active descendant drafts/focus, pending research completion in a folded subtree, poll stability, outline reveal and no committed revision/data loss. Test selectors/labels reachable at narrow fixture geometry; don't claim native visual proof.
+- [x] Implement focused GREEN, run npm test, npm run check and npm run package. No SDK fixture needed unless host wiring is unexpectedly changed; no paid inference or existing user sessions.
+- [x] Bump to **0.1.18** and synchronize metadata/README/release notes, document controls, include controller roadmap update, self-review and commit. No merge/push/issue closure.
+- [x] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-6-report.md with visibility/helper contracts, RED/GREEN and commands/output, commit and manual checks; return concise status.
+
+No nested agents or browser/desktop automation. Controller reviews and publishes. Raise concrete conflicts while continuing independent work. Upcoming focus/minimap/semantic-zoom tasks should be able to reuse the visible-node contract.
 
 ## Issue index
 

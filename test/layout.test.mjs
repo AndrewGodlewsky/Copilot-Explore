@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { layout } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
+import { layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 
 const nodes = [
   { id: 'root', parentId: null }, { id: 'a', parentId: 'root' },
@@ -33,4 +33,36 @@ test('growing research preserves its question header and moves descendants down'
   assert.equal(after.get('a').y, before.get('a').y);
   assert.deepEqual(after.get('b'), before.get('b'));
   assert.equal(after.get('a1').y, before.get('a1').y + 300);
+});
+
+test('nested folds retain their own nodes and count all hidden unresolved descendants', () => {
+  const tree = [
+    { id: 'root', parentId: null, answer: '' },
+    { id: 'a', parentId: 'root', answer: '' },
+    { id: 'b', parentId: 'root', answer: '' },
+    { id: 'a1', parentId: 'a', answer: 'Provisional', answerState: 'tentative' },
+    { id: 'a2', parentId: 'a', answer: '', answerState: 'not-relevant' },
+    { id: 'a3', parentId: 'a1', answer: 'Chosen', answerState: 'decided', review: true },
+    { id: 'b1', parentId: 'b', answer: 'Chosen', answerState: 'decided' },
+  ];
+  const folded = branchView(tree, 'root', new Set(['a', 'a1']));
+  assert.deepEqual(folded.nodes.map(n => n.id), ['root', 'a', 'b', 'b1']);
+  assert.deepEqual(folded.edges.map(n => [n.parentId, n.id]), [['root', 'a'], ['root', 'b'], ['b', 'b1']]);
+  assert.deepEqual(folded.descendants.get('a'), { total: 3, unresolved: 2 });
+  assert.deepEqual(folded.descendants.get('a1'), { total: 1, unresolved: 1 });
+  assert.deepEqual(folded.descendants.get('root'), { total: 6, unresolved: 4 });
+  assert.deepEqual(branchView(tree, 'root', new Set(['root'])).nodes.map(n => n.id), ['root']);
+  assert.deepEqual(branchView(tree, 'root', new Set()).nodes.map(n => n.id), ['root', 'a', 'b', 'a1', 'a2', 'b1', 'a3']);
+  assert.deepEqual([...revealPath(tree, new Set(['root', 'a', 'a1', 'b']), 'a3')], ['b']);
+});
+
+test('wide and maximum-depth maps fold without recursion or repeated subtree scans', () => {
+  const deep = [{ id: 'root', parentId: null, answer: '' }];
+  for (let i = 1; i <= 4999; i++) deep.push({ id: `d${i}`, parentId: i === 1 ? 'root' : `d${i - 1}`, answer: '' });
+  const folded = branchView(deep, 'root', new Set(['d1']));
+  assert.deepEqual(folded.nodes.map(n => n.id), ['root', 'd1']);
+  assert.deepEqual(folded.descendants.get('d1'), { total: 4998, unresolved: 4998 });
+  assert.equal(revealPath(deep, new Set(['root', 'd1', 'd3000']), 'd4999').size, 0);
+  const wide = [{ id: 'root', parentId: null, answer: '' }, ...Array.from({ length: 4999 }, (_, i) => ({ id: `w${i}`, parentId: 'root', answer: '' }))];
+  assert.equal(branchView(wide, 'root', new Set(['root'])).descendants.get('root').total, 4999);
 });

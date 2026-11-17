@@ -1,6 +1,7 @@
 // Shared by the document model and editor. Missing v1 states stay sparse on disk.
 export const ANSWER_STATES = Object.freeze({ unanswered: 'Unanswered', decided: 'Decided', tentative: 'Tentative', assumption: 'Assumption', 'needs-evidence': 'Need evidence', 'not-relevant': 'Not relevant', 'revisit-later': 'Revisit later' });
 export const effectiveAnswerState = node => node.answerState ?? (node.answer?.trim() ? 'tentative' : 'unanswered');
+export const isResolvedQuestion = node => ['decided', 'not-relevant'].includes(effectiveAnswerState(node)) && !node.review;
 export function answerStateError(answer, state) {
   if (typeof state !== 'string' || !Object.hasOwn(ANSWER_STATES, state)) return 'Invalid answer state.';
   if (state === 'unanswered' && answer.trim()) return 'Clear the answer text explicitly before choosing Unanswered.';
@@ -13,7 +14,7 @@ export function questionCounts(doc) {
     if (node.id === doc.rootId) continue;
     const state = effectiveAnswerState(node); counts.total++;
     if (node.answer.trim()) counts.answered++;
-    if (['decided', 'not-relevant'].includes(state) && !node.review) counts.resolved++;
+    if (isResolvedQuestion(node)) counts.resolved++;
     if (state === 'revisit-later') counts.deferred++;
   }
   counts.unresolved = counts.total - counts.resolved;

@@ -40,6 +40,73 @@ async function startReviewedResearch(f) {
   f.document.getElementById('research-review-start').click();
 }
 
+test('option comparison preserves exact duplicate values, unknowns, subjective priorities and draft-only actions', async t => {
+  const r = structuredClone(findings);
+  r.options[0].details = [{ label: 'Cost', value: 'Lower <script>🌿</script>' }, { label: 'Cost', value: 'Setup extra' }, { label: 'Speed', value: 'Slower' }];
+  r.options[1].details = [{ label: 'Speed', value: 'Faster' }, { label: 'cost', value: 'Different label' }];
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = r; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  const summary = $('comparison-summary'); assert.ok(summary); summary.focus(); summary.click(); assert.equal($('option-comparison').open, true);
+  const table = $('comparison-table'); assert.equal(table.querySelectorAll('thead th[scope=col]').length, 3);
+  assert.equal(table.querySelectorAll('tbody th[scope=row]').length, 6, 'three built-ins and three exact labels');
+  assert.match(table.textContent, /Lower <script>🌿<\/script>/); assert.match(table.textContent, /Setup extra/); assert.equal(table.querySelector('script'), null);
+  assert.match(table.textContent, /Unknown/); assert.match(table.textContent, /Model judgment/); assert.match(table.textContent, /Cell source support unknown/);
+  assert.equal(table.querySelectorAll('a').length, 0, 'no invented evidence relation');
+  assert.equal(table.parentElement.tabIndex, 0); assert.equal(table.parentElement.getAttribute('role'), 'region');
+  const answer = $('answer'), question = $('followup-question'); f.type('answer', 'My words'); f.type('followup-question', 'Keep this question');
+  $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  const priority = $('comparison-priority-4'); priority.focus(); priority.value = 'high'; priority.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  const arrow = new f.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }); priority.dispatchEvent(arrow); assert.equal(arrow.defaultPrevented, false, 'native select keys are not intercepted by the canvas');
+  assert.match(table.querySelector('tbody th').textContent, /Speed.*High/); assert.equal(f.document.activeElement, priority);
+  assert.equal($('answer'), answer); assert.equal($('followup-question'), question); assert.equal(question.value, 'Keep this question');
+  $('comparison-detail-0-0').click(); assert.equal($('detail-0-0').checked, true);
+  $('comparison-detail-0-0').focus(); const space = new f.window.KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }); $('comparison-detail-0-0').dispatchEvent(space); assert.equal(space.defaultPrevented, false, 'native checkbox keys remain available');
+  $('comparison-add-details').click(); assert.equal(answer.value, 'My words\n\nCost: Lower <script>🌿</script>');
+  assert.equal($('answer-state').value, 'assumption'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  $('undo-addition').click(); assert.equal(answer.value, 'My words');
+  $('detail-0-1').click(); assert.equal($('comparison-detail-0-1').checked, true);
+  $('comparison-criterion-4').click(); assert.equal(table.querySelectorAll('tbody th').length, 5);
+  priority.focus(); await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Unrelated' }); await f.poll();
+  assert.equal($('comparison-priority-4'), priority); assert.equal(f.document.activeElement, priority); assert.equal(priority.value, 'high');
+  assert.equal($('comparison-criterion-4').checked, false); assert.equal($('detail-0-1').checked, true);
+  f.open(f.explorer.doc.nodes[2].id); f.open(node.id); assert.equal($('comparison-priority-4').value, 'high'); assert.equal($('option-comparison').open, true);
+  assert.equal($('comparison-criterion-4').checked, false); assert.equal($('comparison-detail-0-1').checked, true);
+  assert.equal(f.explorer.pending, null); assert.equal(f.actions.filter(a => ['research', 'research-follow-up'].includes(a.action)).length, 0);
+});
+
+test('option comparison bounds all 35 criteria, renders complete values and rejects malformed replacement', async t => {
+  const r = structuredClone(findings);
+  r.options = Array.from({ length: 4 }, (_, i) => ({ ...r.options[0], title: `Option ${i}`, details: Array.from({ length: 8 }, (_, j) => ({ label: `${i}-${j}<img>中文`.padEnd(80, 'x'), value: `${i}-${j}🌿<script>`.padEnd(1000, '文') })) }));
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = r; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  f.open(f.explorer.doc.nodes[1].id); const $ = id => f.document.getElementById(id), table = $('comparison-table');
+  assert.equal(table.querySelectorAll('thead th').length, 5); assert.equal(table.querySelectorAll('tbody tr').length, 35);
+  assert.equal(table.querySelectorAll('input').length, 32); assert.equal(table.querySelector('img,script'), null);
+  assert.equal($('comparison-detail-3-7').nextSibling.textContent, r.options[3].details[7].value);
+  for (const checkbox of f.document.querySelectorAll('.comparison-controls input')) checkbox.click();
+  assert.match(table.textContent, /Select at least one criterion/); $('comparison-criterion-34').click();
+  const invalid = structuredClone(f.explorer.doc); invalid.nodes[1].research.options[0].details.push({ label: 'ninth', value: 'invalid' });
+  await assert.rejects(f.explorer.command('import', { revision: f.explorer.doc.revision, document: invalid }), /detail/i);
+  await f.poll(); assert.equal($('comparison-table'), table); assert.equal(table.querySelectorAll('tbody th').length, 1);
+  assert.equal(f.explorer.doc.nodes[1].research.options[0].details.length, 8);
+});
+
+test('option comparison resets on observed research replacement even off-node and on panel reload', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = findings; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const node = f.explorer.doc.nodes[1], $ = id => f.document.getElementById(id); f.open(node.id);
+  const priority = $('comparison-priority-0'); assert.ok(priority); priority.value = 'high'; priority.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  const original = structuredClone(f.explorer.doc); f.open(f.explorer.doc.nodes[2].id);
+  const changed = structuredClone(original); changed.nodes[1].research.sources = [{ title: 'New source', url: 'https://example.com/new' }];
+  await f.explorer.command('import', { revision: f.explorer.doc.revision, document: changed }); await f.poll();
+  await f.explorer.command('import', { revision: f.explorer.doc.revision, document: original }); await f.poll();
+  f.open(node.id); assert.equal($('comparison-priority-0').value, 'normal');
+  $('comparison-priority-0').value = 'low'; $('comparison-priority-0').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  const reloaded = await fixture(t, 340, undefined, false, { explorer: f.explorer }); reloaded.open(node.id);
+  assert.equal(reloaded.document.getElementById('comparison-priority-0').value, 'normal');
+  assert.equal(reloaded.document.getElementById('comparison-table').querySelectorAll('tbody tr').length, 3, 'no-details legacy research still compares judgments');
+  const css = await readFile(new URL('../com.github.copilot/extensions/explorer/web/style.css', import.meta.url), 'utf8');
+  assert.match(css, /\.comparison-scroll\s*\{[^}]*overflow-x:\s*auto/);
+});
+
 test('research follow-up keeps typing and focus during polling, renders prior evidence and retains node-scoped history on navigation', async t => {
   let finish;
   const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = findings; await e.command('import', { revision: e.doc.revision, document: doc }); }, runFollowup: () => new Promise(resolve => { finish = resolve; }) });
@@ -57,6 +124,8 @@ test('research follow-up keeps typing and focus during polling, renders prior ev
   assert.equal(f.document.getElementById('followup-question'), question); assert.equal(question.value, 'Next question 🌿'); assert.equal(f.document.activeElement, question); assert.equal(question.selectionStart, 2);
   assert.equal(f.document.getElementById('answer'), answer); assert.equal(answer.value, 'Uncommitted answer'); assert.equal(f.explorer.doc.nodes[1].answer, '');
   const history = f.document.getElementById('followup-history'); assert.equal(history.querySelector('script'), null); assert.match(history.textContent, /Prior evidence/); assert.match(history.textContent, /2020-01-01/);
+  const historyResult = history.firstChild, priority = f.document.getElementById('comparison-priority-0'); priority.value = 'high'; priority.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  assert.equal(history.firstChild, historyResult); assert.equal(f.document.getElementById('followup-question'), question); assert.equal(f.document.getElementById('answer'), answer);
   const link = history.querySelector('a'); assert.equal(link.href, 'https://example.com/prior'); assert.equal(link.rel, 'noopener noreferrer');
   f.open(f.explorer.doc.nodes[2].id); f.open(node.id); assert.match(f.document.getElementById('followup-history').textContent, /Consider a pilot/); assert.equal(f.document.getElementById('followup-question').value, 'Next question 🌿');
 });
@@ -93,6 +162,7 @@ test('claim evidence disclosure shows literal support, source navigation and imp
   const summary = disclosure.querySelector('summary'); summary.focus(); assert.equal(f.document.activeElement, summary); summary.click(); assert.equal(disclosure.open, true);
   assert.match(disclosure.textContent, /Source paraphrase/); assert.match(disclosure.textContent, /Imported read metadata; not observed by this installation/); assert.match(disclosure.textContent, /2026-11-17T12:00:00.000Z/);
   const link = disclosure.querySelector('a'); assert.equal(link.href, 'https://example.com/source?q=1'); assert.equal(link.target, '_blank'); assert.equal(link.rel, 'noopener noreferrer'); assert.equal(link.querySelector('img'), null);
+  assert.equal(f.document.getElementById('comparison-table').querySelector('a'), null); assert.match(f.document.getElementById('comparison-table').textContent, /Cell source support unknown/);
   assert.match(f.document.getElementById('claim-c2').textContent, /Model reasoning/); assert.match(f.document.getElementById('claim-c3').textContent, /Unknown support/);
   assert.match(f.document.querySelector('.research').textContent, /Selected model assertions/);
   const savedAnswer = f.explorer.doc.nodes[1].answer; f.document.getElementById('use-recommendation').click();

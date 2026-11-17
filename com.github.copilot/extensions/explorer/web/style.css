@@ -117,3 +117,11 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .research-followup { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; font-size: 13px; overflow-wrap: anywhere; }
 .research-followup input[type="checkbox"] { width: auto; margin: 12px 6px 12px 0; cursor: pointer; }
 .research-followup textarea { max-height: 240px; }
+.option-comparison { border-block: 1px solid var(--line); padding-block: 14px; margin-block: 14px; }
+.comparison-controls { min-width: 0; margin-block: 12px; border: 1px solid var(--line); }
+.comparison-controls > div { margin-block: 12px; }
+.comparison-controls select { max-width: 100%; }
+.comparison-scroll { overflow-x: auto; max-width: 100%; overscroll-behavior-x: contain; }
+.comparison-scroll table { border-collapse: collapse; width: 100%; table-layout: fixed; min-width: 36rem; }
+.comparison-scroll th, .comparison-scroll td { border: 1px solid var(--line); padding: 10px; vertical-align: top; text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }
+.comparison-scroll caption { text-align: left; font-weight: 600; margin-block: 8px; }

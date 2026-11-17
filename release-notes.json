@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.45",
+    "summary": "Compare saved research options in an accessible matrix. Choose criteria and personal Low, Normal or High priorities, inspect exact duplicate values and unknown cells without invented scores or citation support, and add selected details to an editable draft with undo. Comparison choices stay local to the panel; saved answers still require an explicit save."
+  },
+  {
     "version": "0.1.44",
     "summary": "Ask scoped follow-ups about a research recommendation or hypothetical assumption. Review exact bounded context, keep original research and saved answers unchanged, and inspect prior versus newly read evidence. Retain a small canvas-local history with explicit omissions, freshness checks, cancellation and separately attributed usage receipts."
   },

@@ -139,6 +139,11 @@ function apply(next, reset = false) {
     acceptedIds.clear(); acceptedParentId = null;
   }
   signature = stamp; state = next;
+  for (const [id, ui] of nodeUi) {
+    if (ui.comparison && ui.researchKey !== JSON.stringify(state.document?.nodes.find(node => node.id === id)?.research)) {
+      ui.comparison = null; ui.researchKey = null; ui.selectedDetails = new Set();
+    }
+  }
   if (changedDocument) switchReferences();
   if (state.preview?.id !== previewEdits?.id) previewEdits = state.preview ? { id: state.preview.id, questions: state.preview.questions.map(q => ({ question: q.question, selected: true, rationaleOpen: false })) } : null;
   if (next.acceptedIds) {
@@ -1009,9 +1014,59 @@ function updateFollowupHistory(node) {
   area.replaceChildren(...rows);
 }
 
+function renderComparison(r, ui, selectDetail, addSelected) {
+  const criteria = [{ label: 'Description', field: 'description' }, { label: 'Pros', field: 'pros' }, { label: 'Cons', field: 'cons' }];
+  const labels = new Set(r.options.flatMap(option => (option.details ?? []).map(detail => detail.label)));
+  for (const label of labels) criteria.push({ label });
+  ui.comparison ??= { open: false, selected: criteria.map(() => true), priorities: criteria.map(() => 'normal') };
+  const preferences = ui.comparison;
+  const comparison = el('details', { id: 'option-comparison', class: 'option-comparison' }, el('summary', { id: 'comparison-summary' }, 'Compare options'));
+  comparison.open = preferences.open;
+  comparison.addEventListener('toggle', () => { if (comparison.isConnected) { preferences.open = comparison.open; scheduleLayout(); } });
+  comparison.append(el('p', { class: 'quiet' }, 'Compare saved model judgments. Cell source support is unknown: the separate Claims and evidence section does not establish support for these values. Unknown means no saved value, not a zero score.'),
+    el('p', { class: 'quiet' }, 'Choose criteria and your priorities. High rows appear first, then Normal, then Low. Priorities express your preferences, not evidence quality. Tradeoffs remain yours to judge; no score or winner is calculated. The saved recommendation stays unchanged.'),
+    el('p', { class: 'quiet' }, 'These choices and selected details stay in this panel through node navigation. Changing journeys, reloading, or replacing saved research or sources resets them. Exact detail labels are matched; duplicate values are kept separately. Hiding a criterion does not clear selected details.'));
+  const controls = el('fieldset', { class: 'comparison-controls' }, el('legend', {}, 'Criteria and personal priorities'));
+  const body = el('tbody'), table = el('table', { id: 'comparison-table' }, el('caption', {}, 'Saved option comparison'),
+    el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, 'Criterion / your priority'), r.options.map(option => el('th', { scope: 'col' }, option.title)))), body);
+  const priorities = { high: 'High', normal: 'Normal', low: 'Low' };
+  const renderRows = () => {
+    const rows = criteria.map((criterion, index) => ({ ...criterion, index })).filter(criterion => preferences.selected[criterion.index]);
+    rows.sort((a, b) => Object.keys(priorities).indexOf(preferences.priorities[a.index]) - Object.keys(priorities).indexOf(preferences.priorities[b.index]));
+    body.replaceChildren(...rows.map(criterion => el('tr', {}, el('th', { scope: 'row' }, `${criterion.label}${criterion.field ? ' (model judgment)' : ' (detail)'} · ${priorities[preferences.priorities[criterion.index]]}`), r.options.map((option, optionIndex) => {
+      const cell = el('td');
+      const values = criterion.field ? (Array.isArray(option[criterion.field]) ? option[criterion.field] : [option[criterion.field]]).filter(Boolean) : (option.details ?? []).map((detail, index) => ({ ...detail, index })).filter(detail => detail.label === criterion.label);
+      if (!values.length) return el('td', {}, 'Unknown — no saved value.');
+      cell.append(el('p', { class: 'quiet' }, 'Model judgment · Cell source support unknown'));
+      for (const value of values) {
+        if (criterion.field) cell.append(el('p', {}, value));
+        else {
+          const detailId = `detail-${optionIndex}-${value.index}`, id = `comparison-${detailId}`, checkbox = el('input', { type: 'checkbox', id, 'aria-label': `Select ${criterion.label} from ${option.title}: ${value.value}` });
+          checkbox.checked = ui.selectedDetails.has(detailId);
+          checkbox.addEventListener('change', () => { if (checkbox.isConnected) selectDetail(detailId, checkbox.checked); });
+          cell.append(el('label', { class: 'research-detail', for: id }, checkbox, el('span', {}, value.value)));
+        }
+      }
+      return cell;
+    }))));
+    if (!rows.length) body.append(el('tr', {}, el('td', { colspan: String(r.options.length + 1) }, 'Select at least one criterion to compare.')));
+    scheduleLayout();
+  };
+  criteria.forEach((criterion, index) => {
+    const id = `comparison-criterion-${index}`, checkbox = el('input', { type: 'checkbox', id }); checkbox.checked = preferences.selected[index];
+    checkbox.addEventListener('change', () => { if (checkbox.isConnected) { preferences.selected[index] = checkbox.checked; renderRows(); } });
+    const priorityId = `comparison-priority-${index}`, priority = el('select', { id: priorityId }, Object.entries(priorities).map(([value, label]) => el('option', { value }, label))); priority.value = preferences.priorities[index];
+    priority.addEventListener('change', () => { if (priority.isConnected && Object.hasOwn(priorities, priority.value)) { preferences.priorities[index] = priority.value; renderRows(); } });
+    controls.append(el('div', {}, el('label', { class: 'research-detail', for: id }, checkbox, `${criterion.label}${criterion.field ? ' (model judgment)' : ' (detail)'}`), el('label', { for: priorityId }, `Your priority: ${criterion.label}`), priority));
+  });
+  comparison.append(controls, el('div', { class: 'comparison-scroll', role: 'region', tabindex: '0', 'aria-label': 'Option comparison, scroll horizontally to read all options' }, table));
+  if (labels.size) comparison.append(button('Add selected details to draft', addSelected, { id: 'comparison-add-details', disabled: !ui.selectedDetails.size }));
+  renderRows(); return comparison;
+}
+
 function renderResearch(node) {
   const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r);
-  if (ui.researchKey !== key) { ui.researchKey = key; ui.selectedDetails = new Set(); }
+  if (ui.researchKey !== key) { ui.researchKey = key; ui.selectedDetails = new Set(); ui.comparison = null; }
   const add = suggestion => {
     const live = state.document?.nodes.find(n => n.id === node.id);
     if (!live || selected !== node.id || !expanded || libraryView || JSON.stringify(live.research) !== key) return;
@@ -1042,21 +1097,28 @@ function renderResearch(node) {
     }
   } else section.append(el('p', { class: 'quiet' }, 'Claim-level support and historical retrieval times unknown for this legacy result.'));
   section.append(el('div', { class: 'recommendation' }, el('h3', {}, 'Recommendation'), el('p', {}, r.recommendation), button('Use recommendation', () => add(r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation' })));
-  const details = [];
+  const details = r.options.flatMap((option, index) => (option.details ?? []).map((detail, i) => ({ id: `detail-${index}-${i}`, ...detail })));
+  const selectDetail = (id, checked) => {
+    checked ? ui.selectedDetails.add(id) : ui.selectedDetails.delete(id);
+    for (const control of [$(id), $(`comparison-${id}`)]) if (control) control.checked = checked;
+    for (const control of [$('add-details'), $('comparison-add-details')]) if (control) control.disabled = !ui.selectedDetails.size;
+  };
+  const addSelected = () => {
+    const selected = details.filter(detail => ui.selectedDetails.has(detail.id));
+    if (selected.length) add(selected.map(detail => `${detail.label}: ${detail.value}`).join('\n'));
+  };
+  section.append(renderComparison(r, ui, selectDetail, addSelected));
   for (const [index, o] of r.options.entries()) {
     const option = el('section', { class: 'option' }, el('h3', {}, o.title), el('p', {}, o.description), el('strong', { class: 'pro' }, 'Pros'), el('ul', {}, o.pros.map(v => el('li', {}, v))), el('strong', { class: 'con' }, 'Cons'), el('ul', {}, o.cons.map(v => el('li', {}, v))), button('Use this option', () => add(o.proposedAnswer ?? `${o.title}: ${o.description}`), { id: `add-option-${index}` }));
     for (const [i, detail] of (o.details ?? []).entries()) {
       const id = `detail-${index}-${i}`, checkbox = el('input', { type: 'checkbox', id });
-      checkbox.checked = ui.selectedDetails.has(id); details.push({ id, ...detail });
-      checkbox.addEventListener('change', () => { if (!checkbox.isConnected) return; checkbox.checked ? ui.selectedDetails.add(id) : ui.selectedDetails.delete(id); $('add-details').disabled = !ui.selectedDetails.size; });
+      checkbox.checked = ui.selectedDetails.has(id);
+      checkbox.addEventListener('change', () => { if (checkbox.isConnected) selectDetail(id, checkbox.checked); });
       option.append(el('label', { class: 'research-detail', for: id }, checkbox, el('span', {}, el('strong', {}, detail.label), ': ', detail.value)));
     }
     section.append(option);
   }
-  if (details.length) section.append(button('Add selected details', () => {
-    const selected = details.filter(d => ui.selectedDetails.has(d.id));
-    if (selected.length) add(selected.map(d => `${d.label}: ${d.value}`).join('\n'));
-  }, { id: 'add-details', disabled: !ui.selectedDetails.size }));
+  if (details.length) section.append(button('Add selected details', addSelected, { id: 'add-details', disabled: !ui.selectedDetails.size }));
   section.append(el('h3', {}, 'What is still uncertain'), el('p', {}, r.uncertainty));
   if (r.sources.length) section.append(el('div', { class: 'sources' }, el('h3', {}, 'Consulted sources'), el('p', { class: 'quiet' }, 'Reading a page does not establish claim support.'), r.sources.map((s, index) => el('div', { id: `source-${index}` }, sourceLink(s), el('p', { class: 'quiet' }, retrieval(s))))));
   return section;

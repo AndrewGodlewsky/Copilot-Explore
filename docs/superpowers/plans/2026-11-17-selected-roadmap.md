@@ -992,6 +992,39 @@ Read issue-35.md, task-32-design-notes.md, AGENTS.md and the final task29–31 c
 - Run npm test/check/package and applicable installed fixtures; synchronize confirmed version metadata/release notes/README, include controller plan changes, self-review and commit. No nested agents, merge/push or issue closure.
 - Write task-32-report.md with final bounds, state/ownership/provenance contracts, exact evidence and commit, plus manual native-UI and live-model limitations. Controller independently reviews and publishes.
 
+Published task 32: **v0.1.44**, `7066f34`, required checks and scoped follow-up evidence retained; independent review approved and remote main verified.
+
+## Task 33: Compare researched options (#28 / original36)
+
+Read issue-36.md, task-33-design-notes.md, AGENTS.md and the published claim-evidence/context/research reports. BASE is `7066f3409b24e145aecf6ad8b8064d1b66676b72`; ship version **0.1.45**. Reconcile final task31 claim/source evidence and task32 follow-up state with the actual saved options. Preserve bounded reviewed SDK execution if needed, user drafts and explicit commitment. Define concrete criteria/preference bounds and actual-vs-unknown cell semantics before implementation.
+
+### Behavior
+
+- Offer an optional accessible comparison matrix for the actual options in the selected saved research. Let the user select useful criteria and optionally express the relative importance of those criteria. This is a focused decision aid, not a general spreadsheet or manual map editor.
+- Use actual option details and evidence where available; missing cells are Unknown. Distinguish cited information, model judgments, unknowns and user preferences in the cell or its immediately available details. Do not turn absent facts into zero scores or infer a precise numeric utility from qualitative prose.
+- User weights express personal priorities, not evidence quality or confidence. Explain their effect. Qualitative priorities are sufficient; avoid fabricated decimal rankings. Conflicting criteria should expose a tradeoff rather than invent one universally best option.
+- Preserve current research/source provenance. If additional comparison reasoning is necessary, make it an explicit isolated SDK request with the existing actual prepared-context preview, bounds, permissions/release/cancellation and receipts. Do not trigger inference on every checkbox/weight change, run in main chat, or silently refetch/rewrite the original research.
+- Tie comparison state to journey/node and the exact research/content it uses. Relevant research/source replacement invalidates current comparison output; unrelated metadata updates must preserve criteria, weights, selections and focus. Label whether criteria/preferences are transient and what navigation/reload retains. Avoid a new persistent comparison database.
+- Provide existing explicit actions to use the recommendation, a chosen option or selected values as an editable answer draft. Preserve original user text and selected answer state under existing draft insertion/undo rules. Never commit a decision or save an answer automatically.
+- Keep the matrix usable in a narrow pane: semantic row/column headers, keyboard-reachable controls, full text/evidence available, and a contained horizontal-scroll or stacked alternative that does not make the whole canvas unmanageable. No new chart/table runtime dependency.
+
+### Verification and completion
+
+- Test missing evidence, uneven options, unknown cells, contradictory criteria, weight changes, actual source links, malformed/hostile text and relevant/unrelated updates. Exercise actual HTTP/jsdom keyboard/focus/selection/apply/undo behavior and draft preservation, including stale or cancelled helper output if a helper is added.
+- Verify table semantics and narrow-layout structure locally without claiming jsdom proves native visual layout. No paid provider, existing user session, microphone or browser/desktop automation. Run installed SDK fixtures if integration changes.
+- Run npm test/check/package, synchronize confirmed patch metadata/release notes/README, include controller plan changes, self-review and commit. No nested agents, merge/push or issue closure.
+- Write task-33-report.md with the data/preference ownership contract, exact bounds and evidence, commit, and native-layout/live-model limitations. Controller independently reviews and publishes.
+
+### Accepted comparison contract
+
+The browser-only comparison uses existing per-journey/per-node UI state and exact full saved-research JSON identity. Only retained comparison nodes are reconciled on observed snapshots; research/source replacement or removal resets preferences and selected details even off-node, while unrelated document metadata and follow-up changes preserve controls, focus and selections. Node navigation retains choices; journey switches, panel reload and canvas restart discard them. No persistence, helper request, refetch or new SDK operation is added.
+
+Compare the 2–4 validated saved options using three built-in criteria (Description, Pros, Cons) plus at most 32 distinct exact, case-sensitive saved detail labels: at most 35 selectable criteria, 140 option cells, 32 individually selectable detail records. All criteria start selected at Normal priority. Labels are not normalized or semantically merged by comparison, and built-in criteria have separate indexed identity from identically named detail labels. Repeated labels within an option retain every value in original order and use existing option/detail position IDs. Existing bounds remain title150, description3000, pros/cons6x1000 each, details8x{label80,value1000}, proposedAnswer5000; actual validated research/document envelopes remain authoritative.
+
+Low/Normal/High are the only personal priorities; High rows sort first, then Normal, then Low, with saved criterion order breaking ties. They change row order only, not evidence confidence, original recommendation, numerical utility or a winning option. Each populated cell says Model judgment / Cell source support unknown because saved option fields have no validated claim relations. Missing detail values or empty lists say Unknown, never zero. Existing source-linked claims, limitations, read provenance and safe links remain separate and unchanged; no string matching transfers evidence.
+
+Matrix and original option cards share exact selected detail IDs and the existing explicit append-to-draft/undo path, its 20,000-character limit, newer-typing guard and unchanged answer state. Hiding criteria retains selected details, disclosed in the UI. Existing Use recommendation and Use this option remain available. Native semantic table headers, a labeled keyboard-focusable contained horizontal scroll region and native controls provide access without replacing answer/follow-up editors. No visual/native layout proof is claimed from jsdom.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

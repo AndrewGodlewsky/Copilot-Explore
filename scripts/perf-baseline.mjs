@@ -27,15 +27,16 @@ const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', w
 const errorInfo = error => ({ name: error?.name ?? 'Error', message: String(error?.message ?? error).slice(0, 400), phaseStack: String(error?.stack ?? '').split('\n').slice(0, 4).join('\n') });
 const summarize = values => { const sorted = [...values].sort((a, b) => a - b); return { medianMs: (sorted[0] + sorted[sorted.length - 1]) / 2, minMs: sorted[0], maxMs: sorted.at(-1) }; };
 
-async function measure(phases, name, operation, work, { count = samples, warmup = warmups, setup, dispose } = {}) {
+export async function measure(phases, name, operation, work, { count = samples, warmup = warmups, setup, dispose, report, now = () => performance.now() } = {}) {
   const values = [];
   try {
     for (let i = 0; i < warmup + count; i++) {
       const resource = await setup?.(i);
       try {
-        const started = performance.now();
-        const operations = await work(i, resource);
-        const elapsed = performance.now() - started;
+        const started = now();
+        const value = await work(i, resource);
+        const elapsed = now() - started;
+        const operations = report ? await report(value, resource) : value;
         if (i >= warmup) values.push(elapsed);
         if (i === warmup) phases[name] = { status: 'ok', operation, operations, warmups: warmup, samples: count };
       } finally { await dispose?.(resource); }
@@ -101,23 +102,29 @@ async function benchmark(spec) {
   await measure(phases, 'layout', 'layout full', () => { const positions = layout(document.nodes, document.rootId); return { positionedNodes: positions.size }; });
   const tempResource = async () => ({ dir: await mkdtemp(join(tmpdir(), 'explorer-perf-')) });
   const disposeTemp = async resource => { await rm(resource.dir, { recursive: true, force: true }); };
-  await measure(phases, 'atomicWrite', 'atomicWrite saved native document', async (_, resource) => {
-    await atomicWrite(join(resource.dir, 'map.explore.json'), JSON.stringify(document, null, 2));
-    return { bytes: definition.bytes, files: 1 };
-  }, { setup: tempResource, dispose: disposeTemp });
-  await measure(phases, 'controllerHistoryWrite', 'Explorer.save with history and atomic replacement', async (_, resource) => {
-    const next = structuredClone(resource.explorer.doc);
-    next.objective = 'Choose a bounded pilot with accountable owners.';
-    if (!await resource.explorer.save(next, 'Synthetic benchmark update')) throw new Error('The controller did not commit the measured update.');
-    return { writes: 1, historyCommits: 1, bytes: Buffer.byteLength(JSON.stringify(resource.explorer.doc, null, 2)) };
-  }, { setup: async () => {
+  await measure(phases, 'atomicWrite', 'atomicWrite saved native document', async (_, resource) =>
+    atomicWrite(resource.file, resource.payload),
+  { setup: async () => {
+    const resource = await tempResource();
+    try { return { ...resource, file: join(resource.dir, 'map.explore.json'), payload: JSON.stringify(document, null, 2) }; }
+    catch (error) { await disposeTemp(resource); throw error; }
+  },
+    report: (_, resource) => ({ bytes: Buffer.byteLength(resource.payload), files: 1 }), dispose: disposeTemp });
+  await measure(phases, 'controllerHistoryWrite', 'Explorer.save with history and atomic replacement', async (_, resource) =>
+    resource.explorer.save(resource.next, 'Synthetic benchmark update'),
+  { setup: async () => {
     const resource = await tempResource();
     try {
       const file = join(resource.dir, 'map.explore.json');
       await atomicWrite(file, JSON.stringify(document, null, 2));
       resource.explorer = await new Explorer({ file, send: async () => {}, target: { instanceId: 'perf' } }).load();
+      resource.next = structuredClone(resource.explorer.doc);
+      resource.next.objective = 'Choose a bounded pilot with accountable owners.';
       return resource;
     } catch (error) { await disposeTemp(resource); throw error; }
+  }, report: (committed, resource) => {
+    if (!committed) throw new Error('The controller did not commit the measured update.');
+    return { writes: 1, historyCommits: 1, bytes: Buffer.byteLength(JSON.stringify(resource.explorer.doc, null, 2)) };
   }, dispose: async resource => { await resource.explorer.close(); await disposeTemp(resource); } });
   const closeDom = resource => { resource.close(); global.gc?.(); };
   const researchDom = async () => { const resource = await domFixture(document); try { resource.window.__perf.select(document.nodes.find(node => node.research).id); return resource; } catch (error) { closeDom(resource); throw error; } };
@@ -142,23 +149,25 @@ async function benchmark(spec) {
 
 export function validResult(result) {
   return result?.schema === 1 && result.config?.warmups === warmups && result.config?.samples === samples &&
-    Array.isArray(result.cases) && result.cases.every(item => item.fixture?.fingerprint && Object.values(item.phases).every(phase =>
-      phase.status === 'failed' ? !!phase.error?.message : phase.status === 'ok' && phase.sampleMs.length === samples && phase.minMs <= phase.medianMs && phase.medianMs <= phase.maxMs));
+    Array.isArray(result.cases) && result.cases.every(item =>
+      (item.fixture?.name && item.phases?.fixture?.status === 'failed' && !!item.phases.fixture.error?.message) ||
+      (item.fixture?.fingerprint && Object.values(item.phases).every(phase =>
+        phase.status === 'failed' ? !!phase.error?.message : phase.status === 'ok' && phase.sampleMs.length === samples && phase.minMs <= phase.medianMs && phase.medianMs <= phase.maxMs)));
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await mkdir(output, { recursive: true });
+export async function runBaseline({ specs = fixtureSpecs, runCase = benchmark, outputDirectory = output, log = console.log } = {}) {
+  await mkdir(outputDirectory, { recursive: true });
   const version = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8')).version;
   const result = { schema: 1, version, commit: git('rev-parse', 'HEAD'), dirty: !!git('status', '--porcelain'),
     environment: { node: process.version, platform: platform(), release: release(), arch: arch(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, totalMemoryBytes: totalmem(), execArgv: process.execArgv },
     config: { warmups, samples, fixtureGenerator: 'scripts/perf-fixtures.mjs', measurement: 'performance.now(); sequential, no parallel cases' }, cases: [] };
-  for (const spec of fixtureSpecs) {
-    try { result.cases.push(await benchmark(spec)); }
-    catch (error) { result.cases.push({ fixture: { name: spec.name }, phases: { fixture: { status: 'failed', error: errorInfo(error) } } }); }
-    console.log(`${spec.name}: ${Object.entries(result.cases.at(-1).phases).filter(([, phase]) => phase.status === 'failed').map(([name]) => name).join(', ') || 'measured'}`);
+  for (const spec of specs) {
+    try { result.cases.push(await runCase(spec)); }
+    catch (error) { result.cases.push({ fixture: { name: String(spec?.name ?? 'unknown').slice(0, 80) }, phases: { fixture: { status: 'failed', error: errorInfo(error) } } }); }
+    log(`${spec.name}: ${Object.entries(result.cases.at(-1).phases).filter(([, phase]) => phase.status === 'failed').map(([name]) => name).join(', ') || 'measured'}`);
   }
   if (!validResult(result)) throw new Error('Benchmark result schema is invalid.');
-  const json = join(output, 'baseline.json'), markdown = join(output, 'baseline.md');
+  const json = join(outputDirectory, 'baseline.json'), markdown = join(outputDirectory, 'baseline.md');
   await writeFile(json, JSON.stringify(result, null, 2) + '\n');
   const lines = [`# Explorer ${version} synthetic baseline`, '', `Commit: ${result.commit}; dirty: ${result.dirty}.`,
     `Node ${result.environment.node}; ${result.environment.platform} ${result.environment.release}; ${result.environment.cpu}.`,
@@ -170,6 +179,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   lines.push('', 'jsdom measures JavaScript and DOM mutations only. It does not measure native paint, frame rate, pointer latency, IME, or desktop embedding.',
     'Targets are informational: watch for repeatable changes above 2× the same phase and fixture on the same machine. Compare only when fixture fingerprints and procedures match.');
   await writeFile(markdown, lines.join('\n') + '\n');
-  console.log(`Results: ${json}\nSummary: ${markdown}`);
-  if (result.cases.some(item => Object.values(item.phases).some(phase => phase.status === 'failed'))) process.exitCode = 1;
+  log(`Results: ${json}\nSummary: ${markdown}`);
+  return { result, json, markdown, exitCode: result.cases.some(item => Object.values(item.phases).some(phase => phase.status === 'failed')) ? 1 : 0 };
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = (await runBaseline()).exitCode;
 }

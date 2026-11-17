@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.8",
+    "summary": "Documented using Copilot's existing voice shortcut to dictate directly into an Explorer answer, confirmed in the installed desktop app. Recorded SDK research and current API limits. No new speech engine, shortcut, or recording behavior."
+  },
+  {
     "version": "0.1.7",
     "summary": "Integrated expanding nodes into the installed canvas, replacing the question sidebar. Answer, research, cancellation and follow-up controls now live inside the selected map node. Branches make room for the workspace, drafts survive async updates, and collapsed nodes preview saved answers."
   },

@@ -1,6 +1,6 @@
 # Explorer for GitHub Copilot
 
-**Proof of concept, v0.1.7.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
+**Proof of concept, v0.1.8.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
 
 ## Install from GitHub
 
@@ -74,6 +74,10 @@ Pan by dragging the map background. Use the zoom controls or Ctrl+wheel. **Colla
 
 AI work is queued in the canvas's attached Copilot chat and uses that session's model, tools, permissions, and normal usage accounting. It can appear in chat and wait behind other work. Web research depends on browsing tools being available there. Research never saves an answer for you. Cancel discards the pending result; it does not stop the host's chat turn. A three-minute timeout releases a stalled request and preserves saved answers.
 
+**Voice dictation:** Configure **Voice dictation** in Copilot's settings, including its local transcription model, microphone access, and your preferred shortcut. Click inside Explorer's **Your answer** box, then use that same shortcut to dictate. Review the text and choose **Save answer** or **Save & explore deeper** when ready. Copilot manages recording and the model; Explorer receives the text as an editable draft.
+
+The owner confirmed direct dictation into Explorer on the installed desktop app with Explorer v0.1.7. No Explorer update or second voice setup was needed. The inspected canvas SDK does not expose model-download status or the user's voice shortcut, so Explorer does not automatically report voice availability. See the [voice integration findings](docs/voice-integration-research.md) for evidence and scope.
+
 ## Files and privacy
 
 Each canvas autosaves a versioned JSON document under `~/.copilot/plugin-data/explorer/` (`COPILOT_HOME` is respected). `EXPLORER_DATA_DIR` can override this for testing. Finish also saves a Markdown sibling there. Export names use an exploration identifier; every node's ID and parent relationship are preserved in the resumable file.
@@ -105,7 +109,7 @@ For the real SDK/runtime smoke test, set `COPILOT_SDK_DIR` to the installed SDK 
 
 Manual acceptance in Copilot:
 
-- Update to v0.1.7, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.7**.
+- Update to v0.1.8, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.8**.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
 - Answer a question and confirm relevant deeper questions appear.
 - Research another question; inspect the options, source links and uncertainty.

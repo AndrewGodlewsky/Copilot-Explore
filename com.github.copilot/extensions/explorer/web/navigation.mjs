@@ -39,11 +39,7 @@ export function attachNavigation({ document, window, fetch, zoom, pan }) {
         if (!preserveFields && currentEdit === editVersion) fields(settings);
       }
     } catch (cause) { if (currentLoad !== loadVersion) return false; loadError = cause.message; }
-    if (previous) {
-      $('navigation-wheel').value = previous.wheelMode;
-      $('navigation-sensitivity').value = previous.sensitivity;
-      $('navigation-motion').value = previous.motion;
-    }
+    if (previous && currentEdit === editVersion) fields(previous);
     error(loadError);
     $('navigation-save').disabled = !!loadError || saving;
     $('navigation-refresh').hidden = !loadError && !preserveFields;

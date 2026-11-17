@@ -65,7 +65,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     offsetWidth: { get() { return parseFloat(this.style.width) || (this.id === 'map' ? width : 220); } },
     offsetHeight: { get() { return this.id === 'node-workspace' ? Math.min(540, parseFloat(this.style.maxHeight) || 540) : 110; } },
   });
-  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null, holdHistory = null;
+  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null, holdHistory = null, holdNavigationRead = null;
   const captured = new Set(), observers = new Map();
   map.setPointerCapture = id => { captures++; captured.add(id); };
   map.hasPointerCapture = id => captured.has(id);
@@ -86,6 +86,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
       if (holdState && path === 'api/state') await holdState();
       if (holdDraftRead && path.startsWith('api/drafts?')) await holdDraftRead();
       if (holdHistory && path.startsWith('api/history?')) await holdHistory();
+      if (holdNavigationRead && path === 'api/navigation-settings' && options?.method !== 'POST') await holdNavigationRead();
       return new Response(body, { status: response.status, headers: response.headers });
     })();
     requests.add(request); request.then(() => requests.delete(request), () => requests.delete(request));
@@ -110,7 +111,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
   return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
-    pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; } };
+    pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; } };
 }
 
 function chooseState(f, value) {
@@ -1297,6 +1298,39 @@ test('map settings save, cancel, reset and stale retry keep documents and drafts
   $('navigation-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
   await until(() => !$('navigation-dialog').open, 'reset saved');
   assert.deepEqual(await store.read(), { version: 1, revision: 4, wheelMode: 'zoom', sensitivity: 1, motion: 'system' });
+});
+
+test('navigation refresh keeps edits made while its GET is pending after a stale save', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id);
+  const store = new NavigationPreferences(join(dirname(f.explorer.file), 'navigation-settings.json'));
+  $('navigation-open').click(); await until(() => $('navigation-dialog').open && !$('navigation-save').disabled, 'navigation settings loaded');
+  $('navigation-wheel').value = 'pan'; $('navigation-save').click();
+  await until(() => !$('navigation-dialog').open, 'first preference saved');
+  $('navigation-open').click(); await until(() => $('navigation-dialog').open && !$('navigation-save').disabled, 'saved preference loaded');
+  await store.save({ wheelMode: 'zoom', sensitivity: .5, motion: 'reduce' }, 1);
+  $('navigation-sensitivity').value = '3'; $('navigation-save').click();
+  await until(() => /another canvas/i.test($('navigation-error').textContent), 'stale save rejected');
+  let release, waiting = false;
+  f.pauseNavigationRead(() => { waiting = true; return new Promise(resolve => { release = resolve; }); });
+  $('navigation-refresh').click(); await until(() => waiting, 'refresh GET pending');
+  $('navigation-wheel').value = 'pan'; $('navigation-wheel').dispatchEvent(new f.window.Event('input', { bubbles: true }));
+  $('navigation-sensitivity').value = '1.1'; $('navigation-sensitivity').dispatchEvent(new f.window.Event('input', { bubbles: true }));
+  f.pauseNavigationRead(null); release();
+  await until(() => $('navigation-error').hidden, 'refreshed revision available');
+  assert.equal($('navigation-wheel').value, 'pan');
+  assert.equal($('navigation-sensitivity').value, '1.1', 'latest input survives delayed refresh');
+  $('navigation-save').click(); await until(() => !$('navigation-dialog').open, 'deliberate retry saved');
+  assert.equal((await store.read()).sensitivity, 1.1);
+});
+
+test('navigation sensitivity accepts and saves any in-range fractional value', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id);
+  $('navigation-open').click(); await until(() => $('navigation-dialog').open && !$('navigation-save').disabled, 'navigation settings loaded');
+  $('navigation-sensitivity').value = '0.3';
+  assert.equal($('navigation-sensitivity').checkValidity(), true, 'HTML control accepts a valid non-quarter sensitivity');
+  $('navigation-save').click(); await until(() => !$('navigation-dialog').open, 'fractional preference saved');
+  const store = new NavigationPreferences(join(dirname(f.explorer.file), 'navigation-settings.json'));
+  assert.equal((await store.read()).sensitivity, .3);
 });
 
 test('pan wheel normalizes deltas, keeps answer scrolling and follows motion overrides', async t => {

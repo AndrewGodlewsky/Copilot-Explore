@@ -89,7 +89,7 @@ export function createBriefHelper(parent, options) {
   }), options);
 }
 // Escape Markdown control characters, including punctuation used by autolinks and HTML entities.
-const md = value => String(value).replace(/[\\`*_{}[\]<>#+!|()&.:~-]/g, '\\$&');
+const md = value => String(value).replace(/[\\`*_{}[\]<>#+!|()&.:=~-]/g, '\\$&');
 export function briefMarkdown(brief, doc, freshness = briefFreshness(brief, doc)) {
   brief = validateBrief(brief);
   const refs = new Map(), nodes = new Map(doc.nodes.map(node => [node.id, node]));

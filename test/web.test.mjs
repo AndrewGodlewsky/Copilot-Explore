@@ -2480,3 +2480,44 @@ test('reviewed brief HTTP UI preserves draft/caret, edits, source navigation and
  await until(()=>!$('export-brief').hidden,'separate export available');assert.match($('brief-status').textContent,/current/);
  const disk=JSON.parse(await readFile(f.explorer.file,'utf8'));disk.nodes[2].answer='External uncited answer changed';disk.nodes[2].answerState='tentative';disk.revision++;await writeFile(f.explorer.file,JSON.stringify(disk));await until(()=>$('brief-status').textContent.includes('stale'),'accepted artifact stale from disk');
 });
+
+test('another canvas replacing historical accepted brief preserves fresh proposal editor text and caret over HTTP', async t => {
+ const synthesis = prepared => parseBrief(JSON.stringify({ goal: [{ id: 'goal', text: 'Original proposal', certainty: 'user-statement', sources: [{ kind: 'guidance', field: 'topic' }] }], decisions: [], constraints: [], assumptions: [], unresolved: [{ id: 'open', text: 'Still unresolved', certainty: 'uncertain', sources: [{ kind: 'node', id: prepared.dependencies.records[1].id }] }], nextSteps: [] }), prepared);
+ const helper = { async run(prepared) { return synthesis(prepared); }, close() {} };
+ const { prepareBrief, acceptBrief } = await import('../com.github.copilot/extensions/explorer/decision-brief.mjs');
+ const f = await fixture(t, 340, undefined, false, { briefHelper: helper, before: async explorer => {
+  const historical = acceptBrief(synthesis(prepareBrief(explorer.doc)), []);
+  const oldId = historical.sections.unresolved[0].sources[0].id;
+  historical.sections.unresolved[0].sources[0].id = 'historical-unavailable-node';
+  historical.dependencies.records.find(record => record.id === oldId).id = 'historical-unavailable-node';
+  await explorer.save({ ...explorer.doc, brief: historical });
+ } }), $ = id => f.document.getElementById(id);
+ $('decision-brief').click(); await until(() => !$('generate-brief').disabled && $('brief-status').textContent.includes('stale'), 'historical brief loaded');
+ assert.match($('brief-content').textContent, /Historical source unavailable/);
+ $('generate-brief').click(); await until(() => !$('accept-brief').hidden && !$('accept-brief').disabled, 'fresh proposal');
+ const editor = $('brief-content').querySelector('[data-brief-statement="goal"]');
+ editor.value = 'Unsaved reviewed wording \u03bb'; editor.dispatchEvent(new f.window.Event('input', { bubbles: true }));
+ editor.focus(); editor.setSelectionRange(4, 11);
+ const other = await new Explorer({ file: f.explorer.file, briefHelper: helper }).load();
+ const server = await startServer(other, { close() {} }); t.after(() => server.close());
+ const request = { id: 'external-brief-request-00001', journey: other.doc.id };
+ const post = body => fetch(server.url + 'api/brief', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(server.url).origin }, body: JSON.stringify(body) });
+ assert.equal((await post({ ...request, action: 'start' })).status, 200); await other.toolFreeTask;
+ assert.equal((await post({ ...request, action: 'accept', revision: other.doc.revision, edits: [] })).status, 200);
+ let observed = false; const originalFetch = f.window.fetch;
+ f.window.fetch = async (...args) => {
+  const response = await originalFetch(...args);
+  if (args[0] === 'api/brief') {
+   const value = await response.clone().json();
+   if (value.status === 'proposal' && value.unavailableSources?.length === 0) observed = true;
+  }
+  return response;
+ };
+ await until(() => observed && !$('accept-brief').disabled, 'fresh proposal polled after external acceptance');
+ assert.equal($('brief-content').querySelector('[data-brief-statement="goal"]'), editor);
+ assert.equal(editor.value, 'Unsaved reviewed wording \u03bb'); assert.equal(editor.selectionStart, 4); assert.equal(editor.selectionEnd, 11); assert.equal(f.document.activeElement, editor);
+ $('refresh-brief').click(); await until(() => f.explorer.doc.revision === other.doc.revision && !$('accept-brief').disabled, 'current revision refreshed');
+ assert.equal($('brief-content').querySelector('[data-brief-statement="goal"]'), editor);
+ $('accept-brief').click(); await until(() => f.explorer.doc.brief.sections.goal[0].text === 'Unsaved reviewed wording \u03bb', 'retained text accepted');
+ assert.equal(f.explorer.doc.brief.sections.goal[0].edited, true);
+});

@@ -125,3 +125,36 @@ test('included contradictory/tentative sources remain explicit and prevent a str
  const doc=fixture();doc.nodes[1].answer='Choose A';doc.nodes[1].answerState='decided';doc.nodes[2].answer='Choose B';doc.nodes[2].answerState='tentative';const prepared=prepareBrief(doc),raw=output(doc);raw.decisions[0].sources.push({kind:'node',id:doc.nodes[2].id});
  assert.match(prepared.prompt,/Choose A/);assert.match(prepared.prompt,/Choose B/);assert.equal(parseBrief(JSON.stringify(raw),prepared).sections.decisions[0].certainty,'uncertain');
 });
+
+test('standalone and complete brief source anchors resolve to the appendix before colliding research headings', () => {
+ const doc = fixture(), value = output(doc);
+ doc.topic = 'Source 1\n==='; doc.nodes[0].question = doc.topic;
+ doc.nodes[1].question = 'Source 2\n===';
+ value.goal[0].text = 'A statement\n\nSource 1\n===';
+ value.goal[0].sources = [{ kind: 'node', id: doc.nodes[1].id }, { kind: 'guidance', field: 'topic' }];
+ const proposal = parseBrief(JSON.stringify(value), prepareBrief(doc));
+ doc.brief = acceptBrief(proposal, []);
+ doc.nodes[1].research = { basis: 'reasoning', summary: 'Summary', options: [
+  { title: 'Source 1', description: 'Unrelated first option', pros: [], cons: [] },
+  { title: 'Source 2', description: 'Unrelated second option', pros: [], cons: [] },
+ ], recommendation: 'Unknown', uncertainty: 'No sources', sources: [] };
+ for (const markdown of [briefMarkdown(doc.brief, doc), toMarkdown(doc)]) {
+  for (const number of [1, 2]) {
+   assert.ok(markdown.includes(`[Source ${number}](#source-${number})`));
+   // The first heading with this text receives the unsuffixed fragment in GitHub-style Markdown.
+   const headings = [...markdown.matchAll(new RegExp(`^(#{1,6}) Source ${number}$`, 'gm'))];
+   assert.equal(headings[0][1], '###', `source-${number} belongs to the brief appendix`);
+   const content = markdown.slice(headings[0].index).split(/\n#{1,6} /)[0];
+   assert.match(content, number === 1 ? /Node ID:/ : /Global user guidance/);
+  }
+  assert.ok(markdown.includes('Source 1\n\\=\\=\\='), 'statement text cannot create a Setext heading');
+  assert.ok(markdown.includes('Source 2\n\\=\\=\\='), 'source question text cannot create a Setext heading');
+ }
+ const complete = toMarkdown(doc);
+ assert.match(complete, /^# Exploration\n/);
+ assert.ok(complete.indexOf('### Source 2') < complete.indexOf('#### Source 1'));
+ assert.ok(complete.indexOf('### Source 2') < complete.indexOf('## Topic'));
+ assert.ok(complete.includes('## Topic\n\nSource 1\n==='), 'the original multiline topic is preserved after the appendix');
+ assert.match(complete, /Unrelated first option/);
+ assert.match(complete, /Unrelated second option/);
+});

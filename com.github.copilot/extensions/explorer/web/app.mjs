@@ -1045,7 +1045,8 @@ function renderBrief() {
   $('brief-status').textContent = [value?.error, value?.status === 'pending' ? `${value.progress}… Cancel this before using cleanup or question help.` : proposal ? 'Proposal only — review and edit, then explicitly accept.' : value?.accepted ? `Accepted brief — ${value.freshness}.` : 'No accepted brief yet.',
     coverage ? `Journey summary: ${coverage.included} records included${coverage.omitted !== undefined ? `; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes` : ''}.` : '',
     'User constraints are statements, not verified facts. User edits keep original source links; edited wording is not automatically reverified.'].filter(Boolean).join(' ');
-  const stamp = JSON.stringify([proposal ? briefId : 'accepted', brief, value?.unavailableSources, brief?.dependencies.records.filter(source => !state.document.nodes.some(node => node.id === source.id)).map(source => source.id)]);
+  const unavailable = proposal ? [] : value?.unavailableSources ?? [];
+  const stamp = JSON.stringify([proposal ? briefId : 'accepted', brief, unavailable, brief?.dependencies.records.filter(source => !state.document.nodes.some(node => node.id === source.id)).map(source => source.id)]);
   if (stamp === briefStamp) return;
   briefStamp = stamp; briefEdits.clear(); $('brief-content').replaceChildren();
   if (!brief) return;
@@ -1063,7 +1064,7 @@ function renderBrief() {
       for (const ref of statement.sources) {
         if (ref.kind === 'guidance') area.append(el('p', { class: 'quiet' }, `Source: global user guidance (${ref.field})`));
         else {
-          const source = brief.dependencies.records.find(source => source.id === ref.id), available = !value?.unavailableSources?.includes(ref.id) && state.document.nodes.some(node => node.id === ref.id);
+          const source = brief.dependencies.records.find(source => source.id === ref.id), available = !unavailable.includes(ref.id) && state.document.nodes.some(node => node.id === ref.id);
           area.append(el('p', { class: 'quiet' }, `Source state: ${source.state}${source.review ? '; needs review' : ''}`), available ? button(`Reveal: ${source.question}`, () => { $('brief-dialog').close(); select(ref.id); }, { class: 'brief-source' }) : el('p', { class: 'quiet' }, `Historical source unavailable: ${source.question} (${ref.id})`));
         }
       }

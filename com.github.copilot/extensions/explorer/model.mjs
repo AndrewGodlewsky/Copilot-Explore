@@ -274,6 +274,10 @@ export function toMarkdown(doc) {
       for (const source of r.sources) lines.push(`- [${md(source.title)}](<${source.url.replace(/>/g, '%3E').replace(/</g, '%3C')}>)`);
     }
   }
-  if (doc.brief) lines.push('', briefMarkdown(doc.brief, doc));
+  // Only a fixed heading may precede the appendix, including when the topic is multiline.
+  if (doc.brief) {
+    lines[0] = '# Exploration';
+    lines.splice(2, 0, briefMarkdown(doc.brief, doc), '', '## Topic', '', md(doc.topic), '');
+  }
   return lines.join('\n') + '\n';
 }

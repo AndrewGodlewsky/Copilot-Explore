@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.24",
+    "summary": "Pin up to three saved questions as optional references beside the active editor. Read their saved answer, state and review status, jump to a source, or remove a pin without changing the map. Private per-journey pins survive reopening, show unavailable sources after history restore, and require an explicit refresh to retry conflicting edits."
+  },
+  {
     "version": "0.1.23",
     "summary": "Suggest a missing direction in any branch, then let Copilot propose questions beneath it. Your original direction is saved and labeled as yours, survives failed or cancelled generation, and stays separate from answers and question counts. Review and accept generated questions before adding them."
   },

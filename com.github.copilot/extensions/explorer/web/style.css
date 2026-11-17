@@ -63,3 +63,14 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .candidate textarea { width: 100%; box-sizing: border-box; }
 .node.new-question { border: 3px solid var(--blue); }
 #question-feedback:empty { display: none; }
+.references-area { border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 16px; font-size: 12px; overflow-wrap: anywhere; }
+.references-area > p { margin: 0 0 6px; }
+.references-area > button { font-size: 12px; margin-bottom: 8px; }
+.references-area #references { margin-top: 5px; }
+.reference-row { border-top: 1px solid var(--line); padding: 10px 0; }
+.reference-row p { margin: 4px 0; white-space: pre-wrap; }
+.reference-question { font-weight: 600; }
+.reference-summary { max-height: 5em; overflow: hidden; }
+.reference-row button { font-size: 11px; margin: 6px 8px 0 0; }
+.reference-full { margin: 6px 0; }
+.reference-full p { white-space: pre-wrap; max-height: 180px; overflow: auto; }

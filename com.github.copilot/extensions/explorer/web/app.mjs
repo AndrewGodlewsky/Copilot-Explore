@@ -16,6 +16,7 @@ let collapsed = new Set(), branches = null, focusId = null, wholeView = null;
 let historyEpoch = 0, historyReturn = null, historySelection = null, historyRevision = null;
 let guidanceReturn = null, guidanceBase = null, guidanceNeedsChoice = false, guidanceNeedsRefresh = false;
 let previewEdits = null, acceptedIds = new Set(), acceptedParentId = null;
+let references = { journey: null, revision: 0, nodeIds: [], error: '', loading: false, saving: false, retryIds: null, open: false, epoch: 0 };
 const drafts = new Map(), nodeUi = new Map();
 const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
   changed: () => { const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); } },
@@ -66,6 +67,7 @@ function captureWorkspace() {
     ui.scroll = content.scrollTop;
     ui.researchOpen = panel.querySelector('.research-disclosure')?.open ?? false;
     ui.manualOpen = panel.querySelector('.manual')?.open ?? false;
+    if (!references.error) references.open = panel.querySelector('#references')?.open ?? references.open;
   }
 }
 function apply(next, reset = false) {
@@ -85,6 +87,7 @@ function apply(next, reset = false) {
     acceptedIds.clear(); acceptedParentId = null;
   }
   signature = stamp; state = next;
+  if (changedDocument) switchReferences();
   if (state.preview?.id !== previewEdits?.id) previewEdits = state.preview ? { id: state.preview.id, questions: state.preview.questions.map(q => ({ question: q.question, selected: true })) } : null;
   if (next.acceptedIds) {
     acceptedIds = new Set(next.acceptedIds); acceptedParentId = next.acceptedParentId;
@@ -124,6 +127,83 @@ function apply(next, reset = false) {
     const rect = $('map').getBoundingClientRect(); firstFit = !rect.width || !rect.height;
     if (!firstFit) expanded ? centerSelected() : fit();
   }
+}
+function referenceJourney() { return state.activeKey ?? state.document?.id; }
+function switchReferences() {
+  const epoch = references.epoch + 1;
+  references = { journey: referenceJourney(), revision: 0, nodeIds: [], error: '', loading: !!state.document, saving: false, retryIds: null, open: false, epoch };
+  if (state.document) void loadReferences(epoch);
+}
+async function loadReferences(epoch = references.epoch, retry = false) {
+  const journey = references.journey;
+  references.loading = true;
+  try {
+    const response = await fetch(`api/references?${new URLSearchParams({ journey })}`), result = await response.json();
+    if (closed || epoch !== references.epoch || journey !== referenceJourney()) return;
+    if (!response.ok) throw new Error(result.error);
+    references.revision = result.revision;
+    references.error = result.error ?? '';
+    if (references.error) references.open = true;
+    if (!result.error) {
+      if (!retry) references.nodeIds = result.nodeIds;
+      else if (references.retryIds) {
+        const desired = references.retryIds; references.retryIds = null;
+        references.loading = false;
+        return void saveReferences(desired);
+      }
+    }
+  } catch (error) { if (!closed && epoch === references.epoch) { references.error = error.message; references.open = true; } }
+  finally { if (!closed && epoch === references.epoch) { references.loading = false; if (expanded) { renderWorkspace(); refreshScene(); } } }
+}
+async function saveReferences(nodeIds) {
+  if (references.loading || references.saving || references.error) return;
+  const journey = references.journey, epoch = references.epoch, revision = references.revision;
+  references.nodeIds = nodeIds; references.saving = true; if (expanded) { renderWorkspace(); refreshScene(); }
+  try {
+    const response = await fetch('api/references', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ journey, revision, nodeIds }) });
+    const result = await response.json();
+    if (closed || epoch !== references.epoch) return;
+    if (!response.ok) throw new Error(result.error);
+    references.revision = result.revision; references.retryIds = null; references.error = '';
+  } catch (error) {
+    if (!closed && epoch === references.epoch) { references.error = error.message; references.retryIds = nodeIds; references.open = true; }
+  } finally { if (!closed && epoch === references.epoch) { references.saving = false; if (expanded) { renderWorkspace(); refreshScene(); } } }
+}
+function renderReferences(active) {
+  const section = el('section', { class: 'references-area', 'aria-label': 'Question references' });
+  section.append(el('p', { class: 'quiet' }, isQuestion(active) ? 'Active editable question' : active.parentId === null ? 'Active idea' : 'Active direction'));
+  if (isQuestion(active)) section.append(button(references.nodeIds.includes(active.id) ? 'Pinned as reference' : 'Pin this question as a reference', () => void saveReferences([...references.nodeIds, active.id]),
+    { id: 'pin-reference', disabled: references.loading || references.saving || !!references.error || references.nodeIds.includes(active.id) || references.nodeIds.length >= 3 }));
+  const details = el('details', { id: 'references' }, el('summary', { id: 'references-summary' }, `References (${references.nodeIds.length}/3)`));
+  details.open = references.open;
+  details.addEventListener('toggle', () => { if (details.isConnected) references.open = details.open; });
+  if (references.loading) details.append(el('p', { class: 'quiet' }, 'Loading references…'));
+  for (const id of references.nodeIds) {
+    const node = state.document.nodes.find(n => n.id === id && isQuestion(n));
+    const row = el('div', { class: 'reference-row' });
+    if (!node) row.append(el('p', {}, 'Source unavailable in this saved journey.'));
+    else {
+      row.append(el('p', { class: 'reference-question' }, node.question), el('p', { class: 'quiet' }, `${nodeStatus(node)}${node.review ? ' · needs review' : ''}`));
+      const characters = Array.from(node.answer);
+      if (characters.length > 160 || node.answer.split('\n').length > 4) {
+        const summary = node.answer.split('\n').length > 4 ? node.answer.split('\n').slice(0, 4).join('\n') : characters.slice(0, 160).join('');
+        row.append(el('p', { class: 'reference-answer reference-summary' }, `${Array.from(summary).slice(0, 160).join('')}…`), el('details', { class: 'reference-full' }, el('summary', {}, 'Read full saved answer'), el('p', {}, node.answer)));
+      } else row.append(el('p', { class: 'reference-answer' }, node.answer || 'No saved answer.'));
+      row.append(button('Go to source', () => select(node.id), { class: 'reference-jump' }));
+    }
+    row.append(button('Remove reference', () => {
+      const next = references.nodeIds.filter(value => value !== id);
+      void saveReferences(next);
+      $('references').open = true; references.open = true;
+      $('references-summary')?.focus({ preventScroll: true });
+    }, { class: 'reference-remove', disabled: references.saving || references.loading || !!references.error }));
+    details.append(row);
+  }
+  if (references.error) details.append(el('p', { class: 'notice', role: 'alert' }, references.error), button(references.retryIds ? 'Refresh & retry references' : 'Refresh references', () => {
+    references.error = ''; void loadReferences(references.epoch, !!references.retryIds);
+  }, { id: 'references-retry' }));
+  section.append(details);
+  return section;
 }
 function showView() {
   const home = !state.document || libraryView;
@@ -456,6 +536,7 @@ function renderWorkspace() {
   const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.kind === 'direction' ? nodeStatus(node) : node.category), el('div', { class: 'node-head-actions' }, button('Focus branch', () => focusBranch(node.id), { id: 'focus-branch', 'aria-pressed': String(focusId === node.id), 'aria-label': `Focus branch: ${node.question}` }), branchButton(node, true), button('Collapse node', () => collapseNode(), { id: 'collapse-node' }))), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
   if (collapsed.has(node.id)) heading.append(el('p', { class: 'branch-count' }, hiddenSummary(node.id)));
   const content = el('div', { class: 'node-content' }); panel.append(heading, content);
+  content.append(renderReferences(node));
   if (pending) {
     const workNode = byId.get(state.pending.nodeId);
     content.append(el('div', { class: 'pending', role: 'status' }, el('strong', {}, state.pending.kind === 'research' ? `${state.pending.progress ?? 'Researching'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, state.pending.kind === 'research' ? 'Research runs separately from your chat. Cancelling stops its helper.' : 'Cancelling discards the result; the chat turn may still finish.')));

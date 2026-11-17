@@ -5,6 +5,7 @@ import { createDocument, validateDocument, findNode, addQuestions, addDirection,
 import { atomicWrite } from './storage.mjs';
 import { History } from './history.mjs';
 import { Drafts, draftBase, draftHash, matchesDraftBase } from './drafts.mjs';
+import { References, emptyReferences, validateReferenceIds } from './references.mjs';
 import { ANSWER_CONTEXT_GUIDANCE, effectiveAnswerState, isQuestion } from './web/answer-state.mjs';
 export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
@@ -55,6 +56,29 @@ export class Explorer {
     if (!this.doc || journey !== (this.activeKey ?? this.doc.id)) throw new Error('The active journey changed. This draft request was rejected.');
     this.draftStore ??= new Drafts(this.library?.directory ?? dirname(this.file));
     return this.activeKey ?? draftHash(`${await realpath(this.file)}\0${this.doc.id}`);
+  }
+  readReferences(journey) {
+    return this.transact(async () => {
+      const key = await this.draftIdentity(journey);
+      this.referenceStore ??= new References(this.library?.directory ?? dirname(this.file));
+      try { return { journey, ...(await this.referenceStore.read(key)) }; }
+      catch (error) { return { journey, ...emptyReferences(), error: error.message }; }
+    });
+  }
+  writeReferences(input) {
+    return this.transact(async () => {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'journey,nodeIds,revision') throw new Error('Invalid reference request.');
+      const key = await this.draftIdentity(input.journey);
+      validateReferenceIds(input.nodeIds);
+      this.referenceStore ??= new References(this.library?.directory ?? dirname(this.file));
+      const old = await this.referenceStore.read(key);
+      for (const id of input.nodeIds) {
+        if (old.nodeIds.includes(id)) continue;
+        if (!this.doc.nodes.some(node => node.id === id && isQuestion(node))) throw new Error('Only saved ordinary questions can be added as references.');
+      }
+      const saved = await this.referenceStore.save(key, input.nodeIds, input.revision);
+      return { journey: input.journey, ...saved };
+    });
   }
   readDrafts(journey) {
     return this.transact(async () => {

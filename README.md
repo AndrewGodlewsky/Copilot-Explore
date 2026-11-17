@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.23.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.24.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -90,6 +90,8 @@ Pan by dragging the background, a compact card, or an expanded question heading.
 Generated questions first appear in a **not saved** preview inside the requesting node. Select a subset, optionally adjust wording, then use **Accept selected** to add them in one undoable change, or **Dismiss all**. Dismiss before switching journeys, restoring history or generating again. Empty maps retain **Generate questions** for an explicit retry. A saved source change makes the preview stale; dismiss, refresh and generate again. Draft answers are preserved and do not become generation context. Accepted questions keep their original wording/category and adjustment provenance. The added-question link and static outline highlight make new nodes discoverable while respecting focus, folds and reduced motion.
 
 Previews are temporary canvas memory, excluded from exports, history and native map context. Closing or restarting the canvas discards them; polling preserves selections and wording edits. A renderer reload can recover the original batch while the canvas remains alive, but loses browser-only wording/selection edits. See [question preview contracts](docs/question-preview.md).
+
+Open an ordinary question and choose **Pin this question as a reference** to keep its saved question and answer near another editor. The optional **References** disclosure holds up to three sources, shows saved answer state and review flags, and offers **Go to source** or **Remove reference**. Missing sources after a history restore stay visibly unavailable until removed or restored. Pins are private per-journey view preferences, survive reopening, and do not alter answers, history, exports or AI context. If another canvas edits the pins, **Refresh & retry references** deliberately reloads the latest revision before applying your choice. See [pinned reference storage and API](docs/pinned-references.md).
 
 Initial questions and **Save & explore deeper** are queued in the attached Copilot chat. Research uses a fresh SDK session with the same verified account and selected enabled Copilot model; normal Copilot usage applies. It receives your saved question path, answers and states with a dedicated [research skill](com.github.copilot/extensions/explorer/research/skills/explorer-research/SKILL.md), and checks web search/fetch availability before inference. The main chat receives no research transcript. Status shows preparation, search, reading and comparison; Cancel stops the research helper. Question cancellation still only discards the result, since Explorer cannot stop the main chat turn.
 
@@ -220,10 +222,11 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.23, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.23**.
+- Update to v0.1.24, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.24**.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
+- Pin a saved question, open another question, and expand References in a narrow pane. Check long answer disclosure, source jump with an unsent draft, keyboard focus after Remove reference, and unavailable-source text after restoring an earlier history version.
 - Collapse a branch with an active descendant editor, confirm focus moves to the visible ancestor, then select the hidden question from Outline. Check that its draft text and state return, the other branches stay as they were, and the compact hidden/unresolved counts remain readable in a narrow pane.
 - Focus a deep branch and a leaf, use Fit visible map, then Show whole map. Check root and ancestors remain visible during focus, unrelated branches return with their prior folds, and the answer editor and caret remain usable in a narrow pane. Select a hidden question from Outline and check focus exits.
 - Focus the answer, hold your configured voice shortcut until **Listening**, speak, then release. Confirm the text enters the draft and is not saved automatically. Check Escape cancellation and switching questions.

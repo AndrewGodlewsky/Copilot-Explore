@@ -402,13 +402,47 @@ Read issue-11.md and task-11-design-notes.md in this workspace, AGENTS.md, and t
 
 ### Verification and release
 
-- [ ] RED/GREEN model/controller tests for Unicode/empty/length/type input, legacy root/question behavior, shared counts and exports, seed provenance round trip, no-answer generation, successful candidate acceptance, failed send/retry, cancel/late callbacks, duplicate/bound/near-limit atomic failure, same-file stale writes and history.
-- [ ] Real HTTP/jsdom tests for lightweight form, existing answer/state draft and unsent direction guards, keyboard access, focused/folded reveal, root/question/seed retry, and safe text rendering. No browser or desktop UI automation.
-- [ ] Run npm test, npm run check, npm run package and installed local canvas runtime fixture. Run research fixture if its actual context changes. Never use a paid provider or existing user session.
-- [ ] Bump to **0.1.23** and synchronize metadata/README/release notes; document seed semantics and update relevant integration notes. Include controller plan update; self-review and commit, no merge/push/issue closure.
-- [ ] Write task-11-report.md with exact chosen schema/API/counting contracts, TDD/final command evidence, SHA and native limitations. No nested agents. Raise concrete conflicts while continuing independent work.
+- [x] RED/GREEN model/controller tests for Unicode/empty/length/type input, legacy root/question behavior, shared counts and exports, seed provenance round trip, no-answer generation, successful candidate acceptance, failed send/retry, cancel/late callbacks, duplicate/bound/near-limit atomic failure, same-file stale writes and history.
+- [x] Real HTTP/jsdom tests for lightweight form, existing answer/state draft and unsent direction guards, keyboard access, focused/folded reveal, root/question/seed retry, and safe text rendering. No browser or desktop UI automation.
+- [x] Run npm test, npm run check, npm run package and installed local canvas runtime fixture. Run research fixture if its actual context changes. Never use a paid provider or existing user session.
+- [x] Bump to **0.1.23** and synchronize metadata/README/release notes; document seed semantics and update relevant integration notes. Include controller plan update; self-review and commit, no merge/push/issue closure.
+- [x] Write task-11-report.md with exact chosen schema/API/counting contracts, TDD/final command evidence, SHA and native limitations. No nested agents. Raise concrete conflicts while continuing independent work.
 
 For clean native command evidence, use the controller-provided ignored helper: `node .superpowers/sdd/2026-11-17-selected-roadmap/run-npm.mjs task-11-test test` (and unique labels with `run check`, `run package`, applicable `run e2e`). It invokes the installed adjacent npm CLI through Node, captures stdout/stderr separately and writes result JSON with the exact exit code. Do not rerun a passing suite only to improve logging. The demonstrated installed runtime executable is sibling `copilot.exe`, not `copilot-runtime.exe`.
+
+Published task11: **v0.1.23**, `fcb8a6a`, 229 tests, checks, package and installed local canvas/research fixtures passed; independent review approved and remote main verified. Two Minor follow-ups recorded for related/final review.
+
+## Task 12: Pin prior questions as references (#19 / selection22)
+
+Read issue-22.md and task-12-design-notes.md in this workspace, AGENTS.md, and final task10/11 reports before edits. BASE is **fcb8a6a3cfdee688b7f292e297359792687db88b**; ship **0.1.24**. These are optional visual references, separate from later AI-context constraints.
+
+### Contract
+
+- Let users pin up to three ordinary question nodes as read-only references near the active expanding editor, in an optional compact disclosure. Do not add a mandatory detached sidebar. A question can be open or answered; show its actual saved state/review flag, never call it a settled decision merely because it was pinned. Roots/direction seeds are not answer references.
+- Show source question and saved answer, with a short summary and accessible full-text disclosure for long answers. Use literal text rendering, preserve Unicode, and never substitute another node's unsaved draft. Label the active editable question separately. Removing a reference only unpins it.
+- Source updates refresh content from the current committed document. If history restore removes a pinned source, keep an explicit missing-source row with Remove; never silently point at a different node or erase the pin. Restoring the same source ID can make it available again. Do not add pin copies of answer content to disk.
+- Provide a deliberate source jump through existing select/reveal/focus/fold rules. It retains the current text/state draft and respects voice cancellation. Merely displaying references cannot change selection, folds or AI context. Removing a pin returns focus to a stable nearby control; all operations are keyboard-accessible and usable in a narrow pane.
+- Persist reference node IDs as private per-journey view metadata across canvas reopen, independently of exploration documents/history/drafts/navigation settings. Use stable library entry identity, not only document ID, so divergent same-ID entries stay separate. Direct-file construction uses canonical-path-plus-ID identity as drafts/history already do. Portable exports do not include these local view preferences; document that behavior.
+- Use a small focused store under Explorer's owned root, with a references/ directory containing one safe hashed-journey-key .json file. Version-1 record is {version:1,revision,nodeIds:[...]}, with at most three unique valid node IDs (current model ID bounds), nonnegative safe integer revision and no unknown keys. Limit each file to 4096 bytes and write HTTP JSON body to 1024 bytes. Use atomic write, exclusive lock and expected revision; reject linked/non-regular files. Store no answers, prompts, paths or host IDs. Missing is empty; corrupt/linked/oversized data remains preserved with safe UI fallback/error. Reject stale writes without silently overwriting another canvas and provide a deliberate refresh/retry. Document the exact store/body limits and stale retry contract. Do not widen library summary or native get_exploration payloads to expose private view metadata.
+- Validate newly added IDs against ordinary questions in the active saved journey. Existing pins that become missing/non-question after restore/import remain explicit unavailable rows; permit retaining or removing them, but never adding arbitrary absent/non-question IDs. Unchanged metadata saves should check freshness and remain no-ops. Source text/state follows the current committed map and its established explicit-refresh semantics for another canvas's edits; do not add a silent document reload that could replace drafts.
+- Use existing token/Host/Origin/client protections for private HTTP access; validate active journey identity on each read/write. Preserve edited fields/reference choices through async responses and journey changes; do not let an old read repaint another journey's pins. Pin/unpin does not increment document revision/history/updated time or automatically send anything to AI.
+- Keep this focused: no shared references across journeys, broad note editor, collaboration, AI pinning or backend retrieval. A compact browser module is acceptable to keep existing app.mjs changes focused; register any browser asset in allowlists/fixtures.
+
+### Published integration seams
+
+- Task11 supplies effectiveKind(node), isQuestion(node), nodeStatus(node) in web/answer-state.mjs, with model re-exports for the predicates. Effective kind is idea for parentId===null, otherwise explicit direction or legacy question. Reuse isQuestion for pin eligibility; do not infer roles from labels/answers. Generic library nodeCount remains inclusive of structural seeds.
+- Task10 uiSnapshot() is browser-only preview plus committed snapshot(); native get_exploration excludes previews/private metadata. Keep references on their private endpoint, not added to the native snapshot/context.
+- Existing canonical journey/draft/history identity already handles activeKey vs direct-file realpath+ID. Reuse that safety contract rather than inventing identity from topic, session ID or only document ID.
+
+### Verification and release
+
+- [ ] RED/GREEN store/controller tests for cap, duplicates, invalid/missing node IDs, same-ID divergent journeys, direct-file support, reopen, stale writer conflicts, bounded/corrupt/linked files and failed-write preservation. Missing-after-restore behavior must remain removable/recoverable.
+- [ ] Real HTTP/jsdom tests for answer/state/review updates, long/Unicode/unsafe text, disclosure and keyboard removal/focus, source jumps through focus/folds retaining drafts, delayed reads across journey changes, and no document/history/native context effect.
+- [ ] Run npm test, npm run check, npm run package; installed runtime fixture if host/data-root integration changes. No paid providers/existing user sessions or browser/desktop UI automation.
+- [ ] Bump to **0.1.24**, sync release metadata/README/release notes, document private-view semantics; include controller plan changes, self-review/commit, no merge/push/issue closure.
+- [ ] Write task-12-report.md with exact store/API contract, TDD and final command evidence, SHA and native limits. No nested agents. Raise concrete conflicts while continuing independent work.
+
+For clean native command evidence, use the controller-provided ignored helper: `node .superpowers/sdd/2026-11-17-selected-roadmap/run-npm.mjs task-12-test test` (and unique labels with `run check`, `run package`, applicable `run e2e`). It invokes the installed adjacent npm CLI through Node, captures stdout/stderr separately and writes result JSON with the exact exit code. Do not rerun a passing suite only to improve logging. The demonstrated installed runtime executable is sibling `copilot.exe`, not `copilot-runtime.exe`.
 
 ## Issue index
 

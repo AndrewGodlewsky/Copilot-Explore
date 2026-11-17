@@ -66,7 +66,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     offsetWidth: { get() { return parseFloat(this.style.width) || (this.id === 'map' ? width : 220); } },
     offsetHeight: { get() { return this.id === 'node-workspace' ? Math.min(540, parseFloat(this.style.maxHeight) || 540) : 110; } },
   });
-  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null, holdHistory = null, holdNavigationRead = null;
+  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null, holdHistory = null, holdNavigationRead = null, holdReferencesRead = options.holdReferencesRead;
   const captured = new Set(), observers = new Map();
   map.setPointerCapture = id => { captures++; captured.add(id); };
   map.hasPointerCapture = id => captured.has(id);
@@ -88,6 +88,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
       if (holdDraftRead && path.startsWith('api/drafts?')) await holdDraftRead();
       if (holdHistory && path.startsWith('api/history?')) await holdHistory();
       if (holdNavigationRead && path === 'api/navigation-settings' && options?.method !== 'POST') await holdNavigationRead();
+      if (holdReferencesRead && path.startsWith('api/references?')) await holdReferencesRead();
       return new Response(body, { status: response.status, headers: response.headers });
     })();
     requests.add(request); request.then(() => requests.delete(request), () => requests.delete(request));
@@ -112,8 +113,83 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
   return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
-    pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; } };
+    pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
+
+test('pinned references show committed text and state, remain optional, and jump through the map', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async explorer => {
+    const next = structuredClone(explorer.doc), source = next.nodes[1];
+    source.answer = '<unsafe> 😀 '.repeat(30); source.answerState = 'assumption'; source.review = true;
+    await explorer.save(next, 'Source updated');
+  } }), [source, active] = f.explorer.doc.nodes.slice(1);
+  f.open(source.id);
+  await until(() => f.document.getElementById('pin-reference') && !f.document.getElementById('pin-reference').disabled, 'reference controls ready');
+  f.document.getElementById('pin-reference').click();
+  await until(() => f.document.querySelector('.reference-row'), 'pin rendered');
+  f.open(active.id); f.type('answer', 'Unsent draft stays');
+  const panel = f.document.getElementById('references'); panel.open = true;
+  assert.match(panel.textContent, /Assumption.*needs review/);
+  assert.match(panel.textContent, /<unsafe> 😀/);
+  assert.equal(panel.querySelector('unsafe'), null);
+  assert.ok(panel.querySelector('.reference-full'));
+  assert.equal((await f.window.fetch('export.json').then(r => r.text())).includes('nodeIds'), false);
+  assert.equal(f.explorer.doc.nodes[2].answer, '');
+  f.document.getElementById('focus-branch').click();
+  panel.querySelector('.reference-jump').click();
+  assert.equal(f.document.getElementById('expanded-title').textContent, source.question);
+  f.open(active.id); assert.equal(f.document.getElementById('answer').value, 'Unsent draft stays');
+  const before = f.explorer.doc.revision;
+  await until(() => !f.document.querySelector('.reference-remove')?.disabled, 'pin save finished');
+  f.document.querySelector('.reference-remove').click();
+  assert.equal(f.explorer.doc.revision, before);
+  assert.equal(f.document.activeElement.id, 'references-summary');
+  await until(() => !f.document.querySelector('.reference-remove') && !f.document.getElementById('pin-reference')?.disabled, 'unpin saved');
+  assert.equal((await f.explorer.readReferences(f.explorer.doc.id)).nodeIds.length, 0);
+});
+
+test('pinned reference rows refresh from committed answer changes without showing another draft', async t => {
+  const f = await fixture(t), [source, active] = f.explorer.doc.nodes.slice(1);
+  f.open(source.id); await until(() => !f.document.getElementById('pin-reference')?.disabled, 'references ready');
+  f.document.getElementById('pin-reference').click();
+  await until(() => !f.document.querySelector('.reference-remove')?.disabled, 'pin committed');
+  f.open(active.id);
+  const changed = structuredClone(f.explorer.doc); changed.nodes[1].answer = 'Saved revised answer'; changed.nodes[1].answerState = 'decided'; changed.nodes[1].review = true;
+  await f.explorer.save(changed, 'Answer changed');
+  await until(() => /Saved revised answer/.test(f.document.querySelector('.reference-row')?.textContent ?? ''), 'committed source refresh');
+  assert.match(f.document.querySelector('.reference-row').textContent, /Decided.*needs review/);
+  f.type('answer', 'Unsent different draft');
+  assert.equal(f.document.querySelector('.reference-row').textContent.includes('Unsent different draft'), false);
+});
+
+test('delayed reference read cannot repaint a different active journey', async t => {
+  let release; const waiting = new Promise(resolve => { release = resolve; }); let held = false;
+  const f = await fixture(t, 340, undefined, true, { holdReferencesRead: () => { if (!held) { held = true; return waiting; } } });
+  const other = await f.explorer.library.import(createDocument('Other idea'));
+  await f.explorer.attach(other.key);
+  await until(() => f.document.getElementById('map-title').textContent === 'Other idea', 'new journey shown');
+  release();
+  await until(() => !f.document.getElementById('references')?.textContent.includes('Loading references'), 'new journey references loaded');
+  assert.equal(f.document.getElementById('map-title').textContent, 'Other idea');
+  assert.equal(f.document.querySelector('.reference-row'), null);
+});
+
+test('pinned references keep missing sources removable and reject stale metadata writes', async t => {
+  const f = await fixture(t), [source, active] = f.explorer.doc.nodes.slice(1), journey = f.explorer.doc.id;
+  f.open(source.id); await until(() => !f.document.getElementById('pin-reference')?.disabled, 'reference control ready');
+  f.document.getElementById('pin-reference').click();
+  await until(() => f.document.querySelector('.reference-row'), 'pin saved');
+  const next = structuredClone(f.explorer.doc); next.nodes = next.nodes.filter(n => n.id !== source.id); await f.explorer.save(next, 'Source removed');
+  f.open(active.id);
+  await until(() => /Source unavailable/.test(f.document.querySelector('.reference-row')?.textContent ?? ''), 'missing reference');
+  assert.equal(f.document.querySelector('.reference-jump'), null);
+  const other = await new Explorer({ file: f.explorer.file, send: async () => {} }).load();
+  await other.writeReferences({ journey, revision: 1, nodeIds: [] });
+  f.document.querySelector('.reference-remove').click();
+  await until(() => f.document.getElementById('references-retry'), 'stale retry visible');
+  f.document.getElementById('references-retry').click();
+  await until(() => !f.document.getElementById('references-retry'), 'stale retry resolved');
+  assert.deepEqual((await other.readReferences(journey)).nodeIds, []);
+});
 
 function chooseState(f, value) {
   const select = f.document.getElementById('answer-state'); assert.ok(select, 'labeled answer-state selector');

@@ -164,7 +164,7 @@ function apply(next, reset = false) {
   updateFocusStatus();
   showView();
   $('decision-brief').hidden = !doc;
-  $('check-answers').hidden = !doc;
+  $('check-answers').hidden = !doc; $('challenge-decisions').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('edit-guidance').disabled = !!state.pending;
   if (state.contextCoverage && JSON.stringify(state.contextCoverage) !== lastCoverage) { lastCoverage = JSON.stringify(state.contextCoverage); showCoverage(state.contextCoverage, 'Prepared'); }
@@ -909,11 +909,11 @@ function renderQuestionPreview() {
   }, { id: 'preview-retry' }); retry.hidden = !batch.stale; section.append(retry);
   return section;
 }
-function openResearchReview(nodeId, followup) {
+function openResearchReview(nodeId, followup, purpose) {
   voice.cancel(); researchReviewReturn = document.activeElement;
   $('research-review-content').replaceChildren();
   $('research-review-dialog').showModal(); $('research-review-close').focus();
-  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: $('context-scope').value, ...(followup ? { followup } : {}) });
+  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: purpose === 'challenge-review' ? 'decisions' : $('context-scope').value, ...(purpose ? { purpose } : {}), ...(followup ? { followup } : {}) });
 }
 function closeResearchReview() {
   researchReview.close();
@@ -923,7 +923,11 @@ function renderResearchReview() {
   const area = $('research-review-content'), value = researchReview.value;
   const focusedId = area.contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
   const focusedSetting = area.contains(document.activeElement) ? document.activeElement.dataset.setting : null;
-  $('research-review-start').disabled = !value || researchReview.loading || reviewStarting;
+  const challenge = researchReview.context?.purpose === 'challenge-review';
+  $('research-review-title').textContent = challenge ? 'Challenge decisions: review selected inputs' : 'Review research context';
+  $('research-review-description').textContent = challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is consulted; prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Review the Explorer-supplied input for the isolated research helper. Choices apply only to this request. Viewing or excluding context starts no inference.';
+  $('research-review-start').textContent = challenge ? 'Start reviewed challenge' : 'Start reviewed research';
+  $('research-review-start').disabled = !value || researchReview.loading || reviewStarting || (challenge && !value.prepared.canStart);
   $('research-review-refresh').disabled = researchReview.loading || reviewStarting;
   $('research-review-status').textContent = researchReview.loading ? 'Preparing context locally. No inference has started.' : researchReview.error || '';
   if (!value) { if (!researchReview.loading) area.replaceChildren(); return; }
@@ -931,19 +935,19 @@ function renderResearchReview() {
   const display = (label, item) => el('section', { class: 'review-record' }, el('h3', {}, label), el('pre', {}, JSON.stringify(item, null, 2)));
   const { topic, objective, successCriteria, mode, pins } = context;
   const controls = el('section', { class: 'review-record research-preferences' }, el('h3', {}, 'Research preferences'));
-  for (const [key, label, choices] of [
+  for (const [key, label, choices] of (challenge ? [] : [
     ['depth', 'Depth', [['quick', 'Quick - 60 seconds / 8 tool attempts'], ['standard', 'Standard - 180 seconds / 24 tool attempts'], ['deeper', 'Deeper - 300 seconds / 40 tool attempts']]],
     ['sourceFocus', 'Source focus', [['balanced', 'Balanced evidence'], ['primary', 'Prefer primary sources']]],
     ['recency', 'Recency', [['any', 'No recency preference'], ['recent', 'Prefer recent sources when relevant']]],
-  ]) {
+  ])) {
     const select = el('select', { 'data-setting': key, id: `research-${key}` }, ...choices.map(([id, title]) => el('option', { value: id }, title)));
     select.value = settings[key]; select.disabled = reviewStarting;
     select.addEventListener('change', () => researchReview.settings({ ...researchReview.context.settings, [key]: select.value }));
     controls.append(el('label', {}, label, select));
   }
-  const rows = [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings)), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. Records are complete; no text is clipped.`),
+  const rows = [...(challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. Records are complete; no text is clipped.`),
     display('Required: committed journey guidance and mode', { topic, objective, successCriteria, mode, pins }),
-    display('Required: selected question and committed answer state', context.path.at(-1))];
+    display(challenge ? 'Required: journey root' : 'Required: selected question and committed answer state', context.path.at(-1))];
   if (value.prepared.followup) rows.push(display('Follow-up: exact question, hypothetical status, original recommendation, complete optional evidence and exchanges', value.prepared.followup), display('Bounded source tracking across this history', coverage.followupTracking));
   for (const [kind, records] of [['Ancestor', context.path.slice(0, -1)], ['Other answer', context.decisionsElsewhere]]) for (const record of records) {
     const input = el('input', { type: 'checkbox', 'data-node-id': record.id }); input.checked = true;
@@ -968,6 +972,14 @@ $('research-review-start').addEventListener('click', async () => {
   if (!value || reviewStarting || researchReview.loading) return;
   reviewStarting = true; renderResearchReview();
   const sequence = researchReview.sequence;
+  if (value.prepared.operation === 'challenge-review') {
+    const result = await requestCheck('start', undefined, value.token);
+    reviewStarting = false;
+    if (sequence !== researchReview.sequence) { if (researchReview.context) renderResearchReview(); return; }
+    if (result) { closeResearchReview(); $('check-dialog').showModal(); $('cancel-check').focus({ preventScroll: true }); }
+    else { researchReview.value = null; researchReview.error = $('check-status').textContent; renderResearchReview(); }
+    return;
+  }
   const result = await api(value.prepared.followup ? 'research-follow-up' : 'research', { journey: value.journey, nodeId: value.nodeId, token: value.token });
   reviewStarting = false;
   if (sequence !== researchReview.sequence) { if (researchReview.context) renderResearchReview(); return; }
@@ -1542,38 +1554,47 @@ function closeCheck() {
   checkId = null; checkJourney = null; checkView = null; checkBusy = false;
   if ($('check-dialog').open) $('check-dialog').close();
 }
-async function requestCheck(action, findingId) {
+async function requestCheck(action, findingId, token) {
   if (checkBusy || closed || suspended || !state.document) return;
+  const previous = { id: checkId, journey: checkJourney, view: checkView };
   if (action === 'start' || !checkId) { checkId = crypto.randomUUID(); checkJourney = state.activeKey ?? state.document.id; checkEpoch++; checkView = null; renderCheck(); }
   const epoch = checkEpoch, id = checkId, journey = checkJourney, abort = new AbortController(); checkAbort = abort;
   const timer = setTimeout(() => abort.abort(), 5000);
   checkBusy = true; $('run-check').disabled = true; $('cancel-check').disabled = true;
   try {
     const response = await fetch('api/check-answers', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
-      body: JSON.stringify({ action, id, journey, ...(findingId ? { findingId } : {}) }) });
+      body: JSON.stringify({ action, id, journey, ...(token ? { token, operation: 'challenge-review' } : {}), ...(findingId ? { findingId } : {}) }) });
     const result = await response.json();
     if (epoch !== checkEpoch || id !== checkId || closed) return;
-    if (!response.ok) throw new Error(result.error);
+    if (!response.ok) {
+      if (action === 'start') { checkId = previous.id; checkJourney = previous.journey; checkView = previous.view; renderCheck(); }
+      throw new Error(result.error);
+    }
     if (result.id !== id) throw new Error('Answer check response did not match this request.');
     checkView = result; renderCheck();
     if (action === 'dismiss') [...$('check-content').querySelectorAll('[data-dismissed-finding]')].find(node => node.dataset.dismissedFinding === findingId)?.focus({ preventScroll: true });
+    return true;
   } catch (error) {
     if (epoch === checkEpoch && !closed) $('check-status').textContent = `${error.message} Refresh the saved journey and run the check again if needed.`;
   } finally { clearTimeout(timer); if (epoch === checkEpoch) { checkBusy = false; $('run-check').disabled = checkView?.status === 'pending'; $('cancel-check').disabled = false; } }
 }
+const ordinaryCheckDescription = $('check-description').textContent;
 function renderCheck() {
+  const challenge = checkView?.operation === 'challenge-review';
+  $('check-title').textContent = challenge ? 'Challenge decisions' : 'Check answers';
+  $('check-description').textContent = challenge ? 'Tool-free model hypotheses for user review. No new evidence was consulted; prior research is excluded. Input references are user statements, not proof. Inspect existing sourced research at an original answer separately. Suggestions never change decisions. Findings and dismissals are transient; replacement, reload, journey switch or relevant source changes clear or invalidate them.' : ordinaryCheckDescription;
   const result = checkView, coverage = result?.coverage, active = result?.status === 'result';
   $('cancel-check').hidden = result?.status !== 'pending';
   $('run-check').disabled = result?.status === 'pending';
   $('check-status').textContent = [result?.error, result?.status === 'pending' ? `${result.progress}… Cancel this before using another helper.` :
     result?.status === 'stale' ? 'These findings are stale because a sent source changed. Run the check again.' :
-    active ? result.findings.length ? `${result.findings.length} possible finding${result.findings.length === 1 ? '' : 's'} for review.` : 'No possible issues found in the reviewed context; the whole map is not proven consistent.' : 'Run an explicit check to review saved inputs.',
+    active ? result.findings.length ? `${result.findings.length} possible finding${result.findings.length === 1 ? '' : 's'} for review.` : challenge ? 'No useful hypotheses returned for these selected inputs; this is not proof that the choices are sound.' : 'No possible issues found in the reviewed context; the whole map is not proven consistent.' : 'Run an explicit check to review saved inputs.',
     coverage ? `Journey summary: ${coverage.included} records included; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes.` : ''].filter(Boolean).join(' ');
   $('check-content').replaceChildren();
   if (!active) return;
   const dismissed = new Set(result.dismissed);
   for (const finding of result.findings) {
-    const area = el('section', { class: 'check-finding' }, el('h3', {}, finding.category === 'possible-tension' ? 'Possible tension' : finding.category === 'unresolved-choice' ? 'Unresolved choice' : 'Untested assumption'),
+    const area = el('section', { class: 'check-finding' }, el('h3', {}, ({ assumption: 'Assumption', counterargument: 'Counterargument', alternative: 'Overlooked alternative', 'evidence-gap': 'Evidence gap', 'possible-tension': 'Possible tension', 'unresolved-choice': 'Unresolved choice', 'untested-assumption': 'Untested assumption' })[finding.category]), ...(challenge ? [el('p', { class: 'quiet' }, 'Model hypothesis; no new evidence')] : []),
       el('p', {}, finding.explanation), el('p', {}, `What may help: ${finding.resolution}`));
     for (const [index, ref] of finding.sources.entries()) {
       if (ref.kind === 'guidance') area.append(el('p', { class: 'quiet' }, `Source: global user guidance (${ref.field})`));
@@ -1590,6 +1611,8 @@ function renderCheck() {
 }
 $('check-answers').addEventListener('click', () => { voice.cancel(); $('check-dialog').showModal(); void requestCheck('poll'); });
 $('run-check').addEventListener('click', () => { voice.cancel(); void requestCheck('start'); });
+$('review-challenge').addEventListener('click', () => { $('check-dialog').close(); openResearchReview(state.document.rootId, undefined, 'challenge-review'); });
+$('challenge-decisions').addEventListener('click', () => openResearchReview(state.document.rootId, undefined, 'challenge-review'));
 $('cancel-check').addEventListener('click', () => void requestCheck('cancel'));
 $('refresh-check').addEventListener('click', async () => { if (await api('refresh-answer')) await requestCheck('poll'); });
 $('close-check').addEventListener('click', () => { $('check-dialog').close(); $('check-answers').focus(); });

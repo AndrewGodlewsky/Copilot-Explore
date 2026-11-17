@@ -68,7 +68,7 @@ export class Explorer {
     }).catch(() => {});
   }
   requireToolFreeRelease() {
-    if (this.unconfirmedToolFreeRelease) throw new Error('An earlier helper has not confirmed shutdown. Cleanup, question help, decision briefs and answer checks are blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
+    if (this.unconfirmedToolFreeRelease) throw new Error('An earlier helper has not confirmed shutdown. Cleanup, question help, decision briefs, answer checks and challenge reviews are blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
   }
   cleanupRequest(input) {
     return this.transact(() => {
@@ -88,7 +88,7 @@ export class Explorer {
         const text = cleanupText(input.text);
         if (!this.cleaner) throw new Error('Clean My Answer requires the installed Copilot desktop SDK.');
         if (this.briefWork?.status === 'pending') throw new Error('Cancel the decision brief before cleaning your answer.');
-        if (this.checkWork?.status === 'pending') throw new Error('Cancel the answer check before cleaning your answer.');
+        if (this.checkWork?.status === 'pending') throw new Error('Cancel the answer check or challenge review before cleaning your answer.');
         if (this.help?.status === 'pending') throw new Error('Cancel question help before cleaning your answer.');
         this.cleanup?.abort.abort();
         const work = { id: input.id, journey: input.journey, nodeId: input.nodeId, mutation: input.mutation, status: 'pending', progress: 'Preparing answer cleanup', abort: new AbortController() };
@@ -149,7 +149,7 @@ export class Explorer {
         if (!this.questionHelper) throw new Error('Question help requires the installed Copilot desktop SDK.');
         if (this.cleanup?.status === 'pending') throw new Error('Cancel answer cleanup before starting question help.');
         if (this.briefWork?.status === 'pending') throw new Error('Cancel the decision brief before starting question help.');
-        if (this.checkWork?.status === 'pending') throw new Error('Cancel the answer check before starting question help.');
+        if (this.checkWork?.status === 'pending') throw new Error('Cancel the answer check or challenge review before starting question help.');
         if (!this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw new Error('The selected journey changed. Refresh it and try again.');
         for (const [id, result] of this.helpContexts) if (result.journey !== input.journey || result.nodeId !== input.nodeId) this.helpContexts.delete(id);
         const context = helpContext(this.doc, input.nodeId);
@@ -208,7 +208,7 @@ export class Explorer {
         this.requireToolFreeRelease();
         if (!this.briefHelper) throw new Error('Decision briefs require the installed Copilot desktop SDK.');
         if (this.cleanup?.status === 'pending' || this.help?.status === 'pending') throw new Error('Cancel answer cleanup or question help before generating a decision brief.');
-        if (this.checkWork?.status === 'pending') throw new Error('Cancel the answer check before generating a decision brief.');
+        if (this.checkWork?.status === 'pending') throw new Error('Cancel the answer check or challenge review before generating a decision brief.');
         const prepared = prepareBrief(this.doc), dependencies = captureBrief(prepared);
         const work = { id: input.id, journey: input.journey, dependencies, coverage: { scope: 'journey-summary', bytes: prepared.bytes, limit: prepared.limit, included: dependencies.records.length, omitted: Object.values(prepared.context.omitted).reduce((a, b) => a + b, 0) }, status: 'pending', progress: 'Preparing decision brief', abort: new AbortController() };
         if (!check(work)) throw new Error('Saved brief inputs changed. Refresh the journey before generating.');
@@ -257,8 +257,9 @@ export class Explorer {
   checkRequest(input) {
     return this.transact(async () => {
       const action = input?.action;
+      const challenge = action === 'start' && input.operation === 'challenge-review';
       if (this.closed || !input || !['start', 'poll', 'cancel', 'dismiss'].includes(action) ||
-        Object.keys(input).sort().join(',') !== (action === 'dismiss' ? 'action,findingId,id,journey' : 'action,id,journey') ||
+        Object.keys(input).sort().join(',') !== (challenge ? 'action,id,journey,operation,token' : action === 'dismiss' ? 'action,findingId,id,journey' : 'action,id,journey') ||
         typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || !this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw new Error('Invalid answer check request.');
       const matches = () => this.checkWork?.id === input.id && this.checkWork.journey === input.journey;
       if (action === 'cancel') {
@@ -271,12 +272,12 @@ export class Explorer {
         this.requireToolFreeRelease();
         if (!this.checkHelper) throw new Error('Answer checks require the installed Copilot desktop SDK.');
         if (this.cleanup?.status === 'pending' || this.help?.status === 'pending' || this.briefWork?.status === 'pending') throw new Error('Cancel answer cleanup, question help or the decision brief before checking answers.');
-        if (this.checkWork?.status === 'pending') throw new Error('Cancel the running answer check before starting another.');
-        const prepared = prepareAnswerCheck(this.doc), dependencies = captureCheck(prepared);
-        const work = { id: input.id, journey: input.journey, dependencies,
+        if (this.checkWork?.status === 'pending') throw new Error('Cancel the running answer check or challenge review before starting another.');
+        const prepared = challenge ? await this.researchReview.consume(this, { token: input.token, journey: input.journey, nodeId: this.doc.rootId, purpose: 'challenge-review' }) : prepareAnswerCheck(this.doc), dependencies = captureCheck(prepared);
+        const work = { id: input.id, journey: input.journey, dependencies, operation: challenge ? 'challenge-review' : 'answer-check',
           coverage: { scope: 'journey-summary', bytes: prepared.bytes, limit: prepared.limit, included: dependencies.records.length,
             omitted: Object.values(prepared.context.omitted).reduce((sum, count) => sum + count, 0) },
-          status: 'pending', progress: 'Preparing answer check', abort: new AbortController(), dismissed: new Set() };
+          status: 'pending', progress: challenge ? 'Preparing challenge review' : 'Preparing answer check', abort: new AbortController(), dismissed: new Set() };
         if (!fresh(work)) throw new Error('Saved check inputs changed. Refresh the journey before checking answers.');
         this.checkWork?.abort.abort(); this.checkWork = work;
         this.toolFreeTask = this.toolFreeTask.then(async () => {
@@ -304,7 +305,7 @@ export class Explorer {
         work.dismissed.add(input.findingId);
       }
       const records = new Map(work?.dependencies.records.map(record => [record.id, record]));
-      return structuredClone({ id: input.id, status: work?.status ?? 'idle', progress: work?.progress, error: work?.error, coverage: work?.coverage,
+      return structuredClone({ id: input.id, operation: work?.operation, status: work?.status ?? 'idle', progress: work?.progress, error: work?.error, coverage: work?.coverage,
         ...(work?.status === 'result' ? { findings: work.findings.map(item => ({ ...item, sourceStates: item.sources.map(ref => ref.kind === 'node' ?
           { kind: 'node', id: ref.id, state: records.get(ref.id).answerState ?? (records.get(ref.id).kind === 'direction' ? 'direction' : 'idea'), review: records.get(ref.id).review } : { kind: 'guidance', field: ref.field }) })), dismissed: [...work.dismissed] } : {}) });
     });

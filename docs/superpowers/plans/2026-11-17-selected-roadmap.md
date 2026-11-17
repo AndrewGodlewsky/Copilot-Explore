@@ -1025,6 +1025,36 @@ Low/Normal/High are the only personal priorities; High rows sort first, then Nor
 
 Matrix and original option cards share exact selected detail IDs and the existing explicit append-to-draft/undo path, its 20,000-character limit, newer-typing guard and unchanged answer state. Hiding criteria retains selected details, disclosed in the UI. Existing Use recommendation and Use this option remain available. Native semantic table headers, a labeled keyboard-focusable contained horizontal scroll region and native controls provide access without replacing answer/follow-up editors. No visual/native layout proof is claimed from jsdom.
 
+Published task 33: **v0.1.45**, `ac03c74`, required checks and option comparison evidence retained; independent review approved and remote main verified.
+
+## Task 34: Deliberate challenge review (#31 / original40)
+
+Read issue-40.md, task-34-design-notes.md, AGENTS.md and the final answer-check, context-preview and claim-evidence reports. BASE is `ac03c74d30e33fa46f4b283efe88f4a81d706394`; ship version **0.1.46**. Reconcile the current answer-check lifecycle, reviewed context and claim/source contracts before implementation. Preserve actual-release ownership, retained usage, source freshness and explicit user commitment. Propose the concrete bounded scope, tool choice and reused seam before broad edits.
+
+### Behavior
+
+- Add an explicit challenge action over selected committed decisions with visible scope and bounded owned SDK work. This is a deliberate review action, distinct from the journey's existing Challenge exploration mode. Do not change the mode or rerun checks automatically.
+- Return assumptions, counterarguments, overlooked alternatives and evidence gaps with validated source references to the actual transmitted decisions/guidance. Respect tentative, assumed and needs-review labels. Empty or partially decided contexts must remain truthful about what can be challenged.
+- Separate model speculation from existing sourced information and any newly consulted evidence. Reuse the current claim/source provenance contract; a previously consulted source is not a new fetch or proof of semantic truth. Tool-free reasoning must be clearly labeled. If actual new research is provided, it must use the existing bounded research tools/permissions and its appropriate actual-release ownership; never add ambient project access.
+- Reuse the answer-check lifecycle, source navigation, transient dismissal and context-preview seams where their behavior is genuinely shared. Do not create a second parallel implementation of the same request state machine or a generic workflow engine. No permanent agent swarm, debate loop, automatic re-challenge until agreement or extra model downloads.
+- Treat review results as suggestions only. The user may dismiss, inspect evidence or navigate to an original answer; preserve drafts/caret and committed decisions. Relevant changes invalidate captured results; unrelated saves preserve current findings/dismissals. Keep cancellation, late-result identity checks, explicit retry and retained operation-specific usage.
+- Define explicit finding counts, text/source bounds and lifetime before coding, aligned with the existing check/evidence contracts. Explain omitted context and available usage without fabricated prices, precision or confidence percentages.
+
+### Verification and completion
+
+- Test coherent, contradictory, tentative and empty deterministic scenarios; actual included/omitted sources; malformed references/output; relevant/unrelated edits; dismissal and navigation; cancelled/replaced/stale completions; release contention and receipt attribution. Verify no saved decision changes and no attached-chat send.
+- Exercise shipped HTTP/jsdom UI and installed local SDK fixtures for actual instructions/tool boundaries, bounds and cleanup. No paid provider, existing user session, real microphone or browser/desktop automation. Live semantic quality and native layout remain explicit manual limits.
+- Run npm test/check/package and applicable fixtures, synchronize confirmed patch metadata/release notes/README, include controller plan changes, self-review and commit. No nested agents, merge/push or issue closure.
+- Write task-34-report.md with the final scope/tool choice, reused interfaces, bounds, certainty/evidence/freshness rules, exact test evidence and commit. Controller independently reviews and publishes.
+
+### Approved concrete contract
+
+Use the existing ResearchReview frozen context/token seam and the answer-check request, result, dismissal, navigation, freshness and actual-release queue. Add operation `challenge-review`; keep ordinary check categories and tentative-conflict normalization unchanged. Root/guidance are mandatory; saved stateful question records are optional selected records with per-request exclusions. At least one transmitted nonempty saved answer is required; empty/guidance-only selection shows a local explanation and cannot start. Root context is not presented as a settled choice.
+
+No prior research/claims, drafts, private references, project context or new evidence is transmitted/consulted. All findings are explicitly tool-free hypotheses; node/guidance references identify actual user inputs, not citation support. Existing sourced material remains inspectable at the original answer. Categories: assumption, counterargument, alternative, evidence-gap. Limits: 0-12 findings; unique 1-80 ASCII alphanumeric/underscore/hyphen IDs; 1-8 distinct actual node/guidance refs; nonblank explanation and resolution each at most 1000 UTF-16 code units; raw output at most 256 KiB UTF-8; complete input strings at most 131072 UTF-8 bytes. No clipping.
+
+One owned helper with zero tools and the existing 180000-ms operation allowance; shutdown/accounting can continue afterward. Operation-specific Explorer Challenge Review receipts. Preview is one frozen slot, 10-minute TTL, existing 1-MiB response and 512-KiB request limits, up to 5000 distinct exclusion IDs of at most100 code units. Existing sequence/tombstone, purpose and one-shot token rules apply. Start validates current disk and in-memory sources and never reprepares strings. Results/dismissals last in the shared canvas check slot until replacement/close/journey change; relevant observed source changes stale them, unrelated/excluded changes preserve them. No automatic rerun or decision write. Tool-free preview/start work without a web researcher.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

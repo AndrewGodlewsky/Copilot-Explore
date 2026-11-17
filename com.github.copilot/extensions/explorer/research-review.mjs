@@ -1,4 +1,5 @@
 import { prepareFollowup } from './research-followup.mjs';
+import { prepareChallenge } from './answer-check.mjs';
 import { randomUUID } from 'node:crypto';
 import { isQuestion } from './web/answer-state.mjs';
 import { findNode } from './model.mjs';
@@ -16,8 +17,10 @@ export class ResearchReview {
   constructor() { this.current = null; this.order = null; this.timer = null; }
   clear() { clearTimeout(this.timer); this.timer = null; this.current = null; }
   async prepare(explorer, input) {
+    const challenge = input?.purpose === 'challenge-review';
     if (!input || typeof input !== 'object' || Array.isArray(input) || !['prepare', 'cancel'].includes(input.action) ||
-      !['action,clientId,excluded,journey,nodeId,scope,sequence', 'action,clientId,excluded,journey,nodeId,scope,sequence,settings'].includes(Object.keys(input).filter(key => key !== 'followup').sort().join(',')) ||
+      !['action,clientId,excluded,journey,nodeId,scope,sequence', 'action,clientId,excluded,journey,nodeId,scope,sequence,settings'].includes(Object.keys(input).filter(key => key !== 'followup' && !(challenge && key === 'purpose')).sort().join(',')) ||
+      (challenge && (input.followup !== undefined || input.scope !== 'decisions')) ||
       typeof input.clientId !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.clientId) ||
       !Number.isSafeInteger(input.sequence) || input.sequence < 1 ||
       typeof input.journey !== 'string' || input.journey.length > 100 || typeof input.nodeId !== 'string' || input.nodeId.length > 100 ||
@@ -33,11 +36,11 @@ export class ResearchReview {
     const file = explorer.file, key = explorer.activeKey;
     const current = await explorer.readCurrent();
     if (explorer.closed || this.order !== order || explorer.file !== file || explorer.activeKey !== key) obsolete();
-    if (!isQuestion(findNode(current, input.nodeId))) throw new Error('Select a question to research.');
-    const prepared = input.followup !== undefined ? prepareFollowup(current, input.nodeId, input.followup, { settings, scope: input.scope, excluded: input.excluded, history: explorer.currentFollowup(current, input.nodeId) }) : Object.freeze({ ...prepareResearch(current, input.nodeId, { ...researchFraming(current, settings), scope: input.scope, excluded: input.excluded }), settings, limits: researchLimits(settings) });
+    if (challenge ? input.nodeId !== current.rootId : !isQuestion(findNode(current, input.nodeId))) throw new Error(challenge ? 'Challenge review must use the journey root.' : 'Select a question to research.');
+    const prepared = challenge ? prepareChallenge(current, input.excluded) : input.followup !== undefined ? prepareFollowup(current, input.nodeId, input.followup, { settings, scope: input.scope, excluded: input.excluded, history: explorer.currentFollowup(current, input.nodeId) }) : Object.freeze({ ...prepareResearch(current, input.nodeId, { ...researchFraming(current, settings), scope: input.scope, excluded: input.excluded }), settings, limits: researchLimits(settings) });
     const token = randomUUID(), expiresAt = Date.now() + REVIEW_TTL;
     const response = { token, journey: input.journey, nodeId: input.nodeId, clientId: input.clientId, sequence: input.sequence, expiresAt,
-      excluded: [...input.excluded], prepared: { context: prepared.context, instructions: prepared.instructions, prompt: prepared.prompt, bytes: prepared.bytes, limit: prepared.limit, coverage: prepared.coverage, settings, limits: prepared.limits, ...(prepared.followup ? { followup: prepared.followup } : {}) } };
+      excluded: [...input.excluded], prepared: { context: prepared.context, instructions: prepared.instructions, prompt: prepared.prompt, bytes: prepared.bytes, limit: prepared.limit, coverage: prepared.coverage, ...(challenge ? { operation: 'challenge-review', canStart: prepared.canStart } : { settings }), limits: prepared.limits, ...(prepared.followup ? { followup: prepared.followup } : {}) } };
     if (Buffer.byteLength(JSON.stringify(response), 'utf8') > REVIEW_RESPONSE_LIMIT) throw new Error('The research review exceeds its 1 MiB response limit. Reduce optional exclusions or choose a narrower scope.');
     this.current = { token, journey: input.journey, nodeId: input.nodeId, file, key, prepared, expiresAt };
     this.timer = setTimeout(() => this.clear(), REVIEW_TTL); this.timer.unref?.();
@@ -47,11 +50,13 @@ export class ResearchReview {
     const review = this.current;
     if (!review || typeof input.token !== 'string' || input.token !== review.token || input.journey !== review.journey || input.nodeId !== review.nodeId ||
       explorer.file !== review.file || explorer.activeKey !== review.key || input.journey !== (explorer.activeKey ?? explorer.doc?.id) || Date.now() >= review.expiresAt) obsolete();
-    if (!!review.prepared.followup !== (input.purpose === 'research-follow-up')) throw new Error('This review has a different research or follow-up purpose.');
+    if ((review.prepared.operation ?? (review.prepared.followup ? 'research-follow-up' : 'research')) !== (input.purpose ?? 'research')) throw new Error('This review has a different purpose.');
+    const challenge = review.prepared.operation === 'challenge-review';
+    if (challenge && !review.prepared.canStart) throw new Error('Select at least one saved nonempty answer to challenge. Tentative answers remain tentative.');
     this.clear();
     const current = await explorer.readCurrent();
     explorer.currentFollowup(current);
-    if (explorer.closed || !sameResearchSources(review.prepared.dependencies, current) || !sameResearchDestination(review.prepared.dependencies, current)) throw new Error('Research sources or saved research changed. Refresh and review context before starting.');
+    if (explorer.closed || !sameResearchSources(review.prepared.dependencies, current) || (!challenge && !sameResearchDestination(review.prepared.dependencies, current))) throw new Error('Reviewed sources or saved research changed. Refresh and review context before starting.');
     if (review.prepared.followup && (explorer.currentFollowup(current, input.nodeId)?.id ?? null) !== review.prepared.historyId) throw new Error('Follow-up history or its earlier source context changed. Review again before starting.');
     return review.prepared;
   }

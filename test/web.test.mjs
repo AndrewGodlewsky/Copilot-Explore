@@ -2787,6 +2787,55 @@ test('reviewed brief HTTP UI preserves draft/caret, edits, source navigation and
  const disk=JSON.parse(await readFile(f.explorer.file,'utf8'));disk.nodes[2].answer='External uncited answer changed';disk.nodes[2].answerState='tentative';disk.revision++;await writeFile(f.explorer.file,JSON.stringify(disk));await until(()=>$('brief-status').textContent.includes('stale'),'accepted artifact stale from disk');
 });
 
+test('challenge review HTTP UI selects exact inputs without research access and preserves editor and draft', async t => {
+  let captured, calls = 0;
+  const f = await fixture(t, 340, undefined, false, { checkHelper: { async run(prepared) { calls++; captured = prepared; return { findings: [{ id: 'alt', category: 'alternative', explanation: 'Hypothesis <script>: another route', resolution: 'Compare it with the owner.', sources: [{ kind: 'node', id: prepared.context.decisionsElsewhere[0].id }] }] }; }, close() {} }, before: async explorer => {
+    const doc = structuredClone(explorer.doc); doc.nodes[1].answer = 'Saved route A'; doc.nodes[1].answerState = 'tentative'; doc.nodes[2].answer = 'Saved route B'; doc.nodes[2].answerState = 'decided'; await explorer.save(doc);
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Private unfinished draft');
+  const editor = $('answer'); editor.focus(); editor.setSelectionRange(3, 8);
+  $('challenge-decisions').click(); await until(() => $('research-review-dialog').open && !$('research-review-start').disabled, 'challenge preview ready');
+  assert.equal(calls, 0); assert.match($('research-review-title').textContent, /Challenge/); assert.match($('research-review-content').textContent, /180 seconds.*zero tools/);
+  const omit = [...$('research-review-content').querySelectorAll('[data-node-id]')].find(input => input.dataset.nodeId === f.explorer.doc.nodes[2].id);
+  omit.checked = false; omit.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  await until(() => !$('research-review-start').disabled && !$('research-review-prompt').textContent.includes('Saved route B'), 'excluded challenge context');
+  const exact = $('research-review-prompt').textContent;
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Private unfinished draft'); assert.equal(editor.selectionStart, 3); assert.equal(editor.selectionEnd, 8);
+  $('research-review-start').click(); await until(() => $('check-content').textContent.includes('Hypothesis <script>'), 'challenge result');
+  assert.equal(calls, 1); assert.equal(captured.prompt, exact); assert.ok(!exact.includes('Private unfinished draft')); assert.equal(captured.operation, 'challenge-review');
+  assert.match($('check-title').textContent, /Challenge/); assert.match($('check-description').textContent, /No new evidence/); assert.equal($('check-content').querySelector('script'), null);
+  assert.match($('check-content').textContent, /tentative/); assert.equal(f.explorer.doc.nodes[1].answer, 'Saved route A');
+  $('check-content').querySelector('button:last-child').click(); await until(() => $('check-content').textContent.includes('Dismissed in this canvas.'), 'challenge dismissed');
+  $('check-content').querySelector('.reference-jump').click(); assert.equal($('answer').value, 'Private unfinished draft');
+});
+
+test('challenge empty context explains absence locally and never starts inference', async t => {
+  let calls = 0;
+  const f = await fixture(t, 340, undefined, false, { checkHelper: { run() { calls++; throw Error('No inference'); }, close() {} } }), $ = id => f.document.getElementById(id);
+  const mode = f.explorer.doc.mode;
+  $('challenge-decisions').click(); await until(() => $('research-review-content').textContent.includes('Select at least one saved nonempty answer'), 'empty challenge explanation');
+  assert.equal($('research-review-start').disabled, true); assert.equal(calls, 0); assert.equal(f.explorer.doc.mode, mode);
+  assert.equal($('research-depth'), null); assert.match($('research-review-description').textContent, /No new evidence/);
+  $('research-review-close').click(); assert.equal($('research-review-dialog').open, false);
+});
+test('challenge start rejected during an ordinary check preserves the original cancel identity', async t => {
+  let release, calls = 0;
+  const f = await fixture(t, 340, undefined, false, { checkHelper: { run() { calls++; return new Promise(resolve => { release = () => resolve({ findings: [] }); }); }, close() {} }, before: async explorer => {
+    const doc = structuredClone(explorer.doc); doc.nodes[1].answer = 'Saved'; await explorer.save(doc);
+  } }), $ = id => f.document.getElementById(id);
+  $('check-answers').click(); await until(() => !$('run-check').disabled, 'ordinary check ready');
+  $('run-check').click(); await until(() => f.explorer.checkWork?.status === 'pending' && !$('cancel-check').disabled, 'ordinary pending');
+  try {
+    const id = f.explorer.checkWork.id;
+    $('review-challenge').click(); await until(() => !$('research-review-start').disabled, 'challenge selection ready');
+    $('research-review-start').click(); await until(() => $('research-review-status').textContent.includes('Cancel the running'), 'start rejected');
+    $('research-review-close').click(); $('check-answers').click();
+    await until(() => !$('cancel-check').hidden && !$('cancel-check').disabled, 'original cancellation retained');
+    $('cancel-check').click(); await until(() => f.explorer.checkWork === null, 'original request cancelled');
+    assert.equal(calls, 1); assert.ok(id);
+  } finally { release?.(); }
+});
+
 test('answer check HTTP UI keeps drafts, renders plain text, dismisses locally and reveals an out-of-focus source', async t => {
   let captured;
   const f = await fixture(t, 340, undefined, false, { checkHelper: { async run(prepared) {

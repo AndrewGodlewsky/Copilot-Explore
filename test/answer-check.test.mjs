@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
-import { prepareAnswerCheck, parseAnswerCheck, validateCheck, captureCheck, checkFreshness } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
+import { prepareAnswerCheck, prepareChallenge, parseAnswerCheck, validateCheck, captureCheck, checkFreshness } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { prepareBrief, parseBrief, acceptBrief } from '../com.github.copilot/extensions/explorer/decision-brief.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
@@ -26,6 +26,98 @@ async function makeExplorer(t, helper) {
   t.after(async () => { await explorer.close(); await rm(dir, { recursive: true, force: true }); });
   return explorer;
 }
+const challengeReview = (explorer, excluded = [], sequence = 1, clientId = randomUUID()) => explorer.researchReview.prepare(explorer, {
+  action: 'prepare', purpose: 'challenge-review', journey: explorer.doc.id, nodeId: explorer.doc.rootId, scope: 'decisions', excluded, sequence, clientId,
+});
+test('challenge review captures selected saved answers, validates hypotheses and consumes exact reviewed strings', async t => {
+  let captured;
+  const explorer = await makeExplorer(t, { async run(prepared) { captured = prepared; return { findings: [{ id: 'gap', category: 'evidence-gap', explanation: 'Evidence is missing.', resolution: 'Ask what would disconfirm this choice.', sources: [ref(prepared.context.decisionsElsewhere[0].id)] }] }; }, close() {} });
+  const excluded = explorer.doc.nodes[2].id, review = await challengeReview(explorer, [excluded]);
+  assert.equal(review.prepared.operation, 'challenge-review'); assert.equal(review.prepared.canStart, true);
+  assert.ok(!review.prepared.prompt.includes('Use route B')); assert.match(review.prepared.instructions, /hypothes/i);
+  const original = structuredClone(explorer.doc.nodes), req = request(explorer);
+  await explorer.checkRequest({ ...req, action: 'start', token: review.token, operation: 'challenge-review' }); await explorer.toolFreeTask;
+  assert.equal(captured.prompt, review.prepared.prompt); assert.equal(captured.instructions, review.prepared.instructions);
+  let result = await explorer.checkRequest({ ...req, action: 'poll' }); assert.equal(result.operation, 'challenge-review'); assert.equal(result.findings[0].category, 'evidence-gap');
+  await explorer.checkRequest({ ...req, action: 'dismiss', findingId: 'gap' });
+  const changed = structuredClone(explorer.doc); changed.nodes[2].answer = 'Excluded edit'; changed.revision++; await writeFile(explorer.file, JSON.stringify(changed));
+  result = await explorer.checkRequest({ ...req, action: 'poll' }); assert.equal(result.status, 'result'); assert.deepEqual(result.dismissed, ['gap']);
+  assert.deepEqual(explorer.doc.nodes, original);
+  changed.objective = 'Changed mandatory guidance'; changed.revision++; await writeFile(explorer.file, JSON.stringify(changed));
+  assert.equal((await explorer.checkRequest({ ...req, action: 'poll' })).status, 'stale');
+});
+test('challenge empty selection cannot start; purpose and actually transmitted references are enforced', async t => {
+  const explorer = await makeExplorer(t, { run() { throw Error('Must not infer'); }, close() {} });
+  const empty = await challengeReview(explorer, explorer.doc.nodes.slice(1).map(n => n.id));
+  assert.equal(empty.prepared.canStart, false);
+  await assert.rejects(explorer.checkRequest({ ...request(explorer), action: 'start', token: empty.token, operation: 'challenge-review' }), /Select at least one/);
+  const review = await challengeReview(explorer, [explorer.doc.nodes[2].id]);
+  await assert.rejects(explorer.researchReview.consume(explorer, { token: review.token, journey: explorer.doc.id, nodeId: explorer.doc.rootId }), /purpose/);
+  const prepared = explorer.researchReview.current.prepared;
+  const valid = { findings: [{ id: 'a', category: 'counterargument', explanation: 'Hypothesis', resolution: 'Test it', sources: [ref(explorer.doc.nodes[1].id)] }] };
+  assert.equal(validateCheck(valid, prepared).findings[0].category, 'counterargument');
+  for (const mutate of [v => v.findings[0].sources = [ref(explorer.doc.nodes[2].id)], v => v.findings[0].category = 'possible-tension', v => v.findings[0].evidence = 'fabricated']) {
+    const bad = structuredClone(valid); mutate(bad); assert.throws(() => validateCheck(bad, prepared));
+  }
+  assert.throws(() => validateCheck(valid, prepareAnswerCheck(explorer.doc)));
+});
+test('challenge bounds preserve complete tentative inputs and reject malformed hypotheses without claiming evidence', () => {
+  const doc = fixture(); doc.nodes[1].answerState = 'assumption'; doc.nodes[2].review = true;
+  doc.nodes[1].research = { canary: 'PRIVATE-RESEARCH' }; doc.nodes[1].rationale = 'PRIVATE-RATIONALE';
+  const prepared = prepareChallenge(doc);
+  assert.equal(prepared.context.decisionsElsewhere.find(n => n.id === doc.nodes[1].id).answerState, 'assumption');
+  assert.ok(prepared.context.decisionsElsewhere.find(n => n.id === doc.nodes[2].id).review);
+  assert.ok(Object.isFrozen(prepared.dependencies.records)); assert.ok(!prepared.prompt.includes('PRIVATE-'));
+  assert.deepEqual(parseAnswerCheck('{"findings":[]}', prepared), { findings: [] });
+  const raw = { findings: Array.from({ length: 12 }, (_, i) => ({ id: `hypothesis-${i}`, category: ['assumption', 'counterargument', 'alternative', 'evidence-gap'][i % 4], explanation: 'x'.repeat(1000), resolution: 'y'.repeat(1000), sources: [ref(doc.nodes[1].id), ref(doc.nodes[2].id), { kind: 'guidance', field: 'topic' }] })) };
+  assert.equal(parseAnswerCheck(JSON.stringify(raw), prepared).findings.length, 12);
+  for (const mutate of [v => v.findings.push({ ...v.findings[0], id: '13' }), v => v.findings[0].explanation += 'x', v => v.findings[0].sources = [], v => v.findings[0].sources.push(ref('unknown')), v => v.findings[0].sources.push(v.findings[0].sources[0]), v => v.findings[0].sources = [{ kind: 'url', url: 'https://example.com' }]]) {
+    const bad = structuredClone(raw); mutate(bad); assert.throws(() => validateCheck(bad, prepared));
+  }
+  assert.throws(() => parseAnswerCheck(' '.repeat(256 * 1024 + 1), prepared));
+  assert.equal(prepareChallenge(createDocument('Empty')).canStart, false);
+  for (let i = 0; i < 20; i++) { const [node] = addQuestions(doc, doc.rootId, [{ question: `Long ${i}`, category: 'Other' }]); node.answer = 'x'.repeat(20000); }
+  const bounded = prepareChallenge(doc); assert.ok(bounded.bytes <= 131072); assert.ok(bounded.context.omitted.decisionsElsewhere > 0);
+  for (const node of bounded.context.decisionsElsewhere) assert.equal(node.answer, doc.nodes.find(n => n.id === node.id).answer);
+});
+test('challenge late completion, explicit cancellation, replacement and unconfirmed release share the check queue', async t => {
+  let release, calls = 0;
+  const explorer = await makeExplorer(t, { run() { calls++; return calls === 1 ? new Promise(resolve => { release = () => resolve({ findings: [] }); }) : Promise.resolve({ findings: [] }); }, close() {} });
+  const first = request(explorer), second = request(explorer);
+  const review = await challengeReview(explorer);
+  await explorer.checkRequest({ ...first, action: 'start', token: review.token, operation: 'challenge-review' }); await new Promise(setImmediate);
+  try {
+    await assert.rejects(explorer.checkRequest({ ...second, action: 'start' }), /Cancel the running/);
+    await explorer.checkRequest({ ...first, action: 'cancel' });
+    const next = await challengeReview(explorer);
+    await explorer.checkRequest({ ...second, action: 'start', token: next.token, operation: 'challenge-review' }); assert.equal(calls, 1);
+  } finally { release(); }
+  await explorer.toolFreeTask; assert.equal(calls, 2);
+  assert.equal((await explorer.checkRequest({ ...first, action: 'poll' })).status, 'idle');
+  assert.deepEqual((await explorer.checkRequest({ ...second, action: 'poll' })).findings, []);
+  const third = await challengeReview(explorer); explorer.unconfirmedToolFreeRelease = {};
+  await assert.rejects(explorer.checkRequest({ ...request(explorer), action: 'start', token: third.token, operation: 'challenge-review' }), /shutdown/);
+});
+test('challenge HTTP boundary rejects invalid purpose and stale reviewed inputs before inference; completed source changes stay stale', async t => {
+  let complete, calls = 0;
+  const explorer = await makeExplorer(t, { run() { calls++; return new Promise(resolve => { complete = () => resolve({ findings: [] }); }); }, close() {} });
+  const server = await startServer(explorer, { close() {} }); t.after(() => server.close());
+  const post = (route, body, origin = new URL(server.url).origin) => fetch(server.url + route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: origin }, body: JSON.stringify(body) });
+  const input = { action: 'prepare', purpose: 'challenge-review', journey: explorer.doc.id, nodeId: explorer.doc.rootId, scope: 'decisions', excluded: [], clientId: randomUUID(), sequence: 1 };
+  assert.equal((await post('api/research-review', input, '')).status, 403);
+  assert.equal((await post('api/research-review', { ...input, purpose: 'unknown' })).status, 400);
+  const review = await post('api/research-review', input).then(r => r.json());
+  assert.equal(calls, 0); const req = request(explorer), start = { ...req, action: 'start', token: review.token, operation: 'challenge-review' };
+  assert.equal((await post('api/check-answers', { ...start, extra: true })).status, 400);
+  const disk = structuredClone(explorer.doc); disk.nodes[1].answer = 'Changed during preview'; disk.revision++; await writeFile(explorer.file, JSON.stringify(disk));
+  assert.equal((await post('api/check-answers', start)).status, 400); assert.equal(calls, 0);
+  await explorer.load(); const freshReview = await challengeReview(explorer);
+  await explorer.checkRequest({ ...start, token: freshReview.token }); await new Promise(setImmediate);
+  const later = structuredClone(explorer.doc); later.pins = [{ id: randomUUID(), text: 'New constraint' }]; later.revision++; await writeFile(explorer.file, JSON.stringify(later));
+  complete(); await explorer.toolFreeTask;
+  assert.equal((await explorer.checkRequest({ ...req, action: 'poll' })).status, 'stale');
+  await assert.rejects(explorer.checkRequest({ ...start, token: freshReview.token }), /obsolete/);
+});
 test('bounded context captures exact sent inputs and excludes drafts, research and previous brief', () => {
   const doc = fixture(); doc.nodes[1].research = { private: 'not sent' }; doc.nodes[1].rationale = 'PRIVATE'; doc.brief = { private: 'not sent' };
   const prepared = prepareAnswerCheck(doc), dependencies = captureCheck(prepared);

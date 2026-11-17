@@ -5,7 +5,7 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createAnswerCheckHelper, prepareAnswerCheck } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
+import { createAnswerCheckHelper, prepareAnswerCheck, prepareChallenge } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
 
 const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_PATH;
@@ -17,8 +17,11 @@ let hold = false, onHeld, initialized = 0;
 const document = createDocument('Explore Unicode 🌱', { objective: 'Understand a technical question' });
 const [selected] = addQuestions(document, document.rootId, [{ question: 'What does λ mean for Élodie?', category: 'Technical' }]);
 document.pins = [{ id: 'constraint-00000000000000', text: 'Use familiar vocabulary' }];
-const prepared = prepareAnswerCheck(document);
-const output = { findings: [{ id: 'u', category: 'untested-assumption', explanation: 'The saved question may need evidence.', resolution: 'Ask the user which evidence would settle it.', sources: [{ kind: 'node', id: selected.id }] }] };
+const challenge = process.argv.includes('--challenge');
+selected.answer = 'Use the simpler route'; selected.answerState = 'tentative';
+const prepared = challenge ? prepareChallenge(document) : prepareAnswerCheck(document);
+const usageLabel = challenge ? 'Explorer Challenge Review' : 'Explorer Answer Check';
+const output = { findings: [{ id: 'u', category: challenge ? 'counterargument' : 'untested-assumption', explanation: 'The saved question may need evidence.', resolution: 'Ask the user which evidence would settle it.', sources: [{ kind: 'node', id: selected.id }] }] };
 const fixture = createServer(async (req, res) => {
   let body = ''; for await (const chunk of req) body += chunk;
   const input = JSON.parse(body); prompts.push(input);
@@ -63,6 +66,8 @@ const helper = createAnswerCheckHelper(parent, { runtime, usageDirectory: join(t
 const timer = setTimeout(() => { for (const client of owned) void client.forceStop(); }, 55000);
 try {
   const result = await helper.run(prepared); assert.equal(result.findings[0].explanation, output.findings[0].explanation);
+  assert.equal(prepared.operation === 'challenge-review', challenge);
+  assert.ok(prepared.bytes <= 131072);
   assert.equal(initialized, 1); assert.equal(prompts.length, 1);
   for (const prompt of prompts) {
     assert.equal(prompt.tools?.length ?? 0, 0);
@@ -75,16 +80,16 @@ try {
   const labels = [];
   for (const id of ids) {
     const journal = await readFile(join(temporary, 'usage', 'session-state', id, 'events.jsonl'), 'utf8');
-    labels.push(['Explorer Answer Check'].find(label => journal.includes(label)));
+    labels.push([usageLabel].find(label => journal.includes(label)));
     assert.match(journal, /session.usage_record/); assert.ok(!journal.includes('Élodie'));
   }
-  assert.deepEqual(labels.sort(), ['Explorer Answer Check'].sort());
+  assert.deepEqual(labels.sort(), [usageLabel].sort());
   hold = true; const abort = new AbortController(), held = new Promise(resolve => { onHeld = resolve; });
   const cancelled = assert.rejects(helper.run(prepared, { signal: abort.signal }), /cancelled/);
   await held; abort.abort(); await cancelled; assert.equal(initialized, 2);
   assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 2);
   for (const workspace of workspaces) await assert.rejects(stat(workspace), { code: 'ENOENT' });
-  console.log('PASS isolated answer check: exact captured SDK strings/byte budget, zero initialized tools, root-anchored context, bounded structured output, attributed receipts, cancellation and release. No paid inference or existing session.');
+  console.log((challenge ? 'PASS isolated challenge review: ' : 'PASS isolated answer check: ') + ' exact captured SDK strings/byte budget, zero initialized tools, root-anchored context, bounded structured output, attributed receipts, cancellation and release. No paid inference or existing session.');
 } finally {
   clearTimeout(timer); await helper.close(); await Promise.allSettled([...owned].map(client => client.forceStop()));
   fixture.closeAllConnections(); await new Promise(resolve => fixture.close(resolve));

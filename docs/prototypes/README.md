@@ -1,5 +1,7 @@
 # Explorer prototype studies
 
+The expanding-node direction is integrated into the **installed plugin from v0.1.7**. These standalone studies remain design references with sample data; `npm run preview` runs the production interface. Production keeps a scrollable node body within the available canvas height and uses the existing Copilot research, persistence and export paths.
+
 ## Current: refine the expanding node
 
 The owner selected the expanding node: "That feels right to me." [expanded-node.html](expanded-node.html) is a focused refinement of that direction. Run `npm run prototype:layouts` and open the printed URL in Brave, or open the HTML file directly. This is now the default preview.
@@ -12,7 +14,7 @@ The question this iteration tests is whether an expanding node remains easy to n
 
 Try **Explore options**, type a few words, **Add to my answer**, then **Save & go deeper**. Open the connected follow-up, use the ancestry trail to return, and collapse the parent to see its saved answer. Try the same flow with **Narrow** and **Dark preview**. Escape collapses a question; Ctrl/Command + Enter saves and reveals a follow-up. The map scrolls horizontally and vertically. Opening a node respects reduced motion.
 
-This is still a throwaway prototype. Sample research and follow-ups are illustrative; data lives in memory until reset or refresh. The tree uses simple spacing and native scrolling, not production pan/zoom or a large-map layout engine. Research can make a node taller than the visible canvas; scrolling to compare long options with the draft is a remaining design tradeoff. This iteration does not change the installed canvas. Visual assessment remains manual under the owner's browser-control preference.
+This file is a throwaway prototype. Sample research and follow-ups are illustrative; data lives in memory until reset or refresh. The tree uses simple spacing and native scrolling. Research can make a prototype node taller than the visible canvas. The production implementation uses a bounded, scrollable node body instead, along with the real map's pan/zoom. Visual assessment remains manual under the owner's browser-control preference.
 
 ## Previous: keep the selected node connected
 

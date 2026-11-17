@@ -1,6 +1,6 @@
 # Explorer for GitHub Copilot
 
-**Proof of concept, v0.1.6.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need.
+**Proof of concept, v0.1.7.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
 
 ## Install from GitHub
 
@@ -34,7 +34,7 @@ Exploration files are stored separately and remain intact. For later updates, us
 
 ## Install a development checkout
 
-Requires GitHub Copilot desktop with canvas support and Node.js 22 or later for development commands. The plugin itself uses the SDK/runtime supplied by Copilot; there are no npm dependencies or separate AI keys.
+Requires GitHub Copilot desktop with canvas support and Node.js 22 or later for development commands. The plugin itself uses the SDK/runtime supplied by Copilot; there are no npm runtime dependencies or separate AI keys. The development tests use jsdom.
 
 From this repository:
 
@@ -65,14 +65,14 @@ Local marketplace installs can show a generic native tab icon due to a host issu
 ## Use Explorer
 
 1. Start with an idea. Copilot creates questions in several directions around it.
-2. Select a question in the map or searchable **Outline**.
-3. Use **Research options** to ask Copilot for alternatives, pros/cons, a recommendation, and uncertainty. Consulted sources are linked; unsourced reasoning is labeled.
+2. Select a question in the map or searchable **Outline**. The node expands in its branch; its answer, research, and follow-up controls are inside it.
+3. Open **Explore options**, then use **Research options** to ask Copilot for alternatives, pros/cons, a recommendation, and uncertainty. Consulted sources are linked; unsourced reasoning is labeled. **Add to my answer** appends an option to your draft for editing.
 4. Write your answer. **Save answer** records it; **Save & explore deeper** also generates follow-up questions on that branch. You can add a question manually.
 5. **Finish exploration** saves the record and offers two downloads: Markdown and `.explore.json`. Use **Open file** to resume the latter in another canvas/session.
 
-Pan by dragging the map background. Use the zoom controls, Ctrl+wheel, or Fit map. Keyboard users can Tab to nodes, use the map's arrow-key pan, or navigate the outline. Revising an answered node preserves its descendants and marks them for review.
+Pan by dragging the map background. Use the zoom controls or Ctrl+wheel. **Collapse node** keeps your place and shows a saved-answer preview; **Whole map** collapses the workspace and fits the tree. **Center question** returns to the selected node at reading size. Keyboard users can Tab to nodes, use the map's arrow-key pan, navigate the outline, or press Escape to collapse. Ctrl/Command + Enter saves an answer and explores deeper. Revising an answered node preserves its descendants and marks them for review.
 
-AI work is queued in the canvas's attached Copilot chat and uses that session's model, tools, permissions, and normal usage accounting. It can appear in chat and wait behind other work. Web research depends on browsing tools being available there. Research does not fill in your answer. Cancel discards the pending result; it does not stop the host's chat turn. A three-minute timeout releases a stalled request and preserves saved answers.
+AI work is queued in the canvas's attached Copilot chat and uses that session's model, tools, permissions, and normal usage accounting. It can appear in chat and wait behind other work. Web research depends on browsing tools being available there. Research never saves an answer for you. Cancel discards the pending result; it does not stop the host's chat turn. A three-minute timeout releases a stalled request and preserves saved answers.
 
 ## Files and privacy
 
@@ -85,6 +85,7 @@ There is no fixed depth limit. This POC supports up to 5,000 nodes, 20,000 chara
 ## Develop and verify
 
 ```powershell
+npm ci
 npm test
 npm run check
 npm run preview
@@ -92,9 +93,11 @@ npm run preview
 
 Preview prints a local URL to open in Brave. It uses the real UI and persistence, but has no Copilot connection; AI actions report that limitation. Manual questions, answers, imports and exports work. No browser opens automatically.
 
-For the latest working prototype, run `npm run prototype:layouts`. The owner selected the **expanding node** as the direction to refine. Questions expand in their own branches, research opens below the draft, and collapsed nodes show saved answer previews. Try saving an answer and opening its connected follow-up. These [layout studies](docs/prototypes/README.md) use in-memory example data and are separate from the installed canvas. Earlier studies remain available on the same preview server.
+The **expanding node is integrated into the installed canvas from v0.1.7**. The [earlier layout studies](docs/prototypes/README.md) remain available with `npm run prototype:layouts` for design reference; those pages use in-memory example data. Use `npm run preview` to inspect the real shipped interface locally.
 
-The [interaction research](docs/explorer-interaction-research.md) examines six product precedents and relevant studies. It records why the owner preferred the expanding node and the remaining interaction questions. Its [earlier concept sketches](docs/prototypes/research-directions.html) remain available for reference. The selected direction is being refined in prototypes before production integration.
+The [interaction research](docs/explorer-interaction-research.md) examines six product precedents and relevant studies. It records why the owner preferred the expanding node. Its [earlier concept sketches](docs/prototypes/research-directions.html) remain available for reference.
+
+DOM interaction tests run the shipped HTML/JavaScript against the real local server and persistence controller, with geometry stubs because [jsdom does not render a visual browser](https://github.com/jsdom/jsdom#pretending-to-be-a-visual-browser). They cover in-map forms, drafts, saves, research results and follow-up navigation. Layout tests separately check variable-size boxes and branch separation.
 
 For the real SDK/runtime smoke test, set `COPILOT_SDK_DIR` to the installed SDK directory containing `index.js`, and `COPILOT_CLI_PATH` to its paired runtime executable, then run `npm run e2e`. The test uses a disposable home/session and a loopback model fixture. It checks actual plugin discovery, HTTP serving, queued chat delivery, canvas callbacks, persistence and export/import without paid inference or browser automation.
 
@@ -102,7 +105,8 @@ For the real SDK/runtime smoke test, set `COPILOT_SDK_DIR` to the installed SDK 
 
 Manual acceptance in Copilot:
 
-- Invoke `/explore` and confirm the map opens in the side panel.
+- Update to v0.1.7, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.7**.
+- Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
 - Answer a question and confirm relevant deeper questions appear.
 - Research another question; inspect the options, source links and uncertainty.
 - Export both files, open the JSON in a new canvas, and confirm the full map returns.

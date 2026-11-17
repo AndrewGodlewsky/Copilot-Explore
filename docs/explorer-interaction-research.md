@@ -1,12 +1,12 @@
 # Explorer: alternatives to a question panel
 
-Research checked 2026-11-16. Recommendation for the next prototype, not an approved production design.
+Research checked 2026-11-16. The owner selected the expanding node; it is integrated into the installed canvas from v0.1.7.
 
 ## Recommendation
 
 The owner identified the issue: **the bottom drawer feels detached from the selected node**, then selected the **expanding node** from the [connected-workspace pair](prototypes/connected-workspace.html): "That feels right to me." The [current refinement](prototypes/expanded-node.html) keeps the question in its branch, unfolds research below a preserved draft, and adds answer previews and connected follow-up navigation.
 
-The earlier recommendation was a local branch above a full-width question document. That could still reproduce the owner's concern if the two surfaces feel separate. The expanding node is now the chosen direction for iteration. Exact sizing, movement, and long-research behavior remain proposals to test before production integration. The new prototype uses a simple tree and native scrolling to make those tradeoffs tangible.
+The earlier recommendation was a local branch above a full-width question document. That could still reproduce the owner's concern if the two surfaces feel separate. The expanding node is the chosen direction. Production v0.1.7 moves the live answer/research controls into that node, reserves its measured space in the tree, and bounds long content in a scrollable body. The standalone prototype remains a reference, not the installed application.
 
 The research supports investigating different levels of detail and complementary representations. It does **not** establish that one of these layouts will work best in Copilot. Read the [product evidence](explorer-product-patterns.md) and compare the [three concept sketches](prototypes/research-directions.html).
 

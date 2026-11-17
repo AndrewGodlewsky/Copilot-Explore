@@ -142,11 +142,12 @@ test('canvas instances are independent, reopen from disk and reject cross-sessio
   await extension.canvas.onClose(ctx);
   const reopened = await extension.canvas.open(ctx); assert.notEqual(first.url, reopened.url); assert.equal(read(ctx).document.topic, 'First');
 });
-test('balanced graph layout keeps siblings separated and both sides anchored to the idea', () => {
+test('tree layout keeps siblings separated and branches connected below the idea', () => {
   const doc = createDocument('Garden'); const children = addQuestions(doc, doc.rootId, [question, { question: 'What will it cost?', category: 'Cost' }, { question: 'How much space?', category: 'Space' }]);
   addQuestions(doc, children[0].id, [{ question: 'Who maintains it?', category: 'Care' }, { question: 'Who owns it?', category: 'Ownership' }]);
   const positions = layout(doc.nodes, doc.rootId);
-  assert.ok(positions.get(children[0].id).x < -110); assert.ok(positions.get(children[1].id).x > -110);
+  assert.ok(positions.get(children[0].id).y > positions.get(doc.rootId).y + 110);
+  assert.ok(positions.get(children[1].id).x > positions.get(children[0].id).x);
   const values = [...positions.values()];
   for (let i = 0; i < values.length; i++) for (let j = i + 1; j < values.length; j++) assert.ok(Math.abs(values[i].x - values[j].x) >= 220 || Math.abs(values[i].y - values[j].y) >= 110);
 });

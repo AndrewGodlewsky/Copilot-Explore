@@ -17,12 +17,11 @@
   </section>
   <main id="workspace" hidden>
     <section class="map-section" aria-label="Exploration map">
-      <div class="map-heading"><div><h1 id="map-title"></h1><p id="progress" class="quiet"></p></div><button id="outline-toggle" aria-expanded="false">Outline</button></div>
-      <div id="map" class="map" tabindex="0" aria-label="Question map. Drag background to pan; use zoom buttons or arrow keys. Tab to questions, Enter to select."><div id="world"><svg id="edges" aria-hidden="true"></svg><div id="nodes"></div></div><div id="map-hint">Choose a question. Follow your curiosity.</div></div>
-      <div class="map-controls"><button id="zoom-out" aria-label="Zoom out">−</button><span id="zoom-level">100%</span><button id="zoom-in" aria-label="Zoom in">+</button><button id="fit">Fit map</button><span class="legend"><i></i> Open <i class="answered"></i> Answered</span></div>
+      <div class="map-heading"><div><h1 id="map-title"></h1><p id="progress" class="quiet"></p><button id="request-status" hidden></button></div><button id="outline-toggle" aria-expanded="false">Outline</button></div>
+      <div id="map" class="map" tabindex="0" aria-label="Question map. Drag background to pan; use zoom buttons or arrow keys. Select a question to expand it. Escape collapses it."><div id="world"><svg id="edges" aria-hidden="true"></svg><div id="nodes"></div><section id="node-workspace" class="expanded-node" aria-labelledby="expanded-title" hidden></section></div><div id="map-hint">Select a question to expand it. Drag the background to move around.</div></div>
+      <div class="map-controls"><button id="zoom-out" aria-label="Zoom out">−</button><span id="zoom-level">100%</span><button id="zoom-in" aria-label="Zoom in">+</button><button id="fit">Whole map</button><button id="center-question">Center question</button><span class="legend"><i></i> Open <i class="answered"></i> Answered</span></div>
       <div id="outline" class="outline" hidden><label for="search">Find a question</label><input id="search" type="search" placeholder="Search questions and answers"><div id="outline-list"></div></div>
     </section>
-    <aside id="inspector" aria-label="Selected question"></aside>
   </main>
   <dialog id="export-dialog"><h2>Your exploration, captured.</h2><p>Your answers, open questions, and research are saved. Download both files to keep the full record.</p><div class="exports"><a class="primary" href="export.md" download>Download Markdown</a><a href="export.json" download>Download .explore.json</a></div><p class="quiet">Open the .explore.json file in Explorer to continue later.</p><button id="close-export">Back to the map</button></dialog>
   <footer class="app-version" aria-label="Explorer plugin version">Explorer v{{EXPLORER_VERSION}}</footer>

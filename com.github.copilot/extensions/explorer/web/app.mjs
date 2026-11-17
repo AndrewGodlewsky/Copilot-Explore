@@ -3,9 +3,10 @@ import { layout } from './layout.mjs';
 const $ = id => document.getElementById(id);
 const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'];
 let state = { document: null, pending: null, error: '' };
-let selected = null, signature = '', positions = new Map(), busy = false;
-let view = { x: 0, y: 0, zoom: 1 }, firstFit = true;
-const drafts = new Map();
+let selected = null, expanded = false, signature = '', positions = new Map(), busy = false, firstFit = true;
+let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame;
+const drafts = new Map(), nodeUi = new Map();
+const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, manualOpen: false, category: null, question: '' }); return nodeUi.get(id); };
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -30,126 +31,216 @@ async function api(action, input = {}) {
   } catch (error) { notice(error.message); return null; }
   finally { busy = false; }
 }
+function anchorPoint(id = selected) {
+  const p = positions.get(id);
+  return p ? { id, x: view.x + (p.x + p.width / 2) * view.zoom, y: view.y + p.y * view.zoom } : null;
+}
+function captureWorkspace() {
+  const panel = $('node-workspace'), content = panel.querySelector('.node-content');
+  if (content && !panel.hidden) {
+    const ui = uiFor(panel.dataset.nodeId);
+    ui.scroll = content.scrollTop;
+    ui.researchOpen = panel.querySelector('.research-disclosure')?.open ?? false;
+    ui.manualOpen = panel.querySelector('.manual')?.open ?? false;
+  }
+}
 function apply(next) {
   const stamp = JSON.stringify(next);
   if (stamp === signature) return;
+  captureWorkspace();
+  const changedDocument = state.document?.id !== next.document?.id;
   const firstQuestions = (state.document?.nodes.length ?? 0) <= 1 && (next.document?.nodes.length ?? 0) > 1;
+  const anchor = changedDocument ? null : anchorPoint();
+  if (changedDocument) {
+    drafts.clear(); nodeUi.clear(); positions.clear(); $('node-workspace').replaceChildren();
+    selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
+  }
   signature = stamp; state = next;
   const doc = state.document;
-  if (doc && !doc.nodes.some(n => n.id === selected)) selected = doc.rootId;
+  if (doc && !doc.nodes.some(n => n.id === selected)) { selected = doc.rootId; expanded = false; }
   $('welcome').hidden = !!doc; $('workspace').hidden = !doc;
-  $('save-file').hidden = !doc; $('finish').hidden = !doc;
-  $('finish').disabled = !!state.pending;
+  $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   notice(state.error);
   if (!doc) return;
+  if (firstQuestions && selected === doc.rootId) expanded = false;
   $('map-title').textContent = doc.topic;
   const answered = doc.nodes.filter(n => n.answer).length;
   $('progress').textContent = `${answered} answered · ${doc.nodes.length - 1 - answered} open · Saved locally`;
-  positions = layout(doc.nodes, doc.rootId);
-  renderMap(); renderInspector(); renderOutline();
-  if (firstFit || firstQuestions) { requestAnimationFrame(fit); firstFit = false; }
-}
-function select(id, center = false) {
-  selected = id; renderMap(); renderInspector();
-  if (center) {
-    const p = positions.get(id), rect = $('map').getBoundingClientRect();
-    view.x = rect.width / 2 - (p.x + 110) * view.zoom; view.y = rect.height / 2 - (p.y + 55) * view.zoom; transform();
+  $('request-status').hidden = !state.pending;
+  if (state.pending) {
+    const work = doc.nodes.find(n => n.id === state.pending.nodeId);
+    $('request-status').textContent = `${state.pending.kind === 'research' ? 'Researching' : 'Finding questions for'} ${work?.category ?? 'this map'}…`;
   }
+  renderWorkspace(); refreshScene(anchor); renderOutline();
+  if (firstFit || firstQuestions) { expanded ? centerSelected() : fit(); firstFit = false; }
 }
+function focusTop(id, height) {
+  const node = state.document.nodes.find(n => n.id === id);
+  const parent = state.document.nodes.find(n => n.id === node?.parentId);
+  return Math.max(16, Math.min(parent ? (parent.answer ? 150 : 110) + 72 + 24 : 24, height - 320));
+}
+function select(id) {
+  if (!state.document?.nodes.some(n => n.id === id)) return;
+  const rect = $('map').getBoundingClientRect(), width = Math.min(560, rect.width - 32), old = anchorPoint(id);
+  const anchor = { id, x: Math.max(width / 2 + 16, Math.min(rect.width - width / 2 - 16, old?.x ?? rect.width / 2)), y: focusTop(id, rect.height) };
+  captureWorkspace(); selected = id; expanded = true; view.zoom = 1;
+  renderWorkspace(); refreshScene(anchor); $('expanded-title').focus({ preventScroll: true });
+}
+function collapseNode(focus = true) {
+  const anchor = anchorPoint(); captureWorkspace(); expanded = false;
+  renderWorkspace(); refreshScene(anchor);
+  if (focus) [...$('nodes').children].find(e => e.dataset.nodeId === selected)?.focus({ preventScroll: true });
+}
+function refreshScene(anchor = anchorPoint()) {
+  if (!state.document) return;
+  const panel = $('node-workspace'), rect = $('map').getBoundingClientRect();
+  const width = Math.min(560, Math.max(180, rect.width - 32));
+  const top = Math.max(16, Math.min(rect.height - 160, anchor?.y ?? 24));
+  const height = Math.max(140, rect.height - top - 16);
+  panel.style.width = `${width}px`; panel.style.maxHeight = `${height}px`;
+  panel.style.setProperty('--heading-limit', `${Math.max(64, Math.min(190, height * .42))}px`);
+  const sizes = new Map(state.document.nodes.map(n => [n.id, { width: 220, height: n.answer ? 150 : 110 }]));
+  if (expanded) sizes.set(selected, { width, height: panel.offsetHeight });
+  positions = layout(state.document.nodes, state.document.rootId, sizes);
+  if (anchor && positions.has(anchor.id)) {
+    const p = positions.get(anchor.id);
+    view.x = anchor.x - (p.x + p.width / 2) * view.zoom; view.y = anchor.y - p.y * view.zoom;
+  }
+  if (expanded) { const p = positions.get(selected); panel.style.left = `${p.x}px`; panel.style.top = `${p.y}px`; }
+  renderMap(); transform();
+}
+function scheduleLayout() { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(() => refreshScene()); }
 function renderMap() {
-  const doc = state.document;
-  const fragment = document.createDocumentFragment();
-  $('edges').replaceChildren();
+  const doc = state.document, fragment = document.createDocumentFragment();
+  const focused = $('nodes').contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
+  $('edges').replaceChildren(); $('map-hint').hidden = expanded;
   for (const n of doc.nodes) {
     const p = positions.get(n.id), root = n.id === doc.rootId;
-    const node = button('', () => select(n.id), { class: `node ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''}`,
-      title: n.question, 'aria-pressed': String(selected === n.id), 'aria-label': `${n.category}: ${n.question}. ${n.answer ? 'Answered' : root ? 'Central idea' : 'Open'}` });
-    node.style.left = `${p.x}px`; node.style.top = `${p.y}px`; node.style.setProperty('--branch', colors[p.branch % colors.length]);
-    node.append(el('span', { class: 'category' }, n.category), el('span', { class: 'question' }, n.question), el('span', { class: 'status' }, root ? `${doc.nodes.length - 1} questions` : n.review ? 'Needs review' : n.answer ? 'Answered' : 'Open question'));
-    fragment.append(node);
+    if (!expanded || n.id !== selected) {
+      const node = button('', () => select(n.id), { class: `node ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''}`,
+        title: n.question, 'data-node-id': n.id, 'aria-expanded': 'false', 'aria-label': `${n.category}: ${n.question}. ${n.answer ? 'Answered' : root ? 'Central idea' : 'Open'}` });
+      node.style.left = `${p.x}px`; node.style.top = `${p.y}px`; node.style.width = `${p.width}px`; node.style.height = `${p.height}px`; node.style.setProperty('--branch', colors[p.branch % colors.length]);
+      node.append(el('span', { class: 'category' }, n.category), el('span', { class: 'question' }, n.question));
+      if (n.answer) node.append(el('span', { class: 'answer-preview' }, n.answer));
+      node.append(el('span', { class: 'status' }, root ? `${doc.nodes.length - 1} questions` : n.review ? 'Needs review' : n.answer ? 'Answered' : 'Open question'));
+      fragment.append(node);
+    }
     if (!root) {
-      const parent = positions.get(n.parentId), left = p.side < 0;
-      const x1 = parent.x + (left ? 0 : 220), y1 = parent.y + 55, x2 = p.x + (left ? 220 : 0), y2 = p.y + 55;
+      const parent = positions.get(n.parentId), x1 = parent.x + parent.width / 2, y1 = parent.y + parent.height, x2 = p.x + p.width / 2, y2 = p.y;
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', `M${x1},${y1} C${(x1 + x2) / 2},${y1} ${(x1 + x2) / 2},${y2} ${x2},${y2}`);
+      path.setAttribute('d', `M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}`);
+      if (n.id === selected || n.parentId === selected) path.setAttribute('class', 'current');
       $('edges').append(path);
     }
   }
-  $('nodes').replaceChildren(fragment); transform();
+  $('nodes').replaceChildren(fragment);
+  if (focused) [...$('nodes').children].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
 }
 function transform() { $('world').style.transform = `translate(${view.x}px,${view.y}px) scale(${view.zoom})`; $('zoom-level').textContent = `${Math.round(view.zoom * 100)}%`; }
 function fit() {
   if (!positions.size) return;
   const values = [...positions.values()], rect = $('map').getBoundingClientRect();
-  const minX = Math.min(...values.map(p => p.x)), maxX = Math.max(...values.map(p => p.x + 220));
-  const minY = Math.min(...values.map(p => p.y)), maxY = Math.max(...values.map(p => p.y + 110));
-  view.zoom = Math.max(.12, Math.min(1, (rect.width - 70) / (maxX - minX), (rect.height - 70) / (maxY - minY)));
+  const minX = Math.min(...values.map(p => p.x)), maxX = Math.max(...values.map(p => p.x + p.width));
+  const minY = Math.min(...values.map(p => p.y)), maxY = Math.max(...values.map(p => p.y + p.height));
+  view.zoom = Math.max(.12, Math.min(1, (rect.width - 60) / (maxX - minX), (rect.height - 60) / (maxY - minY)));
   view.x = rect.width / 2 - (minX + maxX) / 2 * view.zoom; view.y = rect.height / 2 - (minY + maxY) / 2 * view.zoom; transform();
+}
+function centerSelected() {
+  if (!selected || !positions.has(selected)) return;
+  const rect = $('map').getBoundingClientRect(); view.zoom = 1;
+  refreshScene({ id: selected, x: rect.width / 2, y: focusTop(selected, rect.height) });
 }
 function zoom(factor) {
   const rect = $('map').getBoundingClientRect(), next = Math.max(.12, Math.min(1.6, view.zoom * factor)), ratio = next / view.zoom;
   view.x = rect.width / 2 - (rect.width / 2 - view.x) * ratio; view.y = rect.height / 2 - (rect.height / 2 - view.y) * ratio; view.zoom = next; transform();
 }
-function renderInspector() {
-  const doc = state.document, node = doc.nodes.find(n => n.id === selected);
-  const panel = $('inspector'), root = node.id === doc.rootId, pending = !!state.pending;
-  const focus = document.activeElement?.id === 'answer' ? { start: $('answer').selectionStart, end: $('answer').selectionEnd } : null;
-  panel.replaceChildren();
+function answerStatus(node) {
+  const dirty = drafts.has(node.id) && drafts.get(node.id).trim() !== node.answer;
+  if ($('answer-status')) $('answer-status').textContent = dirty ? 'Unsaved draft' : node.answer ? 'Answer saved' : 'No answer yet';
+}
+function renderWorkspace() {
+  const panel = $('node-workspace'); captureWorkspace(); panel.hidden = !expanded;
+  if (!expanded) return;
+  const doc = state.document, node = doc.nodes.find(n => n.id === selected), ui = uiFor(node.id), root = node.id === doc.rootId, pending = !!state.pending;
+  const active = document.activeElement, sameNode = panel.dataset.nodeId === node.id;
+  const focus = sameNode && active?.id && panel.contains(active) ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
+  panel.dataset.nodeId = node.id; panel.replaceChildren();
   const path = [], byId = new Map(doc.nodes.map(n => [n.id, n]));
   for (let n = node; n; n = byId.get(n.parentId)) path.push(n);
-  const crumbs = el('div', { class: 'crumbs', 'aria-label': 'Question ancestors' });
-  for (const n of path.toReversed().slice(-4)) { if (crumbs.childNodes.length) crumbs.append(el('span', {}, '/')); crumbs.append(button(n.id === doc.rootId ? 'Your idea' : n.category, () => select(n.id, true))); }
-  panel.append(crumbs, el('span', { class: 'category-label' }, node.category), el('h2', { class: 'question-title' }, node.question));
+  const crumbs = el('nav', { class: 'crumbs', 'aria-label': 'Question ancestors' });
+  for (const n of path.toReversed().slice(0, -1).slice(-3)) {
+    if (crumbs.childNodes.length) crumbs.append(el('span', {}, '/'));
+    crumbs.append(button(n.id === doc.rootId ? 'Your idea' : n.category, () => select(n.id), { id: `ancestor-${n.id}`, title: n.question }));
+  }
+  const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.category), button('Collapse node', () => collapseNode(), { id: 'collapse-node' })), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
+  const content = el('div', { class: 'node-content' }); panel.append(heading, content);
   if (pending) {
     const workNode = byId.get(state.pending.nodeId);
-    panel.append(el('div', { class: 'pending', role: 'status' },
-      el('strong', {}, state.pending.kind === 'research' ? 'Copilot is researching…' : 'Copilot is finding the next questions…'),
-      el('div', {}, workNode?.id === node.id ? 'Watch this node for the result. You can continue browsing the map.' : `Working on: ${workNode?.category}. You can continue browsing.`),
-      button('Cancel request', () => api('cancel')), el('div', { class: 'quiet' }, 'Cancelling discards the result; the chat turn may still finish.')));
+    content.append(el('div', { class: 'pending', role: 'status' }, el('strong', {}, state.pending.kind === 'research' ? 'Copilot is researching…' : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, 'Cancelling discards the result; the chat turn may still finish.')));
   }
-  if (node.review) panel.append(el('p', { class: 'note' }, 'An earlier answer changed. Review this question and save your answer again when it still fits.'));
+  if (node.review) content.append(el('p', { class: 'note' }, 'An earlier answer changed. Review this question and save your answer again when it still fits.'));
   if (root) {
-    panel.append(el('p', { class: 'empty-detail' }, 'There is no required route through this map. Pick a question, make a decision, and go deeper where it matters. Leave the other branches open.'),
-      button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { disabled: pending }));
+    content.append(el('p', { class: 'quiet' }, 'Pick a connected question to explore it. Each question opens into its own workspace on the map.'), button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending }));
   } else {
-    const form = el('form', { class: 'answer-form' });
-    const answer = el('textarea', { id: 'answer', rows: '6', maxlength: '20000', placeholder: 'Your answer can be a decision, a hunch, or what you know so far.' });
+    const form = el('form', { class: 'answer-form' }), answer = el('textarea', { id: 'answer', rows: '4', maxlength: '20000', placeholder: 'A decision, a hunch, or what you know so far…' });
     answer.value = drafts.get(node.id) ?? node.answer;
-    answer.addEventListener('input', () => drafts.set(node.id, answer.value));
-    const save = async expand => {
+    answer.addEventListener('input', () => { drafts.set(node.id, answer.value); answerStatus(node); });
+    const save = async deepen => {
       if (!answer.value.trim()) return notice('Write an answer before saving.');
       const value = answer.value;
-      if (await api('answer', { nodeId: node.id, answer: value, expand })) { drafts.delete(node.id); renderInspector(); if (expand) notice('Answer saved. Copilot will add follow-up questions to this branch.'); }
+      if (await api('answer', { nodeId: node.id, answer: value, expand: deepen })) {
+        if (drafts.get(node.id) === value) drafts.delete(node.id);
+        renderWorkspace(); refreshScene();
+        if (deepen) notice('Answer saved. Copilot will add follow-up questions to this branch.');
+      }
     };
     form.addEventListener('submit', event => { event.preventDefault(); void save(true); });
-    form.append(el('label', { for: 'answer' }, 'Your answer'), answer, el('div', { class: 'actions' },
-      el('button', { type: 'submit', class: 'primary', disabled: pending }, 'Save & explore deeper'), button('Save answer', () => save(false), { disabled: pending })));
-    panel.append(form);
-    panel.append(el('div', { class: 'research-header' }, el('h3', {}, 'Think it through'), button(node.research ? 'Research again' : 'Research options', () => api('research', { nodeId: node.id }), { disabled: pending })));
-    if (node.research) panel.append(renderResearch(node.research));
-    else panel.append(el('p', { class: 'quiet' }, 'Ask Copilot to compare options, explain trade-offs, and recommend a direction before you answer.'));
+    form.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void save(true); } });
+    form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), el('span', { id: 'answer-status', class: 'quiet' })), answer, el('div', { class: 'actions' }, button('Save answer', () => save(false), { id: 'save-answer', disabled: pending }), el('button', { type: 'submit', id: 'save-deeper', class: 'primary', disabled: pending }, 'Save & explore deeper')));
+    content.append(form); answerStatus(node);
+    const research = el('details', { class: 'research-disclosure' }, el('summary', { id: 'research-summary' }, 'Explore options')); research.open = ui.researchOpen;
+    research.addEventListener('toggle', () => { if (research.isConnected) { ui.researchOpen = research.open; scheduleLayout(); } });
+    research.append(el('p', { class: 'quiet' }, 'Compare possibilities before you decide. Suggestions stay separate from your saved answer.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; void api('research', { nodeId: node.id }); }, { id: 'research-request', disabled: pending }));
+    if (node.research) research.append(renderResearch(node));
+    content.append(research);
   }
-  const details = el('details');
-  const manual = el('form');
-  const category = el('input', { id: 'manual-category', required: '', maxlength: '60', value: root ? '' : node.category });
-  const question = el('textarea', { id: 'manual-question', required: '', rows: '2', maxlength: '600' });
-  manual.append(el('label', { for: 'manual-category' }, 'Category'), category, el('label', { for: 'manual-question' }, 'Question'), question, el('button', { type: 'submit', disabled: pending }, 'Add question'));
-  manual.addEventListener('submit', async event => { event.preventDefault(); if (await api('add', { nodeId: node.id, question: question.value, category: category.value })) fit(); });
-  details.append(el('summary', {}, 'Add your own question'), manual); panel.append(details);
-  if (focus && $('answer')) { $('answer').focus({ preventScroll: true }); $('answer').setSelectionRange(focus.start, focus.end); }
+  const children = doc.nodes.filter(n => n.parentId === node.id);
+  if (children.length) content.append(el('div', { class: 'followups' }, el('h3', {}, root ? 'Explore a direction' : 'Follow-up questions'), el('p', { class: 'quiet' }, 'Connected below this node.'), children.map(child => button(child.question, () => select(child.id), { id: `followup-${child.id}`, class: 'followup' }))));
+  const details = el('details', { class: 'manual' }, el('summary', { id: 'manual-summary' }, 'Add your own question')); details.open = ui.manualOpen;
+  details.addEventListener('toggle', () => { if (details.isConnected) { ui.manualOpen = details.open; scheduleLayout(); } });
+  const manual = el('form'), category = el('input', { id: 'manual-category', required: '', maxlength: '60' }), question = el('textarea', { id: 'manual-question', required: '', rows: '2', maxlength: '600' });
+  category.value = ui.category ?? (root ? '' : node.category); question.value = ui.question;
+  category.addEventListener('input', () => { ui.category = category.value; }); question.addEventListener('input', () => { ui.question = question.value; });
+  manual.append(el('label', { for: 'manual-category' }, 'Category'), category, el('label', { for: 'manual-question' }, 'Question'), question, el('button', { type: 'submit', id: 'add-question', disabled: pending }, 'Add question'));
+  manual.addEventListener('submit', async event => { event.preventDefault(); const value = question.value; if (await api('add', { nodeId: node.id, question: value, category: category.value })) { if (ui.question === value) ui.question = ''; renderWorkspace(); refreshScene(); } });
+  details.append(manual); content.append(details); content.scrollTop = ui.scroll;
+  if (focus) {
+    const target = $(focus.id);
+    const restored = target && !target.disabled ? target : $('cancel-request') ?? $('expanded-title');
+    restored.focus({ preventScroll: true });
+    if (restored === target && typeof focus.start === 'number') restored.setSelectionRange(focus.start, focus.end);
+  }
 }
-function renderResearch(r) {
+function renderResearch(node) {
+  const r = node.research;
   const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'), el('p', {}, r.summary));
-  for (const o of r.options) section.append(el('section', { class: 'option' }, el('h3', {}, o.title), el('p', {}, o.description), el('strong', { class: 'pro' }, 'Pros'), el('ul', {}, o.pros.map(v => el('li', {}, v))), el('strong', { class: 'con' }, 'Cons'), el('ul', {}, o.cons.map(v => el('li', {}, v)))));
+  for (const [index, o] of r.options.entries()) section.append(el('section', { class: 'option' }, el('h3', {}, o.title), el('p', {}, o.description), el('strong', { class: 'pro' }, 'Pros'), el('ul', {}, o.pros.map(v => el('li', {}, v))), el('strong', { class: 'con' }, 'Cons'), el('ul', {}, o.cons.map(v => el('li', {}, v))), button('Add to my answer', () => {
+    const previous = drafts.get(node.id) ?? node.answer, suggestion = `${o.title}: ${o.description}`, value = previous ? `${previous}\n\n${suggestion}` : suggestion;
+    if (value.length > 20000) return notice('Your answer is too long to add this option. Shorten it first.');
+    drafts.set(node.id, value); $('answer').value = value; answerStatus(node);
+    $('answer').focus({ preventScroll: true }); $('answer').setSelectionRange(value.length, value.length); $('answer').scrollIntoView({ block: 'nearest' }); notice('Option added to your draft. Edit it into your own answer before saving.');
+  }, { id: `add-option-${index}` })));
   section.append(el('h3', {}, 'Recommendation'), el('p', {}, r.recommendation), el('h3', {}, 'What is still uncertain'), el('p', {}, r.uncertainty));
-  if (r.sources.length) section.append(el('div', { class: 'sources' }, el('h3', {}, 'Sources'), r.sources.map(s => el('a', { href: s.url, target: '_blank', rel: 'noopener noreferrer' }, s.title))));
+  if (r.sources.length) section.append(el('div', { class: 'sources' }, el('h3', {}, 'Sources'), r.sources.map((s, index) => el('a', { id: `source-${index}`, href: s.url, target: '_blank', rel: 'noopener noreferrer' }, s.title))));
   return section;
 }
 function renderOutline() {
   if (!state.document) return;
+  const focused = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
   const query = $('search').value.toLowerCase();
   const nodes = state.document.nodes.filter(n => `${n.question} ${n.answer} ${n.category}`.toLowerCase().includes(query));
-  $('outline-list').replaceChildren(...nodes.map(n => button([n.question, el('small', {}, `${n.category} · ${n.answer ? 'Answered' : 'Open'}`)], () => { select(n.id, true); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); })));
+  $('outline-list').replaceChildren(...nodes.map(n => button([n.question, el('small', {}, `${n.category} · ${n.answer ? 'Answered' : 'Open'}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id })));
+  if (focused) [...$('outline-list').children].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
 }
 function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) && drafts.get(n.id).trim() !== n.answer) ?? []; }
 $('start-form').addEventListener('submit', async event => { event.preventDefault(); await api('start', { topic: $('topic').value }); });
@@ -160,29 +251,30 @@ $('file').addEventListener('change', async () => {
   if (state.pending) return notice('Cancel the current Copilot request before opening another map.');
   if (file.size > 10 * 1024 * 1024) return notice('The file exceeds the 10 MiB POC limit.');
   if (state.document && !confirm('Replace the map in this canvas? Download Save file first if you want to keep the current map. Unsaved answer drafts will be discarded.')) return;
-  try {
-    const document = JSON.parse(await file.text());
-    if (await api('import', { document })) { drafts.clear(); firstFit = false; selected = state.document.rootId; renderInspector(); fit(); }
-  } catch (error) { notice(`Could not open that file: ${error.message}`); }
+  try { const document = JSON.parse(await file.text()); if (await api('import', { document })) { drafts.clear(); nodeUi.clear(); selected = state.document.rootId; expanded = false; renderWorkspace(); refreshScene(null); fit(); } }
+  catch (error) { notice(`Could not open that file: ${error.message}`); }
 });
-$('finish').addEventListener('click', async () => {
-  const dirty = dirtyNodes();
-  if (dirty.length) { select(dirty[0].id, true); return notice('Save your draft answer before finishing.'); }
-  if (await api('finish')) $('export-dialog').showModal();
-});
+$('finish').addEventListener('click', async () => { const dirty = dirtyNodes(); if (dirty.length) { select(dirty[0].id); return notice('Save your draft answer before finishing.'); } if (await api('finish')) $('export-dialog').showModal(); });
 $('save-file').addEventListener('click', event => { if (dirtyNodes().length) { event.preventDefault(); notice('Save your draft answers before downloading the map.'); } });
 $('close-export').addEventListener('click', () => $('export-dialog').close());
 $('outline-toggle').addEventListener('click', () => { $('outline').hidden = !$('outline').hidden; $('outline-toggle').setAttribute('aria-expanded', String(!$('outline').hidden)); if (!$('outline').hidden) $('search').focus(); });
 $('search').addEventListener('input', renderOutline);
-$('fit').addEventListener('click', fit); $('zoom-in').addEventListener('click', () => zoom(1.2)); $('zoom-out').addEventListener('click', () => zoom(1 / 1.2));
-let drag;
-$('map').addEventListener('pointerdown', event => { if (event.target.closest('button')) return; drag = { x: event.clientX, y: event.clientY, vx: view.x, vy: view.y }; $('map').setPointerCapture(event.pointerId); });
+$('request-status').addEventListener('click', () => { if (state.pending) select(state.pending.nodeId); });
+$('fit').addEventListener('click', () => { collapseNode(false); fit(); }); $('center-question').addEventListener('click', centerSelected);
+$('zoom-in').addEventListener('click', () => zoom(1.2)); $('zoom-out').addEventListener('click', () => zoom(1 / 1.2));
+$('map').addEventListener('pointerdown', event => { if (event.button !== 0 || event.target.closest('button,a,input,textarea,select,summary,.expanded-node')) return; drag = { x: event.clientX, y: event.clientY, vx: view.x, vy: view.y }; $('map').setPointerCapture(event.pointerId); });
 $('map').addEventListener('pointermove', event => { if (drag) { view.x = drag.vx + event.clientX - drag.x; view.y = drag.vy + event.clientY - drag.y; transform(); } });
-for (const name of ['pointerup', 'pointercancel']) $('map').addEventListener(name, () => { drag = null; });
-$('map').addEventListener('keydown', event => { if (event.target !== $('map')) return; const direction = { ArrowLeft: [40, 0], ArrowRight: [-40, 0], ArrowUp: [0, 40], ArrowDown: [0, -40] }[event.key]; if (direction) { event.preventDefault(); view.x += direction[0]; view.y += direction[1]; transform(); } });
-$('map').addEventListener('wheel', event => { if (event.ctrlKey || event.metaKey) { event.preventDefault(); zoom(event.deltaY < 0 ? 1.1 : 1 / 1.1); } }, { passive: false });
+for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) $('map').addEventListener(name, () => { drag = null; });
+$('map').addEventListener('keydown', event => {
+  if (event.key === 'Escape' && expanded) { event.preventDefault(); collapseNode(); return; }
+  if (event.target !== $('map')) return;
+  const direction = { ArrowLeft: [40, 0], ArrowRight: [-40, 0], ArrowUp: [0, 40], ArrowDown: [0, -40] }[event.key];
+  if (direction) { event.preventDefault(); view.x += direction[0]; view.y += direction[1]; transform(); }
+});
+$('map').addEventListener('wheel', event => { if (event.target.closest('.expanded-node')) return; if (event.ctrlKey || event.metaKey) { event.preventDefault(); zoom(event.deltaY < 0 ? 1.1 : 1 / 1.1); } }, { passive: false });
 window.addEventListener('beforeunload', event => { if (dirtyNodes().length) { event.preventDefault(); event.returnValue = ''; } });
-new ResizeObserver(() => { if (positions.size && !drag) fit(); }).observe($('map'));
+new ResizeObserver(() => { if (positions.size && !drag) { expanded ? centerSelected() : fit(); } }).observe($('map'));
+new ResizeObserver(() => { if (expanded) scheduleLayout(); }).observe($('node-workspace'));
 async function poll() {
   try { const response = await fetch('api/state'); if (!response.ok) throw new Error('Canvas connection lost. Reopen Explorer in Copilot.'); apply(await response.json()); }
   catch (error) { notice(error.message); }

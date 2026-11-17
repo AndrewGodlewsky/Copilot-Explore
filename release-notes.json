@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.7",
+    "summary": "Integrated expanding nodes into the installed canvas, replacing the question sidebar. Answer, research, cancellation and follow-up controls now live inside the selected map node. Branches make room for the workspace, drafts survive async updates, and collapsed nodes preview saved answers."
+  },
+  {
     "version": "0.1.6",
     "summary": "Added a small version label at the bottom of Explorer, visible on the welcome screen and exploration map. The label uses the installed plugin package version. The expanding-node prototype also displays its version in the bottom bar."
   },

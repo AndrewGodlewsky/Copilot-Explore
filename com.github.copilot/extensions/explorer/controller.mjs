@@ -1,4 +1,5 @@
 import { prepareBrief, captureBrief, briefFreshness, acceptBrief, validateBrief } from './decision-brief.mjs';
+import { prepareAnswerCheck, captureCheck, checkFreshness, validateCheck } from './answer-check.mjs';
 import { mkdir, readFile, open, unlink, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -17,12 +18,12 @@ export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
 export class Explorer {
-  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, briefHelper, timeoutMs = 240000 }) {
+  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, briefHelper, checkHelper, timeoutMs = 240000 }) {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
     this.researcher = researcher; this.researchTasks = new Set(); this.researchTask = Promise.resolve(); this.unconfirmedResearchRelease = null; this.researchWork = null;
-    this.briefHelper = briefHelper; this.briefWork = null; this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
+    this.briefHelper = briefHelper; this.briefWork = null; this.checkHelper = checkHelper; this.checkWork = null; this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
     this.library = library; this.binding = binding; this.activeKey = null;
   }
   async load() {
@@ -39,6 +40,9 @@ export class Explorer {
   reconcileCleanup() {
     const brief = this.briefWork;
     if (brief && (brief.journey !== (this.activeKey ?? this.doc?.id) || briefFreshness(brief.proposal ?? { dependencies: brief.dependencies }, this.doc) !== 'current')) { brief.abort.abort(); brief.status = 'stale'; brief.error = 'Saved brief inputs changed. Refresh the journey and regenerate.'; }
+    const check = this.checkWork;
+    if (check && check.journey !== (this.activeKey ?? this.doc?.id)) { check.abort.abort(); this.checkWork = null; }
+    else if (check && !checkFreshness(check.dependencies, this.doc)) { check.abort.abort(); check.status = 'stale'; check.error = 'Saved check inputs changed. Refresh the journey and run the check again.'; }
     const work = this.cleanup;
     if (work && (work.journey !== (this.activeKey ?? this.doc?.id) || !this.doc?.nodes.some(n => n.id === work.nodeId && isQuestion(n)))) {
       work.abort.abort(); this.cleanup = null;
@@ -57,7 +61,7 @@ export class Explorer {
     }).catch(() => {});
   }
   requireToolFreeRelease() {
-    if (this.unconfirmedToolFreeRelease) throw new Error('An earlier helper has not confirmed shutdown. Cleanup, question help and decision briefs are blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
+    if (this.unconfirmedToolFreeRelease) throw new Error('An earlier helper has not confirmed shutdown. Cleanup, question help, decision briefs and answer checks are blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
   }
   cleanupRequest(input) {
     return this.transact(() => {
@@ -77,6 +81,7 @@ export class Explorer {
         const text = cleanupText(input.text);
         if (!this.cleaner) throw new Error('Clean My Answer requires the installed Copilot desktop SDK.');
         if (this.briefWork?.status === 'pending') throw new Error('Cancel the decision brief before cleaning your answer.');
+        if (this.checkWork?.status === 'pending') throw new Error('Cancel the answer check before cleaning your answer.');
         if (this.help?.status === 'pending') throw new Error('Cancel question help before cleaning your answer.');
         this.cleanup?.abort.abort();
         const work = { id: input.id, journey: input.journey, nodeId: input.nodeId, mutation: input.mutation, status: 'pending', progress: 'Preparing answer cleanup', abort: new AbortController() };
@@ -137,6 +142,7 @@ export class Explorer {
         if (!this.questionHelper) throw new Error('Question help requires the installed Copilot desktop SDK.');
         if (this.cleanup?.status === 'pending') throw new Error('Cancel answer cleanup before starting question help.');
         if (this.briefWork?.status === 'pending') throw new Error('Cancel the decision brief before starting question help.');
+        if (this.checkWork?.status === 'pending') throw new Error('Cancel the answer check before starting question help.');
         if (!this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw new Error('The selected journey changed. Refresh it and try again.');
         for (const [id, result] of this.helpContexts) if (result.journey !== input.journey || result.nodeId !== input.nodeId) this.helpContexts.delete(id);
         const context = helpContext(this.doc, input.nodeId);
@@ -195,6 +201,7 @@ export class Explorer {
         this.requireToolFreeRelease();
         if (!this.briefHelper) throw new Error('Decision briefs require the installed Copilot desktop SDK.');
         if (this.cleanup?.status === 'pending' || this.help?.status === 'pending') throw new Error('Cancel answer cleanup or question help before generating a decision brief.');
+        if (this.checkWork?.status === 'pending') throw new Error('Cancel the answer check before generating a decision brief.');
         const prepared = prepareBrief(this.doc), dependencies = captureBrief(prepared);
         const work = { id: input.id, journey: input.journey, dependencies, coverage: { scope: 'journey-summary', bytes: prepared.bytes, limit: prepared.limit, included: dependencies.records.length, omitted: Object.values(prepared.context.omitted).reduce((a, b) => a + b, 0) }, status: 'pending', progress: 'Preparing decision brief', abort: new AbortController() };
         if (!check(work)) throw new Error('Saved brief inputs changed. Refresh the journey before generating.');
@@ -238,6 +245,61 @@ export class Explorer {
         ...(work?.status === 'proposal' ? { proposal: work.proposal } : {}),
         ...(current.brief ? { accepted: current.brief, freshness: briefFreshness(current.brief, current), unavailableSources: current.brief.dependencies.records.filter(source => !current.nodes.some(node => node.id === source.id)).map(source => source.id) } : {}),
         ...(work ? { coverage: work.coverage } : {}) });
+    });
+  }
+  checkRequest(input) {
+    return this.transact(async () => {
+      const action = input?.action;
+      if (this.closed || !input || !['start', 'poll', 'cancel', 'dismiss'].includes(action) ||
+        Object.keys(input).sort().join(',') !== (action === 'dismiss' ? 'action,findingId,id,journey' : 'action,id,journey') ||
+        typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || !this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw new Error('Invalid answer check request.');
+      const matches = () => this.checkWork?.id === input.id && this.checkWork.journey === input.journey;
+      if (action === 'cancel') {
+        if (matches()) { this.checkWork.abort.abort(); this.checkWork = null; }
+        return { id: input.id, status: 'cancelled' };
+      }
+      const current = await this.readCurrent();
+      const fresh = work => work.journey === (this.activeKey ?? this.doc.id) && checkFreshness(work.dependencies, this.doc) && checkFreshness(work.dependencies, current);
+      if (action === 'start') {
+        this.requireToolFreeRelease();
+        if (!this.checkHelper) throw new Error('Answer checks require the installed Copilot desktop SDK.');
+        if (this.cleanup?.status === 'pending' || this.help?.status === 'pending' || this.briefWork?.status === 'pending') throw new Error('Cancel answer cleanup, question help or the decision brief before checking answers.');
+        if (this.checkWork?.status === 'pending') throw new Error('Cancel the running answer check before starting another.');
+        const prepared = prepareAnswerCheck(this.doc), dependencies = captureCheck(prepared);
+        const work = { id: input.id, journey: input.journey, dependencies,
+          coverage: { scope: 'journey-summary', bytes: prepared.bytes, limit: prepared.limit, included: dependencies.records.length,
+            omitted: Object.values(prepared.context.omitted).reduce((sum, count) => sum + count, 0) },
+          status: 'pending', progress: 'Preparing answer check', abort: new AbortController(), dismissed: new Set() };
+        if (!fresh(work)) throw new Error('Saved check inputs changed. Refresh the journey before checking answers.');
+        this.checkWork?.abort.abort(); this.checkWork = work;
+        this.toolFreeTask = this.toolFreeTask.then(async () => {
+          if (this.checkWork !== work || work.abort.signal.aborted) return;
+          try {
+            this.requireToolFreeRelease();
+            const result = await this.checkHelper.run(prepared, { signal: work.abort.signal, onProgress: progress => { if (this.checkWork === work) work.progress = progress; } });
+            const trusted = validateCheck(result, prepared);
+            await this.transact(async () => {
+              if (this.checkWork !== work || work.abort.signal.aborted) return;
+              const disk = await this.readCurrent();
+              if (!checkFreshness(dependencies, disk) || !checkFreshness(dependencies, this.doc)) { work.status = 'stale'; work.error = 'Saved check inputs changed. Refresh and run the check again.'; return; }
+              work.findings = trusted.findings; work.status = 'result';
+            });
+          } catch (error) {
+            this.trackToolFreeRelease(error);
+            if (this.checkWork === work && !work.abort.signal.aborted) { work.status = 'error'; work.error = error.message; }
+          }
+        });
+      }
+      const work = matches() ? this.checkWork : null;
+      if (work && !fresh(work)) { work.abort.abort(); work.status = 'stale'; work.error = 'Saved check inputs changed. Refresh and run the check again.'; }
+      if (action === 'dismiss') {
+        if (!work || work.status !== 'result' || typeof input.findingId !== 'string' || !work.findings.some(item => item.id === input.findingId)) throw new Error('This finding is stale or unavailable. Run the check again.');
+        work.dismissed.add(input.findingId);
+      }
+      const records = new Map(work?.dependencies.records.map(record => [record.id, record]));
+      return structuredClone({ id: input.id, status: work?.status ?? 'idle', progress: work?.progress, error: work?.error, coverage: work?.coverage,
+        ...(work?.status === 'result' ? { findings: work.findings.map(item => ({ ...item, sourceStates: item.sources.map(ref => ref.kind === 'node' ?
+          { kind: 'node', id: ref.id, state: records.get(ref.id).answerState ?? (records.get(ref.id).kind === 'direction' ? 'direction' : 'idea'), review: records.get(ref.id).review } : { kind: 'guidance', field: ref.field }) })), dismissed: [...work.dismissed] } : {}) });
     });
   }
   uiSnapshot() {
@@ -612,5 +674,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.closed = true; this.briefWork?.abort.abort(); this.briefWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
+  async close() { this.closed = true; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
 }

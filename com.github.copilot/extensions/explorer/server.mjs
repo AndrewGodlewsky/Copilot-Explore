@@ -87,6 +87,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.briefRequest(await body(req, 256 * 1024)));
       }
+      if (req.method === 'POST' && route === 'api/check-answers') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.checkRequest(await body(req, 2048)));
+      }
       if (req.method === 'GET' && route === 'api/history') {
         const selected = url.searchParams.get('snapshotRevision');
         if (selected !== null && !/^(0|[1-9][0-9]*)$/.test(selected)) throw new Error('Invalid history revision.');

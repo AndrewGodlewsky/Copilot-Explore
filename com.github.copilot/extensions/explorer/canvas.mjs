@@ -1,4 +1,5 @@
 import { createBriefHelper } from './decision-brief.mjs';
+import { createAnswerCheckHelper } from './answer-check.mjs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { Explorer } from './controller.mjs';
@@ -46,6 +47,7 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
             researcher: createResearcher(getSession(), { usageDirectory: join(directory, 'usage') }),
             cleaner: createCleaner(getSession(), { usageDirectory: join(directory, 'usage') }),
             briefHelper: createBriefHelper(getSession(), { usageDirectory: join(directory, 'usage') }),
+            checkHelper: createAnswerCheckHelper(getSession(), { usageDirectory: join(directory, 'usage') }),
             questionHelper: createQuestionHelper(getSession(), { usageDirectory: join(directory, 'usage') }),
             target: { extensionId: ctx.extensionId, canvasId: 'explorer', instanceId: ctx.instanceId },
             send: async options => {

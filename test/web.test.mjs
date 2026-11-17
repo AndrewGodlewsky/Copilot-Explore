@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { JSDOM } from 'jsdom';
 import { parseBrief } from '../com.github.copilot/extensions/explorer/decision-brief.mjs';
+import { parseAnswerCheck } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
 import { createDocument, contextFor } from '../com.github.copilot/extensions/explorer/model.mjs';
@@ -35,7 +36,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
   const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
-    cleaner: options.cleaner, briefHelper: options.briefHelper,
+    cleaner: options.cleaner, briefHelper: options.briefHelper, checkHelper: options.checkHelper,
     questionHelper: options.questionHelper,
     researcher: { run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
   }).load();
@@ -51,6 +52,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const briefDialog = document.getElementById('brief-dialog');
   briefDialog.showModal = () => { briefDialog.open = true; };
   briefDialog.close = () => { briefDialog.open = false; };
+  const checkDialog = document.getElementById('check-dialog');
+  checkDialog.showModal = () => { checkDialog.open = true; };
+  checkDialog.close = () => { checkDialog.open = false; };
   const guidanceDialog = document.getElementById('guidance-dialog');
   guidanceDialog.showModal = () => { guidanceDialog.open = true; };
   guidanceDialog.close = () => { guidanceDialog.open = false; };
@@ -2479,6 +2483,32 @@ test('reviewed brief HTTP UI preserves draft/caret, edits, source navigation and
  $('decision-brief').click();await until(()=>!$('accept-brief').hidden&&!$('accept-brief').disabled,'review reopened');$('accept-brief').click();await until(()=>f.explorer.doc.brief,'accepted');assert.equal(f.explorer.doc.brief.sections.goal[0].text,'User edited <img> \u{1f331}');assert.equal(f.explorer.doc.brief.sections.unresolved[0].text,'No answer yet.\r\nReason unknown.');assert.equal(f.explorer.doc.brief.sections.unresolved[0].edited,false);assert.equal(f.explorer.doc.nodes[1].answer,'');assert.equal($('answer').value,'Unsaved raw draft \u{1f331}');
  await until(()=>!$('export-brief').hidden,'separate export available');assert.match($('brief-status').textContent,/current/);
  const disk=JSON.parse(await readFile(f.explorer.file,'utf8'));disk.nodes[2].answer='External uncited answer changed';disk.nodes[2].answerState='tentative';disk.revision++;await writeFile(f.explorer.file,JSON.stringify(disk));await until(()=>$('brief-status').textContent.includes('stale'),'accepted artifact stale from disk');
+});
+
+test('answer check HTTP UI keeps drafts, renders plain text, dismisses locally and reveals an out-of-focus source', async t => {
+  let captured;
+  const f = await fixture(t, 340, undefined, false, { checkHelper: { async run(prepared) {
+    captured = prepared;
+    return parseAnswerCheck(JSON.stringify({ findings: [{ id: 'tension', category: 'possible-tension',
+      explanation: 'Possible <script> conflict; not proof.', resolution: 'Ask which saved choice applies.',
+      sources: [{ kind: 'node', id: prepared.dependencies.records[1].id }, { kind: 'node', id: prepared.dependencies.records[2].id }] }] }), prepared);
+  }, close() {} } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Unsaved answer draft');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'check draft saved');
+  const first = f.explorer.doc.nodes[1].id, second = f.explorer.doc.nodes[2].id;
+  $('focus-branch').click(); assert.match($('focus-status').textContent, /Focusing branch/);
+  $('check-answers').click(); await until(() => $('check-dialog').open && !$('run-check').disabled, 'check dialog ready');
+  $('run-check').click(); await until(() => $('check-content').textContent.includes('Possible <script> conflict'), 'check result');
+  assert.ok(captured); assert.ok(!captured.prompt.includes('Unsaved answer draft')); assert.equal(captured.context.targetId, f.explorer.doc.rootId);
+  assert.equal($('check-content').querySelector('script'), null); assert.equal(f.explorer.doc.nodes.find(node => node.id === first).answer, '');
+  $('check-content').querySelector('button:last-child').click(); await until(() => $('check-content').textContent.includes('Dismissed in this canvas.'), 'dismissal');
+  assert.equal(f.document.activeElement.dataset.dismissedFinding, 'tension');
+  await delay(1350); assert.match($('check-content').textContent, /Dismissed in this canvas/);
+  const jump = [...$('check-content').querySelectorAll('.reference-jump')].find(button => button.textContent.includes(f.explorer.doc.nodes[2].question));
+  jump.click(); assert.equal($('check-dialog').open, false); assert.equal($('node-workspace').dataset.nodeId, second);
+  assert.equal($('focus-status').textContent, '');
+  f.open(first); assert.equal($('answer').value, 'Unsaved answer draft');
+  $('check-answers').click(); await until(() => $('check-content').textContent.includes('Dismissed in this canvas.'), 'dismissal retained after navigation');
 });
 
 test('another canvas replacing historical accepted brief preserves fresh proposal editor text and caret over HTTP', async t => {

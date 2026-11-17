@@ -92,3 +92,7 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #brief-dialog .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .brief-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .brief-source { max-width: 100%; overflow-wrap: anywhere; }
+#check-dialog { max-width: 580px; width: calc(100% - 32px); max-height: 85vh; overflow: auto; }
+#check-dialog .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.check-finding { border-top: 1px solid var(--line); padding: 12px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.check-finding button { max-width: 100%; overflow-wrap: anywhere; }

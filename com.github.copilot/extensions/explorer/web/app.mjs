@@ -102,6 +102,7 @@ function apply(next, reset = false) {
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
     closeBrief();
+    closeCheck();
     lastCoverage = ''; $('context-coverage').textContent = 'Check the selected node or start a request to see coverage.';
     cleanup.cancel();
     questionHelp.sync();
@@ -134,6 +135,7 @@ function apply(next, reset = false) {
   updateFocusStatus();
   showView();
   $('decision-brief').hidden = !doc;
+  $('check-answers').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('edit-guidance').disabled = !!state.pending;
   if (state.contextCoverage && JSON.stringify(state.contextCoverage) !== lastCoverage) { lastCoverage = JSON.stringify(state.contextCoverage); showCoverage(state.contextCoverage, 'Prepared'); }
@@ -1082,6 +1084,64 @@ $('discard-brief').addEventListener('click', () => void requestBrief('discard'))
 $('accept-brief').addEventListener('click', () => void requestBrief('accept'));
 $('refresh-brief').addEventListener('click', async () => { if (await api('refresh-answer')) await requestBrief('poll'); });
 $('close-brief').addEventListener('click', () => { $('brief-dialog').close(); $('decision-brief').focus(); });
+let checkView = null, checkId = null, checkJourney = null, checkEpoch = 0, checkBusy = false;
+function closeCheck() {
+  checkEpoch++;
+  if (checkId && checkJourney) void fetch('api/check-answers', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'cancel', id: checkId, journey: checkJourney }) }).catch(() => {});
+  checkId = null; checkJourney = null; checkView = null; checkBusy = false;
+  if ($('check-dialog').open) $('check-dialog').close();
+}
+async function requestCheck(action, findingId) {
+  if (checkBusy || closed || !state.document) return;
+  if (action === 'start' || !checkId) { checkId = crypto.randomUUID(); checkJourney = state.activeKey ?? state.document.id; checkEpoch++; checkView = null; renderCheck(); }
+  const epoch = checkEpoch, id = checkId, journey = checkJourney, abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 5000);
+  checkBusy = true; $('run-check').disabled = true; $('cancel-check').disabled = true;
+  try {
+    const response = await fetch('api/check-answers', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
+      body: JSON.stringify({ action, id, journey, ...(findingId ? { findingId } : {}) }) });
+    const result = await response.json();
+    if (epoch !== checkEpoch || id !== checkId || closed) return;
+    if (!response.ok) throw new Error(result.error);
+    if (result.id !== id) throw new Error('Answer check response did not match this request.');
+    checkView = result; renderCheck();
+    if (action === 'dismiss') [...$('check-content').querySelectorAll('[data-dismissed-finding]')].find(node => node.dataset.dismissedFinding === findingId)?.focus({ preventScroll: true });
+  } catch (error) {
+    if (epoch === checkEpoch && !closed) $('check-status').textContent = `${error.message} Refresh the saved journey and run the check again if needed.`;
+  } finally { clearTimeout(timer); if (epoch === checkEpoch) { checkBusy = false; $('run-check').disabled = checkView?.status === 'pending'; $('cancel-check').disabled = false; } }
+}
+function renderCheck() {
+  const result = checkView, coverage = result?.coverage, active = result?.status === 'result';
+  $('cancel-check').hidden = result?.status !== 'pending';
+  $('run-check').disabled = result?.status === 'pending';
+  $('check-status').textContent = [result?.error, result?.status === 'pending' ? `${result.progress}… Cancel this before using another helper.` :
+    result?.status === 'stale' ? 'These findings are stale because a sent source changed. Run the check again.' :
+    active ? result.findings.length ? `${result.findings.length} possible finding${result.findings.length === 1 ? '' : 's'} for review.` : 'No possible issues found in the reviewed context; the whole map is not proven consistent.' : 'Run an explicit check to review saved inputs.',
+    coverage ? `Journey summary: ${coverage.included} records included; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes.` : ''].filter(Boolean).join(' ');
+  $('check-content').replaceChildren();
+  if (!active) return;
+  const dismissed = new Set(result.dismissed);
+  for (const finding of result.findings) {
+    const area = el('section', { class: 'check-finding' }, el('h3', {}, finding.category === 'possible-tension' ? 'Possible tension' : finding.category === 'unresolved-choice' ? 'Unresolved choice' : 'Untested assumption'),
+      el('p', {}, finding.explanation), el('p', {}, `What may help: ${finding.resolution}`));
+    for (const [index, ref] of finding.sources.entries()) {
+      if (ref.kind === 'guidance') area.append(el('p', { class: 'quiet' }, `Source: global user guidance (${ref.field})`));
+      else {
+        const source = state.document.nodes.find(node => node.id === ref.id), captured = finding.sourceStates[index];
+        area.append(el('p', { class: 'quiet' }, `Captured source: ${captured.state}${captured.review ? '; needs review' : ''} · ${ref.id}`));
+        if (source) area.append(button(`Go to source: ${source.question}`, () => { $('check-dialog').close(); select(ref.id); }, { class: 'reference-jump' }));
+        else area.append(el('p', { class: 'quiet' }, 'Source unavailable in this map. Run the check again.'));
+      }
+    }
+    area.append(dismissed.has(finding.id) ? el('p', { class: 'quiet', tabindex: '-1', 'data-dismissed-finding': finding.id }, 'Dismissed in this canvas.') : button('Dismiss', () => void requestCheck('dismiss', finding.id)));
+    $('check-content').append(area);
+  }
+}
+$('check-answers').addEventListener('click', () => { voice.cancel(); $('check-dialog').showModal(); void requestCheck('poll'); });
+$('run-check').addEventListener('click', () => { voice.cancel(); void requestCheck('start'); });
+$('cancel-check').addEventListener('click', () => void requestCheck('cancel'));
+$('refresh-check').addEventListener('click', async () => { if (await api('refresh-answer')) await requestCheck('poll'); });
+$('close-check').addEventListener('click', () => { $('check-dialog').close(); $('check-answers').focus(); });
 $('finish').addEventListener('click', async () => {
   await draftClient.ready;
   if (draftClient.loadError) return notice('Draft recovery is unavailable. Retry recovery before finishing.');
@@ -1180,6 +1240,7 @@ new ResizeObserver(() => { if (expanded) scheduleLayout(); }).observe($('node-wo
 window.addEventListener('pagehide', event => {
   cleanup.cancel();
   closeBrief();
+  closeCheck();
   questionHelp.dispose();
   void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;
@@ -1192,7 +1253,7 @@ async function poll() {
     const response = await fetch('api/state');
     if (!response.ok) throw new Error('Canvas connection lost. Reopen Explorer in Copilot.');
     const next = await response.json();
-    if (!closed && !busy && epoch === actionEpoch) { apply(next); await questionHelp.checkRetained(); if ($('brief-dialog').open) await requestBrief('poll'); }
+    if (!closed && !busy && epoch === actionEpoch) { apply(next); await questionHelp.checkRetained(); if ($('brief-dialog').open) await requestBrief('poll'); if ($('check-dialog').open) await requestCheck('poll'); }
   } catch (error) { if (!closed && !busy && epoch === actionEpoch) notice(error.message); }
   finally { if (!closed) pollTimer = setTimeout(poll, document.hidden ? 4000 : 1200); }
 }

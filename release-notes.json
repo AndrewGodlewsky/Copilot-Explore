@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.35",
+    "summary": "Add a repeatable synthetic performance baseline for validated maps, context preparation, exports, layout, saved history writes and shipped panel DOM work. Reports include fixture fingerprints, bounded samples and explicit failures; native interaction checks remain manual."
+  },
+  {
     "version": "0.1.34",
     "summary": "Check a bounded summary of saved answers for possible tensions, unresolved choices and untested assumptions. Each suggestion links captured sources, shows omitted context, and can be dismissed or used to navigate. Changed source inputs make results stale; checking never edits answers."
   },

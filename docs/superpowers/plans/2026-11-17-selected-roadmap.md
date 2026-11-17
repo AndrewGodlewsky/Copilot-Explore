@@ -766,6 +766,30 @@ Read issue-8.md, task-22-design-notes.md and AGENTS.md. BASE is `b14e3f2065d5449
 - Reuse existing helper/schema/source-navigation seams only where genuinely shared. No generic workflow framework or parallel agent pool. Require local installed SDK fixtures when the integration path changes; no paid provider, existing user session, microphone or browser/desktop automation.
 - Run npm test/check/package, synchronize confirmed patch/release metadata/README, include controller plan changes, self-review and commit. No nested agents or push/merge/issue closure. Write task-22-report.md with final schema/limits, dependency/invalidation behavior, exact test evidence, commit and live-model/native-UI limitations. Controller independently reviews and publishes.
 
+Published task 22: **v0.1.34**, `88868a4`, required checks and applicable installed fixtures passed; code-quality review approved with one Minor fixed-scope metadata gap tracked for task29/#40; remote main verified.
+
+## Task 23: Repeatable performance evidence (#36 / original46)
+
+Read issue-46.md, task-23-design-notes.md and AGENTS.md. BASE is `88868a4213167117fbb9cb120819161380f4dbc8`; ship version **0.1.35**. Read task-21-report.md and task-22-report.md for the current saved brief and transient check/context contracts before constructing fixtures.
+
+### Scope
+
+- Add a documented explicit benchmark command, using deterministic generated synthetic maps. Keep giant fixture files out of git. Cover small, medium, large and near5000-node maps, both deep and wide topology, populated answer/research fields and a saved document close to the9MiB limit. Build fixtures with actual validation rules including optional node kinds/states, rather than silently bypassing limits.
+- Benchmark model validation, context preparation, Markdown/native export, branchView/layout, atomic controller/history writes and real-app jsdom rendering separately. Current modules are web/layout.mjs (branchView/layout), web/app.mjs (renderMap/renderWorkspace/renderOutline/poll), model.mjs and controller.mjs; no web/map.mjs exists. Reconcile added helpers before measuring.
+- Include a representative saved brief/provenance case, user constraints and decision states using the published schemas, so export/validation/context measurements cover current documents rather than only the original minimal map. Do not include accepted briefs recursively in synthesis input. Keep comparisons reproducible with stable fixture definitions and label any newly added cases separately.
+- Use a bounded warmup/sample policy and report sample count, median and range, with Node/OS/CPU, fixture byte/node/question counts and relevant configuration. Report actual elapsed measurements and operation counts, not invented native paint/frame rates. jsdom does not measure browser paint, actual pointer latency, IME or native embedding.
+- Provide machine-readable results suitable for comparison across versions and a concise Markdown summary. Record version/commit/dirty status; do not claim a comparison if fixtures or measurement procedures changed. Output belongs in an explicit ignored directory, with bounded temporary files and safe cleanup.
+- Keep npm test deterministic. It may verify fixture shapes, complexity/operation counters and result-schema correctness, but must not fail due to a tight wall-clock budget on a shared computer. An explicit benchmark may report conservative targets as informational evidence. Do not optimize production paths in this baseline issue; tasks24–26 use the same harness to demonstrate their changes.
+- If a valid large fixture exposes a production failure, report that measurement as failed with its phase and bounded error; do not record zero latency or silently reduce the fixture. Keep the runner able to finish other cases and release resources, then route the concrete failure to the applicable optimization task. A broken benchmark harness itself must be fixed here. Do not call a baseline with production failures an all-passing performance result.
+- Bound repeats and memory: process large fixtures sequentially and release jsdom windows, servers, timers and owned temporary history between samples. Never inspect real user documents or use paid providers, existing sessions, a microphone or browser/desktop automation.
+- Document a short owner-only native checklist for typing, focus, expand/fold, pan/zoom and narrow resize. Separate those pending checks from measured local evidence.
+
+### Completion
+
+- Verify deterministic fixtures and benchmark schema with focused tests, run a complete bounded benchmark once, inspect the report for meaningful measurements and retain its artifact path. Fix harness errors rather than publishing misleading zero/not-measured values.
+- Run npm test/check/package and applicable fixtures only when integration actually changes. Synchronize the confirmed patch/release metadata/README and include the controller plan update. Self-review and commit; no merge/push/issue closure or nested agents.
+- Report task-23-report.md with module/API seams, fixture and sample definitions, exact commands/exit evidence, observed baseline and limits, artifact path and commit. The controller reviews and publishes.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

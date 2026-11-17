@@ -440,7 +440,9 @@ export class Explorer {
             if ((await this.readCurrent()).revision !== next.revision) throw new Error('Another canvas updated this file. Refresh the saved journey before retrying.');
             break;
           }
-          next.objective = objective; next.successCriteria = successCriteria; if (mode === 'understand') delete next.mode; else next.mode = mode; next.finishedAt = null;
+          next.objective = objective; next.successCriteria = successCriteria;
+          if (effectiveMode(next) !== mode) { if (mode === 'understand') delete next.mode; else next.mode = mode; }
+          next.finishedAt = null;
           await this.save(next, 'Guidance changed');
           break;
         }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDocument, validateDocument, addQuestions, contextFor, toMarkdown, MAX_DOCUMENT_BYTES } from '../com.github.copilot/extensions/explorer/model.mjs';
@@ -36,6 +36,23 @@ test('mode is a saved help dependency and research guidance travels within its b
   const context = boundedContext(contextFor(doc, node.id));
   assert.equal(context.mode, 'decide');
   assert.ok(JSON.stringify(context).length <= 75000);
+});
+
+test('legacy guidance edit retains an imported explicit Understand field', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'explorer-explicit-understand-')), file = join(dir, 'map.explore.json');
+  const imported = { ...createDocument('Garden'), mode: 'understand' };
+  await writeFile(file, JSON.stringify(imported));
+  const e = await new Explorer({ file }).load();
+  t.after(async () => { await e.close(); await rm(dir, { recursive: true, force: true }); });
+  await e.command('guidance', { revision: e.doc.revision, objective: 'Keep this text 🌿', successCriteria: '' });
+  assert.equal(e.doc.mode, 'understand');
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).mode, 'understand');
+  const before = e.doc.revision;
+  await e.command('guidance', { revision: before, objective: 'Keep this text 🌿', successCriteria: '', mode: 'understand' });
+  assert.equal(e.doc.revision, before, 'same effective mode stays a no-op');
+  await e.command('guidance', { revision: before, objective: 'Keep this text 🌿', successCriteria: '', mode: 'decide' });
+  await e.command('guidance', { revision: e.doc.revision, objective: 'Keep this text 🌿', successCriteria: '', mode: 'understand' });
+  assert.equal(Object.hasOwn(e.doc, 'mode'), false, 'a switch back to Understand returns to the sparse default');
 });
 
 test('legacy map near the saved-data cap remains sparse when loaded', () => {

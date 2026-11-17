@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { research } from './model.mjs';
+import { research, MAX_RESEARCH_BYTES } from './model.mjs';
 import { prepareContext, RESEARCH_CONTEXT_LIMIT } from './research-context.mjs';
 export { boundedContext } from './research-context.mjs';
 import { modePolicy } from './web/modes.mjs';
@@ -39,7 +39,7 @@ const sourceKey = value => { const url = new URL(value); url.hash = ''; return u
 export function createResearcher(parent, options = {}) {
   const helper = createOwnedHelper(parent, 'research', async (prepared, { controller, progress, stopWith, fail, eligible }) => {
     if (Buffer.byteLength(prepared.instructions) + Buffer.byteLength(prepared.prompt) > RESEARCH_CONTEXT_LIMIT) throw fail('The prepared research request exceeds its limit.');
-    const pages = new Set(), reads = new Map(); let toolCalls = 0;
+    const pages = new Map(), reads = new Map(), readIds = new Set(); let toolCalls = 0;
     return {
       instructions: prepared.instructions,
       config: {
@@ -61,15 +61,23 @@ export function createResearcher(parent, options = {}) {
             const fetch = input.toolName === 'web_fetch', search = ['web_search', 'github-mcp-server-web_search', 'github-mcp-server/web_search'].includes(input.toolName);
             if (fetch && (typeof input.toolCallId !== 'string' || !input.toolCallId)) stopWith('This Copilot SDK does not provide source tracking IDs. Update Copilot before researching.');
             if (!eligible() || (!fetch && !search) || (fetch && !await publicUrl(input.toolArgs?.url, options.resolve)) || !eligible()) return { permissionDecision: 'deny', permissionDecisionReason: 'Only public web research within the request limits is allowed.' };
-            if (fetch) { reads.set(input.toolCallId, sourceKey(input.toolArgs.url)); progress('Reading sources'); }
+            if (fetch) {
+              if (readIds.has(input.toolCallId)) { stopWith('Research source tracking IDs were reused. The result was not saved.'); return { permissionDecision: 'deny' }; }
+              readIds.add(input.toolCallId); reads.set(input.toolCallId, sourceKey(input.toolArgs.url)); progress('Reading sources');
+            }
             else progress('Searching the web');
             return {};
           },
           onPostToolUse: input => {
             if (input.toolName === 'web_fetch' && (typeof input.toolCallId !== 'string' || !input.toolCallId)) stopWith('This Copilot SDK does not provide source tracking IDs. Update Copilot before researching.');
-            if (input.toolName === 'web_fetch' && reads.has(input.toolCallId) && input.toolResult?.resultType === 'success' && input.toolResult.textResultForLlm?.trim()) pages.add(reads.get(input.toolCallId));
+            // This observes the requested URL and completion time, not redirect identity or publication date.
+            if (eligible() && input.toolName === 'web_fetch' && reads.has(input.toolCallId) && input.toolResult?.resultType === 'success' && typeof input.toolResult.textResultForLlm === 'string' && input.toolResult.textResultForLlm.trim()) {
+              const url = reads.get(input.toolCallId);
+              if (!pages.has(url)) pages.set(url, new Date().toISOString());
+            }
             reads.delete(input.toolCallId); progress('Comparing options');
           },
+          onPostToolUseFailure: input => { reads.delete(input.toolCallId); },
         },
         // GitHub MCP needs discovery inside the empty owned configuration/workspace.
         enableConfigDiscovery: true,
@@ -84,8 +92,13 @@ export function createResearcher(parent, options = {}) {
       parse(content) {
         let result;
         try {
-          if (typeof content !== 'string' || content.length > 80000) throw new Error();
-          result = research({ ...JSON.parse(content.trim().replace(/^```(?:json)?\s*\n([\s\S]*)\n```$/, '$1')), settings: prepared.settings });
+          if (typeof content !== 'string' || content.length > 80000 || Buffer.byteLength(content) > MAX_RESEARCH_BYTES) throw new Error();
+          const raw = JSON.parse(content.trim().replace(/^```(?:json)?\s*\n([\s\S]*)\n```$/, '$1'));
+          if (!Object.hasOwn(raw, 'claims') || !Array.isArray(raw.sources) || raw.sources.length > 15) throw new Error();
+          result = research({ ...raw, settings: prepared.settings, sources: raw.sources.map(source => {
+            const retrievedAt = pages.get(sourceKey(source.url));
+            return { ...source, retrievedAt: retrievedAt ?? null, provenance: retrievedAt ? 'recorded-read' : 'imported' };
+          }) });
         } catch { throw fail('The researcher returned an invalid comparison. Your answers are saved; try research again.'); }
         if (result.sources.some(s => !pages.has(sourceKey(s.url))) || (result.basis === 'reasoning' && result.sources.length)) throw fail('Research included sources it did not successfully read. The result was not saved. Try again.');
         return result;

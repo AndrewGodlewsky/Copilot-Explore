@@ -3,7 +3,7 @@ import { questionCounts } from './web/answer-state.mjs';
 import { mkdir, readdir, lstat, realpath, readFile } from 'node:fs/promises';
 import { join, resolve, dirname, basename } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { validateDocument, MAX_DOCUMENT_BYTES } from './model.mjs';
+import { validateDocument, importedDocument, MAX_DOCUMENT_BYTES } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -130,7 +130,7 @@ export class Library {
     return null;
   }
   async import(document, { asCopy = false } = {}) {
-    const doc = validateDocument(document);
+    let doc = validateDocument(document);
     if (typeof asCopy !== 'boolean') throw new Error('Invalid import choice.');
     return this.locked(async () => {
       const { records } = await this.scan(), matches = records.filter(record => record.document.id === doc.id);
@@ -140,6 +140,7 @@ export class Library {
         const ambiguous = ambiguousIds(records);
         return { conflict: matches.map(record => this.summary(record, metadata, ambiguous)) };
       }
+      doc = importedDocument(doc);
       if (asCopy) { doc.id = randomUUID(); doc.revision = 0; doc.finishedAt = null; doc.createdAt = doc.updatedAt = new Date().toISOString(); }
       const name = `journey-${hash(doc.id)}.explore.json`, file = join(await this.root(), name);
       // Never replace an unreadable file or a legacy collision at the canonical name.

@@ -37,7 +37,7 @@ test('bounded research context retains committed guidance inside its total budge
 const result = { basis: 'reasoning', summary: 'Comparison', options: [
   { title: 'Small', description: 'Pilot', pros: ['Simple'], cons: ['Limited'] },
   { title: 'Large', description: 'Launch', pros: ['Reach'], cons: ['Cost'] },
-], recommendation: 'Pilot first.', uncertainty: 'No pages read.', sources: [] };
+], recommendation: 'Pilot first.', uncertainty: 'No pages read.', sources: [], claims: [{ id: 'c1', text: 'Pilot first', basis: 'reasoning', evidence: [], limitations: 'No externally supported claim.' }] };
 const auth = { isAuthenticated: true, login: 'fixture', host: 'github.com' };
 const model = { id: 'fixture-model', provider: { kind: 'copilot' }, policy: { state: 'enabled' } };
 const expectedTools = [{ name: 'web_fetch' }, { name: 'web_search', namespacedName: 'github-mcp-server/web_search', mcpServerName: 'github-mcp-server', mcpToolName: 'web_search' }];
@@ -83,7 +83,7 @@ async function fixture(t, options = {}) {
         gitHubAuth: { getStatus: async () => options.auth ?? auth },
         metadata: { snapshot: async () => ({ workingDirectory: calls.client.workingDirectory, isRemote: false }) },
         tools: { initializeAndValidate: async () => {}, getCurrentMetadata: async () => ({ tools: options.tools ?? expectedTools }) },
-      }, sendAndWait: async (input, timeout) => { calls.sends++; calls.prompt = input.prompt; calls.timeout = timeout; await options.send?.(calls); return { data: { content: JSON.stringify(options.result ?? result) } }; } };
+      }, sendAndWait: async (input, timeout) => { calls.sends++; calls.prompt = input.prompt; calls.timeout = timeout; await options.send?.(calls); return { data: { content: options.content ?? JSON.stringify(options.result ?? result) } }; } };
     }
   } } });
   const researcher = createResearcher(parent, { usageDirectory: join(dir, 'usage'), runtime, ...(options.usageRecorder ? { usageRecorder: options.usageRecorder } : {}), ...(options.clock ? { clock: options.clock } : {}), ...(options.resolve ? { resolve: options.resolve } : {}), ...(options.stopTimeoutMs ? { stopTimeoutMs: options.stopTimeoutMs } : {}) });
@@ -123,7 +123,7 @@ test('cancelling during startup never sends and stops the owned client', async t
 });
 
 test('unread citations are rejected; successful page reads are required for sourced findings', async t => {
-  const sourced = { ...result, basis: 'sources', sources: [{ title: 'Source', url: 'https://8.8.8.8/reference' }] };
+  const sourced = { ...result, basis: 'sources', sources: [{ id: 's1', title: 'Source', url: 'https://8.8.8.8/reference' }] };
   const bad = await fixture(t, { result: sourced });
   await assert.rejects(bad.researcher.run(context), /sources/);
   const good = await fixture(t, { result: sourced, send: async ({ config }) => {
@@ -131,11 +131,13 @@ test('unread citations are rejected; successful page reads are required for sour
     assert.notEqual((await config.hooks.onPreToolUse(input))?.permissionDecision, 'deny');
     await config.hooks.onPostToolUse({ ...input, toolResult: { resultType: 'success', textResultForLlm: 'Reference content' } });
   } });
-  assert.deepEqual(await good.researcher.run(context), { ...sourced, settings: researchSettings() });
+  const observed = await good.researcher.run(context);
+  assert.equal(observed.sources[0].provenance, 'recorded-read'); assert.ok(Number.isFinite(Date.parse(observed.sources[0].retrievedAt)));
+  assert.deepEqual(observed, { ...sourced, sources: [{ ...sourced.sources[0], retrievedAt: observed.sources[0].retrievedAt, provenance: 'recorded-read' }], settings: researchSettings() });
 });
 
 test('overlapping fetches without hook IDs cannot credit an unread page', async t => {
-  const sourced = { ...result, basis: 'sources', sources: [{ title: 'Unread B', url: 'https://8.8.8.8/b' }] };
+  const sourced = { ...result, basis: 'sources', sources: [{ id: 's1', title: 'Unread B', url: 'https://8.8.8.8/b' }] };
   const { researcher } = await fixture(t, { result: sourced, send: async ({ config }) => {
     const a = { toolName: 'web_fetch', toolArgs: { url: 'https://8.8.8.8/a' } };
     const b = { toolName: 'web_fetch', toolArgs: { url: 'https://8.8.8.8/b' } };
@@ -144,6 +146,57 @@ test('overlapping fetches without hook IDs cannot credit an unread page', async 
     config.hooks.onPostToolUse({ ...b, toolResult: { resultType: 'failure', textResultForLlm: 'B failed' } });
   } });
   await assert.rejects(researcher.run(context), /tracking|sources/);
+});
+
+test('claim provenance uses actual successful read time, requested URL and this request only', async t => {
+  const url = 'https://8.8.8.8/reference?q=1', sourced = { ...result, basis: 'sources', sources: [{ id: 's1', title: 'Reference', url, retrievedAt: '1900-01-01T00:00:00.000Z', provenance: 'forged' }], claims: [{ id: 'c1', text: 'A model assertion', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'A model interpretation of content' }], limitations: 'Read does not verify meaning.' }] };
+  let afterRead, beforeRead, runs = 0;
+  const f = await fixture(t, { result: sourced, send: async ({ config }) => {
+    if (++runs > 1) return;
+    const input = { toolName: 'web_fetch', toolArgs: { url: url + '#part' }, toolCallId: 'read-exact' };
+    await config.hooks.onPreToolUse(input);
+    beforeRead = Date.now();
+    config.hooks.onPostToolUse({ ...input, toolResult: { resultType: 'success', textResultForLlm: 'Actual content', finalUrl: 'https://other.example/redirect' } });
+    afterRead = Date.now();
+  } });
+  const observed = await f.researcher.run(context), source = observed.sources[0];
+  assert.equal(source.url, url); assert.equal(source.provenance, 'recorded-read');
+  assert.ok(Date.parse(source.retrievedAt) >= beforeRead && Date.parse(source.retrievedAt) <= afterRead);
+  assert.deepEqual(observed.claims, sourced.claims); assert.equal(source.finalUrl, undefined);
+  await assert.rejects(f.researcher.run(context), /sources.*read/);
+});
+
+test('search, blank, failed, mismatched and duplicate fetch IDs cannot fabricate claim provenance', async t => {
+  const source = { id: 's1', title: 'Source', url: 'https://8.8.8.8/a' };
+  for (const mode of ['search', 'blank', 'failed', 'mismatched', 'duplicate']) {
+    const f = await fixture(t, { result: { ...result, basis: 'sources', sources: [source] }, send: async ({ config }) => {
+      const input = { toolName: mode === 'search' ? 'web_search' : 'web_fetch', toolArgs: { url: source.url }, toolCallId: 'read' };
+      await config.hooks.onPreToolUse(input);
+      if (mode === 'duplicate') await config.hooks.onPreToolUse({ ...input, toolArgs: { url: 'https://8.8.8.8/b' } });
+      if (mode === 'failed') config.hooks.onPostToolUseFailure({ ...input, error: 'Fetch failed' });
+      config.hooks.onPostToolUse({ ...input, toolCallId: mode === 'mismatched' ? 'other' : 'read', toolResult: { resultType: 'success', textResultForLlm: mode === 'blank' ? '  ' : 'Page' } });
+    } });
+    await assert.rejects(f.researcher.run(context), /sources.*read|tracking/, mode);
+  }
+});
+
+test('new helper results require claim records and enforce raw UTF-8 output envelope', async t => {
+  const missing = { ...result }; delete missing.claims;
+  const f = await fixture(t, { result: missing }); await assert.rejects(f.researcher.run(context), /invalid comparison/);
+  const huge = { ...result, summary: '界'.repeat(5000), recommendation: '界'.repeat(5000), options: Array.from({ length: 4 }, () => ({ title: 'Option', description: '界'.repeat(3000), pros: Array(6).fill('界'.repeat(1000)), cons: [], proposedAnswer: '界'.repeat(5000) })) };
+  assert.ok(JSON.stringify(huge).length < 80000); assert.ok(Buffer.byteLength(JSON.stringify(huge)) > 160000);
+  const h = await fixture(t, { result: huge }); await assert.rejects(h.researcher.run(context), /invalid comparison/);
+});
+
+test('raw Unicode bytes and SDK character envelope accept their exact boundaries and reject one over', async t => {
+  const value = { ...result, summary: '界'.repeat(5000), recommendation: '界'.repeat(5000), proposedAnswer: '界'.repeat(5000), options: Array.from({ length: 4 }, () => ({ title: 'Option', description: '界'.repeat(3000), pros: Array(6).fill('界'.repeat(1000)), cons: [] })) };
+  const json = JSON.stringify(value), raw = json + ' '.repeat(160000 - Buffer.byteLength(json));
+  assert.ok(raw.length < 80000); assert.equal(Buffer.byteLength(raw), 160000);
+  const exact = await fixture(t, { content: raw }); assert.deepEqual(await exact.researcher.run(context), { ...value, settings: researchSettings() });
+  const over = await fixture(t, { content: raw + ' ' }); await assert.rejects(over.researcher.run(context), /invalid comparison/);
+  const small = JSON.stringify(result), chars = small + ' '.repeat(80000 - small.length);
+  const exactChars = await fixture(t, { content: chars }); assert.deepEqual(await exactChars.researcher.run(context), { ...result, settings: researchSettings() });
+  const overChars = await fixture(t, { content: chars + ' ' }); await assert.rejects(overChars.researcher.run(context), /invalid comparison/);
 });
 
 test('helper denies managed approval, sandbox bypass and unrelated permissions', async t => {
@@ -193,7 +246,7 @@ test('accounting failure preserves the helper journal and recovery pointer witho
 });
 
 test('failed page reads cannot validate sources and arbitrary SDK errors stay out of the UI', async t => {
-  const sourced = { ...result, basis: 'sources', sources: [{ title: 'Reference', url: 'https://8.8.8.8/reference' }] };
+  const sourced = { ...result, basis: 'sources', sources: [{ id: 's1', title: 'Reference', url: 'https://8.8.8.8/reference' }] };
   const { researcher } = await fixture(t, { result: sourced, send: async ({ config }) => {
     const input = { toolName: 'web_fetch', toolArgs: { url: sourced.sources[0].url }, toolCallId: 'failed-read' };
     await config.hooks.onPreToolUse(input);

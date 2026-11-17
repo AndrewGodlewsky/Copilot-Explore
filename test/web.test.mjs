@@ -40,6 +40,30 @@ async function startReviewedResearch(f) {
   f.document.getElementById('research-review-start').click();
 }
 
+test('claim evidence disclosure shows literal support, source navigation and imported provenance beside the claim', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc);
+    doc.nodes[1].research = { ...findings, basis: 'sources', sources: [{ id: 's1', title: '<img src=x onerror=alert(1)>', url: 'https://example.com/source?q=1', retrievedAt: '2026-11-17T12:00:00.000Z', provenance: 'recorded-read' }], claims: [
+      { id: 'c1', text: '<script>Claim</script>', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Source paraphrase <script>plain</script>' }], limitations: 'Applies only in the source setting.' },
+      { id: 'c2', text: 'Personal judgment', basis: 'reasoning', evidence: [], limitations: 'No external support.' },
+      { id: 'c3', text: 'Unknown local costs', basis: 'unknown', evidence: [], limitations: 'No data.' },
+    ] };
+    await e.command('import', { revision: e.doc.revision, document: doc });
+  } });
+  f.open(f.explorer.doc.nodes[1].id);
+  const claim = f.document.getElementById('claim-c1'); assert.ok(claim);
+  assert.match(claim.textContent, /<script>Claim<\/script>/); assert.equal(claim.querySelector('script'), null);
+  const disclosure = claim.querySelector('details'); assert.ok(disclosure); assert.equal(disclosure.open, false);
+  const summary = disclosure.querySelector('summary'); summary.focus(); assert.equal(f.document.activeElement, summary); summary.click(); assert.equal(disclosure.open, true);
+  assert.match(disclosure.textContent, /Source paraphrase/); assert.match(disclosure.textContent, /Imported read metadata; not observed by this installation/); assert.match(disclosure.textContent, /2026-11-17T12:00:00.000Z/);
+  const link = disclosure.querySelector('a'); assert.equal(link.href, 'https://example.com/source?q=1'); assert.equal(link.target, '_blank'); assert.equal(link.rel, 'noopener noreferrer'); assert.equal(link.querySelector('img'), null);
+  assert.match(f.document.getElementById('claim-c2').textContent, /Model reasoning/); assert.match(f.document.getElementById('claim-c3').textContent, /Unknown support/);
+  assert.match(f.document.querySelector('.research').textContent, /Selected model assertions/);
+  const savedAnswer = f.explorer.doc.nodes[1].answer; f.document.getElementById('use-recommendation').click();
+  assert.equal(f.document.getElementById('answer').value, findings.recommendation); assert.equal(f.explorer.doc.nodes[1].answer, savedAnswer);
+  f.open(f.explorer.doc.nodes[2].id); f.open(f.explorer.doc.nodes[1].id); assert.ok(f.document.getElementById('claim-c1'));
+});
+
 async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;

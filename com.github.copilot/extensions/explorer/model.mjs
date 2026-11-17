@@ -81,14 +81,52 @@ export function acceptQuestions(doc, parentId, batch, selected) {
   validateDocument(next);
   return { document: next, ids: nodes.map(n => n.id) };
 }
+export const MAX_RESEARCH_BYTES = 160000;
+function evidenceId(value, seen, name) {
+  if (typeof value !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(value) || seen.has(value)) throw new Error(`Invalid or duplicate ${name} ID.`);
+  seen.add(value); return value;
+}
+function evidenceKeys(value, keys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(k => !keys.includes(k))) throw new Error('Invalid research evidence fields.');
+}
 export function research(value) {
   if (!value || !['sources', 'reasoning'].includes(value.basis)) throw new Error('Research needs a basis: sources or reasoning.');
+  const hasClaims = Object.hasOwn(value, 'claims'), sourceIds = new Set(), sourceUrls = new Set(), claimIds = new Set();
+  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims']);
+  if (hasClaims && Buffer.byteLength(JSON.stringify(value)) > MAX_RESEARCH_BYTES) throw new Error('Research evidence exceeds its serialized limit.');
   const sources = list(value.sources, 'sources', 15, source => {
     const url = new URL(text(source?.url, 'Source URL', 2000));
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Sources must be public HTTP(S) URLs.');
-    return { title: text(source.title, 'Source title', 300), url: url.href };
+    if (!hasClaims) return { title: text(source.title, 'Source title', 300), url: url.href };
+    evidenceKeys(source, ['id', 'title', 'url', 'retrievedAt', 'provenance']);
+    url.hash = '';
+    text(url.href, 'Canonical source URL', 2000);
+    if (sourceUrls.has(url.href)) throw new Error('Duplicate research source URL.');
+    sourceUrls.add(url.href);
+    const id = evidenceId(source.id, sourceIds, 'source');
+    if (source.retrievedAt !== null && (typeof source.retrievedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(source.retrievedAt) || !Number.isFinite(Date.parse(source.retrievedAt)) || new Date(source.retrievedAt).toISOString() !== source.retrievedAt)) throw new Error('Invalid source retrieval time.');
+    if (!['recorded-read', 'imported'].includes(source.provenance) || source.provenance === 'recorded-read' && !source.retrievedAt) throw new Error('Invalid source provenance.');
+    return { id, title: text(source.title, 'Source title', 300), url: url.href, retrievedAt: source.retrievedAt, provenance: source.provenance };
   });
   if (value.basis === 'sources' && !sources.length) throw new Error('Sourced research needs at least one consulted source.');
+  let claims;
+  if (hasClaims) {
+    if (value.basis === 'reasoning' && sources.length) throw new Error('Reasoning research cannot contain sources.');
+    claims = list(value.claims, 'claims', 12, claim => {
+      evidenceKeys(claim, ['id', 'text', 'basis', 'evidence', 'limitations']);
+      const id = evidenceId(claim.id, claimIds, 'claim'), refs = new Set();
+      if (!['sources', 'reasoning', 'unknown'].includes(claim.basis)) throw new Error('Invalid claim basis.');
+      const evidence = list(claim.evidence, 'claim evidence', 3, item => {
+        evidenceKeys(item, ['sourceId', 'paraphrase']);
+        if (!sourceIds.has(item.sourceId) || refs.has(item.sourceId)) throw new Error('Unknown or duplicate claim source reference.');
+        refs.add(item.sourceId);
+        return { sourceId: item.sourceId, paraphrase: text(item.paraphrase, 'Supporting paraphrase', 1000) };
+      });
+      if ((claim.basis === 'sources') !== (evidence.length > 0)) throw new Error('Claim basis does not match its evidence.');
+      return { id, text: text(claim.text, 'Claim', 1000), basis: claim.basis, evidence, limitations: text(claim.limitations, 'Claim limitations', 1000) };
+    });
+    if (!claims.length) throw new Error('Research needs at least one claim.');
+  }
   const options = list(value.options, 'options', 4, option => ({
     title: text(option?.title, 'Option title', 150),
     description: text(option.description, 'Option description', 3000),
@@ -98,11 +136,20 @@ export function research(value) {
     ...(option.details !== undefined ? { details: list(option.details, 'details', 8, d => ({ label: text(d?.label, 'Detail label', 80), value: text(d.value, 'Detail value', 1000) })) } : {}),
   }));
   if (options.length < 2) throw new Error('Compare at least two options.');
-  return { basis: value.basis, summary: text(value.summary, 'Research summary', 5000), options,
+  const result = { basis: value.basis, summary: text(value.summary, 'Research summary', 5000), options,
+    ...(hasClaims ? { claims } : {}),
     ...(Object.hasOwn(value, 'settings') ? { settings: researchSettings(value.settings) } : {}),
     recommendation: text(value.recommendation, 'Recommendation', 5000),
     ...(value.proposedAnswer !== undefined ? { proposedAnswer: text(value.proposedAnswer, 'Proposed answer', 5000) } : {}),
     uncertainty: text(value.uncertainty, 'Uncertainty', 3000), sources };
+  if (hasClaims && Buffer.byteLength(JSON.stringify(result)) > MAX_RESEARCH_BYTES) throw new Error('Research evidence exceeds its serialized limit.');
+  return result;
+}
+// Imported metadata can describe another installation's read, never a local observation.
+export function importedDocument(value) {
+  const doc = validateDocument(value);
+  for (const node of doc.nodes) for (const source of node.research?.claims ? node.research.sources : []) source.provenance = 'imported';
+  return doc;
 }
 export function createDocument(topic, { objective = '', successCriteria = '', mode = 'understand' } = {}) {
   const now = new Date().toISOString();
@@ -273,7 +320,18 @@ export function toMarkdown(doc) {
       }
       lines.push('**Recommendation:** ' + md(r.recommendation), '', '**Uncertainty:** ' + md(r.uncertainty), '');
       if (r.proposedAnswer) lines.push('Suggested draft: ' + md(r.proposedAnswer), '');
-      for (const source of r.sources) lines.push(`- [${md(source.title)}](<${source.url.replace(/>/g, '%3E').replace(/</g, '%3C')}>)`);
+      if (r.claims) {
+        lines.push('#### Claims and evidence', '', 'Model interpretation of support; a recorded page read does not verify a claim.', '');
+        for (const claim of r.claims) {
+          lines.push(`**${claim.id}: ${md(claim.text)}**`, '', `${claim.basis === 'sources' ? 'Source-linked model interpretation' : claim.basis === 'reasoning' ? 'Model reasoning' : 'Unknown support'}.`, '', `Limitations: ${md(claim.limitations)}`, '');
+          for (const item of claim.evidence) {
+            const source = r.sources.find(s => s.id === item.sourceId);
+            lines.push(`- ${item.sourceId}: ${md(item.paraphrase)}`, `  [${md(source.title)}](<${source.url.replace(/>/g, '%3E').replace(/</g, '%3C')}>) — ${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation' : 'Recorded successful read of requested URL'}; ${source.retrievedAt ?? 'Retrieval time unknown'}.`);
+          }
+        }
+      } else lines.push('Claim-level support and historical retrieval times unknown for this legacy result.', '');
+      lines.push('Consulted sources (a read does not establish claim support):', '');
+      for (const source of r.sources) lines.push(`- ${source.id ? source.id + ': ' : ''}[${md(source.title)}](<${source.url.replace(/>/g, '%3E').replace(/</g, '%3C')}>) — ${source.retrievedAt ? `${source.provenance === 'imported' ? 'Imported metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt}` : 'Retrieval time unknown'}.`);
     }
   }
   // Only a fixed heading may precede the appendix, including when the topic is multiline.

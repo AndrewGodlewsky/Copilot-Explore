@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.43",
+    "summary": "Inspect selected research claims with source-linked supporting paraphrases, limitations and actual successful-read times. Distinguish model reasoning and unknown support from consulted pages. Preserve evidence in exports and history, label imported metadata honestly, and reject fabricated references or oversized results without replacing prior research."
+  },
+  {
     "version": "0.1.42",
     "summary": "Choose Quick, Standard or Deeper research with enforced time and tool-attempt ceilings. Review source-focus and recency preferences in the exact request before starting, and retain chosen settings with results. Preserve legacy unknown settings, cancellation, usage receipts and explicit retry; close late permission-approval races."
   },

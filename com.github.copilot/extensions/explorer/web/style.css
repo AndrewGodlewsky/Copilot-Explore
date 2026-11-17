@@ -34,6 +34,10 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .recommendation { border-left: 3px solid var(--blue); padding-left: 14px; margin: 18px 0; }
 .research-detail { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; font-weight: normal; }
 .research-detail input { flex: 0 0 auto; width: 16px; height: 16px; margin: 3px 0 0; }
+.research-claim { border-top: 1px solid var(--line); padding-block: 12px; }
+.research-claim h4 { margin: 0; font-size: 13px; }
+.research-claim .basis { margin-block: 8px; }
+.research-claim details p { line-height: 1.5; }
 .undo-addition { margin-top: 8px; }
 
 #zoom-level{min-width:62px;font-variant-numeric:tabular-nums} .node-content textarea,.node-content input{user-select:text;cursor:text}

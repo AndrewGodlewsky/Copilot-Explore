@@ -983,6 +983,20 @@ function renderResearch(node) {
     notice('Added to your draft. Edit it before saving, or undo the addition.');
   };
   const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'), el('p', { class: 'quiet' }, researchSettingsText(r.settings)), el('p', {}, r.summary));
+  const retrieval = source => !source.retrievedAt ? 'Retrieval time unknown.' : `${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt}. Redirect destination and publication date unknown.`;
+  const sourceLink = source => el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `${source.id ? source.id + ': ' : ''}${source.title}`);
+  if (r.claims) {
+    section.append(el('h3', {}, 'Claims and evidence'), el('p', { class: 'quiet' }, 'Selected model assertions, not an exhaustive check of this comparison. A page read does not verify a claim; supporting paraphrases are model interpretations.'));
+    for (const claim of r.claims) {
+      const block = el('section', { class: 'research-claim', id: `claim-${claim.id}` }, el('h4', {}, `${claim.id}: ${claim.text}`), el('p', { class: 'basis' }, claim.basis === 'sources' ? 'Source-linked model interpretation' : claim.basis === 'reasoning' ? 'Model reasoning' : 'Unknown support'));
+      const disclosure = el('details', {}, el('summary', {}, claim.evidence.length ? 'Inspect supporting evidence and limitations' : 'Inspect limitations'), el('p', {}, `Limitations: ${claim.limitations}`));
+      for (const item of claim.evidence) {
+        const source = r.sources.find(s => s.id === item.sourceId);
+        disclosure.append(el('p', {}, item.paraphrase), sourceLink(source), el('p', { class: 'quiet' }, retrieval(source)));
+      }
+      block.append(disclosure); section.append(block);
+    }
+  } else section.append(el('p', { class: 'quiet' }, 'Claim-level support and historical retrieval times unknown for this legacy result.'));
   section.append(el('div', { class: 'recommendation' }, el('h3', {}, 'Recommendation'), el('p', {}, r.recommendation), button('Use recommendation', () => add(r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation' })));
   const details = [];
   for (const [index, o] of r.options.entries()) {
@@ -1000,7 +1014,7 @@ function renderResearch(node) {
     if (selected.length) add(selected.map(d => `${d.label}: ${d.value}`).join('\n'));
   }, { id: 'add-details', disabled: !ui.selectedDetails.size }));
   section.append(el('h3', {}, 'What is still uncertain'), el('p', {}, r.uncertainty));
-  if (r.sources.length) section.append(el('div', { class: 'sources' }, el('h3', {}, 'Sources'), r.sources.map((s, index) => el('a', { id: `source-${index}`, href: s.url, target: '_blank', rel: 'noopener noreferrer' }, `[${index + 1}] ${s.title}`))));
+  if (r.sources.length) section.append(el('div', { class: 'sources' }, el('h3', {}, 'Consulted sources'), el('p', { class: 'quiet' }, 'Reading a page does not establish claim support.'), r.sources.map((s, index) => el('div', { id: `source-${index}` }, sourceLink(s), el('p', { class: 'quiet' }, retrieval(s))))));
   return section;
 }
 function renderOutline() {

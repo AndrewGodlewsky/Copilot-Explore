@@ -16,8 +16,11 @@ const calls = [], toolCalls = [], prompts = [], captured = [], sendTimeouts = []
 const findings = { basis: 'reasoning', summary: 'Synthetic local comparison.', options: [
   { title: 'Pilot', description: 'Small first step.', pros: ['Learn'], cons: ['Limited'] , proposedAnswer: 'I will run a pilot.', details: [{ label: 'Size', value: 'Ten people' }] },
   { title: 'Launch', description: 'Broad first step.', pros: ['Reach'], cons: ['Cost'], proposedAnswer: 'I will launch broadly.', details: [] },
-], recommendation: 'Pilot first.', proposedAnswer: 'I will run a pilot.', uncertainty: 'Local fixture: no real sources read.', sources: [] };
-let hold = false, onHeld;
+], recommendation: 'Pilot first.', proposedAnswer: 'I will run a pilot.', uncertainty: 'Local fixture: no real sources read.', sources: [], claims: [
+  { id: 'c1', text: 'A pilot could help learning.', basis: 'reasoning', evidence: [], limitations: 'Model judgment; no page fetched.' },
+  { id: 'c2', text: 'Local cost is unknown.', basis: 'unknown', evidence: [], limitations: 'Search snippets do not establish fetched evidence.' },
+] };
+let hold = false, onHeld, falseCitation = false;
 const fixture = createServer(async (req, res) => {
   try {
     let body = ''; for await (const chunk of req) body += chunk;
@@ -38,7 +41,8 @@ const fixture = createServer(async (req, res) => {
     if (hold) { onHeld?.(); return; }
     const searched = input.messages.some(m => m.role === 'tool');
     const searchName = input.tools.find(t => t.function.name.includes('web_search')).function.name;
-    const message = searched ? { role: 'assistant', content: JSON.stringify(findings) } : {
+    const output = falseCitation ? { ...findings, basis: 'sources', sources: [{ id: 's1', title: 'Unread search result', url: 'https://example.com/unread', retrievedAt: '1900-01-01T00:00:00.000Z', provenance: 'recorded-read' }], claims: [{ id: 'c1', text: 'Unsupported claim', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Invented support' }], limitations: 'Fixture' }] } : findings;
+    const message = searched ? { role: 'assistant', content: JSON.stringify(output) } : {
       role: 'assistant', content: null, tool_calls: [{ id: 'search-fixture', type: 'function', function: { name: searchName, arguments: JSON.stringify({ query: 'synthetic pilot options' }) } }],
     };
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -115,14 +119,24 @@ try {
   const operation = JSON.parse(await readFile(join(temporary, 'usage', 'session-state', sessions[0], 'operation.json'), 'utf8'));
   assert.equal(operation.operation, 'research'); assert.equal(operation.status, 'completed');
   assert.match(journal, /session.usage_record/); assert.ok(!journal.includes('Neighbors only')); assert.ok(!journal.includes('Synthetic garden'));
+  falseCitation = true;
+  await assert.rejects(researcher.run(prepared.context, { prepared }), /sources.*successfully read/);
+  assert.equal(toolCalls.length, 2); assert.ok(toolCalls.every(call => call.name === 'web_search'));
+  const rejectedSessions = await readdir(join(temporary, 'usage', 'session-state'));
+  assert.equal(rejectedSessions.length, 2);
+  const rejectedId = rejectedSessions.find(id => id !== sessions[0]);
+  const rejectedOperation = JSON.parse(await readFile(join(temporary, 'usage', 'session-state', rejectedId, 'operation.json'), 'utf8'));
+  assert.equal(rejectedOperation.operation, 'research'); assert.equal(rejectedOperation.status, 'failed');
+  assert.match(await readFile(join(temporary, 'usage', 'session-state', rejectedId, 'events.jsonl'), 'utf8'), /session.usage_record/);
+  falseCitation = false;
   hold = true;
   const controller = new AbortController();
   const held = new Promise(resolve => { onHeld = resolve; });
   const cancelled = researcher.run(context, { signal: controller.signal });
   const rejected = assert.rejects(cancelled, /cancelled/);
   await held; controller.abort(); await rejected;
-  assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 2);
-  console.log('PASS isolated research: installed SDK tools initialize before inference, local MCP search runs, curated instructions/context reach the local model, structured suggestions return, receipts persist, cancellation stops the helper. No paid provider or user session.');
+  assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 3);
+  console.log('PASS isolated research: real installed MCP search, reasoning/unknown claims, rejection of search-only fabricated source/time, exact reviewed inputs, retained completed/failed receipts and cancellation/release. Successful builtin web_fetch is NOT exercised; deterministic hook tests separately cover successful read provenance. No paid provider or user session.');
 } finally {
   clearTimeout(deadline); await researcher.close();
   await Promise.allSettled([...owned].map(client => client.forceStop()));

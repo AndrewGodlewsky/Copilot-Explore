@@ -7,7 +7,7 @@ import { prepareAnswerCheck, captureCheck, checkFreshness, validateCheck } from 
 import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createDocument, validateDocument, findNode, addQuestions, addDirection, candidateQuestions, acceptQuestions, answerNode, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA, pinnedConstraints } from './model.mjs';
+import { createDocument, validateDocument, importedDocument, findNode, addQuestions, addDirection, candidateQuestions, acceptQuestions, answerNode, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA, pinnedConstraints } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
 import { History } from './history.mjs';
 import { Drafts, draftBase, draftHash, matchesDraftBase } from './drafts.mjs';
@@ -671,7 +671,7 @@ export class Explorer {
             if (record.conflict) return { ...this.snapshot(), importConflict: { entries: record.conflict } };
             await this.attach(record.key); break;
           }
-          await this.save(validateDocument(input.document), 'Imported saved map');
+          await this.save(importedDocument(input.document), 'Imported saved map');
           break;
         case 'open':
           if (!this.library) throw new Error('The library is unavailable in this preview.');

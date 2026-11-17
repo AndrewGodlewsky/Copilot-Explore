@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.51",
+    "summary": "Share a read-only offline HTML viewer after previewing exact selected nodes, saved answers and research. Search and navigate without Copilot or the plugin, preserve uncertainty and source provenance, and open sources only by deliberate clicks. Private metadata and excluded nodes stay out; selected text is not redacted. Size limits and stale-preview checks protect the export."
+  },
+  {
     "version": "0.1.50",
     "summary": "Export whole journeys or selected branches as Mermaid, JSON Canvas, standalone SVG or a printable HTML map with a manual Save as PDF path. Preserve saved roles, answers, states and relationships regardless of folds or focus, with explicit size limits and private-data exclusions. Complete native and Markdown exports remain available; handoff guidance and source links are corrected."
   },

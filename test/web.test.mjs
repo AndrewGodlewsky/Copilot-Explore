@@ -70,6 +70,51 @@ test('visual export UI explicitly captures full or selected scope despite foldin
   assert.deepEqual(f.actions.filter(a => a.action === 'finish'), []);
 });
 
+test('offline viewer UI requires a fresh exact preview, defaults private fields off and discards stale responses', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = structuredClone(findings); await e.command('import', { revision: e.doc.revision, document: doc }); } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'VIEWER_DRAFT_CANARY');
+  let downloaded;
+  f.window.URL.createObjectURL = blob => { downloaded = blob; return 'blob:viewer-fixture'; }; f.window.URL.revokeObjectURL = () => {}; f.window.HTMLAnchorElement.prototype.click = function () {};
+  $('visual-export-open').click(); assert.ok($('viewer-preview'), 'viewer export has a separate explicit preview');
+  assert.equal($('viewer-download').disabled, true);
+  const rows = [...$('viewer-selection').querySelectorAll('fieldset')]; assert.equal(rows.length, 3);
+  for (const row of rows) for (const field of ['node', 'answer', 'research']) assert.equal(row.querySelector(`[data-field="${field}"]`).checked, false);
+  const select = (field, checked = true) => { const control = rows[1].querySelector(`[data-field="${field}"]`); control.checked = checked; control.dispatchEvent(new f.window.Event('change', { bubbles: true })); };
+  select('node'); select('research'); $('viewer-preview').click();
+  await until(() => !$('viewer-download').disabled, 'viewer preview');
+  assert.match($('viewer-preview-content').textContent, /Two possible ways forward/); assert.ok(!$('viewer-preview-content').textContent.includes('VIEWER_DRAFT_CANARY'));
+  assert.equal($('viewer-preview-content').querySelector('script,iframe'), null);
+  $('viewer-download').click(); await until(() => downloaded, 'viewer file'); assert.ok(!(await downloaded.text()).includes('VIEWER_DRAFT_CANARY'));
+  downloaded = null; select('answer'); assert.equal($('viewer-download').disabled, true); assert.equal($('viewer-preview-content').textContent, '');
+  const original = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await original(path, options); if (path === 'api/viewer-export') return new Promise(resolve => { release = () => resolve(response); }); return response; };
+  $('viewer-preview').click(); await until(() => release, 'held preview'); select('research', false); release();
+  await delay(30); assert.equal($('viewer-download').disabled, true); assert.equal($('viewer-preview-content').textContent, '');
+  f.window.fetch = original; $('viewer-preview').click(); await until(() => !$('viewer-download').disabled, 'refreshed preview');
+  release = null; f.window.fetch = async (path, options) => { const response = await original(path, options); if (path === 'api/viewer-export') return new Promise(resolve => { release = () => resolve(response); }); return response; };
+  $('viewer-download').click(); await until(() => release, 'held download'); $('close-export').click(); release(); await delay(30); assert.equal(downloaded, null);
+  assert.equal($('answer').value, 'VIEWER_DRAFT_CANARY');
+  f.window.fetch = original; $('visual-export-open').click();
+  const node = $('viewer-selection').querySelectorAll('[data-field="node"]')[1]; node.checked = true; node.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  $('viewer-preview').click(); await until(() => !$('viewer-download').disabled, 'second fresh preview');
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[1].id, answer: 'Changed saved answer' });
+  $('viewer-download').click(); await until(() => /changed|Reopen/.test($('viewer-status').textContent), 'stale saved version'); assert.equal(downloaded, null); assert.equal($('viewer-download').disabled, true);
+  await f.poll(); $('close-export').click(); $('visual-export-open').click();
+  const freshNode = $('viewer-selection').querySelectorAll('[data-field="node"]')[1]; freshNode.checked = true; freshNode.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  $('viewer-preview').click(); await until(() => !$('viewer-download').disabled, 'preview before poll update');
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[1].id, answer: 'Another saved version' });
+  await f.poll(); assert.equal($('viewer-download').disabled, true, 'a published state update invalidates the preview immediately'); assert.equal($('viewer-preview-content').textContent, '');
+  $('close-export').click(); $('visual-export-open').click();
+  const restoredNode = $('viewer-selection').querySelectorAll('[data-field="node"]')[1]; restoredNode.checked = true; restoredNode.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  $('viewer-preview').click(); await until(() => !$('viewer-download').disabled, 'preview before page suspension');
+  release = null; f.window.fetch = async (path, options) => { const response = await original(path, options); if (path === 'api/viewer-export') return new Promise(resolve => { release = () => resolve(response); }); return response; };
+  $('viewer-download').click(); await until(() => release, 'download before page suspension');
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); release(); await delay(30);
+  assert.equal(downloaded, null, 'a response from before page suspension cannot trigger a download after restore');
+  assert.equal($('viewer-download').disabled, true);
+});
+
 test('option comparison preserves exact duplicate values, unknowns, subjective priorities and draft-only actions', async t => {
   const r = structuredClone(findings);
   r.options[0].details = [{ label: 'Cost', value: 'Lower <script>🌿</script>' }, { label: 'Cost', value: 'Setup extra' }, { label: 'Speed', value: 'Slower' }];

@@ -2,6 +2,8 @@
 
 Choose **Export maps** at any point, or **Finish exploration** when ready. Complete Markdown and `.explore.json` downloads always contain the full saved journey, research and accepted artifacts. Local answer drafts and private project excerpts are excluded. Use the native file to continue editing in Explorer.
 
+The same dialog also offers a separate [offline read-only viewer](offline-viewer.md) with exact per-node answer/research selection, a required included-content preview, and local search/navigation in one HTML file. Its inclusion and text-preservation rules differ from the four visual formats below.
+
 Portable maps offer **Whole journey** or **Selected branch and all descendants**. The branch is the node selected when the dialog opens, with all of its descendants, including folded or offscreen nodes. Focus and viewport never choose the scope. A branch omits its ancestors, sibling branches, overall topic and guidance; selecting the idea itself includes the entire tree. Reopen the dialog after changing the selected node or saved journey. Stale journey/revision requests are rejected.
 
 The four portable formats contain node relationships, original roles (idea, question, user direction), categories, question/direction text, saved user answers, answer states and needs-review flags. States express user intent, not verification. A direction remains user-supplied context, not an answer. Current files have no persisted importance rank, and exports do not infer one from a question's rationale.

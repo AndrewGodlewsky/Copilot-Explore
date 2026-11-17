@@ -22,6 +22,7 @@ let geometryBranches = null, geometryInputs = '', fontEpoch = 0;
 let workspace = null;
 let suppressClick = false, restoringFocus = false, composing = null;
 let actionEpoch = 0, closed = false, pollTimer;
+let viewerTarget = null, viewerEpoch = 0, viewerPreview = null;
 let stateCursor = null, pollFlight = null, pollFailures = 0, pageEpoch = 0, suspended = false, actionAbort = null;
 function stopPolling() {
   clearTimeout(pollTimer); pollFlight?.abort.abort(); pollFlight = null; stateCursor = null;
@@ -118,6 +119,10 @@ function apply(next, reset = false) {
   const compactFocused = $('nodes').contains(document.activeElement);
   const previousSelection = selected;
   const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
+  if (viewerTarget && (changedDocument || viewerTarget.journey !== (next.activeKey ?? next.document?.id) || viewerTarget.revision !== next.document?.revision)) {
+    invalidateViewer('The journey changed. Reopen Export maps and preview again.');
+    viewerTarget = null; $('viewer-preview').disabled = true;
+  }
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
@@ -1783,8 +1788,64 @@ function openVisualExport() {
   $('visual-export-target').textContent = `Selected branch: ${state.document.nodes.find(n => n.id === selected)?.question ?? 'Unavailable'}`;
   $('visual-export-status').textContent = 'Exports contain saved answers only; local drafts are unchanged.';
   $('visual-export-download').disabled = false;
+  openViewerSelection();
   $('export-dialog').showModal();
 }
+function invalidateViewer(message = 'Selection changed. Preview the included content before downloading.') {
+  viewerEpoch++; viewerPreview = null;
+  $('viewer-download').disabled = true; $('viewer-preview').disabled = false;
+  $('viewer-preview-content').textContent = ''; $('viewer-status').textContent = message;
+}
+function openViewerSelection() {
+  viewerTarget = { journey: state.activeKey ?? state.document.id, revision: state.document.revision };
+  invalidateViewer('Choose saved nodes, then optionally include their answers and research. Preview before downloading.');
+  $('viewer-selection').replaceChildren();
+  for (const node of state.document.nodes) {
+    const row = el('fieldset', { 'data-node-id': node.id }), include = el('input', { type: 'checkbox', 'data-field': 'node' });
+    const answer = el('input', { type: 'checkbox', 'data-field': 'answer', disabled: true }), research = el('input', { type: 'checkbox', 'data-field': 'research', disabled: true });
+    row.append(el('legend', {}, node.question), el('label', {}, include, ' Include node'), el('label', {}, answer, ' Include saved answer'), el('label', {}, research, ' Include saved research (AI suggestions)'));
+    include.addEventListener('change', () => {
+      answer.disabled = !include.checked || !isQuestion(node); research.disabled = !include.checked || !node.research;
+      if (!include.checked) answer.checked = research.checked = false;
+    });
+    $('viewer-selection').append(row);
+  }
+}
+function viewerSelection() {
+  return [...$('viewer-selection').querySelectorAll('fieldset')].filter(row => row.querySelector('[data-field="node"]').checked).map(row => ({ nodeId: row.dataset.nodeId, answer: row.querySelector('[data-field="answer"]').checked, research: row.querySelector('[data-field="research"]').checked }));
+}
+$('viewer-selection').addEventListener('change', () => invalidateViewer());
+async function requestViewer(action) {
+  if (!viewerTarget || (action === 'download' && !viewerPreview)) return;
+  const target = { ...viewerTarget }, selection = viewerSelection(), selectionKey = JSON.stringify(selection), proof = viewerPreview;
+  const epoch = ++viewerEpoch, page = pageEpoch;
+  const owns = () => !closed && !suspended && page === pageEpoch && epoch === viewerEpoch && $('export-dialog').open;
+  const current = () => owns() && target.journey === (state.activeKey ?? state.document?.id) && target.revision === state.document?.revision && selectionKey === JSON.stringify(viewerSelection());
+  viewerPreview = null; $('viewer-download').disabled = true; $('viewer-preview').disabled = true;
+  $('viewer-status').textContent = action === 'preview' ? 'Preparing exact saved content…' : 'Checking the previewed saved version…';
+  try {
+    if (action === 'preview') $('viewer-preview-content').textContent = '';
+    const response = await fetch('api/viewer-export', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ ...target, selection, action, digest: action === 'download' ? proof.digest : null }) });
+    if (!response.ok) throw Error((await response.json()).error || 'Viewer export failed. Preview again.');
+    if (action === 'preview') {
+      const value = await response.json(); if (!current()) return;
+      viewerPreview = { digest: value.digest };
+      $('viewer-preview-content').textContent = JSON.stringify(value.snapshot, null, 2);
+      $('viewer-status').textContent = `Preview: ${value.snapshot.nodes.length} saved nodes. Review all included text below before downloading. Research is recorded AI suggestion and interpretation, not a user decision or verified fact.`;
+      $('viewer-download').disabled = false;
+    } else {
+      const blob = await response.blob(); if (!current()) return;
+      if (response.headers.get('Content-Disposition') !== 'attachment; filename="exploration-viewer.html"') throw Error('Invalid viewer download response. Preview again.');
+      const url = URL.createObjectURL(blob), link = el('a', { href: url, download: 'exploration-viewer.html' });
+      document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+      viewerPreview = proof; $('viewer-download').disabled = false;
+      $('viewer-status').textContent = 'Download requested. Browser file saving is unknown. Open exploration-viewer.html in Brave to read offline.';
+    }
+  } catch (error) { if (owns()) invalidateViewer(error.message || 'Viewer export failed. Preview again.'); }
+  finally { if (owns()) { $('viewer-preview').disabled = false; if (!current()) invalidateViewer('The journey changed. Reopen Export maps and preview again.'); } }
+}
+$('viewer-preview').addEventListener('click', () => void requestViewer('preview'));
+$('viewer-download').addEventListener('click', () => void requestViewer('download'));
 $('visual-export-open').addEventListener('click', openVisualExport);
 $('visual-export-download').addEventListener('click', async () => {
   if (!visualExportTarget) return;
@@ -1814,8 +1875,8 @@ $('finish').addEventListener('click', async () => {
   if (await api('finish')) openVisualExport();
 });
 $('save-file').addEventListener('click', () => { notice('This download contains saved answers and states only. Local answer drafts are not included.'); });
-$('close-export').addEventListener('click', () => { visualExportEpoch++; $('export-dialog').close(); $('visual-export-open').focus(); });
-$('export-dialog').addEventListener('cancel', () => { visualExportEpoch++; });
+$('close-export').addEventListener('click', () => { visualExportEpoch++; invalidateViewer(); viewerTarget = null; $('export-dialog').close(); $('visual-export-open').focus(); });
+$('export-dialog').addEventListener('cancel', () => { visualExportEpoch++; invalidateViewer(); viewerTarget = null; });
 $('outline-toggle').addEventListener('click', () => { $('outline').hidden = !$('outline').hidden; $('outline-toggle').setAttribute('aria-expanded', String(!$('outline').hidden)); if (!$('outline').hidden) { renderOutline(); $('search').focus(); } });
 $('outline').addEventListener('keydown', event => {
   if (event.key !== 'Escape' || event.isComposing) return;
@@ -1908,6 +1969,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  if (viewerTarget) { invalidateViewer('The page was suspended. Reopen Export maps and preview again.'); viewerTarget = null; $('viewer-preview').disabled = true; }
   closeResearchReview();
   suspended = true; pageEpoch++; actionEpoch++; stopPolling(); actionAbort?.abort(); actionAbort = null; busy = false;
   if ($('diagnostics-dialog').open) closeDiagnostics();

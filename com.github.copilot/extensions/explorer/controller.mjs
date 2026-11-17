@@ -24,6 +24,7 @@ import { researchFraming } from './research.mjs';
 import { contextScope, prepareResearch, sameResearchSources, sameResearchDestination } from './research-context.mjs';
 import { ResearchReview } from './research-review.mjs';
 import { visualExport } from './visual-export.mjs';
+import { viewerSnapshot, viewerDigest, viewerArtifact } from './offline-viewer.mjs';
 export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
@@ -423,6 +424,23 @@ export class Explorer {
       throw new Error('This journey changed on disk. Reopen it from the library.');
     }
     return saved.document;
+  }
+  exportViewer(input) {
+    return this.transact(async () => {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'action,digest,journey,revision,selection' ||
+        !['preview', 'download'].includes(input.action) || typeof input.journey !== 'string' || !Number.isSafeInteger(input.revision) || input.revision < 0 ||
+        (input.action === 'preview' ? input.digest !== null : typeof input.digest !== 'string' || !/^[a-f0-9]{64}$/.test(input.digest))) throw Error('Invalid offline viewer request.');
+      const matches = () => !this.closed && this.doc && input.journey === (this.activeKey ?? this.doc.id) && input.revision === this.doc.revision;
+      if (!matches()) throw Error('The journey changed. Reopen Export maps and preview again.');
+      const identity = [this.file, this.activeKey, this.doc.id, this.doc.rootId, this.doc.createdAt];
+      const doc = await this.readCurrent();
+      if (!matches() || JSON.stringify(identity) !== JSON.stringify([this.file, this.activeKey, this.doc.id, this.doc.rootId, this.doc.createdAt]) || doc.revision !== input.revision) throw Error('The journey changed. Reopen Export maps and preview again.');
+      const snapshot = viewerSnapshot(doc, input.selection), digest = viewerDigest(input, snapshot);
+      const artifact = viewerArtifact(snapshot); // Check the final output bound before offering a preview.
+      if (input.action === 'preview') return { snapshot, digest };
+      if (input.digest !== digest) throw Error('The selection changed. Preview the included content again.');
+      return artifact;
+    });
   }
   exportVisual(input) {
     return this.transact(async () => {

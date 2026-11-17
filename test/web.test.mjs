@@ -50,7 +50,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     offsetWidth: { get() { return parseFloat(this.style.width) || (this.id === 'map' ? width : 220); } },
     offsetHeight: { get() { return this.id === 'node-workspace' ? Math.min(540, parseFloat(this.style.maxHeight) || 540) : 110; } },
   });
-  let captures = 0, holdAnswer = null, holdState = null;
+  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null;
   const captured = new Set(), observers = new Map();
   map.setPointerCapture = id => { captures++; captured.add(id); };
   map.hasPointerCapture = id => captured.has(id);
@@ -62,6 +62,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.fetch = (path, options) => {
     const request = (async () => {
       if (holdAnswer && options?.body && JSON.parse(options.body).action === 'answer') await holdAnswer();
+      if (holdAdd && options?.body && JSON.parse(options.body).action === 'add') await holdAdd();
       if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, Origin: new URL(server.url).origin } };
       const response = await fetch(new URL(path, server.url), options);
       const body = await response.arrayBuffer();
@@ -84,7 +85,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const type = (id, value) => { const e = document.getElementById(id); assert.ok(e, id); e.value = value; e.dispatchEvent(new window.Event('input', { bubbles: true })); };
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
   return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, pauseAnswer: fn => { holdAnswer = fn; },
-    resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; } };
+    resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; } };
 }
 
 test('library opens, searches, pins and archives journeys at narrow pane width', async t => {
@@ -170,6 +171,51 @@ test('opening a divergent legacy entry resets saved-value editor buffers even wh
   const collapse = f.document.getElementById('collapse-node'); if (collapse) collapse.click();
   f.open(node.id);
   assert.equal(f.document.getElementById('answer').value, 'The other saved version');
+});
+
+test('saved manual categories no longer block switching journeys', async t => {
+  const f = await fixture(t, 340, undefined, true);
+  const other = await f.explorer.library.import(createDocument('Other journey'));
+  f.open(f.explorer.doc.rootId); f.type('manual-category', 'Custom category'); f.type('manual-question', 'A saved question?');
+  f.document.getElementById('add-question').click();
+  await until(() => f.explorer.doc.nodes.some(n => n.question === 'A saved question?') && f.document.getElementById('manual-question').value === '', 'manual question saved');
+  assert.equal(f.explorer.doc.nodes.find(n => n.question === 'A saved question?').category, 'Custom category');
+  f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'library entries');
+  [...f.document.querySelectorAll('.library-entry')].find(entry => entry.textContent.includes('Other journey')).querySelector('[data-action="open"]').click();
+  await until(() => f.explorer.activeKey === other.key, 'switch after saved manual category');
+});
+
+test('manual category edited during a save remains protected as an unsaved draft', async t => {
+  const f = await fixture(t, 340, undefined, true), originalKey = f.explorer.activeKey;
+  await f.explorer.library.import(createDocument('Other journey'));
+  f.open(f.explorer.doc.rootId); f.type('manual-category', 'Submitted category'); f.type('manual-question', 'Submitted question?');
+  let release, waiting = false;
+  const gate = new Promise(resolve => { release = resolve; });
+  f.pauseAdd(() => { waiting = true; return gate; });
+  f.document.getElementById('add-question').click();
+  await until(() => waiting, 'manual save in flight');
+  f.type('manual-category', 'Next category'); release();
+  await until(() => f.explorer.doc.nodes.some(n => n.question === 'Submitted question?') && f.document.getElementById('manual-question').value === '', 'submitted question saved');
+  assert.equal(f.explorer.doc.nodes.find(n => n.question === 'Submitted question?').category, 'Submitted category');
+  assert.equal(f.document.getElementById('manual-category').value, 'Next category');
+  f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'library entries');
+  [...f.document.querySelectorAll('.library-entry')].find(entry => entry.textContent.includes('Other journey')).querySelector('[data-action="open"]').click();
+  await until(() => /draft/.test(f.document.getElementById('notice').textContent), 'new category protects switch');
+  assert.equal(f.explorer.activeKey, originalKey);
+  f.document.getElementById('library-return').click();
+  assert.equal(f.document.getElementById('manual-category').value, 'Next category');
+});
+
+test('clearing a non-root manual category discards it and permits a new journey', async t => {
+  const f = await fixture(t, 340, undefined, true), first = f.explorer.doc.id;
+  f.open(f.explorer.doc.nodes[1].id); f.type('manual-category', 'Unsaved custom category'); f.type('manual-category', '');
+  f.document.getElementById('library-toggle').click();
+  f.type('topic', 'A new journey');
+  f.document.getElementById('start-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => f.explorer.doc.id !== first, 'new journey after cleared category');
+  assert.equal(f.explorer.doc.topic, 'A new journey');
 });
 
 function viewOf(f) {

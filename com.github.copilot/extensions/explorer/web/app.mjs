@@ -124,7 +124,7 @@ function switchAllowed() {
   if (state.pending) { notice('Cancel the current Copilot request before opening another journey.'); return false; }
   if (dirtyNodes().length || [...nodeUi].some(([id, ui]) => {
     const node = state.document?.nodes.find(n => n.id === id);
-    return ui.question.length || (ui.category !== null && ui.category !== (node?.id === state.document?.rootId ? '' : node?.category));
+    return ui.question.length || (ui.category && ui.category !== (node?.id === state.document?.rootId ? '' : node?.category));
   })) { notice('Save or clear your answer and manual-question drafts before opening another journey. Back to current map keeps your drafts.'); return false; }
   return true;
 }
@@ -341,7 +341,13 @@ function renderWorkspace() {
   category.value = ui.category ?? (root ? '' : node.category); question.value = ui.question;
   category.addEventListener('input', () => { ui.category = category.value; }); question.addEventListener('input', () => { ui.question = question.value; });
   manual.append(el('label', { for: 'manual-category' }, 'Category'), category, el('label', { for: 'manual-question' }, 'Question'), question, el('button', { type: 'submit', id: 'add-question', disabled: pending }, 'Add question'));
-  manual.addEventListener('submit', async event => { event.preventDefault(); const value = question.value; if (await api('add', { nodeId: node.id, question: value, category: category.value })) { if (ui.question === value) ui.question = ''; renderWorkspace(); refreshScene(); } });
+  manual.addEventListener('submit', async event => {
+    event.preventDefault(); const value = question.value, submittedCategory = category.value;
+    if (await api('add', { nodeId: node.id, question: value, category: submittedCategory })) {
+      if (ui.question === value) { ui.question = ''; if (ui.category === submittedCategory) ui.category = null; }
+      renderWorkspace(); refreshScene();
+    }
+  });
   details.append(manual); content.append(details);
   if (focus) {
     const target = $(focus.id);

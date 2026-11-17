@@ -8,6 +8,7 @@ let selected = null, expanded = false, signature = '', positions = new Map(), bu
 let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame, viewportSize;
 let suppressClick = false, restoringFocus = false, composing = null, workspaceDirty = false;
 let actionEpoch = 0, closed = false, pollTimer;
+let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
 const drafts = new Map(), nodeUi = new Map();
 const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args),
   context: () => `${state.document?.id}/${selected}/${expanded}`,
@@ -37,7 +38,7 @@ async function api(action, input = {}) {
     const result = await response.json();
     if (closed) return null;
     if (!response.ok) throw new Error(result.error);
-    apply(result); return result;
+    if (!result.importConflict) apply(result, ['start', 'open', 'import'].includes(action)); return result;
   } catch (error) { if (!closed) notice(error.message); return null; }
   finally { busy = false; }
 }
@@ -54,11 +55,11 @@ function captureWorkspace() {
     ui.manualOpen = panel.querySelector('.manual')?.open ?? false;
   }
 }
-function apply(next) {
+function apply(next, reset = false) {
   const stamp = JSON.stringify(next);
-  if (stamp === signature) return;
+  if (stamp === signature && !reset) return;
   captureWorkspace();
-  const changedDocument = state.document?.id !== next.document?.id;
+  const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
   const firstQuestions = (state.document?.nodes.length ?? 0) <= 1 && (next.document?.nodes.length ?? 0) > 1;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
@@ -67,9 +68,10 @@ function apply(next) {
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
   }
   signature = stamp; state = next;
+  if (state.library && !state.document) void refreshLibrary();
   const doc = state.document;
   if (doc && !doc.nodes.some(n => n.id === selected)) { selected = doc.rootId; expanded = false; }
-  $('welcome').hidden = !!doc; $('workspace').hidden = !doc;
+  showView();
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   notice(state.error);
   if (!doc) return;
@@ -87,6 +89,61 @@ function apply(next) {
     const rect = $('map').getBoundingClientRect(); firstFit = !rect.width || !rect.height;
     if (!firstFit) expanded ? centerSelected() : fit();
   }
+}
+function showView() {
+  const home = !state.document || libraryView;
+  $('welcome').hidden = !home; $('workspace').hidden = home;
+  $('library-toggle').hidden = !state.library;
+  $('library-home').hidden = !state.library;
+  $('library-return').hidden = !state.document;
+  document.body.classList.toggle('has-library', !!state.library);
+}
+async function refreshLibrary() {
+  const epoch = ++libraryEpoch;
+  try {
+    const query = new URLSearchParams({ search: $('library-search').value, archived: String($('library-archived').checked) });
+    const response = await fetch(`api/library?${query}`), result = await response.json();
+    if (epoch !== libraryEpoch || closed) return;
+    if (!response.ok) throw new Error(result.error);
+    libraryRevision = result.revision;
+    $('library-errors').replaceChildren(...result.errors.map(error => el('p', { class: 'notice' }, error.message)));
+    $('library-list').replaceChildren(...result.entries.map(entry => {
+      const change = async patch => { if (await api('library-update', { key: entry.key, patch, metadataRevision: libraryRevision })) await refreshLibrary(); };
+      return el('article', { class: 'library-entry' }, el('h2', {}, entry.topic),
+        el('p', { class: 'quiet' }, `${entry.pinned ? 'Pinned · ' : ''}${entry.nodeCount - 1} questions · ${entry.lastOpenedAt ? 'Opened' : 'Edited'} ${new Date(entry.lastOpenedAt ?? entry.updatedAt).toLocaleString()}`),
+        entry.ambiguous ? el('p', { class: 'quiet' }, `Multiple saved versions share this identity. Version ${entry.key.slice(0, 8)} is preserved separately.`) : null,
+        el('div', { class: 'library-actions' }, button('Open', () => switchJourney('open', { key: entry.key }), { 'data-action': 'open' }),
+          button(entry.pinned ? 'Unpin' : 'Pin', () => change({ pinned: !entry.pinned }), { 'data-action': 'pin', 'aria-pressed': String(entry.pinned) }),
+          button(entry.archived ? 'Unarchive' : 'Archive', () => change({ archived: !entry.archived }), { 'data-action': 'archive' })));
+    }));
+    if (!result.entries.length) $('library-list').append(el('p', { class: 'quiet' }, $('library-search').value ? 'No journeys match this search.' : $('library-archived').checked ? 'No archived journeys.' : 'No saved journeys yet. Start an exploration below, or open a saved file.'));
+  } catch (error) { if (epoch === libraryEpoch && !closed) $('library-errors').textContent = `Could not load the library: ${error.message}`; }
+}
+function switchAllowed() {
+  if (busy || closed) return false;
+  if (state.pending) { notice('Cancel the current Copilot request before opening another journey.'); return false; }
+  if (dirtyNodes().length || [...nodeUi].some(([id, ui]) => {
+    const node = state.document?.nodes.find(n => n.id === id);
+    return ui.question.length || (ui.category !== null && ui.category !== (node?.id === state.document?.rootId ? '' : node?.category));
+  })) { notice('Save or clear your answer and manual-question drafts before opening another journey. Back to current map keeps your drafts.'); return false; }
+  return true;
+}
+async function switchJourney(action, input) {
+  if (!switchAllowed()) return null;
+  voice.cancel();
+  $('workspace').inert = true; $('welcome').inert = true;
+  let result;
+  try { result = await api(action, input); }
+  finally { $('workspace').inert = false; $('welcome').inert = false; }
+  if (result?.importConflict) {
+    importDocument = input.document;
+    $('import-existing').replaceChildren(...result.importConflict.entries.map(entry => button(`Open saved: ${entry.topic} (${entry.key.slice(0, 8)})`, async () => {
+      if (await switchJourney('open', { key: entry.key })) { importDocument = null; $('import-conflict').close(); }
+    })));
+    $('import-conflict').showModal(); return null;
+  }
+  if (result) { libraryView = false; showView(); refreshScene(null); fit(); $('map').focus({ preventScroll: true }); }
+  return result;
 }
 function focusTop(id, height) {
   const node = state.document.nodes.find(n => n.id === id);
@@ -339,15 +396,24 @@ function renderOutline() {
   if (focused) [...$('outline-list').children].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
 }
 function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) && drafts.get(n.id).trim() !== n.answer) ?? []; }
-$('start-form').addEventListener('submit', async event => { event.preventDefault(); await api('start', { topic: $('topic').value }); });
+$('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value }); });
+$('library-toggle').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); void refreshLibrary(); $('library-search').focus(); });
+$('library-return').addEventListener('click', () => { libraryView = false; showView(); refreshScene(); $('map').focus({ preventScroll: true }); });
+$('library-search').addEventListener('input', refreshLibrary);
+$('library-archived').addEventListener('change', refreshLibrary);
+$('library-refresh').addEventListener('click', refreshLibrary);
+$('library-new').addEventListener('click', () => $('topic').focus());
+$('import-copy').addEventListener('click', async () => { if (importDocument && await switchJourney('import', { document: importDocument, asCopy: true })) { importDocument = null; $('import-conflict').close(); } });
+$('import-cancel').addEventListener('click', () => { importDocument = null; $('import-conflict').close(); });
+$('import-conflict').addEventListener('cancel', () => { importDocument = null; });
 $('import').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', async () => {
   const file = $('file').files[0]; $('file').value = '';
   if (!file) return;
-  if (state.pending) return notice('Cancel the current Copilot request before opening another map.');
+  if (!switchAllowed()) return;
   if (file.size > 10 * 1024 * 1024) return notice('The file exceeds the 10 MiB POC limit.');
-  if (state.document && !confirm('Replace the map in this canvas? Download Save file first if you want to keep the current map. Unsaved answer drafts will be discarded.')) return;
-  try { const document = JSON.parse(await file.text()); if (await api('import', { document })) { drafts.clear(); nodeUi.clear(); selected = state.document.rootId; expanded = false; renderWorkspace(); refreshScene(null); fit(); } }
+  if (!state.library && state.document && !confirm('Replace the map in this preview? Download Save file first to keep it.')) return;
+  try { const document = JSON.parse(await file.text()); await switchJourney('import', { document }); }
   catch (error) { notice(`Could not open that file: ${error.message}`); }
 });
 $('finish').addEventListener('click', async () => { const dirty = dirtyNodes(); if (dirty.length) { select(dirty[0].id); return notice('Save your draft answer before finishing.'); } if (await api('finish')) $('export-dialog').showModal(); });

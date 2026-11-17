@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { JSDOM } from 'jsdom';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
+import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
+import { createDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { layout } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
@@ -20,10 +22,10 @@ async function until(read, label) {
   assert.fail('Timed out: ' + label);
 }
 
-async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }) {
+async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
-  const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), send: async () => {}, target: { instanceId: 'dom-test' },
+  const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
     researcher: { run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
   }).load();
   await explorer.command('start', { topic: 'A tool library' });
@@ -84,6 +86,91 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; } };
 }
+
+test('library opens, searches, pins and archives journeys at narrow pane width', async t => {
+  const f = await fixture(t, 340, undefined, true);
+  const second = await f.explorer.library.import(createDocument('Another saved journey'));
+  assert.ok(f.document.getElementById('library-toggle'), 'header offers Library');
+  f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'two library entries');
+  f.type('library-search', 'Another');
+  await until(() => f.document.querySelectorAll('.library-entry').length === 1, 'library search');
+  f.document.querySelector('.library-entry [data-action="pin"]').click();
+  await until(() => f.document.querySelector('.library-entry [data-action="pin"]')?.textContent === 'Unpin', 'pin saved');
+  f.document.querySelector('.library-entry [data-action="archive"]').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 0, 'archived hidden');
+  const archived = f.document.getElementById('library-archived'); archived.checked = true; archived.dispatchEvent(new f.window.Event('change'));
+  await until(() => f.document.querySelectorAll('.library-entry').length === 1, 'archive filter');
+  f.document.querySelector('.library-entry [data-action="open"]').click();
+  await until(() => f.explorer.activeKey === second.key && !f.document.getElementById('workspace').hidden, 'journey opened');
+  assert.equal(f.document.activeElement.id, 'map', 'keyboard focus follows the opened map');
+});
+
+test('switching blocks unsaved answer and manual-question drafts and pending AI', async t => {
+  const f = await fixture(t, 340, undefined, true), first = f.explorer.doc.id, node = f.explorer.doc.nodes[1];
+  await f.explorer.library.import(createDocument('Second journey'));
+  assert.ok(f.document.getElementById('library-toggle'), 'header offers Library');
+  const trySwitch = async () => {
+    f.document.getElementById('library-toggle').click();
+    await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'library visible');
+    [...f.document.querySelectorAll('.library-entry')].find(e => e.textContent.includes('Second journey')).querySelector('[data-action="open"]').click();
+    await delay(20); assert.equal(f.explorer.doc.id, first);
+    f.document.getElementById('library-return').click();
+  };
+  f.open(node.id); f.type('answer', 'My unsaved draft'); await trySwitch();
+  assert.match(f.document.getElementById('notice').textContent, /draft/i);
+  assert.equal(f.document.getElementById('answer').value, 'My unsaved draft');
+  f.type('answer', ''); f.type('manual-question', 'A manual question'); await trySwitch();
+  assert.equal(f.document.getElementById('manual-question').value, 'A manual question');
+  f.type('manual-question', ''); f.type('manual-category', 'My custom category'); await trySwitch();
+  assert.equal(f.document.getElementById('manual-category').value, 'My custom category');
+  f.type('manual-category', node.category);
+  await f.explorer.command('questions', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.rootId });
+  await until(() => !f.document.getElementById('request-status').hidden, 'pending visible'); await trySwitch();
+  assert.match(f.document.getElementById('notice').textContent, /cancel/i);
+});
+
+test('import conflict offers open-existing or copy and never discards a manual draft', async t => {
+  const f = await fixture(t, 340, undefined, true), original = structuredClone(f.explorer.doc), key = f.explorer.activeKey;
+  const dialog = f.document.getElementById('import-conflict');
+  // jsdom does not implement native dialog presentation or a file-picker dialog.
+  dialog.showModal = () => { dialog.open = true; }; dialog.close = () => { dialog.open = false; };
+  const source = structuredClone(original); source.nodes[1].answer = 'Imported answer';
+  const file = f.document.getElementById('file');
+  const importFile = document => {
+    Object.defineProperty(file, 'files', { configurable: true, value: [{ size: JSON.stringify(document).length, text: async () => JSON.stringify(document) }] });
+    file.dispatchEvent(new f.window.Event('change'));
+  };
+  f.open(original.nodes[1].id); f.type('manual-question', 'Keep this unfinished question');
+  importFile(source); await delay(25);
+  assert.equal(dialog.open, false); assert.equal(f.document.getElementById('manual-question').value, 'Keep this unfinished question');
+  f.type('manual-question', ''); importFile(source);
+  await until(() => dialog.open, 'duplicate choice'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  f.document.querySelector('#import-existing button').click();
+  await until(() => !dialog.open, 'open saved'); assert.equal(f.explorer.activeKey, key);
+  importFile(source); await until(() => dialog.open, 'duplicate choice again');
+  f.document.getElementById('import-copy').click();
+  await until(() => !dialog.open && f.explorer.doc.id !== original.id, 'import copy');
+  assert.equal(f.explorer.doc.nodes[1].answer, 'Imported answer');
+  assert.equal((await f.explorer.library.resolve(key)).document.nodes[1].answer, '');
+  importFile(original); await until(() => f.explorer.activeKey === key, 'identical import opens existing');
+  assert.equal((await f.explorer.library.list()).entries.length, 2);
+});
+
+test('opening a divergent legacy entry resets saved-value editor buffers even when journey IDs match', async t => {
+  const f = await fixture(t, 340, undefined, true), doc = structuredClone(f.explorer.doc), node = doc.nodes[1];
+  doc.nodes[1].answer = 'The other saved version';
+  await writeFile(join(f.explorer.library.directory, 'legacy-other.explore.json'), JSON.stringify(doc));
+  const other = (await f.explorer.library.list()).entries.find(entry => entry.key !== f.explorer.activeKey);
+  f.open(node.id); f.type('answer', '');
+  f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'ambiguous entries');
+  [...f.document.querySelectorAll('.library-entry')].find(entry => entry.textContent.includes(other.key.slice(0, 8))).querySelector('[data-action="open"]').click();
+  await until(() => f.explorer.activeKey === other.key && !f.document.getElementById('workspace').hidden, 'other backing file');
+  const collapse = f.document.getElementById('collapse-node'); if (collapse) collapse.click();
+  f.open(node.id);
+  assert.equal(f.document.getElementById('answer').value, 'The other saved version');
+});
 
 function viewOf(f) {
   const numbers = f.document.getElementById('world').style.transform.match(/-?[\d.]+/g).map(Number);

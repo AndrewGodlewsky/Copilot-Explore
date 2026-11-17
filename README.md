@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.13.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
+**Proof of concept, v0.1.14.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -66,11 +66,13 @@ Local marketplace installs can show a generic native tab icon due to a host issu
 
 ## Use Explorer
 
-1. Start with an idea. Copilot creates questions in several directions around it.
+1. Use `/explore` to open your library, or `/explore <idea>` to start a journey. Search saved topics, pin favorites, or show archived journeys. **Open** continues a journey in the current chat; **New exploration** starts another without replacing the saved map. Copilot creates questions in several directions around a new idea.
 2. Select a question in the map or searchable **Outline**. The node expands in its branch; its answer, research, and follow-up controls are inside it.
 3. Open **Explore options**, then use **Research options** for alternatives, pros/cons, a recommendation, and uncertainty. A separate Copilot researcher works inside this node. Consulted sources are numbered and linked; unsourced reasoning is labeled. **Use recommendation**, **Use this option**, or **Add selected details** appends suggestions to your editable draft. **Undo addition** restores the previous draft until you edit it. Nothing is saved as your answer until you click Save.
 4. Write your answer. **Save answer** records it; **Save & explore deeper** also generates follow-up questions on that branch. You can add a question manually.
-5. **Finish exploration** saves the record and offers two downloads: Markdown and `.explore.json`. Use **Open file** to resume the latter in another canvas/session.
+5. **Finish exploration** saves the record and offers two downloads: Markdown and `.explore.json`. Use **Library** to reopen it from any canvas/session, or **Open file** to import an exported journey.
+
+The library shows pinned journeys first, then most recently opened journeys. Files saved before the library existed use their last edited date until you open them. Archive hides a journey from the default list; it never deletes the file. Importing an identical saved journey opens the existing one. A changed file with the same identity offers **Open saved** or **Import as new copy**, preserving both versions. Save or clear answer and manual-question drafts before switching; cancel pending Copilot work first. **Back to current map** returns to unfinished drafts. Draft recovery across app restarts is not included yet.
 
 Pan by dragging the background, a compact card, or an expanded question heading. Middle-button dragging also works over the editor. Scroll over the map to zoom around the pointer, or use Ctrl/Command+wheel (including trackpad pinch) anywhere on the map. Normal scrolling inside an expanded node scrolls its contents. The +/? controls zoom up to 300%; click the percentage to return to 100%. **Collapse node** keeps your place and shows a saved-answer preview; **Whole map** collapses the workspace and fits the tree. **Center question** returns to the selected node at reading size. Keyboard users can Tab to nodes (including those off screen), navigate the outline, or press Escape to close the outline or collapse a question. With the map focused, arrow keys pan, +/? zoom, 0 resets zoom, and Home fits the whole map. Window resizing preserves your zoom and position. Ctrl/Command + Enter saves an answer and explores deeper. Revising an answered node preserves its descendants and marks them for review.
 
@@ -163,9 +165,9 @@ PvRecorder captures mono, 16-bit PCM audio at 16 kHz. Foundry Local runs the spe
 
 ## Files and privacy
 
-Each canvas autosaves a versioned JSON document under `~/.copilot/plugin-data/explorer/` (`COPILOT_HOME` is respected). `EXPLORER_DATA_DIR` can override this for testing. Finish also saves a Markdown sibling there. Export names use an exploration identifier; every node's ID and parent relationship are preserved in the resumable file.
+Journeys autosave as versioned JSON documents under `~/.copilot/plugin-data/explorer/` (`COPILOT_HOME` is respected). `EXPLORER_DATA_DIR` can override this for testing. New filenames hash the stable journey ID; canvas/session identity is only an attachment. Legacy `.explore.json` files are discovered in place. Opening a journey from another canvas uses the same file and revision protection. Finish also saves a Markdown sibling there. Export names use an exploration identifier; every node's ID and parent relationship are preserved in the resumable file. Pin/archive/recent metadata and canvas bindings live separately in `library.json`; opening or pinning never changes the journey's edited timestamp. See the [library storage contract](docs/library.md).
 
-Question/answer/research data is stored locally as plain text. Generating questions sends map context to the attached chat; research sends a bounded saved-context snapshot to its isolated Copilot session and may include relevant terms in web searches. The plugin reads no repository context and loads no external UI assets. Downloaded files contain the exploration text. Imported files replace the current canvas after confirmation; save the current map first if you want to retain it. Unsaved text-area drafts are not part of exports or research input; save them before leaving.
+Question/answer/research data is stored locally as plain text. Generating questions sends only the current map context to the attached chat; the library listing is not added to that context. Research sends a bounded saved-context snapshot to its isolated Copilot session and may include relevant terms in web searches. The plugin reads no repository context and loads no external UI assets. Downloaded files contain the exploration text. Importing a journey keeps the previously open journey in the library. Unsaved text-area drafts are not part of exports or research input; save them before leaving.
 
 Research usage receipts are retained under `~/.copilot/plugin-data/explorer/usage/session-state/`, respecting the same directory overrides. They contain model, token/credit metrics and accounting IDs, without prompts, answers, account names or credentials. The temporary research conversation is removed after the helper stops and usage is retained. Cleanup/accounting failures preserve recovery files rather than losing receipts; `usage/recovery-<session>.json` identifies the temporary directory when a pointer can be saved. See [integration notes](docs/copilot-integration.md#background-model-work).
 
@@ -199,7 +201,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.13, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.13**.
+- Update to v0.1.14, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.14**.
 <!-- explorer-install-check:end -->
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
 - Focus the answer, hold your configured voice shortcut until **Listening**, speak, then release. Confirm the text enters the draft and is not saved automatically. Check Escape cancellation and switching questions.
@@ -207,6 +209,7 @@ Manual acceptance in Copilot:
 - Answer a question and confirm relevant deeper questions appear.
 - Research another question; confirm progress appears in the node and the main chat stays quiet. Inspect relevance, source links and uncertainty. Add a recommendation and selected details to an existing draft, undo an addition, then save explicitly. Cancel another research run and confirm your answer is preserved.
 - Export both files, open the JSON in a new canvas, and confirm the full map returns.
+- Open Library in a different chat, search/pin/archive/unarchive a journey, then reopen it. Confirm questions arrive in the new attached chat. Try importing a changed export with the same identity and verify both duplicate choices. Check that answer and manual-question drafts block switching without disappearing.
 - Check the narrow layout, keyboard focus, pan/zoom, and light/dark appearance.
 
 Automated runtime fixtures cannot establish desktop rendering, actual model research quality, or successful slash-command discovery in your visible session. Those checks remain manual.

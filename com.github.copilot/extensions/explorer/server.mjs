@@ -24,7 +24,7 @@ async function body(req, limit = MAX_BODY) {
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
-export async function startServer(explorer, voice = new VoiceService({ preferencesFile: explorer.file ? join(dirname(explorer.file), 'voice-settings.json') : undefined })) {
+export async function startServer(explorer, voice = new VoiceService({ preferencesFile: explorer.library ? join(explorer.library.directory, 'voice-settings.json') : explorer.file ? join(dirname(explorer.file), 'voice-settings.json') : undefined })) {
   const { version } = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
   const token = randomBytes(24).toString('hex');
   const prefix = `/${token}/`;
@@ -55,6 +55,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         return json(200, voice[input.action](input.id));
       }
       if (req.method === 'GET' && route === 'api/state') return json(200, explorer.snapshot());
+      if (req.method === 'GET' && route === 'api/library') {
+        if (!explorer.library) return json(200, { revision: 0, entries: [], errors: [] });
+        return json(200, await explorer.library.list({ search: url.searchParams.get('search') ?? '', archived: url.searchParams.get('archived') === 'true' }));
+      }
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req);

@@ -45,13 +45,62 @@ Ruling: The owner's instruction to create issues and proceed with agents supplie
 
 **Interfaces:** Export `checkReleaseMetadata(root)` from `scripts/release-metadata.mjs`; it validates relevant files under the explicit root, returns the current version, and throws an actionable file/field-specific error on mismatch. `scripts/check.mjs` invokes it before its existing syntax/assets/skill checks. Disposable fixtures call the same function. Keep historical README version references intact; identify current version declarations and installation-checklist assertions with explicit stable markers or tightly bounded sections.
 
-- [ ] Write failing fixture tests for package-lock root and packages entry mismatches, each manifest mismatch, current README and installation-checklist drift, newest release-note mismatch, invalid release summaries, and a valid document retaining historical references.
-- [ ] Run the focused tests and confirm they fail for the missing checks.
-- [ ] Implement the shared checks and a safe documented bump procedure. A script, if provided, validates inputs before mutations and synchronizes every required current-version reference without rewriting historical prose.
-- [ ] Add tests for rejected invalid bumps/no partial edits if a mutation script is implemented. Verify the procedure in disposable fixtures.
-- [ ] Bump to 0.1.13, prepend accurate release notes, and fix current README references. Preserve prior release notes and the complete plugin package.
-- [ ] Run `node --test test/release.test.mjs`, `npm test`, `npm run check`, and `npm run package`. No SDK fixtures are required because runtime integration is unchanged.
-- [ ] Self-review and commit all intended changes on the current isolated branch. Do not push, merge, or close the issue: the controller performs independent review and publishes after approval. Write the report to `.superpowers/sdd/2026-11-17-selected-roadmap/task-1-report.md` with RED/GREEN evidence, full checks, commit, and limitations.
+- [x] Write failing fixture tests for package-lock root and packages entry mismatches, each manifest mismatch, current README and installation-checklist drift, newest release-note mismatch, invalid release summaries, and a valid document retaining historical references.
+- [x] Run the focused tests and confirm they fail for the missing checks.
+- [x] Implement the shared checks and a safe documented bump procedure. A script, if provided, validates inputs before mutations and synchronizes every required current-version reference without rewriting historical prose.
+- [x] Add tests for rejected invalid bumps/no partial edits if a mutation script is implemented. Verify the procedure in disposable fixtures.
+- [x] Bump to 0.1.13, prepend accurate release notes, and fix current README references. Preserve prior release notes and the complete plugin package.
+- [x] Run `node --test test/release.test.mjs`, `npm test`, `npm run check`, and `npm run package`. No SDK fixtures are required because runtime integration is unchanged.
+- [x] Self-review and commit all intended changes on the current isolated branch. Do not push, merge, or close the issue: the controller performs independent review and publishes after approval. Write the report to `.superpowers/sdd/2026-11-17-selected-roadmap/task-1-report.md` with RED/GREEN evidence, full checks, commit, and limitations.
+
+Published task 1: **v0.1.13**, `474c1e3`, 93 tests, checks and package passed; remote main verified.
+
+## Task 2: Exploration library (GitHub #1, original selection 1)
+
+Read `issue-1.md` beside this file for the acceptance criteria. Read AGENTS.md and the current release procedure. This task follows release consistency checks and ships the next patch version. The controller will review, integrate, push, and close the issue after your commit.
+
+### Goal and boundaries
+
+Provide a library inside Explorer with recent, pinned, archived, and searchable saved journeys, plus new/open/import flows. Reopen independently of the original chat while keeping question generation attached to the currently opening session. Preserve existing files. No dashboard, draft persistence, revision history, AI changes, or scenario forks in this issue.
+
+### Architecture decisions
+
+- Add a focused `library.mjs` under the extension for library discovery/metadata and safe path resolution. Keep document edits and atomic revision checks in `controller.mjs`. Extract a small persistence utility only if shared locking/atomic-write code actually requires it; avoid a broad refactor.
+- Keep document `id` as stable logical journey identity. Host session/canvas identity is an attachment, not a journey ID. Do not store raw user IDs as filenames: use hashes and allowlisted relative paths.
+- Discover existing root `*.explore.json` files rather than requiring users to migrate manually. Do not overwrite/delete legacy files. New journeys may use a canonical hash-of-document-ID filename. A small binding file can remember the active journey for reopening the same canvas. Fresh `/explore` without a topic shows the library/start view.
+- Reopening the same journey from another canvas must target the same backing document and its existing revision/lock checks, not copy it into the new canvas file. Reads and metadata changes must not increment document revisions or update its edited timestamp.
+- Use a stable, opaque library entry key for addressing files. Resolve it only inside the owned data root; reject traversal, malformed keys, symlinks/junction escape, oversized files, and mismatched IDs. Do not expose absolute paths to the web UI.
+- Store pin/archive/last-open metadata separately from answer data. Serialize and lock updates across instances, with revision checks for conflicting metadata changes. Archived means hidden from the default list, never deleted. Recent means a documented ordering (last opened where recorded, otherwise document updated time); do not invent past open events.
+- Import of a new journey preserves the old canvas journey in the library. Import of an already-known identical journey reopens the existing one without duplicate storage. Divergent same-ID imports must not silently overwrite: present open-existing or explicit import-as-new-copy. The latter is duplicate-import handling, not the deferred scenario-fork feature. Preserve every original file if legacy duplicates already exist and surface ambiguity rather than silently selecting a divergent version.
+- Keep the attached-chat `snapshot()` focused on the current document. Fetch library summaries via a separate HTTP/controller path so other journeys are not implicitly added to main-chat context.
+- Keep `Explorer({file,...})` direct-file construction usable for existing tests/preview. Production canvas wires the library; avoid rewriting every test merely to satisfy the new constructor.
+
+### UI behavior
+
+- Add a Library entry point in the existing header and a compact library home with search, recent/pinned entries, archived filter, clear Open/Pin/Archive controls, and the existing new-topic form.
+- Do not add a detached question panel. The map and expanding nodes remain unchanged when a journey is open.
+- Until draft recovery lands in the next issue, block destructive journey switches when there are unsaved drafts or offer an explicit save/discard choice; never silently clear drafts. Cancel voice before switching. Pending AI work must be cancelled explicitly or block the switch; stale callbacks cannot write into another journey.
+- Show understandable empty, missing/corrupt-file, storage-error, and duplicate states. One bad library file must not hide the rest of the library.
+- Keep controls accessible and usable at 340px. Use existing text-only DOM construction and no new runtime dependencies.
+
+### Files and interfaces
+
+- Create `com.github.copilot/extensions/explorer/library.mjs`, with a small class or functions for listing safe entry summaries, resolving an entry, and updating pin/archive/open metadata. Export the exact chosen API and document it in your report for the next task.
+- Modify `controller.mjs`, `canvas.mjs`, `server.mjs`, `web/app.mjs`, `web/index.html`, `web/style.css` as needed. Keep voice preferences rooted at the Explorer data directory after changing document paths.
+- Add `test/library.test.mjs`; extend real-controller HTTP and jsdom tests plus `scripts/e2e.mjs` for cross-session/instance reopen. New browser modules must be in the HTTP asset allowlist and loaded by the DOM fixture.
+- Read installed SDK canvas declarations and `docs/copilot-integration.md` before changing canvas integration. Installed SDK directory: `C:/Users/godle/AppData/Local/github-copilot-sdk/cli/copilot-sdk-runtime-1.0.106-8.unstable.r43566476370.g869eef3/copilot-sdk`; runtime executable is `copilot.exe` beside it. No npm SDK substitute.
+
+### Test-first steps
+
+- [ ] Add focused failing tests: legacy discovery; create two journeys; reopen from a different canvas/session; same-file simultaneous writers; pin/archive/recent/search; malformed/oversized files; safe entry resolution; duplicate import identical versus divergent; metadata conflicts; preservation of unsaved drafts and pending callbacks during switching.
+- [ ] Run the focused tests and record meaningful RED output.
+- [ ] Implement the library service and controller lifecycle, then HTTP/UI wiring, preserving existing behaviors.
+- [ ] Extend the local installed-SDK fixture to create a journey in one canvas and reopen it in another without using paid inference or another existing user session.
+- [ ] Run focused tests as needed, then `npm test`, `npm run check`, `npm run e2e` with the specified installed runtime variables, and `npm run package`. Run research fixture only if research integration changes materially.
+- [ ] Update README usage, a short durable library architecture note, current version/release notes, and commit. Use the preceding issue's release procedure. Do not merge or push.
+- [ ] Self-review and write `.superpowers/sdd/2026-11-17-selected-roadmap/task-2-report.md` with tests/RED/GREEN, commit, chosen APIs/storage contracts, and honest native-UI limitations. Return a concise status/commit/test summary.
+
+Do not spawn subagents. No browser/desktop automation. The controller supplies the independent reviewer. Raise concrete architecture conflicts to the controller, not the user; keep working on independent parts.
 
 ## Issue index
 

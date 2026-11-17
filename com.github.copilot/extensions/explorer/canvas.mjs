@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { Explorer } from './controller.mjs';
+import { Library } from './library.mjs';
 import { startServer } from './server.mjs';
 import { createResearcher } from './research.mjs';
 
@@ -15,6 +16,7 @@ export const actionSchemas = {
 };
 
 export function explorerCanvas({ createCanvas, getSession, directory }) {
+  const library = new Library(directory);
   const instances = new Map();
   const starting = new Map();
   const get = ctx => {
@@ -37,7 +39,7 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
       if (!instances.has(ctx.instanceId) && !starting.has(ctx.instanceId)) {
         starting.set(ctx.instanceId, (async () => {
           const key = createHash('sha256').update(`${ctx.sessionId}\0${ctx.instanceId}`).digest('hex').slice(0, 32);
-          const explorer = await new Explorer({ file: join(directory, `${key}.explore.json`),
+          const explorer = await new Explorer({ library, binding: key,
             researcher: createResearcher(getSession(), { usageDirectory: join(directory, 'usage') }),
             target: { extensionId: ctx.extensionId, canvasId: 'explorer', instanceId: ctx.instanceId },
             send: async options => {

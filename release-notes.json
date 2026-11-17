@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.14",
+    "summary": "Added a searchable exploration library with recent journeys, pinning, archive, and reopening across chats. Existing saves are discovered in place. Imports preserve prior journeys and offer explicit choices for duplicates. Switching protects unsaved answer and manual-question drafts and requires pending AI work to be cancelled."
+  },
+  {
     "version": "0.1.13",
     "summary": "Added release checks for package metadata, the lockfile, current README instructions, and release notes. Updated the installation checklist and documented a consistent version-bump procedure."
   },

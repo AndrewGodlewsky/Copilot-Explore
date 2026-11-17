@@ -4,11 +4,18 @@
 <body>
   <header class="topbar">
     <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 16 5 6M16 16 27 6M16 16 5 27M16 16 27 27"/><circle cx="16" cy="16" r="5"/><circle cx="5" cy="6" r="2"/><circle cx="27" cy="6" r="2"/><circle cx="5" cy="27" r="2"/><circle cx="27" cy="27" r="2"/></svg><strong>Explorer</strong><span class="poc">Preview</span></div>
-    <nav aria-label="Exploration files"><button id="import">Open file</button><a id="save-file" href="export.json" download hidden>Save file</a><button id="finish" class="primary" hidden>Finish exploration</button></nav>
+    <nav aria-label="Exploration files"><button id="library-toggle" hidden>Library</button><button id="import">Open file</button><a id="save-file" href="export.json" download hidden>Save file</a><button id="finish" class="primary" hidden>Finish exploration</button></nav>
     <input id="file" type="file" accept=".json,.explore.json" hidden>
   </header>
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
   <section id="welcome" class="welcome">
+    <section id="library-home" aria-labelledby="library-title" hidden>
+      <div class="library-heading"><h1 id="library-title">Your explorations</h1><button id="library-return" hidden>Back to current map</button></div>
+      <p class="quiet">Pinned journeys first, then recently opened. Older journeys use their last edited date.</p>
+      <label for="library-search">Search journeys</label><input id="library-search" type="search" maxlength="4000" placeholder="Search by topic">
+      <div class="library-filters"><label for="library-archived"><input id="library-archived" type="checkbox"> Archived journeys</label><button id="library-refresh">Refresh</button><button id="library-new">New exploration</button></div>
+      <div id="library-errors" role="status"></div><div id="library-list" aria-live="polite"></div>
+    </section>
     <div class="intro-map" aria-hidden="true"><span>Who is it for?</span><i></i><b>Your idea</b><i></i><span>What could work?</span></div>
     <h1>Make room for the questions.</h1>
     <p>Start with an idea, a problem, or something you want to understand. Follow the branches that matter to you.</p>
@@ -24,6 +31,7 @@
     </section>
   </main>
   <dialog id="export-dialog"><h2>Your exploration, captured.</h2><p>Your answers, open questions, and research are saved. Download both files to keep the full record.</p><div class="exports"><a class="primary" href="export.md" download>Download Markdown</a><a href="export.json" download>Download .explore.json</a></div><p class="quiet">Open the .explore.json file in Explorer to continue later.</p><button id="close-export">Back to the map</button></dialog>
+  <dialog id="import-conflict"><h2>This journey is already saved</h2><p>The file differs from a saved journey with the same identity. Open a saved version, or import the file as a separate copy. Every original is kept.</p><div id="import-existing"></div><button id="import-copy">Import as new copy</button><button id="import-cancel">Cancel import</button></dialog>
   <footer class="app-version" aria-label="Explorer plugin version">Explorer v{{EXPLORER_VERSION}}</footer>
   <script type="module" src="app.mjs"></script>
 </body></html>

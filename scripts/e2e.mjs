@@ -25,7 +25,7 @@ const client = new CopilotClient({ mode: 'empty', baseDirectory: join(temporary,
   useLoggedInUser: false, builtinPluginDirectories: [root],
   connection: RuntimeConnection.forStdio({ path: cli, args: ['--no-auto-update'], env: environment }),
 });
-let session;
+let session, secondSession;
 const deadline = setTimeout(() => { process.stderr.write('Explorer runtime fixture timed out.\n'); void client.forceStop(); }, 55000);
 async function until(read, predicate, label) {
   for (let i = 0; i < 100; i++) { const value = await read(); if (predicate(value)) return value; await new Promise(resolve => setTimeout(resolve, 200)); }
@@ -50,11 +50,12 @@ try {
   });
   console.log('Installed extension runtime launched the isolated voice helper; no microphone or model opened.');
   await client.start();
-  session = await client.createSession({ workingDirectory: project, availableTools: [], requestExtensions: true, requestCanvasRenderer: true,
+  const sessionOptions = { workingDirectory: project, availableTools: [], requestExtensions: true, requestCanvasRenderer: true,
     extensionSdkPath: sdkDirectory, pluginDirectories: [root], enableConfigDiscovery: false,
     onPermissionRequest: () => ({ kind: 'denied-by-rules', rules: [] }),
     model: 'gpt-4o', provider: { type: 'openai', baseUrl: `http://127.0.0.1:${fixture.address().port}/v1`, apiKey: 'fixture', wireApi: 'completions' },
-  });
+  };
+  session = await client.createSession(sessionOptions);
   const catalog = await until(() => session.rpc.canvas.list(), result => result.canvases?.some(c => c.canvasId === 'explorer'), 'canvas registration');
   const found = catalog.canvases.find(c => c.canvasId === 'explorer');
   assert.equal(found.extensionId, 'plugin:explorer:explorer');
@@ -106,13 +107,34 @@ try {
   const imported = await session.rpc.canvas.open({ canvasId: 'explorer', instanceId: 'explorer-import', input: {} });
   const result = await fetch(imported.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'import', document: exported }) });
   assert.equal(result.status, 200); assert.equal((await result.json()).document.nodes[1].answer, 'Neighbors');
+  const library = await (await fetch(imported.url + 'api/library')).json();
+  assert.equal(library.entries.length, 1, 'identical import reopens without another stored document');
+  secondSession = await client.createSession(sessionOptions);
+  await until(() => secondSession.rpc.canvas.list(), value => value.canvases?.some(c => c.canvasId === 'explorer'), 'second-session canvas registration');
+  const across = await secondSession.rpc.canvas.open({ canvasId: 'explorer', instanceId: 'library-other-session', input: {} });
+  assert.equal((await (await fetch(across.url + 'api/state')).json()).document, null);
+  const acrossPost = async input => fetch(across.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+  const crossOpen = await acrossPost({ action: 'open', key: library.entries[0].key });
+  assert.equal(crossOpen.status, 200); assert.deepEqual((await crossOpen.json()).document, exported);
+  const crossAnswer = await acrossPost({ action: 'answer', revision: exported.revision, nodeId, answer: 'Another session, same journey', expand: false });
+  assert.equal(crossAnswer.status, 200);
+  const crossState = await crossAnswer.json();
+  const staleSave = await fetch(imported.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'answer', revision: exported.revision, nodeId, answer: 'Stale writer', expand: false }) });
+  assert.equal(staleSave.status, 400); assert.match((await staleSave.json()).error, /Another canvas/);
+  const followup = await acrossPost({ action: 'questions', revision: crossState.document.revision, nodeId });
+  const crossPending = await followup.json(); assert.ok(crossPending.pending);
+  await until(async () => requests, values => JSON.stringify(values).includes('library-other-session'), 'currently attached session question delivery');
+  await secondSession.rpc.canvas.action.invoke({ instanceId: 'library-other-session', actionName: 'submit_questions', input: { requestId: crossPending.pending.id, questions: [{ question: 'How will the new group coordinate?', category: 'People' }] } });
+  assert.equal((await (await fetch(across.url + 'api/state')).json()).document.nodes.length, 3);
+  await secondSession.rpc.canvas.close({ instanceId: 'library-other-session' });
   await session.rpc.canvas.close({ instanceId: 'explorer-import' });
   await session.rpc.canvas.close({ instanceId });
   const { version } = JSON.parse(await readFile(join(root, 'plugin.json'), 'utf8'));
-  console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, canvas callbacks, answers, research access guard, exports, stale-response rejection, close/reopen and file import. Local fixture only; no paid model or UI automation.`);
+  console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, canvas callbacks, answers, research access guard, exports, stale-response rejection, close/reopen, duplicate import, cross-session library reopen and shared-writer protection. Local fixture only; no paid model or UI automation.`);
 } finally {
   clearTimeout(deadline);
   await session?.disconnect().catch(() => {});
+  await secondSession?.disconnect().catch(() => {});
   await client.forceStop();
   fixture.closeAllConnections(); await new Promise(resolve => fixture.close(resolve));
   assert.equal(dirname(resolve(temporary)), resolve(tmpdir()));

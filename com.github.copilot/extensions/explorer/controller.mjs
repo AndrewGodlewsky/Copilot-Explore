@@ -1,27 +1,32 @@
-import { mkdir, readFile, writeFile, rename, open, unlink } from 'node:fs/promises';
+import { mkdir, readFile, open, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createDocument, validateDocument, findNode, addQuestions, answerNode, contextFor, research, text, toMarkdown } from './model.mjs';
-
-export async function atomicWrite(path, content) {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  await writeFile(temporary, content, { encoding: 'utf8', mode: 0o600 });
-  await rename(temporary, path);
-}
+import { atomicWrite } from './storage.mjs';
+export { atomicWrite } from './storage.mjs';
 
 export class Explorer {
-  constructor({ file, send, target, researcher, timeoutMs = 240000 }) {
+  constructor({ file, library, binding, send, target, researcher, timeoutMs = 240000 }) {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.researcher = researcher; this.researchTasks = new Set();
+    this.library = library; this.binding = binding; this.activeKey = null;
   }
   async load() {
+    if (this.library) {
+      try { const record = await this.library.bound(this.binding); if (record) await this.attach(record.key); }
+      catch (error) { this.error = error.message; }
+      return this;
+    }
     try { this.doc = validateDocument(JSON.parse(await readFile(this.file, 'utf8'))); }
     catch (error) { if (error.code !== 'ENOENT') throw new Error(`Could not load the saved map. The file has been preserved: ${error.message}`); }
     return this;
   }
-  snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error }); }
+  snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
+  async attach(key) {
+    const record = await this.library.opened(key, this.binding);
+    this.file = record.file; this.doc = record.document; this.activeKey = key;
+  }
   transact(fn) {
     const work = this.queue.then(fn);
     this.queue = work.catch(() => {});
@@ -36,9 +41,13 @@ export class Explorer {
       throw error;
     }
     try {
+      if (this.library) {
+        const record = await this.library.resolve(this.activeKey);
+        if (record.file !== this.file || record.document.id !== this.doc.id) throw new Error('This journey changed on disk. Reopen it from the library.');
+      }
       let saved = null;
       try { saved = JSON.parse(await readFile(this.file, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if ((saved?.revision ?? 0) !== (this.doc?.revision ?? 0)) throw new Error('Another canvas updated this file. Reopen Explorer to load the saved version.');
+      if ((saved?.revision ?? 0) !== (this.doc?.revision ?? 0) || (this.doc && saved?.id !== this.doc.id)) throw new Error('Another canvas updated this file. Reopen Explorer to load the saved version.');
       next.revision = (this.doc?.revision ?? 0) + 1;
       next.updatedAt = new Date().toISOString();
       validateDocument(next);
@@ -84,18 +93,35 @@ export class Explorer {
   command(action, input = {}) {
     return this.transact(async () => {
       if (action === 'cancel') { this.clearPending(); this.error = ''; return this.snapshot(); }
+      if (action === 'library-update' && this.library) {
+        await this.library.update(input.key, input.patch, input.metadataRevision); return this.snapshot();
+      }
       if (this.pending) throw new Error('Wait for Copilot or cancel the current request first.');
       if (this.doc && input.revision !== this.doc.revision) throw new Error('The map changed. Refresh and try again; your draft is still here.');
       const next = structuredClone(this.doc);
       this.error = '';
       switch (action) {
         case 'start':
+          if (this.library) {
+            const doc = createDocument(input.topic); doc.revision = 1;
+            const record = await this.library.import(doc); await this.attach(record.key);
+            this.request('questions', this.doc.rootId); break;
+          }
           if (this.doc) throw new Error('Open a new canvas for a new exploration, or import a saved map.');
           await this.save(createDocument(input.topic));
           this.request('questions', this.doc.rootId);
           break;
         case 'import':
+          if (this.library) {
+            const record = await this.library.import(input.document, { asCopy: input.asCopy });
+            if (record.conflict) return { ...this.snapshot(), importConflict: { entries: record.conflict } };
+            await this.attach(record.key); break;
+          }
           await this.save(validateDocument(input.document));
+          break;
+        case 'open':
+          if (!this.library) throw new Error('The library is unavailable in this preview.');
+          await this.attach(input.key);
           break;
         case 'answer':
           answerNode(next, input.nodeId, input.answer); next.finishedAt = null;

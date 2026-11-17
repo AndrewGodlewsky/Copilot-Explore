@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.38",
+    "summary": "Skip unchanged map transfers with conditional polling. Reconnect with bounded retries while preserving drafts and rejecting late responses. Keep private explanation freshness checks active, protect newer help results from older failed checks, and prevent old polls from overwriting accepted briefs."
+  },
+  {
     "version": "0.1.37",
     "summary": "Keep large maps responsive by mounting nearby cards and reusing stable layout geometry. Preserve focused controls, expanded editors, crossing connectors and full Outline access. Add near-limit culling, focus, resize and disposal regressions with separate pan/zoom benchmark counters."
   },

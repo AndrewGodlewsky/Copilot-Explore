@@ -74,7 +74,13 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (!['start', 'poll', 'finish', 'cancel', 'ack'].includes(input.action) || typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || Object.keys(input).some(k => !['action', 'id', ...(input.action === 'ack' ? ['sequence'] : [])].includes(k)) || (input.action === 'ack' && (!Number.isSafeInteger(input.sequence) || input.sequence < 1))) throw new Error('Invalid voice request.');
         return json(200, voice[input.action](input.id, input.sequence));
       }
-      if (req.method === 'GET' && route === 'api/state') return json(200, explorer.uiSnapshot());
+      if (req.method === 'GET' && route === 'api/state') {
+        const cursor = req.headers['x-explorer-state'];
+        const state = explorer.pollSnapshot(typeof cursor === 'string' && /^[0-9a-f-]{36}$/.test(cursor) ? cursor : undefined);
+        res.setHeader('X-Explorer-State', state.cursor);
+        if (!state.snapshot) { res.writeHead(204); return res.end(); }
+        return json(200, state.snapshot);
+      }
       if (req.method === 'POST' && route === 'api/cleanup') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.cleanupRequest(await body(req, 128 * 1024)));

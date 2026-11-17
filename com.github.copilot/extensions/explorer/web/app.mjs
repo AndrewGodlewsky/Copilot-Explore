@@ -17,6 +17,11 @@ let geometryBranches = null, geometryInputs = '', fontEpoch = 0;
 let workspace = null;
 let suppressClick = false, restoringFocus = false, composing = null;
 let actionEpoch = 0, closed = false, pollTimer;
+let stateCursor = null, pollFlight = null, pollFailures = 0, pageEpoch = 0, suspended = false, actionAbort = null;
+function stopPolling() {
+  clearTimeout(pollTimer); pollFlight?.abort.abort(); pollFlight = null; stateCursor = null;
+}
+function connectionStatus(message = '') { $('connection-status').textContent = message; $('connection-status').hidden = !message; }
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
 let collapsed = new Set(), branches = null, focusId = null, wholeView = null;
 let historyEpoch = 0, historyReturn = null, historySelection = null, historyRevision = null;
@@ -69,16 +74,20 @@ function el(tag, attrs = {}, ...children) {
 const button = (label, handler, attrs = {}) => el('button', { type: 'button', onclick: handler, ...attrs }, label);
 function notice(message) { $('notice').textContent = message; $('notice').hidden = !message; }
 async function api(action, input = {}) {
-  if (busy || closed) return null;
-  busy = true; actionEpoch++;
+  if (busy || closed || suspended) return null;
+  busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort();
+  const epoch = actionEpoch, page = pageEpoch, abort = new AbortController(); actionAbort = abort;
+  const timeout = setTimeout(() => abort.abort(), 10000);
   try {
-    const response = await fetch('api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, revision: state.document?.revision, scope: action === 'start' ? $('start-scope').value : $('context-scope').value, ...input }) });
+    const response = await fetch('api/action', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, revision: state.document?.revision, scope: action === 'start' ? $('start-scope').value : $('context-scope').value, ...input }) });
     const result = await response.json();
-    if (closed) return null;
+    if (closed || suspended || page !== pageEpoch || epoch !== actionEpoch) return null;
     if (!response.ok) throw new Error(result.error);
     if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'import'].includes(action)); return result;
-  } catch (error) { if (!closed) notice(error.message); return null; }
-  finally { busy = false; }
+  } catch (error) {
+    if (!closed && !suspended && page === pageEpoch && epoch === actionEpoch) notice(abort.signal.aborted ? 'The action response timed out. Refresh the saved map before retrying; it may have been saved. Your draft is still here.' : error.message);
+    return null;
+  } finally { clearTimeout(timeout); if (actionAbort === abort) { actionAbort = null; busy = false; } }
 }
 function anchorPoint(id = selected) {
   const p = positions.get(id);
@@ -1126,16 +1135,19 @@ $('file').addEventListener('change', async () => {
   try { const document = JSON.parse(await file.text()); await switchJourney('import', { document }); }
   catch (error) { notice(`Could not open that file: ${error.message}`); }
 });
-let briefView = null, briefId = null, briefJourney = null, briefEpoch = 0, briefBusy = false, briefStamp = '', briefEdits = new Map();
+let briefView = null, briefId = null, briefJourney = null, briefEpoch = 0, briefBusy = false, briefAbort = null, briefStamp = '', briefEdits = new Map();
 function closeBrief() {
-  briefEpoch++;
+  briefEpoch++; briefAbort?.abort(); briefAbort = null;
   if (briefId && briefJourney) void fetch('api/brief', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'discard', id: briefId, journey: briefJourney }) }).catch(() => {});
   briefId = null; briefJourney = null; briefView = null; briefStamp = ''; briefEdits.clear(); briefBusy = false;
   if ($('brief-dialog').open) $('brief-dialog').close();
 }
 async function requestBrief(action) {
-  if (!briefId || briefBusy || closed) return;
-  const epoch = briefEpoch, id = briefId, journey = briefJourney, abort = new AbortController();
+  if (!briefId || briefBusy || closed || suspended || action === 'accept' && busy) return;
+  const writesMap = action === 'accept';
+  if (writesMap) { busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); }
+  const mapEpoch = actionEpoch;
+  const epoch = briefEpoch, id = briefId, journey = briefJourney, abort = new AbortController(); briefAbort = abort;
   const timer = setTimeout(() => abort.abort(), 5000);
   briefBusy = true;
   for (const name of ['generate-brief', 'accept-brief', 'discard-brief']) $(name).disabled = true;
@@ -1143,7 +1155,7 @@ async function requestBrief(action) {
     const response = await fetch('api/brief', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
       body: JSON.stringify({ action, id, journey, ...(action === 'accept' ? { revision: state.document.revision, edits: [...briefEdits].map(([id, text]) => ({ id, text })) } : {}) }) });
     const result = await response.json();
-    if (epoch !== briefEpoch || id !== briefId || closed) return;
+    if (epoch !== briefEpoch || id !== briefId || closed || writesMap && mapEpoch !== actionEpoch) return;
     if (!response.ok) throw new Error(result.error);
     if (result.id !== id) throw new Error('Decision brief response did not match this request.');
     if (result.snapshot) apply(result.snapshot);
@@ -1152,7 +1164,7 @@ async function requestBrief(action) {
     renderBrief();
   } catch (error) {
     if (epoch === briefEpoch && !closed) { $('brief-status').textContent = `${error.message} Brief freshness is unknown until the saved journey can be checked.`; $('accept-brief').hidden = true; }
-  } finally { clearTimeout(timer); if (epoch === briefEpoch) { briefBusy = false; $('generate-brief').disabled = briefView?.status === 'pending'; $('accept-brief').disabled = false; $('discard-brief').disabled = false; } }
+  } finally { clearTimeout(timer); if (writesMap && mapEpoch === actionEpoch) busy = false; if (epoch === briefEpoch) { briefBusy = false; $('generate-brief').disabled = briefView?.status === 'pending'; $('accept-brief').disabled = false; $('discard-brief').disabled = false; } }
 }
 function renderBrief() {
   const value = briefView, proposal = value?.status === 'proposal' ? value.proposal : null, brief = proposal ?? value?.accepted;
@@ -1201,17 +1213,17 @@ $('discard-brief').addEventListener('click', () => void requestBrief('discard'))
 $('accept-brief').addEventListener('click', () => void requestBrief('accept'));
 $('refresh-brief').addEventListener('click', async () => { if (await api('refresh-answer')) await requestBrief('poll'); });
 $('close-brief').addEventListener('click', () => { $('brief-dialog').close(); $('decision-brief').focus(); });
-let checkView = null, checkId = null, checkJourney = null, checkEpoch = 0, checkBusy = false;
+let checkView = null, checkId = null, checkJourney = null, checkEpoch = 0, checkBusy = false, checkAbort = null;
 function closeCheck() {
-  checkEpoch++;
+  checkEpoch++; checkAbort?.abort(); checkAbort = null;
   if (checkId && checkJourney) void fetch('api/check-answers', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'cancel', id: checkId, journey: checkJourney }) }).catch(() => {});
   checkId = null; checkJourney = null; checkView = null; checkBusy = false;
   if ($('check-dialog').open) $('check-dialog').close();
 }
 async function requestCheck(action, findingId) {
-  if (checkBusy || closed || !state.document) return;
+  if (checkBusy || closed || suspended || !state.document) return;
   if (action === 'start' || !checkId) { checkId = crypto.randomUUID(); checkJourney = state.activeKey ?? state.document.id; checkEpoch++; checkView = null; renderCheck(); }
-  const epoch = checkEpoch, id = checkId, journey = checkJourney, abort = new AbortController();
+  const epoch = checkEpoch, id = checkId, journey = checkJourney, abort = new AbortController(); checkAbort = abort;
   const timer = setTimeout(() => abort.abort(), 5000);
   checkBusy = true; $('run-check').disabled = true; $('cancel-check').disabled = true;
   try {
@@ -1360,6 +1372,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  suspended = true; pageEpoch++; actionEpoch++; stopPolling(); actionAbort?.abort(); actionAbort = null; busy = false;
   cleanup.cancel();
   closeBrief();
   closeCheck();
@@ -1370,15 +1383,39 @@ window.addEventListener('pagehide', event => {
   mapObserver.disconnect(); workspaceObserver.disconnect(); document.fonts?.removeEventListener('loadingdone', fontsChanged);
   geometryCache.clear(); geometryBranches = null; geometryInputs = ''; positions.clear(); branches = null;
 });
+window.addEventListener('pageshow', event => {
+  if (!event.persisted || closed || !suspended) return;
+  suspended = false; pageEpoch++; pollFailures = 0; stateCursor = null; void (poll());
+});
 async function poll() {
-  const epoch = actionEpoch;
+  if (closed || suspended || pollFlight) return;
+  clearTimeout(pollTimer);
+  const epoch = actionEpoch, page = pageEpoch, abort = new AbortController(), flight = { abort };
+  pollFlight = flight;
+  const current = () => !closed && !suspended && page === pageEpoch && !busy && epoch === actionEpoch && pollFlight === flight;
+  const timeout = setTimeout(() => abort.abort(), 8000);
   try {
-    if (busy || closed) return;
-    const response = await fetch('api/state');
-    if (!response.ok) throw new Error('Canvas connection lost. Reopen Explorer in Copilot.');
-    const next = await response.json();
-    if (!closed && !busy && epoch === actionEpoch) { apply(next); await questionHelp.checkRetained(); if ($('brief-dialog').open) await requestBrief('poll'); if ($('check-dialog').open) await requestCheck('poll'); }
-  } catch (error) { if (!closed && !busy && epoch === actionEpoch) notice(error.message); }
-  finally { if (!closed) pollTimer = setTimeout(poll, document.hidden ? 4000 : 1200); }
+    if (busy) return;
+    const cursor = stateCursor;
+    const response = await fetch('api/state', { signal: abort.signal, headers: cursor ? { 'X-Explorer-State': cursor } : {} });
+    if (!response.ok) throw new Error('Canvas connection lost.');
+    const nextCursor = response.headers.get('X-Explorer-State');
+    if (response.status === 204 && (!cursor || nextCursor !== cursor)) throw new Error('Canvas state needs a full refresh.');
+    const next = response.status === 204 ? null : await response.json();
+    if (!current()) return;
+    if (next) apply(next);
+    stateCursor = nextCursor; pollFailures = 0; connectionStatus();
+    await questionHelp.checkRetained();
+    if (current() && $('brief-dialog').open) await requestBrief('poll');
+    if (current() && $('check-dialog').open) await requestCheck('poll');
+  } catch {
+    if (current()) { stateCursor = null; pollFailures = Math.min(pollFailures + 1, 4); connectionStatus('Reconnecting... Your draft stays here. Reopen Explorer if the connection does not recover.'); }
+  } finally {
+    clearTimeout(timeout);
+    if (pollFlight === flight) {
+      pollFlight = null;
+      if (!closed && !suspended && page === pageEpoch) pollTimer = setTimeout(poll, pollFailures ? Math.min(15000, 1200 * 2 ** pollFailures) : document.hidden ? 4000 : 1200);
+    }
+  }
 }
 void poll();

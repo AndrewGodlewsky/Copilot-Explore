@@ -35,25 +35,29 @@ export class QuestionHelpClient {
     if (old) void this.request('cancel', old).catch(() => {});
     if (old) this.changed();
   }
-  dispose() { this.cancel(); this.forget([...this.results]); this.results.clear(); }
+  dispose() { this.checking?.abort(); this.checking = null; this.cancel(); this.forget([...this.results]); this.results.clear(); }
   async checkRetained() {
     this.sync();
     if (this.checking || !this.selection || !this.results.size) return;
     const selection = this.selection, ids = [...this.results].map(([operation, result]) => ({ id: result.id, operation }));
     const abort = new AbortController(), timeout = setTimeout(() => abort.abort(), 5000);
-    this.checking = true;
+    this.checking = abort;
     try {
       const response = await this.fetch('api/question-help', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
         body: JSON.stringify({ action: 'check', journey: selection.journey, nodeId: selection.nodeId, ids }) });
       const result = await response.json();
       if (!response.ok || result.status !== 'checked' || !Array.isArray(result.staleIds)) throw new Error('Question help freshness check failed.');
-      if (!same(selection, this.selection)) return;
+      if (this.checking !== abort || !same(selection, this.selection)) return;
       let changed = false;
       for (const [operation, value] of this.results) if (result.staleIds.includes(value.id)) { this.results.delete(operation); changed = true; }
       if (changed) this.changed();
     } catch {
-      if (same(selection, this.selection) && this.results.size) { this.results.clear(); this.changed(); }
-    } finally { clearTimeout(timeout); this.checking = false; }
+      if (this.checking === abort && same(selection, this.selection)) {
+        let changed = false;
+        for (const { operation, id } of ids) if (this.results.get(operation)?.id === id) { this.results.delete(operation); changed = true; }
+        if (changed) this.changed();
+      }
+    } finally { clearTimeout(timeout); if (this.checking === abort) this.checking = null; }
   }
   async start(operation) {
     if (!operations.includes(operation)) throw new Error('Invalid question help operation.');

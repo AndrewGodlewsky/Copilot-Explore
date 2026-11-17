@@ -1,3 +1,4 @@
+import { measureStateTraffic } from './perf-state-polling.mjs';
 import { performance } from 'node:perf_hooks';
 import { cpus, platform, release, arch, tmpdir, totalmem } from 'node:os';
 import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
@@ -181,7 +182,7 @@ async function benchmark(spec) {
       mountedEdges: window.document.querySelectorAll('#edges path').length,
       sameEditor: window.document.getElementById('answer') === resource.editor };
   }, { setup: async () => { const resource = await researchDom(); resource.editor = resource.window.document.getElementById('answer'); return resource; }, dispose: closeDom });
-  return { fixture: definition, phases, steadyState, viewInteractions };
+  return { fixture: definition, phases, steadyState, viewInteractions, stateTraffic: await measureStateTraffic(document) };
 }
 
 export const phaseNames = ['validate', 'contextResearch', 'contextBrief', 'contextCheck', 'markdown', 'nativeExport', 'branchView', 'layout', 'atomicWrite', 'controllerHistoryWrite', 'renderMap', 'renderWorkspace', 'renderOutline', 'poll'];
@@ -224,6 +225,8 @@ export async function runBaseline({ specs = fixtureSpecs, runCase = benchmark, o
   for (const item of result.cases) for (const [name, phase] of Object.entries(item.steadyState ?? {})) if (phase.status === 'ok') lines.push(`| ${item.fixture.name} | ${name} | ${JSON.stringify(phase.operations)} | ${phase.medianMs.toFixed(2)} |`);
   lines.push('', '## Additional viewport interactions (not task23 phases)', '', '| Fixture | Update | Operations | Median ms |', '| --- | --- | --- | ---: |');
   for (const item of result.cases) for (const [name, phase] of Object.entries(item.viewInteractions ?? {})) if (phase.status === 'ok') lines.push(`| ${item.fixture.name} | ${name} | ${JSON.stringify(phase.operations)} | ${phase.medianMs.toFixed(2)} |`);
+  lines.push('', '## Conditional HTTP counters (separate from full-update poll phase)', '', '| Fixture | Scenario | Actual work |', '| --- | --- | --- |');
+  for (const item of result.cases) for (const [name, counts] of Object.entries(item.stateTraffic ?? {})) lines.push(`| ${item.fixture.name} | ${name} | ${JSON.stringify(counts)} |`);
   lines.push('', 'jsdom measures JavaScript and DOM mutations only. It does not measure native paint, frame rate, pointer latency, IME, or desktop embedding.',
     'Targets are informational: watch for repeatable changes above 2× the same phase and fixture on the same machine. Compare only when fixture fingerprints and procedures match.');
   await writeFile(markdown, lines.join('\n') + '\n');

@@ -109,7 +109,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
       if (holdHistory && path.startsWith('api/history?')) await holdHistory();
       if (holdNavigationRead && path === 'api/navigation-settings' && options?.method !== 'POST') await holdNavigationRead();
       if (holdReferencesRead && path.startsWith('api/references?')) await holdReferencesRead();
-      return new Response(body, { status: response.status, headers: response.headers });
+      return new Response(response.status === 204 ? null : body, { status: response.status, headers: response.headers });
     })();
     requests.add(request); request.then(() => requests.delete(request), () => requests.delete(request));
     return request;
@@ -2811,4 +2811,91 @@ test('Outline folding an offscreen ancestor reveals and mounts the moved selecti
   assert.equal(d.getElementById('answer-state').value, 'assumption');
   assert.equal(d.activeElement.id, 'expanded-title');
   assert.equal(JSON.stringify(f.explorer.doc), logical, 'draft recovery remains separate from saved answers');
+});
+
+test('conditional polling skips map work but checks retained help and recovers connection gaps with a full snapshot', async t => {
+  const f = await fixture(t, 340, undefined, false, { questionHelper: { run: async () => 'Retained explanation', close() {} } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Local draft');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'draft');
+  $('help-rephrase').click(); await until(() => $('question-help-results').textContent.includes('Retained explanation'), 'help');
+  await f.poll();
+  const original = f.window.fetch; let checks = 0, polls = [], fail = false, parsed = 0;
+  f.window.fetch = async (path, options) => {
+    if (path === 'api/question-help' && JSON.parse(options.body).action === 'check') checks++;
+    if (path === 'api/state' && fail) throw new Error('offline');
+    const response = await original(path, options);
+    if (path === 'api/state') { polls.push({ cursor: options?.headers?.['X-Explorer-State'], status: response.status }); const json = response.json.bind(response); response.json = () => { parsed++; return json(); }; }
+    return response;
+  };
+  const editor = $('answer'), geometry = f.window.__updates.scene().geometry;
+  await f.poll(); assert.equal(polls.at(-1).status, 204); assert.equal(parsed, 0); assert.ok(checks > 0);
+  assert.equal($('answer'), editor); assert.equal(f.window.__updates.scene().geometry, geometry);
+  fail = true; await f.poll(); assert.match($('connection-status').textContent, /Reconnecting/); assert.equal(editor.value, 'Local draft');
+  fail = false; f.explorer.error = 'Transient change during gap'; await f.poll();
+  assert.equal(polls.at(-1).cursor, undefined); assert.equal(polls.at(-1).status, 200); assert.equal($('connection-status').hidden, true);
+  assert.equal(editor.value, 'Local draft'); assert.equal($('answer'), editor); assert.match($('notice').textContent, /Transient change/);
+});
+
+test('conditional polling aborts old page epochs and resumes one full loop after persisted pagehide', async t => {
+  const f = await fixture(t); await f.poll(); const original = f.window.fetch; let held, calls = 0;
+  f.window.fetch = async (path, options) => {
+    if (path !== 'api/state') return original(path, options);
+    calls++;
+    if (!held) return new Promise(resolve => { held = { resolve, signal: options?.signal }; });
+    return original(path, options);
+  };
+  const old = f.poll(); await until(() => held, 'held state request');
+  const hide = new f.window.Event('pagehide'); Object.defineProperty(hide, 'persisted', { value: true }); f.window.dispatchEvent(hide);
+  assert.equal(held.signal?.aborted, true); const count = calls; await f.poll(); assert.equal(calls, count);
+  f.explorer.error = 'Fresh after resume'; const show = new f.window.Event('pageshow'); Object.defineProperty(show, 'persisted', { value: true }); f.window.dispatchEvent(show);
+  await until(() => f.document.getElementById('notice').textContent === 'Fresh after resume', 'full resume');
+  held.resolve(new Response(JSON.stringify({ ...f.explorer.uiSnapshot(), error: 'Obsolete response' }), { headers: { 'X-Explorer-State': '00000000-0000-4000-8000-000000000000' } })); await old;
+  assert.equal(f.document.getElementById('notice').textContent, 'Fresh after resume');
+  f.window.dispatchEvent(new f.window.Event('pagehide')); const closedCalls = calls; await f.poll(); f.window.dispatchEvent(show); assert.equal(calls, closedCalls);
+});
+
+test('conditional polling bounds timeouts and retry delays without replaying failed actions', async t => {
+  const f = await fixture(t); await f.poll(); const original = f.window.fetch, timer = f.window.setTimeout.bind(f.window);
+  let deadline, delays = [], actionCalls = 0, timedSignal;
+  f.window.setTimeout = (fn, ms, ...args) => { if (ms === 8000) deadline = fn; if ([2400, 4800, 9600, 15000].includes(ms)) delays.push(ms); return timer(fn, ms, ...args); };
+  f.window.fetch = (path, options) => {
+    if (path === 'api/action') { actionCalls++; return Promise.reject(new Error('offline action')); }
+    if (path === 'api/state') return new Promise((_, reject) => { timedSignal = options.signal; options.signal.addEventListener('abort', () => reject(new Error('timeout')), { once: true }); });
+    return original(path, options);
+  };
+  for (let i = 0; i < 5; i++) { const work = f.poll(); deadline(); await work; assert.equal(timedSignal.aborted, true); }
+  assert.deepEqual(delays, [2400, 4800, 9600, 15000, 15000]);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep this through disconnect'); f.click('Save answer');
+  await until(() => actionCalls === 1, 'explicit failed action'); await delay(0);
+  f.window.fetch = async (path, options) => { if (path === 'api/action') actionCalls++; return original(path, options); };
+  await f.poll(); await f.poll(); assert.equal(actionCalls, 1); assert.equal(f.document.getElementById('answer').value, 'Keep this through disconnect');
+});
+
+test('late action response from a hidden page cannot replace the reconnected map or draft', async t => {
+  const f = await fixture(t); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Explicit saved answer');
+  const original = f.window.fetch; let held;
+  f.window.fetch = async (path, options) => { const response = await original(path, options); if (path === 'api/action') return new Promise(resolve => { held = () => resolve(response); }); return response; };
+  f.click('Save answer'); await until(() => held, 'held action after commit');
+  const hide = new f.window.Event('pagehide'); Object.defineProperty(hide, 'persisted', { value: true }); f.window.dispatchEvent(hide);
+  f.explorer.error = 'Newer state after action'; const show = new f.window.Event('pageshow'); Object.defineProperty(show, 'persisted', { value: true }); f.window.dispatchEvent(show);
+  await until(() => f.document.getElementById('notice').textContent === 'Newer state after action', 'new epoch snapshot');
+  held(); await delay(20); assert.equal(f.document.getElementById('notice').textContent, 'Newer state after action');
+  assert.equal(f.document.getElementById('answer').value, 'Explicit saved answer');
+});
+
+test('brief acceptance rejects a pre-action poll snapshot and closes its pending read on pagehide', async t => {
+  const f = await fixture(t, 340, undefined, false, { briefHelper: { async run(prepared) { return parseBrief(JSON.stringify({ goal: [{ id: 'g', text: 'Review goal', certainty: 'user-statement', sources: [{ kind: 'guidance', field: 'topic' }] }], decisions: [], constraints: [], assumptions: [], unresolved: [], nextSteps: [] }), prepared); }, close() {} } });
+  const $ = id => f.document.getElementById(id); $('decision-brief').click(); await until(() => !$('generate-brief').disabled, 'brief ready'); $('generate-brief').click(); await until(() => !$('accept-brief').hidden && !$('accept-brief').disabled, 'proposal');
+  const original = f.window.fetch; let held, briefRead;
+  f.explorer.error = 'Before acceptance';
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/state' && !held) return new Promise(resolve => { held = () => resolve(response); });
+    if (path === 'api/brief' && JSON.parse(options.body).action === 'poll') briefRead = options.signal;
+    return response;
+  };
+  const old = f.poll(); await until(() => held, 'old full snapshot held'); f.explorer.error = ''; assert.equal($('accept-brief').disabled, false, $('brief-status').textContent); $('accept-brief').click();
+  await until(() => f.explorer.doc.brief && !$('accept-brief').disabled, 'accepted snapshot'); held(); await old;
+  assert.equal($('notice').textContent, '', 'pre-acceptance state must not replace accepted snapshot');
+  await f.poll(); f.window.dispatchEvent(new f.window.Event('pagehide')); assert.equal(briefRead?.aborted, true);
 });

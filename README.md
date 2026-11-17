@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.37.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.38.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -214,6 +214,8 @@ Dictation reads Copilot's voice settings record and local voice assets. Explorer
 
 There is no fixed depth limit. This POC supports up to 5,000 nodes, 20,000 characters per answer, 9 MiB of saved map data, and 10 MiB imports. The saved-data limit keeps exports reloadable. Very large maps or prompts can hit host/context limits sooner. A crashed process may leave a `.lock` file; fully exit Copilot before removing only the matching lock, then reopen the map. Corrupt files are preserved and reported, never silently reset.
 
+Unchanged maps use conditional polling, avoiding repeated map downloads and parsing. A connection gap shows **Reconnecting** while the editor and local draft remain available. Polling retries automatically with a bounded delay and requests a full snapshot after reconnect. Failed document actions are never replayed automatically; refresh the saved map before retrying an action whose response timed out, because it may already have saved.
+
 ## Develop and verify
 
 ```powershell
@@ -240,7 +242,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.37, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.37**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.38, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.38**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

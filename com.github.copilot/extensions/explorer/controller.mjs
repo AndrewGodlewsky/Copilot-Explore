@@ -302,6 +302,17 @@ export class Explorer {
           { kind: 'node', id: ref.id, state: records.get(ref.id).answerState ?? (records.get(ref.id).kind === 'direction' ? 'direction' : 'idea'), review: records.get(ref.id).review } : { kind: 'guidance', field: ref.field }) })), dismissed: [...work.dismissed] } : {}) });
     });
   }
+  pollSnapshot(cursor) {
+    // Documents, candidate batches, captured sources and coverage are replaced, never edited.
+    // The only in-place public mutations are pending.progress and preview.stale.
+    const stamp = [this.doc, this.activeKey, !!this.library, this.error,
+      JSON.stringify(this.pending), this.preview, this.preview?.stale,
+      this.questionSource, this.contextCoverage];
+    if (!this.pollStamp || stamp.some((value, index) => value !== this.pollStamp[index])) {
+      this.pollStamp = stamp; this.pollCursor = randomUUID();
+    }
+    return { cursor: this.pollCursor, snapshot: cursor === this.pollCursor ? null : this.uiSnapshot() };
+  }
   uiSnapshot() {
     let stale = this.preview?.stale ?? false;
     if (this.preview) {
@@ -674,5 +685,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.closed = true; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
+  async close() { this.pollStamp = null; this.pollCursor = null; this.closed = true; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
 }

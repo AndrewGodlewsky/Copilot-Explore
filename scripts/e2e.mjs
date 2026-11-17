@@ -75,6 +75,10 @@ try {
   const voiceOptions = await fetch(opened.url + 'api/voice/settings');
   assert.equal(voiceOptions.status, 400, 'Settings explain missing host configuration without enumerating or recording devices.');
   assert.ok((await voiceOptions.json()).error);
+  const firstState = await fetch(opened.url + 'api/state');
+  const cursor = firstState.headers.get('X-Explorer-State'); assert.ok(cursor); assert.equal((await firstState.json()).document, null);
+  const unchanged = await fetch(opened.url + 'api/state', { headers: { 'X-Explorer-State': cursor } });
+  assert.equal(unchanged.status, 204); assert.equal(await unchanged.text(), '');
   const state = async () => (await fetch(opened.url + 'api/state')).json();
   const action = async (name, input = {}) => {
     const current = await state();

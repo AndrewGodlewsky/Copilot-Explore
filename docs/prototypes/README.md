@@ -1,8 +1,23 @@
-# Question placement study
+# Explorer prototype studies
+
+## Current: keep the selected node connected
+
+The owner clarified that the bottom drawer feels detached from the selected node. [connected-workspace.html](connected-workspace.html) provides two working alternatives with the question itself forming the workspace header:
+
+- **Attached drawer** (`?variant=attached`): the selected node forms a raised top edge, joined to a wider drawer by one continuous outline.
+- **Expanded node** (`?variant=expanded`): the question grows into a card within the map, with its parent and nearby questions connected around it.
+
+Run `npm run prototype:layouts` and open the printed URL in Brave, or open the HTML file directly. The command now opens this pair by default. Top choices, bottom arrows, and left/right keys switch variants. Drafts and saved answers stay with each question across switches. No Copilot connection, persistence, or browser launch is involved.
+
+Try **Research options**, expand an option, use it as a starting point, and **Save & go deeper**. The follow-up appears connected below the workspace and can be opened. **Show whole map** exposes the entire sample tree; select another question to see it open from that node. **Narrow**, **Dark preview**, and keyboard access are included. User-triggered expansion respects reduced motion. Reset or refresh clears all example data.
+
+These prototypes test perceived connection and working space, not production graph layout or actual AI research. No design has been selected for the installed plugin. Visual assessment remains manual under the owner's browser-control preference.
+
+## Earlier: question placement
 
 Four interactive alternatives to the current question sidebar. These are standalone design sketches with sample data, separate from the installed canvas. No layout has been selected for the plugin yet.
 
-Run `npm run prototype:layouts` from the repository and open the printed URL in Brave. No dependencies or Copilot session are needed. You can also open [question-placement.html](question-placement.html) directly as a local file.
+Run `npm run prototype:layouts` from the repository and open `/question-placement.html` on the printed server in Brave. No dependencies or Copilot session are needed. You can also open [question-placement.html](question-placement.html) directly as a local file.
 
 | Variant | Placement | Tradeoff |
 | --- | --- | --- |

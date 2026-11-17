@@ -4,9 +4,9 @@ Research checked 2026-11-16. Recommendation for the next prototype, not an appro
 
 ## Recommendation
 
-Prototype a **local branch above a full-width question workspace** first. When someone chooses a question, show its parent, nearby alternatives, and follow-ups in a compact strip. Give the question, research, and answer the rest of the canvas. Keep a visible **Whole map** action that restores the previous map position.
+The owner has now identified the issue: **the bottom drawer feels detached from the selected node**. Prioritize a workspace that visibly opens from the node itself. The [current working prototypes](prototypes/connected-workspace.html) compare an attached drawer, with the node forming its upper edge, against an expanded node within the map. Both retain graph connections and keep the question, research, and answer within one continuous surface.
 
-The owner disliked the question sidebar and tentatively preferred the bottom drawer among four placement prototypes, without liking it enough to choose it. The first prototypes mostly relocated the same inspector. My working hypothesis is that Explorer needs a better transition between surveying an idea and working through one question. The owner's reason for disliking the drawer is not yet established.
+The earlier recommendation was a local branch above a full-width question document. That could still reproduce the owner's concern if the two surfaces feel separate. The preference for visible attachment is confirmed; the attached drawer and expanded node remain proposals to test, not approved production choices.
 
 The research supports investigating different levels of detail and complementary representations. It does **not** establish that one of these layouts will work best in Copilot. Read the [product evidence](explorer-product-patterns.md) and compare the [three concept sketches](prototypes/research-directions.html).
 
@@ -22,11 +22,11 @@ The research supports investigating different levels of detail and complementary
 
 Product documentation adds concrete precedents: Kialo's local tree navigation, TheBrain's navigation from notes, Workflowy's focused subtrees, card interactions in Heptabase and Obsidian, and historical focus behavior in Scrintal. These show that the patterns exist; marketing and help pages do not prove usability. Exact behavior and citations are recorded in the [product comparison](explorer-product-patterns.md).
 
-## Three directions worth comparing
+## Earlier research directions
 
 The following are design proposals inferred from the evidence and Explorer's requirements. Their layouts, labels, proportions, and workflows have not been validated with users.
 
-### 1. Local branch + question workspace — test first
+### 1. Local branch + question workspace
 
 **What it feels like:** navigating a branch and opening its working page.
 
@@ -76,10 +76,10 @@ These are proposed Explorer requirements, not findings that the studies tested a
 
 ## What to test next
 
-Compare **local branch + workspace** against **research cards**, with the current bottom drawer as a reference. Keep Branch Notebook as a third option if longer writing is the priority. Build one interaction flow per candidate rather than polishing the entire app.
+Compare the **attached drawer** against the **expanded node** in the current working prototypes, with the original bottom drawer as a reference. Assess whether the question and workspace now feel like one object. Keep the earlier research directions as context for future decisions; they are not the selected implementation.
 
-Use the same six-question map and the same sample text. Complete a quick answer, compare three longer options, answer a follow-up, switch to a sibling, then return to an unfinished draft. Repeat in a narrow canvas and on a map with several nested branches.
+Use the same sample questions and text in both variants. Complete a quick answer, compare longer options, answer a follow-up, switch to a sibling, then return to an unfinished draft. Repeat in a narrow canvas and on a map with several nested branches.
 
 Observe whether the user can tell which question they are answering, find a sibling, recover their previous location, and distinguish their answer from research. Record unwanted scrolling, lost context, and unnecessary navigation. Ask which view feels natural after these tasks; do not choose on a screenshot or arbitrary numeric design scores alone.
 
-The delivered sketches explain the directions, not working Copilot interactions. No production layout was changed. Browser/desktop visual verification remains with the owner under the repository's standing preference.
+The earlier sketches explain the research directions; the current pair supports the sample interaction flow. Neither is connected to Copilot. No production layout was changed. Browser/desktop visual verification remains with the owner under the repository's standing preference.

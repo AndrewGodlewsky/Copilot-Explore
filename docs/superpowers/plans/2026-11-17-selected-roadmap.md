@@ -278,14 +278,40 @@ Task 7 clarification: a content-changing history restore creates a fresh monoton
 
 ### Verification and release
 
-- [ ] Test-first coverage for initial legacy baseline, every supported mutation class, true no-op, checkpoint persistence, exact count/byte limits and protected retention, restoring twice, restored provenance, identity isolation, schema validation and near-limit maps.
-- [ ] Inject failures around snapshot/manifest/active-document writes and simulate interrupted recovery. Verify the active document remains valid, history does not invent successful commits, original files remain recoverable, and retry is safe.
-- [ ] Real two-controller/HTTP/jsdom checks for stale restore, undo after unrelated edits, draft preservation/stale choice, pending work, late response after journey switch, keyboard dialog actions and missing/corrupt history.
-- [ ] Run npm test, npm run check and npm run package; applicable installed local SDK fixture only if host wiring changes. Never paid providers or existing sessions; no UI automation.
-- [ ] Bump to **0.1.19**, synchronize metadata/README/release notes, document recovery/retention/API contracts, include controller roadmap edit, self-review and commit. No merge/push/issue close.
-- [ ] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-7-report.md with the atomicity/recovery protocol, exact APIs/limits/migration, test RED/GREEN and final command outputs, commit and remaining manual checks.
+- [x] Test-first coverage for initial legacy baseline, every supported mutation class, true no-op, checkpoint persistence, exact count/byte limits and protected retention, restoring twice, restored provenance, identity isolation, schema validation and near-limit maps.
+- [x] Inject failures around snapshot/manifest/active-document writes and simulate interrupted recovery. Verify the active document remains valid, history does not invent successful commits, original files remain recoverable, and retry is safe.
+- [x] Real two-controller/HTTP/jsdom checks for stale restore, undo after unrelated edits, draft preservation/stale choice, pending work, late response after journey switch, keyboard dialog actions and missing/corrupt history.
+- [x] Run npm test, npm run check and npm run package; applicable installed local SDK fixture only if host wiring changes. Never paid providers or existing sessions; no UI automation.
+- [x] Bump to **0.1.19**, synchronize metadata/README/release notes, document recovery/retention/API contracts, include controller roadmap edit, self-review and commit. No merge/push/issue close.
+- [x] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-7-report.md with the atomicity/recovery protocol, exact APIs/limits/migration, test RED/GREEN and final command outputs, commit and remaining manual checks.
 
 No nested agents. Raise a concrete storage-protocol ambiguity to the controller while progressing independently. Controller reviews and publishes.
+
+Published task7: **v0.1.19**, `bc63012`, 192 tests, checks and package passed; independent review approved and remote main verified.
+
+## Task 8: Focus a branch (#13 / selection 14)
+
+Read .superpowers/sdd/2026-11-17-selected-roadmap/issue-14.md, task-8-design-notes.md, AGENTS.md and final task-6/task-7 reports in that workspace. BASE is bc630125740762ace935c6982a55a54fd8161d09; ship **0.1.20**. This is optional presentation focus, not an AI scope or graph edit. History read/restore APIs and saved-outcome contracts are documented in docs/history.md; focus changes must not call save/history. Capture test output and exit codes without PowerShell treating ordinary npm stderr notices as test errors.
+
+### Behavior
+
+- Add an explicit Focus branch action to the current question workspace (including leaves) and a clear Show whole map action/status while focused. Keep root and the complete ancestor path visible with the chosen subtree; hide unrelated branches. Focusing the root is equivalent to whole map.
+- Keep focus ID separate from the existing collapsed Set. Reuse/extend branchView/revealPath instead of changing saved nodes. Preserve unrelated folds; folds within the focused subtree still work. Ancestors necessary to reach the focus root remain visible. If the user explicitly collapses an ancestor above the focus root, exit focus and perform the requested collapse through the existing safe selection/draft path.
+- Keep the complete outline. Selecting an out-of-focus node through outline/search deliberately exits focus, expands only its ancestor path and reveals it. Ordinary poll/research completion never resets focus or expands unrelated branches. Opening another journey resets focus.
+- On Show whole map retain the current selected node, editor/draft state and underlying folds; keep the selected node reachable using existing reveal/fit behavior. Preserve the prior whole-map view when practical, without restoring a transform that strands selection offscreen. Fit/Home acts on the currently visible map; Show whole map is a separate explicit action.
+- A history restore can remove focused/selected IDs. Fall back safely to the whole map/root as needed, retaining surviving folds and all draft recovery data. No floating editor for a hidden or removed node.
+- Focus changes must not modify document revision/timestamps, question counts, native/Markdown exports, research data, AI context or committed history. Pending research can continue in unrelated branches without being silently retargeted.
+- Keep controls inside the existing expanding-node/header flow, no question sidebar. Use visible focus, labels/pressed state, text focus status, narrow-pane wrapping and existing pointer/text selection guards. Do not introduce a graph dependency or broad render rewrite.
+
+### Verification and release
+
+- [ ] Focused RED/GREEN pure visibility tests for deep paths, root/leaf/nested focus, nested collapse interaction and restoration of unrelated folds; keep supported 5,000-node traversal iterative.
+- [ ] Real HTTP/jsdom tests for explicit focus/whole-map controls, out-of-focus outline reveal, drafts/state/caret retention, polling/hidden research, history removal of IDs, fit bounds and unchanged document/export/context/history.
+- [ ] Run npm test, npm run check and npm run package; installed SDK fixture only if integration changes. No paid inference or existing sessions.
+- [ ] Bump to **0.1.20**, synchronize metadata/README/release notes, document focus versus fold behavior, include controller roadmap update, self-review and commit. No merge/push/issue closure.
+- [ ] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-8-report.md with visibility/focus APIs, RED/GREEN/final commands and outputs, commit and native manual limits.
+
+No nested agents or browser/desktop automation. Controller reviews and publishes. Raise concrete conflicts while continuing independent work.
 
 ## Issue index
 

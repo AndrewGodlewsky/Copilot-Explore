@@ -1243,6 +1243,140 @@ test('history rejects stale preview and undo after refresh targets the latest un
   await until(() => f.explorer.doc.objective === '' && !f.document.getElementById('history-dialog').open, 'latest unrelated edit undone');
   assert.equal(f.explorer.doc.nodes[1].answer, 'Keep this answer');
 });
+
+test('focus branch keeps drafts and folds, fits visible nodes, and whole map retains the editor', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, category: 'People', question: 'Invite nearby?' });
+    await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[2].id, category: 'Trust', question: 'Repair tools?' });
+  } });
+  const [root, a, b, a1, b1] = f.explorer.doc.nodes;
+  f.document.querySelector(`[data-branch-id="${b.id}"]`).click();
+  f.open(a.id); f.type('answer', 'A private draft'); chooseState(f, 'assumption');
+  const answer = f.document.getElementById('answer'); answer.focus(); answer.setSelectionRange(2, 7);
+  const revision = f.explorer.doc.revision, updatedAt = f.explorer.doc.updatedAt;
+  const beforeHistory = await f.explorer.readHistory(f.explorer.doc.id);
+  assert.ok(f.document.getElementById('focus-branch'), 'leaves and branches share a focus control');
+  f.document.getElementById('focus-branch').click();
+  assert.equal(f.document.getElementById('focus-branch').getAttribute('aria-pressed'), 'true');
+  assert.match(f.document.getElementById('focus-status').textContent, /Focusing.*Who should borrow first/);
+  assert.equal(f.document.getElementById('show-whole-map').hidden, false);
+  assert.deepEqual([...f.document.querySelectorAll('#nodes .node')].map(e => e.dataset.nodeId), [root.id, a1.id]);
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${b.id}"]`), null);
+  assert.equal(f.document.getElementById('answer').value, 'A private draft');
+  assert.equal(f.document.getElementById('answer-state').value, 'assumption');
+  assert.deepEqual([f.document.getElementById('answer').selectionStart, f.document.getElementById('answer').selectionEnd], [2, 7]);
+  f.document.getElementById('show-whole-map').click();
+  assert.equal(f.document.getElementById('show-whole-map').hidden, true);
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${b.id}"]`));
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${b1.id}"]`), null, 'unrelated fold restored');
+  assert.equal(f.document.getElementById('answer').value, 'A private draft');
+  assert.equal(f.document.getElementById('answer-state').value, 'assumption');
+  assert.equal(f.explorer.doc.revision, revision); assert.equal(f.explorer.doc.updatedAt, updatedAt);
+  assert.deepEqual(await f.explorer.readHistory(f.explorer.doc.id), beforeHistory);
+  assert.equal((await (await f.window.fetch('export.json')).json()).nodes.length, 5);
+  assert.match(await (await f.window.fetch('export.md')).text(), /Repair tools\?/);
+  f.document.getElementById('focus-branch').click(); f.document.getElementById('fit').click();
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${b.id}"]`), null, 'Fit stays inside focus');
+  const view = viewOf(f);
+  for (const node of f.document.querySelectorAll('#nodes .node')) {
+    const left = view.x + parseFloat(node.style.left) * view.zoom, top = view.y + parseFloat(node.style.top) * view.zoom;
+    assert.ok(left >= 0 && left + parseFloat(node.style.width) * view.zoom <= 340, 'focused width fits');
+    assert.ok(top >= 0 && top + parseFloat(node.style.height) * view.zoom <= 720, 'focused height fits');
+  }
+});
+
+test('outline selection exits focus and reveals only the selected path', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, category: 'People', question: 'Invite nearby?' });
+    await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[2].id, category: 'Trust', question: 'Repair tools?' });
+  } });
+  const [root, a, b, a1, b1] = f.explorer.doc.nodes;
+  f.document.querySelector(`[data-branch-id="${b.id}"]`).click();
+  f.open(a1.id); f.document.getElementById('focus-branch').click();
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${b.id}"]`), null);
+  f.document.getElementById('outline-toggle').click();
+  const target = [...f.document.querySelectorAll('#outline-list [data-node-id]')].find(e => e.dataset.nodeId === b1.id);
+  assert.ok(target); target.click();
+  assert.equal(f.document.getElementById('show-whole-map').hidden, true);
+  assert.equal(f.document.getElementById('expanded-title').textContent, b1.question);
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${a.id}"]`));
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${a1.id}"]`));
+  assert.equal(f.document.querySelector(`[data-branch-id="${b.id}"]`).getAttribute('aria-expanded'), 'true');
+  f.open(root.id); f.document.getElementById('focus-branch').click();
+  assert.equal(f.document.getElementById('show-whole-map').hidden, true, 'root focus means whole map');
+});
+
+test('collapsing an ancestor exits focus safely and hidden research does not retarget it', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, category: 'People', question: 'Invite nearby?' });
+    await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[2].id, category: 'Trust', question: 'Repair tools?' });
+  } });
+  const [root, a, b, a1, b1] = f.explorer.doc.nodes;
+  f.open(b1.id); f.document.querySelector('.research-disclosure summary').click(); f.click('Research options');
+  await until(() => f.explorer.pending?.kind === 'research', 'research started');
+  f.open(a1.id); f.type('answer', 'Keep this draft'); chooseState(f, 'needs-evidence');
+  f.document.getElementById('focus-branch').click();
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${b.id}"]`), null);
+  f.resolveResearch(findings);
+  await until(() => !!f.explorer.doc.nodes.find(n => n.id === b1.id).research, 'hidden research saved');
+  await until(() => f.document.getElementById('request-status').hidden, 'completion polled');
+  assert.equal(f.document.getElementById('show-whole-map').hidden, false, 'poll retains focus');
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${b.id}"]`), null);
+  assert.equal(f.document.getElementById('answer').value, 'Keep this draft');
+  f.document.getElementById('outline-toggle').click();
+  f.document.querySelector(`#outline-list [data-branch-id="${root.id}"]`).click();
+  assert.equal(f.document.getElementById('show-whole-map').hidden, true);
+  assert.equal(f.document.getElementById('node-workspace').hidden, true);
+  assert.equal(f.document.activeElement.dataset.nodeId, root.id);
+  assert.equal(f.document.querySelectorAll('#nodes .node').length, 1);
+  f.document.querySelector(`[data-branch-id="${root.id}"]`).click();
+  f.open(a1.id);
+  assert.equal(f.document.getElementById('answer').value, 'Keep this draft');
+  assert.equal(f.document.getElementById('answer-state').value, 'needs-evidence');
+  assert.equal(f.explorer.doc.nodes.find(n => n.id === b1.id).research.summary, findings.summary);
+});
+
+test('history removal of the focused selection returns to whole map and keeps surviving folds', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: e => e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[2].id, category: 'Trust', question: 'Repair tools?' }) });
+  const [root, a, b, b1] = f.explorer.doc.nodes;
+  f.document.querySelector(`[data-branch-id="${b.id}"]`).click();
+  const baseline = f.explorer.doc.revision;
+  await f.explorer.command('add', { revision: baseline, nodeId: a.id, category: 'People', question: 'Temporary focus?' });
+  await until(() => [...f.document.querySelectorAll('#nodes .node')].some(node => node.title === 'Temporary focus?'), 'temporary question polled');
+  const removed = f.explorer.doc.nodes.at(-1);
+  f.open(removed.id); chooseState(f, 'not-relevant'); f.document.getElementById('focus-branch').click();
+  f.document.getElementById('history-open').click();
+  await until(() => f.document.querySelector(`[data-history-revision="${baseline}"]`), 'baseline history');
+  f.document.querySelector(`[data-history-revision="${baseline}"]`).click();
+  await until(() => !f.document.getElementById('history-restore').disabled, 'restore preview');
+  f.document.getElementById('history-restore').click();
+  await until(() => f.document.getElementById('orphan-drafts').textContent.includes('Not relevant'), 'orphan state retained');
+  assert.equal(f.document.getElementById('show-whole-map').hidden, true);
+  assert.equal(f.document.getElementById('node-workspace').hidden, true);
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${root.id}"]`));
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${a.id}"]`));
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${b.id}"]`));
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${b1.id}"]`), null, 'surviving fold retained');
+  assert.equal(f.document.querySelector(`[data-branch-id="${b.id}"]`).getAttribute('aria-expanded'), 'false');
+  assert.equal(f.document.querySelector('#nodes .node.selected')?.dataset.nodeId, root.id, 'removed selection falls back to root');
+});
+
+test('opening another journey clears branch focus', async t => {
+  const f = await fixture(t, 340, undefined, true), first = f.explorer.activeKey;
+  await f.explorer.library.import(createDocument('Another focus journey'));
+  f.open(f.explorer.doc.nodes[1].id); f.document.getElementById('focus-branch').click();
+  f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'library entries');
+  [...f.document.querySelectorAll('.library-entry')].find(e => e.textContent.includes('Another focus journey')).querySelector('[data-action="open"]').click();
+  await until(() => f.explorer.activeKey !== first && f.document.getElementById('map-title').textContent === 'Another focus journey', 'journey switch');
+  assert.equal(f.document.getElementById('show-whole-map').hidden, true);
+  assert.equal(f.document.getElementById('focus-status').textContent, '');
+  f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'library entries reopened');
+  [...f.document.querySelectorAll('.library-entry')].find(e => e.textContent.includes('A tool library')).querySelector('[data-action="open"]').click();
+  await until(() => f.explorer.activeKey === first && f.document.getElementById('map-title').textContent === 'A tool library', 'first journey reopened');
+  assert.equal(f.document.getElementById('show-whole-map').hidden, true, 'focus is per canvas session, not saved in the journey');
+});
 test('late history reads never populate a different journey dialog', async t => {
   const f = await fixture(t, 340, undefined, true), first = f.explorer.activeKey;
   const copy = await f.explorer.library.import(createDocument('Another journey'));

@@ -66,3 +66,25 @@ test('wide and maximum-depth maps fold without recursion or repeated subtree sca
   const wide = [{ id: 'root', parentId: null, answer: '' }, ...Array.from({ length: 4999 }, (_, i) => ({ id: `w${i}`, parentId: 'root', answer: '' }))];
   assert.equal(branchView(wide, 'root', new Set(['root'])).descendants.get('root').total, 4999);
 });
+
+test('branch focus keeps its ancestry and subtree while restoring unrelated folds', () => {
+  const folded = new Set(['root', 'a', 'a1', 'b']);
+  const focused = branchView(nodes, 'root', folded, 'a1');
+  assert.deepEqual(focused.nodes.map(n => n.id), ['root', 'a', 'a1']);
+  assert.deepEqual(focused.edges.map(n => n.id), ['a', 'a1']);
+  assert.deepEqual([...folded], ['root', 'a', 'a1', 'b'], 'focus never edits folds');
+  assert.deepEqual(branchView(nodes, 'root', folded).nodes.map(n => n.id), ['root']);
+  assert.deepEqual(branchView(nodes, 'root', new Set(['b']), 'a').nodes.map(n => n.id), ['root', 'a', 'a1', 'a2', 'a3']);
+  assert.deepEqual(branchView(nodes, 'root', new Set(['a1']), 'a').nodes.map(n => n.id), ['root', 'a', 'a1', 'a2']);
+  assert.deepEqual(branchView(nodes, 'root', new Set(), 'a3').nodes.map(n => n.id), ['root', 'a', 'a1', 'a3']);
+  assert.deepEqual(branchView(nodes, 'root', new Set(), 'root').nodes.map(n => n.id), branchView(nodes, 'root', new Set()).nodes.map(n => n.id));
+});
+
+test('maximum-depth focus and nested folds stay iterative', () => {
+  const deep = [{ id: 'root', parentId: null, answer: '' }];
+  for (let i = 1; i <= 4999; i++) deep.push({ id: `d${i}`, parentId: i === 1 ? 'root' : `d${i - 1}`, answer: '' });
+  const focused = branchView(deep, 'root', new Set(['root', 'd1', 'd4998']), 'd4999');
+  assert.equal(focused.nodes.length, 5000);
+  assert.equal(focused.edges.length, 4999);
+  assert.equal(branchView(deep, 'root', new Set(['d4999']), 'd4998').nodes.length, 5000);
+});

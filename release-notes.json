@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.20",
+    "summary": "Focus a question branch to show its root, ancestor path and subtree while hiding unrelated branches. Show whole map restores the wider view and keeps the selected question reachable. Focus preserves folds, drafts, research, exports and saved history."
+  },
+  {
     "version": "0.1.19",
     "summary": "Undo committed changes, preview and restore saved revisions, and keep named checkpoints. History preserves answers, states and research with bounded retention and interrupted-save recovery. Restores check competing writers and preserve local drafts, including state-only drafts for removed questions."
   },

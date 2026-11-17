@@ -1,9 +1,14 @@
 import { isResolvedQuestion } from './answer-state.mjs';
 
 // The full tree supplies counts; only visible nodes and edges reach layout/rendering.
-export function branchView(nodes, rootId, collapsed) {
+export function branchView(nodes, rootId, collapsed, focusId = null) {
   const children = new Map(nodes.map(node => [node.id, []]));
   for (const node of nodes) if (node.parentId) children.get(node.parentId).push(node);
+  const ancestry = new Set();
+  if (focusId && focusId !== rootId) {
+    const parents = new Map(nodes.map(node => [node.id, node.parentId]));
+    for (let id = focusId; id != null; id = parents.get(id)) ancestry.add(id);
+  }
   const order = [nodes.find(node => node.id === rootId)];
   for (let i = 0; i < order.length; i++) order.push(...children.get(order[i].id));
   const descendants = new Map();
@@ -19,8 +24,11 @@ export function branchView(nodes, rootId, collapsed) {
   const visible = [order[0]], edges = [];
   for (let i = 0; i < visible.length; i++) {
     const node = visible[i];
-    if (collapsed.has(node.id)) continue;
-    for (const child of children.get(node.id)) { visible.push(child); edges.push(child); }
+    if (collapsed.has(node.id) && (!ancestry.has(node.id) || node.id === focusId)) continue;
+    for (const child of children.get(node.id)) {
+      if (ancestry.has(node.id) && node.id !== focusId && !ancestry.has(child.id)) continue;
+      visible.push(child); edges.push(child);
+    }
   }
   return { nodes: visible, edges, descendants };
 }

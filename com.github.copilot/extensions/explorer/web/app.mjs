@@ -11,7 +11,7 @@ let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame, viewportSize;
 let suppressClick = false, restoringFocus = false, composing = null, workspaceDirty = false;
 let actionEpoch = 0, closed = false, pollTimer;
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
-let collapsed = new Set(), branches = null;
+let collapsed = new Set(), branches = null, focusId = null, wholeView = null;
 let historyEpoch = 0, historyReturn = null, historySelection = null, historyRevision = null;
 let guidanceReturn = null, guidanceBase = null, guidanceNeedsChoice = false, guidanceNeedsRefresh = false;
 const drafts = new Map(), nodeUi = new Map();
@@ -72,7 +72,7 @@ function apply(next, reset = false) {
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
     voice.cancel();
-    drafts.clear(); nodeUi.clear(); positions.clear(); collapsed.clear(); branches = null; $('node-workspace').replaceChildren();
+    drafts.clear(); nodeUi.clear(); positions.clear(); collapsed.clear(); branches = null; focusId = null; wholeView = null; $('node-workspace').replaceChildren();
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
     $('start-objective').value = ''; $('start-criteria').value = ''; $('start-guidance').open = false;
     if ($('history-dialog').open) closeHistory();
@@ -83,8 +83,13 @@ function apply(next, reset = false) {
   else draftClient.updateNodes(state.document?.nodes ?? []);
   if (state.library && !state.document) void refreshLibrary();
   const doc = state.document;
-  if (doc && !doc.nodes.some(n => n.id === selected)) { selected = doc.rootId; expanded = false; }
-  if (doc) { const ids = new Set(doc.nodes.map(node => node.id)); collapsed = new Set([...collapsed].filter(id => ids.has(id))); branches = branchView(doc.nodes, doc.rootId, collapsed); }
+  if (doc) {
+    const ids = new Set(doc.nodes.map(node => node.id));
+    if (!ids.has(selected) || (focusId && !ids.has(focusId))) { selected = doc.rootId; expanded = false; focusId = null; wholeView = null; }
+    collapsed = new Set([...collapsed].filter(id => ids.has(id)));
+    branches = branchView(doc.nodes, doc.rootId, collapsed, focusId);
+  }
+  updateFocusStatus();
   showView();
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('edit-guidance').disabled = !!state.pending;
@@ -171,8 +176,10 @@ function select(id) {
   if (!state.document?.nodes.some(n => n.id === id)) return;
   endDrag();
   voice.cancel();
+  if (focusId && !withinFocus(id)) { focusId = null; wholeView = null; }
   collapsed = revealPath(state.document.nodes, collapsed, id);
-  branches = branchView(state.document.nodes, state.document.rootId, collapsed);
+  branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
+  updateFocusStatus();
   const rect = $('map').getBoundingClientRect(), width = Math.min(560, rect.width - 32), old = anchorPoint(id);
   const anchor = { id, x: Math.max(width / 2 + 16, Math.min(rect.width - width / 2 - 16, old?.x ?? rect.width / 2)), y: focusTop(id, rect.height) };
   captureWorkspace(); selected = id; expanded = true; view.zoom = 1;
@@ -183,6 +190,7 @@ function toggleBranch(id, source) {
   if (!node || !branches.descendants.get(id)?.total) return;
   endDrag();
   const folding = !collapsed.has(id), anchor = anchorPoint(id);
+  if (folding && focusId && id !== focusId && focusAncestor(id)) { focusId = null; wholeView = null; updateFocusStatus(); }
   if (folding) collapsed.add(id); else collapsed.delete(id);
   let moved = false;
   if (folding && selected !== id) {
@@ -192,7 +200,7 @@ function toggleBranch(id, source) {
       voice.cancel(); captureWorkspace(); selected = id; expanded = false; moved = true; break;
     }
   }
-  branches = branchView(state.document.nodes, state.document.rootId, collapsed);
+  branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
   renderWorkspace(); refreshScene(anchor); renderOutline();
   const focus = moved ? [...$('nodes').children].find(e => e.dataset.nodeId === id) :
     source === 'outline' ? [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === id) :
@@ -206,6 +214,45 @@ function branchButton(node, workspace = false) {
   return button(label, event => toggleBranch(node.id, event.currentTarget.closest('.outline') ? 'outline' : 'map'), { ...(workspace ? { id: 'branch-workspace' } : {}),
     class: workspace ? 'workspace-branch-toggle' : 'branch-toggle', 'data-branch-id': node.id,
     'aria-label': `${label}: ${node.question}`, 'aria-expanded': String(!folded) });
+}
+function focusAncestor(id) {
+  const byId = new Map(state.document.nodes.map(node => [node.id, node]));
+  for (let node = byId.get(focusId); node; node = byId.get(node.parentId)) if (node.id === id) return true;
+  return false;
+}
+function withinFocus(id) {
+  if (focusAncestor(id)) return true;
+  const byId = new Map(state.document.nodes.map(node => [node.id, node]));
+  for (let node = byId.get(id); node; node = byId.get(node.parentId)) if (node.id === focusId) return true;
+  return false;
+}
+function updateFocusStatus() {
+  const node = state.document?.nodes.find(n => n.id === focusId);
+  $('focus-access').hidden = !node;
+  $('show-whole-map').hidden = !node;
+  $('focus-status').textContent = node ? `Focusing branch: ${node.question}` : '';
+  $('focus-branch')?.setAttribute('aria-pressed', String(!!node && selected === node.id));
+}
+function showWholeMap() {
+  if (!focusId) return;
+  endDrag();
+  focusId = null;
+  collapsed = revealPath(state.document.nodes, collapsed, selected);
+  branches = branchView(state.document.nodes, state.document.rootId, collapsed);
+  if (wholeView) view = wholeView;
+  wholeView = null;
+  updateFocusStatus();
+  refreshScene(null);
+  revealNode(selected);
+  (expanded ? $('focus-branch') : $('map')).focus({ preventScroll: true });
+}
+function focusBranch(id) {
+  if (id === state.document.rootId) { showWholeMap(); return; }
+  if (!wholeView) wholeView = { ...view };
+  focusId = id;
+  branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
+  updateFocusStatus();
+  refreshScene(anchorPoint(id));
 }
 function collapseNode(focus = true) {
   endDrag();
@@ -388,7 +435,7 @@ function renderWorkspace() {
     if (crumbs.childNodes.length) crumbs.append(el('span', {}, '/'));
     crumbs.append(button(n.id === doc.rootId ? 'Your idea' : n.category, () => select(n.id), { id: `ancestor-${n.id}`, title: n.question }));
   }
-  const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.category), el('div', { class: 'node-head-actions' }, branchButton(node, true), button('Collapse node', () => collapseNode(), { id: 'collapse-node' }))), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
+  const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.category), el('div', { class: 'node-head-actions' }, button('Focus branch', () => focusBranch(node.id), { id: 'focus-branch', 'aria-pressed': String(focusId === node.id), 'aria-label': `Focus branch: ${node.question}` }), branchButton(node, true), button('Collapse node', () => collapseNode(), { id: 'collapse-node' }))), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
   if (collapsed.has(node.id)) { const count = branches.descendants.get(node.id); heading.append(el('p', { class: 'branch-count' }, `${count.total} hidden · ${count.unresolved} unresolved`)); }
   const content = el('div', { class: 'node-content' }); panel.append(heading, content);
   if (pending) {
@@ -695,6 +742,7 @@ $('outline').addEventListener('keydown', event => {
 $('search').addEventListener('input', renderOutline);
 $('request-status').addEventListener('click', () => { if (state.pending) select(state.pending.nodeId); });
 $('fit').addEventListener('click', () => { collapseNode(false); fit(); }); $('center-question').addEventListener('click', centerSelected);
+$('show-whole-map').addEventListener('click', showWholeMap);
 $('zoom-in').addEventListener('click', () => zoom(1.2)); $('zoom-out').addEventListener('click', () => zoom(1 / 1.2));
 $('zoom-level').addEventListener('click', () => zoom(1 / view.zoom));
 function endDrag(event) {

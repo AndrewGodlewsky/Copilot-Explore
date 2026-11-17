@@ -594,6 +594,7 @@ export class Explorer {
         if (!active()) return;
         if (this.file !== work.file || this.activeKey !== work.key) throw new Error('The research journey changed. The result was discarded.');
         const current = await this.readCurrent();
+        this.currentFollowup(current);
         if (!sameResearchSources(work.dependencies, current)) throw new Error('The saved research source context changed. The result was discarded; refresh the journey and research again.');
         if (!sameResearchDestination(work.dependencies, current)) throw new Error('Saved research changed in another canvas. The conflicting result was discarded; refresh the journey.');
         if (!active()) return;

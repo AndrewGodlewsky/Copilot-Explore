@@ -139,6 +139,51 @@ test('raw output and retained serialized exchanges enforce exact byte and charac
   assert.equal(Buffer.byteLength(JSON.stringify(exact)), 65536); assert.equal(retainExchanges(exact).length, 1);
   exact[0].result.answer += 'x'; assert.deepEqual(retainExchanges(exact), []);
 });
+for (const boundary of ['review consumption', 'helper completion']) {
+  for (const change of ['sent source', 'original research', 'unrelated metadata']) {
+    test(`${boundary} reconciles retained follow-ups after disk changes to ${change}`, async t => {
+      const f = await fixture(t);
+      await f.start(await f.review('First question')); await new Promise(setImmediate);
+      f.runs[0].resolve(result); await f.settle();
+      const retained = structuredClone(f.e.uiSnapshot().followup.exchanges);
+      const reviewed = await f.review('Second question');
+      if (boundary === 'helper completion') { await f.start(reviewed); await new Promise(setImmediate); }
+      const originalDisk = JSON.parse(await readFile(f.file, 'utf8')), disk = structuredClone(originalDisk);
+      disk.revision++; disk.updatedAt = '2026-11-17T23:00:00.000Z';
+      if (change === 'sent source') disk.nodes[1].answer = 'A newly committed constraint';
+      if (change === 'original research') disk.nodes[1].research.recommendation = 'A replacement recommendation';
+      const changedBytes = JSON.stringify(disk); await writeFile(f.file, changedBytes);
+      const relevant = change !== 'unrelated metadata';
+      if (boundary === 'review consumption') {
+        if (relevant) { await assert.rejects(f.start(reviewed), /changed/); assert.equal(f.runs.length, 1); }
+        else { await f.start(reviewed); await new Promise(setImmediate); }
+      }
+      if (boundary === 'helper completion' || !relevant) { f.runs[1].resolve(result); await f.settle(); }
+      const snapshot = f.e.uiSnapshot();
+      assert.equal(snapshot.pending, null);
+      assert.equal(await readFile(f.file, 'utf8'), changedBytes);
+      if (!relevant) {
+        assert.equal(snapshot.followup.historical, false);
+        assert.deepEqual(snapshot.followup.exchanges[0], retained[0]);
+        assert.equal(snapshot.followup.exchanges.length, 2);
+        assert.equal(snapshot.followup.exchanges[1].question, 'Second question');
+        assert.equal(f.e.doc.revision, disk.revision); assert.equal(f.e.error, '');
+        return;
+      }
+      if (boundary === 'helper completion') assert.match(f.e.error, /changed.*discarded/);
+      assert.deepEqual(snapshot.followup.exchanges, retained);
+      assert.equal(snapshot.followup.historical, true);
+      originalDisk.revision = disk.revision + 1;
+      const reversedBytes = JSON.stringify(originalDisk); await writeFile(f.file, reversedBytes);
+      await f.e.command('refresh-answer', { revision: f.e.doc.revision });
+      assert.equal(f.e.uiSnapshot().followup.historical, true);
+      assert.deepEqual(f.e.uiSnapshot().followup.exchanges, retained);
+      const afterReversal = await f.review('After content reversal');
+      assert.equal(afterReversal.prepared.followup.exchanges.length, 0);
+      assert.equal(await readFile(f.file, 'utf8'), reversedBytes);
+    });
+  }
+}
 test('source fingerprint union keeps earlier dependencies under its explicit count and byte bounds', () => {
   const doc = document(); addQuestions(doc, doc.rootId, [{ question: 'Earlier source?', category: 'Other' }]); doc.nodes[2].answer = 'Used earlier';
   const first = prepareFollowup(doc, doc.nodes[1].id, { question: 'First?', hypothetical: false });

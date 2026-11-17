@@ -50,6 +50,7 @@ export class ResearchReview {
     if (!!review.prepared.followup !== (input.purpose === 'research-follow-up')) throw new Error('This review has a different research or follow-up purpose.');
     this.clear();
     const current = await explorer.readCurrent();
+    explorer.currentFollowup(current);
     if (explorer.closed || !sameResearchSources(review.prepared.dependencies, current) || !sameResearchDestination(review.prepared.dependencies, current)) throw new Error('Research sources or saved research changed. Refresh and review context before starting.');
     if (review.prepared.followup && (explorer.currentFollowup(current, input.nodeId)?.id ?? null) !== review.prepared.historyId) throw new Error('Follow-up history or its earlier source context changed. Review again before starting.');
     return review.prepared;

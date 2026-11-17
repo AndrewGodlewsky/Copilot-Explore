@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.30",
+    "summary": "Choose Understand, Decide, Design, Diagnose, or Challenge to guide future questions and research. A mode change is saved in guidance and history while earlier answers, research, and question explanations stay intact. The active mode appears above the map and in exports."
+  },
+  {
     "version": "0.1.29",
     "summary": "An expanded question now offers Rephrase, Give an example, and Explain terms. Model help uses bounded saved context in a separate tool-free helper; examples are illustrative. Explanations stay beside the question until you switch nodes or reload, without changing your question, answer or draft. Cancel help before cleaning an answer, or vice versa."
   },

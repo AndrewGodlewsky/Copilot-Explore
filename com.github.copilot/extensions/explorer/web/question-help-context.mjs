@@ -1,4 +1,5 @@
 import { effectiveAnswerState, isQuestion } from './answer-state.mjs';
+import { effectiveMode } from './modes.mjs';
 
 const selectedRecord = n => ({ id: n.id, parentId: n.parentId, question: n.question, category: n.category });
 const ancestorRecord = n => ({ id: n.id, parentId: n.parentId, question: n.question, category: n.category, answer: n.answer, ...(isQuestion(n) ? { answerState: effectiveAnswerState(n) } : {}), ...(n.kind ? { kind: n.kind } : {}) });
@@ -6,7 +7,7 @@ export function helpContext(doc, nodeId) {
   const node = doc?.nodes.find(n => n.id === nodeId);
   if (!node) throw new Error('That node no longer exists.');
   if (node.id === doc.rootId || !isQuestion(node)) throw new Error('Select an ordinary question for help.');
-  const input = { selected: selectedRecord(node), topic: doc.topic, objective: doc.objective, successCriteria: doc.successCriteria, ancestors: [], omissions: { ancestorIds: [], unlistedCount: 0 } };
+  const input = { selected: selectedRecord(node), topic: doc.topic, objective: doc.objective, successCriteria: doc.successCriteria, mode: effectiveMode(doc), ancestors: [], omissions: { ancestorIds: [], unlistedCount: 0 } };
   if (JSON.stringify(input).length > 16000) throw new Error('The selected question and guidance exceed the question help context limit. Shorten the saved guidance before trying again.');
   const byId = new Map(doc.nodes.map(n => [n.id, n]));
   for (let parent = byId.get(node.parentId); parent; parent = byId.get(parent.parentId)) {
@@ -21,7 +22,7 @@ export function helpContext(doc, nodeId) {
   return input;
 }
 export function sameHelpContext(input, doc) {
-  if (!input?.selected || !Array.isArray(input.ancestors) || !doc || [doc.topic, doc.objective, doc.successCriteria].some((value, i) => value !== [input.topic, input.objective, input.successCriteria][i])) return false;
+  if (!input?.selected || !Array.isArray(input.ancestors) || !doc || [doc.topic, doc.objective, doc.successCriteria, effectiveMode(doc)].some((value, i) => value !== [input.topic, input.objective, input.successCriteria, input.mode][i])) return false;
   const byId = new Map(doc.nodes.map(n => [n.id, n]));
   const selected = byId.get(input.selected.id);
   if (!selected || selected.id === doc.rootId || !isQuestion(selected) || JSON.stringify(selectedRecord(selected)) !== JSON.stringify(input.selected)) return false;

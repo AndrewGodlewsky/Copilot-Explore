@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.29.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.30.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -66,7 +66,7 @@ Local marketplace installs can show a generic native tab icon due to a host issu
 
 ## Use Explorer
 
-While creating a journey, open **Add an objective and success criteria** if you know what you want to understand or decide. Both fields are optional. Use **Objective & criteria** above an existing map to revise them later. They guide future questions and isolated research; they do not answer questions or decide when the journey is complete. Cancel pending Copilot work before editing guidance.
+While creating a journey, open **Add exploration guidance** to choose a mode or enter an objective and success criteria. **Understand** maps concepts and unknowns; **Decide** compares choices and tradeoffs; **Design** explores outcomes and feasibility; **Diagnose** investigates symptoms and causes; **Challenge** tests assumptions and failure conditions. Understand is the default. Use **Edit guidance** above an existing map to change these settings. Mode guides future questions and isolated research; earlier answers, research and explanations stay intact. Objective and success criteria remain separate inputs. Cancel pending Copilot work before editing guidance, and dismiss an old question preview before accepting new suggestions.
 
 1. Use `/explore` to open your library, or `/explore <idea>` to start a journey. Search saved topics, pin favorites, or show archived journeys. **Open** continues a journey in the current chat; **New exploration** starts another without replacing the saved map. Copilot creates questions in several directions around a new idea.
 2. Select a question in the map or searchable **Outline**. The node expands in its branch; its answer, research, and follow-up controls are inside it.
@@ -196,7 +196,7 @@ PvRecorder captures mono, 16-bit PCM audio at 16 kHz. Foundry Local runs the spe
 
 ## Files and privacy
 
-Committed objective and success criteria are stored on the version-1 journey document and included in JSON and Markdown exports. Older files open with both fields empty. The objective is limited to 2,000 characters and success criteria to 4,000; invalid explicit values are rejected on import. Guidance can influence questions and research, but finishing remains your choice.
+Committed objective, success criteria and optional exploration mode are stored on the version-1 journey document and included in JSON and Markdown exports. Older files open in Understand mode without adding a field to the saved file. The objective is limited to 2,000 characters and success criteria to 4,000; invalid explicit guidance and modes are rejected on import. Mode changes are undoable guidance revisions and clear a finished state while preserving old content. Guidance influences future questions and research, but finishing remains your choice.
 
 Journeys autosave as versioned JSON documents under `~/.copilot/plugin-data/explorer/` (`COPILOT_HOME` is respected). `EXPLORER_DATA_DIR` can override this for testing. New filenames hash the stable journey ID; canvas/session identity is only an attachment. Legacy `.explore.json` files are discovered in place. Opening a journey from another canvas uses the same file and revision protection. Finish also saves a Markdown sibling there. Export names use an exploration identifier; every node's ID and parent relationship are preserved in the resumable file. Pin/archive/recent metadata and canvas bindings live separately in `library.json`; opening or pinning never changes the journey's edited timestamp. See the [library storage contract](docs/library.md).
 
@@ -234,7 +234,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.29, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.29**.
+- Update to v0.1.30, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.30**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

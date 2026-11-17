@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './web/answer-state.mjs';
+import { effectiveMode, validMode, MODES } from './web/modes.mjs';
+export { effectiveMode } from './web/modes.mjs';
 export { effectiveAnswerState, questionCounts, isQuestion, effectiveKind } from './web/answer-state.mjs';
 
 export const FORMAT = 'copilot-explorer';
@@ -90,11 +92,12 @@ export function research(value) {
     ...(value.proposedAnswer !== undefined ? { proposedAnswer: text(value.proposedAnswer, 'Proposed answer', 5000) } : {}),
     uncertainty: text(value.uncertainty, 'Uncertainty', 3000), sources };
 }
-export function createDocument(topic, { objective = '', successCriteria = '' } = {}) {
+export function createDocument(topic, { objective = '', successCriteria = '', mode = 'understand' } = {}) {
   const now = new Date().toISOString();
   const id = randomUUID();
   return { format: FORMAT, version: 1, id: randomUUID(), revision: 0, topic: text(topic, 'Idea', 4000),
     objective: guidanceText(objective, 'Objective', MAX_OBJECTIVE), successCriteria: guidanceText(successCriteria, 'Success criteria', MAX_SUCCESS_CRITERIA),
+    ...(validMode(mode) === 'understand' ? {} : { mode }),
     createdAt: now, updatedAt: now, finishedAt: null, rootId: id,
     nodes: [{ id, parentId: null, question: topic.trim(), category: 'Your idea', answer: '', research: null, review: false }] };
 }
@@ -145,6 +148,7 @@ export function validateDocument(value) {
     revision: Number.isSafeInteger(value.revision) && value.revision >= 0 ? value.revision : 0,
     topic, objective: guidanceText(Object.hasOwn(value, 'objective') ? value.objective : '', 'Objective', MAX_OBJECTIVE),
     successCriteria: guidanceText(Object.hasOwn(value, 'successCriteria') ? value.successCriteria : '', 'Success criteria', MAX_SUCCESS_CRITERIA),
+    ...(Object.hasOwn(value, 'mode') ? { mode: validMode(value.mode) } : {}),
     rootId: root.id, createdAt: date(value.createdAt, 'creation date'), updatedAt: date(value.updatedAt, 'update date'),
     finishedAt: value.finishedAt === null ? null : date(value.finishedAt, 'finish date'), nodes };
   if (Buffer.byteLength(JSON.stringify(document, null, 2)) > MAX_DOCUMENT_BYTES) throw new Error('This map has reached the 9 MiB saved-data limit. Export it and continue in a new exploration.');
@@ -213,7 +217,7 @@ export function contextFor(doc, nodeId) {
     question: n.question, originalQuestion: n.generation.originalQuestion, rationale: n.rationale,
     provenance: 'Historical model explanation for the original suggested wording and context; not a user fact or decision.',
   }));
-  return { topic: doc.topic, objective: doc.objective ?? '', successCriteria: doc.successCriteria ?? '', path: path.reverse(), historicalRationales,
+  return { topic: doc.topic, objective: doc.objective ?? '', successCriteria: doc.successCriteria ?? '', mode: effectiveMode(doc), path: path.reverse(), historicalRationales,
     existingQuestions: doc.nodes.filter(n => n.parentId === nodeId && isQuestion(n)).map(n => n.question),
     directions: doc.nodes.filter(n => n.parentId === nodeId && n.kind === 'direction').map(n => ({ kind: 'direction', origin: 'user', text: n.question })),
     decisionsElsewhere: doc.nodes.filter(n => isQuestion(n) && (n.answer.trim() || effectiveAnswerState(n) !== 'unanswered') && !path.some(p => p.id === n.id)).map(n => ({ question: n.question, answer: n.answer, answerState: effectiveAnswerState(n), review: n.review })) };
@@ -225,7 +229,7 @@ export function toMarkdown(doc) {
   const lines = ['# Exploration: ' + md(doc.topic), '', `Saved: ${doc.updatedAt}`, '',
     `${answered} answered; ${resolved} resolved; ${deferred} deferred; ${unresolved} unresolved questions.`, '',
     'This record preserves user answers separately from AI research. Open questions are unresolved, not decisions.', '',
-    '## Guidance', '', '**Objective:**', '', doc.objective ? md(doc.objective) : '_Not set._', '',
+    '## Guidance', '', `**Mode: ${MODES[effectiveMode(doc)].label}**`, '', '**Objective:**', '', doc.objective ? md(doc.objective) : '_Not set._', '',
     '**Success criteria:**', '', doc.successCriteria ? md(doc.successCriteria) : '_Not set._', '',
     'Criteria guide exploration; the user decides when to finish.', '', '## Map', '',
     '| ID | Parent | Category | Question | Status |', '| --- | --- | --- | --- | --- |'];

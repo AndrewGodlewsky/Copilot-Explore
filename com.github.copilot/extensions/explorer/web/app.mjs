@@ -3,6 +3,7 @@ import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
 import { CleanupClient } from './cleanup.mjs';
 import { QuestionHelpClient } from './question-help-client.mjs';
+import { effectiveMode, MODES } from './modes.mjs';
 import { attachNavigation } from './navigation.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
 
@@ -17,6 +18,7 @@ let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument =
 let collapsed = new Set(), branches = null, focusId = null, wholeView = null;
 let historyEpoch = 0, historyReturn = null, historySelection = null, historyRevision = null;
 let guidanceReturn = null, guidanceBase = null, guidanceNeedsChoice = false, guidanceNeedsRefresh = false;
+const showModeDescription = id => { $(`${id}-description`).textContent = MODES[$(id).value].description; };
 let previewEdits = null, acceptedIds = new Set(), acceptedParentId = null;
 let references = { journey: null, revision: 0, nodeIds: [], error: '', loading: false, saving: false, retryIds: null, open: false, epoch: 0 };
 const drafts = new Map(), nodeUi = new Map();
@@ -104,7 +106,7 @@ function apply(next, reset = false) {
     voice.cancel();
     drafts.clear(); nodeUi.clear(); positions.clear(); collapsed.clear(); branches = null; focusId = null; wholeView = null; $('node-workspace').replaceChildren();
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
-    $('start-objective').value = ''; $('start-criteria').value = ''; $('start-guidance').open = false;
+    $('start-objective').value = ''; $('start-criteria').value = ''; $('start-mode').value = 'understand'; showModeDescription('start-mode'); $('start-guidance').open = false;
     if ($('history-dialog').open) closeHistory();
     if ($('guidance-dialog').open) $('guidance-dialog').close();
     acceptedIds.clear(); acceptedParentId = null;
@@ -135,6 +137,7 @@ function apply(next, reset = false) {
   if (!doc) return;
   if (firstQuestions && selected === doc.rootId) expanded = false;
   $('map-title').textContent = doc.topic;
+  $('current-mode').textContent = `Mode: ${MODES[effectiveMode(doc)].label}`;
   const { answered, resolved, deferred, unresolved } = questionCounts(doc);
   $('progress').textContent = `${answered} answered · ${resolved} resolved · ${deferred} deferred · ${unresolved} unresolved · Saved locally`;
   $('request-status').hidden = !state.pending && !state.preview;
@@ -891,7 +894,9 @@ $('history-restore').addEventListener('click', async () => {
 });
 
 function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) || draftClient.entries.get(n.id)?.conflict) ?? []; }
-$('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value, objective: $('start-objective').value, successCriteria: $('start-criteria').value }); });
+$('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value, objective: $('start-objective').value, successCriteria: $('start-criteria').value, mode: $('start-mode').value }); });
+$('start-mode').addEventListener('change', () => showModeDescription('start-mode'));
+$('edit-mode').addEventListener('change', () => showModeDescription('edit-mode'));
 function closeGuidance() {
   $('guidance-dialog').close(); $('guidance-error').hidden = true; $('guidance-error').textContent = '';
   if (guidanceReturn?.nodeId === selected && $('answer')) {
@@ -904,10 +909,12 @@ $('edit-guidance').addEventListener('click', () => {
   if (!state.document || state.pending) return notice('Wait for Copilot or cancel the current request before editing guidance.');
   const answer = expanded && $('answer');
   guidanceReturn = answer ? { nodeId: selected, start: answer.selectionStart, end: answer.selectionEnd, direction: answer.selectionDirection } : null;
-  guidanceBase = { objective: state.document.objective ?? '', successCriteria: state.document.successCriteria ?? '' };
+  guidanceBase = { objective: state.document.objective ?? '', successCriteria: state.document.successCriteria ?? '', mode: effectiveMode(state.document) };
   guidanceNeedsChoice = false; guidanceNeedsRefresh = false;
   $('edit-objective').value = state.document.objective ?? '';
   $('edit-criteria').value = state.document.successCriteria ?? '';
+  $('edit-mode').value = effectiveMode(state.document);
+  showModeDescription('edit-mode');
   $('guidance-error').hidden = true; $('guidance-error').textContent = '';
   $('refresh-guidance').hidden = true; $('guidance-conflict').hidden = true; $('save-guidance').disabled = false;
   $('guidance-dialog').showModal(); $('edit-objective').focus();
@@ -918,18 +925,18 @@ $('refresh-guidance').addEventListener('click', async () => {
   if (busy || !guidanceNeedsRefresh) return;
   const result = await api('refresh-guidance');
   if (!result) { $('guidance-error').textContent = $('notice').textContent || 'Could not refresh the saved journey.'; $('guidance-error').hidden = false; return; }
-  const latest = { objective: result.document.objective, successCriteria: result.document.successCriteria };
-  guidanceNeedsChoice = latest.objective !== guidanceBase.objective || latest.successCriteria !== guidanceBase.successCriteria;
+  const latest = { objective: result.document.objective, successCriteria: result.document.successCriteria, mode: effectiveMode(result.document) };
+  guidanceNeedsChoice = latest.objective !== guidanceBase.objective || latest.successCriteria !== guidanceBase.successCriteria || latest.mode !== guidanceBase.mode;
   guidanceBase = latest; guidanceNeedsRefresh = false; $('refresh-guidance').hidden = true;
   $('guidance-conflict').hidden = !guidanceNeedsChoice;
   $('save-guidance').disabled = guidanceNeedsChoice;
-  $('guidance-latest').textContent = `Saved objective: ${latest.objective || '(empty)'}\nSaved success criteria: ${latest.successCriteria || '(empty)'}`;
+  $('guidance-latest').textContent = `Saved mode: ${MODES[latest.mode].label}\nSaved objective: ${latest.objective || '(empty)'}\nSaved success criteria: ${latest.successCriteria || '(empty)'}`;
   $('guidance-error').textContent = guidanceNeedsChoice ? 'The saved guidance changed. Choose a version below.' : 'Saved journey refreshed. Review and save your guidance.';
   $('guidance-error').hidden = false;
 });
 function chooseGuidance(choice) {
   if (!guidanceNeedsChoice) return;
-  if (choice === 'latest') { $('edit-objective').value = guidanceBase.objective; $('edit-criteria').value = guidanceBase.successCriteria; }
+  if (choice === 'latest') { $('edit-objective').value = guidanceBase.objective; $('edit-criteria').value = guidanceBase.successCriteria; $('edit-mode').value = guidanceBase.mode; showModeDescription('edit-mode'); }
   guidanceNeedsChoice = false; $('guidance-conflict').hidden = true; $('save-guidance').disabled = false;
   $('guidance-error').hidden = true; $('guidance-error').textContent = '';
   $('edit-objective').focus();
@@ -941,7 +948,9 @@ $('guidance-form').addEventListener('submit', async event => {
   if (busy || guidanceNeedsChoice || guidanceNeedsRefresh) return;
   $('save-guidance').disabled = true;
   try {
-    const result = await api('guidance', { objective: $('edit-objective').value, successCriteria: $('edit-criteria').value });
+    const modeChanged = $('edit-mode').value !== effectiveMode(state.document);
+    const hadHelp = questionHelp.work?.status === 'pending' || questionHelp.results.size > 0;
+    const result = await api('guidance', { objective: $('edit-objective').value, successCriteria: $('edit-criteria').value, mode: $('edit-mode').value });
     if (!result) {
       const message = $('notice').textContent || 'Could not save guidance. Try again.';
       guidanceNeedsRefresh = /Another canvas|map changed/.test(message);
@@ -950,6 +959,7 @@ $('guidance-form').addEventListener('submit', async event => {
       return;
     }
     closeGuidance();
+    if (modeChanged && hadHelp) notice('Exploration mode saved. Question help from the earlier mode was cleared. Choose a help action to try again.');
   } finally { $('save-guidance').disabled = guidanceNeedsChoice || guidanceNeedsRefresh; }
 });
 $('library-toggle').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); void refreshLibrary(); $('library-search').focus(); });

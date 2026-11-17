@@ -57,6 +57,30 @@ test('private help HTTP is isolated, stale-safe and serialized with cleanup', as
   assert.equal((await post({ ...base, id: randomUUID(), action: 'start' })).status, 400, 'stale local canvas cannot start over changed disk source');
 });
 
+test('retained help is invalidated by a committed external mode edit', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'explorer-mode-help-'));
+  const explorer = new Explorer({ file: join(dir, 'map.explore.json'), send: async () => {}, target: {},
+    questionHelper: { async run() { return 'A plain explanation'; }, close() {} } });
+  await explorer.command('start', { topic: 'Topic' });
+  await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ question: 'What matters?', category: 'Scope' }] });
+  await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: [{ index: 0, question: 'What matters?' }] });
+  const server = await startServer(explorer, { close() {} });
+  t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const origin = new URL(server.url).origin;
+  const post = body => fetch(server.url + 'api/question-help', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: origin }, body: JSON.stringify(body) }).then(r => r.json());
+  const base = { id: randomUUID(), journey: explorer.doc.id, nodeId: explorer.doc.nodes[1].id, operation: 'rephrase' };
+  const started = await post({ ...base, action: 'start' });
+  assert.equal(started.context.mode, 'understand');
+  let result;
+  for (let i = 0; i < 20; i++) { result = await post({ ...base, action: 'poll' }); if (result.status === 'result') break; await delay(5); }
+  assert.equal(result.status, 'result');
+  const disk = JSON.parse(await readFile(explorer.file, 'utf8')); disk.mode = 'challenge'; disk.revision++;
+  await writeFile(explorer.file, JSON.stringify(disk));
+  const checked = await post({ action: 'check', journey: base.journey, nodeId: base.nodeId, ids: [{ id: base.id, operation: base.operation }] });
+  assert.deepEqual(checked.staleIds, [base.id]);
+  assert.equal(explorer.doc.mode, undefined, 'retained check uses committed disk, not just the local canvas');
+});
+
 test('unconfirmed failed or timed-out shutdown blocks queued and new cross-feature work in both directions', async t => {
   for (const first of ['cleanup', 'help']) for (const stop of ['failed', 'timeout']) {
     const dir = await mkdtemp(join(tmpdir(), 'explorer-help-stop-'));

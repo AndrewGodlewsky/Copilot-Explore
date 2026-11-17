@@ -33,6 +33,23 @@ test('research distinguishes provisional states and carries no-text choices and 
   assert.equal(supplied.decisionsElsewhere[0].answerState, 'revisit-later'); assert.equal(supplied.decisionsElsewhere[0].answer, '');
   assert.match(calls.prompt, /never external verification/); assert.match(calls.prompt, /Tentative is provisional/); assert.match(calls.prompt, /needs-review/);
 });
+test('research receives each fixed exploration strategy in its isolated prompt', async t => {
+  const { researcher, calls } = await fixture(t);
+  const strategies = {
+    understand: /concepts, stakeholders and unknowns/i,
+    decide: /choices, criteria and tradeoffs/i,
+    design: /outcomes, constraints, interfaces and feasibility/i,
+    diagnose: /symptoms, reproduction, evidence and alternative causes/i,
+    challenge: /assumptions, counterexamples and possible failure conditions/i,
+  };
+  for (const [mode, strategy] of Object.entries(strategies)) {
+    await researcher.run({ ...context, mode });
+    assert.match(calls.prompt, strategy);
+    assert.match(calls.prompt, new RegExp(`"mode":"${mode}"`));
+  }
+  assert.equal(calls.sends, 5);
+  assert.equal(calls.stops, 5);
+});
 
 async function fixture(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-sdk-test-'));

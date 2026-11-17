@@ -18,6 +18,7 @@ import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/
 import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
 import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
+import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 
 const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', options: [
   { title: 'One block', description: 'Start with the nearest neighbors.', pros: ['Easy handovers'], cons: ['Fewer tools'] },
@@ -108,9 +109,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.CleanupClient = CleanupClient;
   window.QuestionHelpClient = QuestionHelpClient;
   window.attachNavigation = attachNavigation;
-  Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus });
+  Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
-  window.eval(script.replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", ''));
+  window.eval(script.replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -1325,17 +1326,68 @@ test('optional creation guidance is saved without carrying settings into another
   details.open = true;
   f.type('topic', 'A shared orchard');
   f.type('start-objective', 'Decide where to plant 🌳');
+  f.document.getElementById('start-mode').value = 'decide';
   f.type('start-criteria', 'Neighbors can reach it');
   f.document.getElementById('start-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
   await until(() => f.explorer.doc?.topic === 'A shared orchard', 'guided journey created');
   await until(() => !f.document.getElementById('workspace').hidden && f.document.getElementById('start-objective').value === '', 'new journey rendered');
   assert.equal(f.explorer.doc.objective, 'Decide where to plant 🌳');
   assert.equal(f.explorer.doc.successCriteria, 'Neighbors can reach it');
+  assert.equal(f.explorer.doc.mode, 'decide');
+  assert.equal(f.document.getElementById('current-mode').textContent, 'Mode: Decide');
   await f.explorer.command('cancel');
   f.document.getElementById('library-toggle').click();
   await until(() => !f.document.getElementById('welcome').hidden, 'library visible');
   assert.equal(f.document.getElementById('start-objective').value, '');
   assert.equal(f.document.getElementById('start-criteria').value, '');
+  assert.equal(f.document.getElementById('start-mode').value, 'understand');
+});
+test('mode selector uses saved guidance with explicit conflict choice and preserves the answer editor', async t => {
+  const f = await fixture(t, 340), d = f.document, e = f.explorer, node = e.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'My draft');
+  d.getElementById('answer-state').value = 'assumption';
+  d.getElementById('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  const answer = d.getElementById('answer'); answer.focus(); answer.setSelectionRange(3, 3);
+  d.getElementById('edit-guidance').click();
+  assert.equal(d.getElementById('edit-mode').value, 'understand');
+  assert.match(d.getElementById('edit-mode-description').textContent, /concepts, stakeholders and unknowns/);
+  d.getElementById('edit-mode').value = 'design';
+  d.getElementById('edit-mode').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  assert.match(d.getElementById('edit-mode-description').textContent, /outcomes, constraints, interfaces and feasibility/);
+  assert.equal(e.pending, null, 'selector changes do not start inference');
+  const other = await new Explorer({ file: e.file }).load();
+  await other.command('guidance', { revision: other.doc.revision, objective: '', successCriteria: '', mode: 'challenge' });
+  d.getElementById('guidance-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => !d.getElementById('refresh-guidance').hidden, 'mode conflict refresh');
+  d.getElementById('refresh-guidance').click();
+  await until(() => !d.getElementById('guidance-conflict').hidden, 'mode conflict choice');
+  assert.equal(d.getElementById('edit-mode').value, 'design');
+  assert.match(d.getElementById('guidance-latest').textContent, /Saved mode: Challenge/);
+  d.getElementById('keep-guidance-edits').click();
+  d.getElementById('guidance-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => e.doc.mode === 'design' && !d.getElementById('guidance-dialog').open, 'mode saved');
+  assert.equal(d.getElementById('current-mode').textContent, 'Mode: Design');
+  assert.equal(d.getElementById('answer').value, 'My draft');
+  assert.equal(d.getElementById('answer-state').value, 'assumption');
+  assert.equal(d.getElementById('answer').selectionStart, 3);
+});
+test('saving a new mode explains why completed question help disappeared', async t => {
+  const f = await fixture(t, 340, undefined, false, { questionHelper: { async run() { return 'Earlier mode explanation.'; }, close() {} } });
+  const d = f.document, node = f.explorer.doc.nodes[1]; f.open(node.id);
+  d.getElementById('question-help').open = true;
+  d.getElementById('help-rephrase').click();
+  await until(() => /Earlier mode explanation/.test(d.getElementById('question-help-results').textContent), 'completed help');
+  d.getElementById('edit-guidance').click();
+  d.getElementById('guidance-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => !d.getElementById('guidance-dialog').open, 'unchanged mode saved as no-op');
+  assert.match(d.getElementById('question-help-results').textContent, /Earlier mode explanation/);
+  d.getElementById('edit-guidance').click();
+  d.getElementById('edit-mode').value = 'challenge';
+  d.getElementById('guidance-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => f.explorer.doc.mode === 'challenge', 'new mode saved');
+  await until(() => d.getElementById('question-help-results').textContent === '', 'old help cleared');
+  assert.equal(d.getElementById('question-help-results').textContent, '');
+  assert.match(d.getElementById('notice').textContent, /question help.*cleared/i);
 });
 test('guidance edit, cancel, and stale retry preserve the expanded answer draft and caret', async t => {
   const f = await fixture(t, 340), node = f.explorer.doc.nodes[1];

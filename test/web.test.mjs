@@ -8,6 +8,7 @@ import { JSDOM } from 'jsdom';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { layout } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
+import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 
 const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', options: [
   { title: 'One block', description: 'Start with the nearest neighbors.', pros: ['Easy handovers'], cons: ['Fewer tools'] },
@@ -19,14 +20,14 @@ async function until(read, label) {
   assert.fail('Timed out: ' + label);
 }
 
-async function fixture(t, width = 1100) {
+async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), send: async () => {}, target: { instanceId: 'dom-test' } }).load();
   await explorer.command('start', { topic: 'A tool library' });
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [
     { category: 'People', question: 'Who should borrow first?' }, { category: 'Trust', question: 'What if a tool breaks?' },
   ] });
-  const server = await startServer(explorer);
+  const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom, document = window.document;
   t.after(async () => { dom.window.close(); await server.close(); assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true }); });
@@ -46,11 +47,13 @@ async function fixture(t, width = 1100) {
   window.HTMLElement.prototype.animate = () => ({ cancel() {}, finished: Promise.resolve() });
   window.fetch = async (path, options) => {
     if (holdAnswer && options?.body && JSON.parse(options.body).action === 'answer') await holdAnswer();
+    if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, Origin: new URL(server.url).origin } };
     return fetch(new URL(path, server.url), options);
   };
   window.layout = layout;
+  window.attachVoice = attachVoice;
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
-  window.eval(script.replace("import { layout } from './layout.mjs';", ''));
+  window.eval(script.replace("import { layout } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", ''));
   await until(() => document.querySelectorAll('#nodes button').length >= 3, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -173,4 +176,80 @@ test('keyboard focus survives research, cancellation, and background map updates
   await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Repairs from a shared fund' });
   await until(() => f.document.getElementById('nodes').textContent.includes('Repairs from a shared fund'), 'background update');
   assert.equal(f.document.activeElement.dataset.nodeId, a.id);
+});
+
+function voiceFixture(mode = 'push_to_talk') {
+  let job, starts = 0, finishes = 0, cancels = 0;
+  return {
+    status: async () => ({ ready: true, shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, label: 'Ctrl + Space', mode }),
+    start(id) { starts++; job = { id, phase: 'listening' }; return job; },
+    poll() { return job; },
+    finish() { finishes++; job = { ...job, phase: 'done', text: 'our neighbors' }; return job; },
+    cancel() { cancels++; job = { ...job, phase: 'cancelled' }; return job; },
+    close() {},
+    counts: () => ({ starts, finishes, cancels }),
+  };
+}
+const key = (f, type, props = {}) => f.document.getElementById('answer').dispatchEvent(new f.window.KeyboardEvent(type, { bubbles: true, cancelable: true, key: ' ', code: 'Space', ctrlKey: true, ...props }));
+
+test('Ctrl+Space dictates only into a focused answer, at the selection, without saving', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 1100, voice), node = f.explorer.doc.nodes[1];
+  f.open(node.id);
+  await until(() => f.document.getElementById('voice-status').textContent.includes('Hold Ctrl'), 'voice settings');
+  key(f, 'keydown'); await delay(20); assert.equal(voice.counts().starts, 0, 'answer must own focus');
+  const answer = f.document.getElementById('answer'); answer.focus();
+  f.type('answer', 'For everyone nearby.'); answer.setSelectionRange(4, 12);
+  key(f, 'keydown', { altKey: true }); await delay(10); assert.equal(voice.counts().starts, 0, 'exact modifiers');
+  key(f, 'keydown'); key(f, 'keydown', { repeat: true });
+  await until(() => /^Listening/.test(f.document.getElementById('voice-status').textContent), 'listening');
+  assert.equal(voice.counts().starts, 1);
+  key(f, 'keyup', { key: 'Control', code: 'ControlLeft', ctrlKey: false });
+  await until(() => answer.value.includes('our neighbors'), 'dictated draft');
+  assert.equal(answer.value, 'For our neighbors nearby.'); assert.equal(node.answer, '');
+  assert.match(f.document.getElementById('answer-status').textContent, /Unsaved/);
+  assert.equal(voice.counts().finishes, 1);
+});
+
+test('typing, Escape and focus loss cancel dictation without overwriting a draft', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 1100, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => f.document.getElementById('voice-status').textContent.includes('Hold Ctrl'), 'settings');
+  const answer = f.document.getElementById('answer'); answer.focus();
+  key(f, 'keydown'); await until(() => voice.counts().starts === 1, 'start');
+  f.type('answer', 'Keep my edit'); await until(() => voice.counts().cancels === 1, 'edit cancels');
+  key(f, 'keyup'); await delay(30); assert.equal(answer.value, 'Keep my edit');
+  key(f, 'keydown'); await until(() => voice.counts().starts === 2, 'restart');
+  key(f, 'keydown', { key: 'Escape', code: 'Escape', ctrlKey: false });
+  await until(() => voice.counts().cancels === 2, 'escape cancels');
+  assert.equal(f.document.getElementById('node-workspace').hidden, false, 'escape cancels before collapsing');
+  key(f, 'keydown'); await until(() => voice.counts().starts === 3, 'restart');
+  answer.blur(); await until(() => voice.counts().cancels === 3, 'blur cancels');
+  assert.equal(voice.counts().finishes, 0);
+});
+
+test('toggle dictation ignores key release and finishes with the same configured shortcut', async t => {
+  const voice = voiceFixture('toggle'), f = await fixture(t, 1100, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => f.document.getElementById('voice-status').textContent.includes('Press Ctrl'), 'toggle settings');
+  const answer = f.document.getElementById('answer'); answer.focus(); key(f, 'keydown');
+  await until(() => /^Listening/.test(f.document.getElementById('voice-status').textContent), 'listening');
+  key(f, 'keyup'); await delay(20); assert.equal(voice.counts().finishes, 0);
+  key(f, 'keydown'); await until(() => answer.value === 'our neighbors', 'toggle finish');
+});
+
+test('a late dictation result cannot cross into another question', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 1100, voice), [a, b] = f.explorer.doc.nodes.slice(1);
+  f.open(a.id); await until(() => f.document.getElementById('voice-status').textContent.includes('Hold Ctrl'), 'settings');
+  f.document.getElementById('answer').focus(); key(f, 'keydown'); await until(() => voice.counts().starts === 1, 'start');
+  f.open(b.id); f.type('answer', 'Another answer'); voice.finish();
+  await delay(400); assert.equal(f.document.getElementById('answer').value, 'Another answer');
+  f.open(a.id); assert.equal(f.document.getElementById('answer').value, '');
+});
+
+test('dictation respects the answer length limit without losing the existing draft', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 1100, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => f.document.getElementById('voice-status').textContent.includes('Hold Ctrl'), 'settings');
+  const answer = f.document.getElementById('answer'), previous = 'a'.repeat(20000);
+  answer.focus(); f.type('answer', previous); answer.setSelectionRange(previous.length, previous.length);
+  key(f, 'keydown'); await until(() => /^Listening/.test(f.document.getElementById('voice-status').textContent), 'listening');
+  key(f, 'keyup'); await until(() => f.document.getElementById('voice-status').textContent.includes('exceed'), 'limit explained');
+  assert.equal(answer.value, previous); assert.equal(f.explorer.doc.nodes[1].answer, '');
 });

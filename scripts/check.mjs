@@ -34,5 +34,5 @@ async function checkTree(folder) {
   }
 }
 for (const folder of ['com.github.copilot', 'scripts', 'test']) await checkTree(join(root, folder));
-for (const name of ['index.html', 'style.css', 'app.mjs', 'layout.mjs']) await access(join(root, 'com.github.copilot/extensions/explorer/web', name));
+for (const name of ['index.html', 'style.css', 'app.mjs', 'layout.mjs', 'voice.mjs']) await access(join(root, 'com.github.copilot/extensions/explorer/web', name));
 console.log(`Explorer ${plugin.version}: syntax, skill, assets, marketplace and release versions passed.`);

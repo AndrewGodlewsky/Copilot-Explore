@@ -1,41 +1,48 @@
-# Host voice dictation and Explorer
+# Local dictation in Explorer
 
-Checked November 16, 2026 using public primary sources and the owner's manual test. This note concerns the **GitHub Copilot app**, Explorer's desktop host. Microsoft Copilot Studio is a separate low-code agent/workflow product; its voice channels are not evidence of a GitHub canvas API. [GitHub app](https://github.com/github/app), [Copilot Studio overview](https://learn.microsoft.com/en-us/microsoft-copilot-studio/fundamentals-what-is-copilot-studio).
+Investigated November 16, 2026 against GitHub Copilot desktop 1.4.2, its installed SDK/runtime, and primary upstream sources.
 
-## Finding
+## Correction and root cause
 
-**Native dictation already works in Explorer on the owner's tested installation.** The owner focused Explorer's answer box, used their usual Copilot voice shortcut, and confirmed that the transcription entered that answer box directly. This manual observation establishes the desired behavior locally; it is not a cross-version API guarantee.
+The v0.1.8 claim that native dictation already entered Explorer was incorrect. The owner clarified that Ctrl+Space works in the main chat composer but **does not work with Explorer's answer focused**. An earlier response had been misinterpreted; it was not successful manual verification.
 
-Explorer therefore needs no separate recording flow, shortcut, transcription model, or model-download detection for this use. Voice setup remains in the host. The absence of a documented plugin voice API does not prevent the host from inserting text into a focused canvas field.
+Read-only inspection of the installed frontend establishes why. Its composer voice bridge tracks an active editable element and recording controls. The dictation feature registers the main composer and checks its focus before starting. Explorer's separate canvas does not register with that bridge. Native transcription commands are private application commands, not a guest-canvas API.
 
-## What the host supports
+GitHub's [voice guide](https://docs.github.com/en/copilot/how-tos/github-copilot-app/agent-sessions#using-voice-dictation) documents local setup and prompt-box insertion. It does not promise arbitrary canvas input support. The installed `extension.d.ts`, `canvas.d.ts`, and `types.d.ts` expose no voice service, shortcut query, or transcription callback. Public [canvas](https://github.com/microsoft/copilot-sdk/blob/bc4f9a19d190021c27554d3c1d95121ab61e8d43/nodejs/src/canvas.ts) and [extension](https://github.com/microsoft/copilot-sdk/blob/bc4f9a19d190021c27554d3c1d95121ab61e8d43/nodejs/src/extension.ts) sources agree with that bounded audit.
 
-| Evidence | What it establishes | Limit |
-| --- | --- | --- |
-| [App session guide: voice dictation](https://docs.github.com/en/copilot/how-tos/github-copilot-app/agent-sessions#using-voice-dictation) | Setup uses Settings > Voice dictation, a chosen shortcut, OS microphone permission, and a downloaded local transcription model. It documents prompt-box insertion before submission. | Its prompt-box example does not establish that canvas fields are unsupported; the owner's test confirms Explorer field insertion locally. |
-| [App v0.2.13 release](https://github.com/github/app/releases/tag/v0.2.13) | The feature introduced local capture, composer insertion, push-to-talk or toggle modes, microphone selection, and local model management. | Historical feature introduction; does not name a universal default shortcut. |
-| [App v1.1.30 release](https://github.com/github/app/releases/tag/v1.1.30) | Recording continues when the user clicks a canvas or browser preview. | Continued recording is not evidence that its destination changes to that canvas. |
-| [App changelog, v1.1.24 and v1.2.0](https://github.com/github/app/blob/eb1ca2573ebfb00d41cd0fc413cb32261bdf3827/changelog.md) | Dictation became enabled by default; a later release added a downloadable multilingual model and language selection. | No extension-facing voice API is described. |
+## Installed evidence
 
-The [CLI voice guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/voice-input) separately documents local transcription, `/voice`, `/voice models`, `/voice devices`, hold-Space input, and Ctrl+X then V toggling. These are interactive CLI controls. They should not be presented as desktop canvas bindings or as a supported transcription service for Explorer.
+Only relevant configuration and assets were inspected. No host configuration or database was edited, and no microphone was opened during investigation.
 
-## Extension contract inspected
+| Component | Finding |
+| --- | --- |
+| Settings | `~/.copilot/data.db`, `app_state` record `voice-mode-settings`, version 1. Tested settings: physical `ctrl+Space`, `push_to_talk`, default microphone, Nemotron English. |
+| Model | Existing CPU assets under `~/.github-copilot-cli/cache/models/Microsoft/`; configuration type `nemotron_speech`. Desktop Foundry app name: `github-copilot-cli`. |
+| Components | Copilot's support package includes Foundry SDK 2.2.1 and PvRecorder 1.2.9. The SDK and desktop `foundry_local.dll` hashes match. Discovery checks both versions and hash equality. |
+| Bridge | Installed `composerVoiceBridgeStore`, `voiceState`, and `voice-dictation` assets tie capture to composer controls. `voiceTranscriptionSession` invokes native commands and session-tagged events. The canvas SDK exposes none of this. |
 
-Local inspection also covered the installed desktop SDK and its paired runtime `1.0.106-8.unstable.r43566476370.g869eef3`. Their `extension.d.ts`, `canvas.d.ts`, and `types.d.ts` declare no voice, dictation, speech-recognition, transcription, or voice-shortcut API. This says nothing about native field insertion, which the owner's manual check confirmed. Explorer already treats answer-field input as a draft through its ordinary `input` listener in [the shipped app](../com.github.copilot/extensions/explorer/web/app.mjs).
+These settings and paths are implementation details, not a GitHub compatibility promise. Explorer reports unsupported configurations; it does not patch the desktop or invoke private Tauri commands.
 
-GitHub's [extension tutorial](https://docs.github.com/en/copilot/tutorials/create-an-extension) uses the bundled `@github/copilot-sdk/extension`, with `joinSession()` attaching a separate extension process. The public repository currently redirects from `github/copilot-sdk` to `microsoft/copilot-sdk`, whose current documents use `@microsoft/copilot-sdk`. This discrepancy is a reason to use the installed host declarations for implementation, not to change Explorer's imports from web examples.
+## v0.1.9 adapter
 
-The following public source was inspected at SDK commit `bc4f9a19d190021c27554d3c1d95121ab61e8d43`:
+Explorer reads the configured shortcut and downloaded model metadata. A shortcut press inside the focused answer starts an isolated helper using the compatible installed SDK and native libraries. The helper registers existing weights in an Explorer-owned temporary **local catalog**, as Microsoft's [real-model fixture](https://github.com/microsoft/Foundry-Local/blob/main/sdk_v2/js/test/_fixtures/realModelManager.ts) does. It never downloads or copies model weights or writes host settings.
 
-- [`extension.ts`](https://github.com/microsoft/copilot-sdk/blob/bc4f9a19d190021c27554d3c1d95121ab61e8d43/nodejs/src/extension.ts) exports `joinSession()` and canvas construction/types; it does not export a voice service.
-- [`canvas.ts`](https://github.com/microsoft/copilot-sdk/blob/bc4f9a19d190021c27554d3c1d95121ab61e8d43/nodejs/src/canvas.ts) exposes `createCanvas()`, open/close handling, and declared agent-callable actions. These lifecycle/action callbacks are not recording or dictation callbacks.
-- [`generated/rpc.ts`](https://github.com/microsoft/copilot-sdk/blob/bc4f9a19d190021c27554d3c1d95121ab61e8d43/nodejs/src/generated/rpc.ts) defines `CanvasHostContextCapabilities` with `canvases?: boolean`, and `CanvasProviderOpenResult` with `url`, `title`, and `status`. Neither supplies audio capability negotiation or a voice bridge.
-- Searches of the full `canvas.ts`, `generated/rpc.ts`, and [`session.ts`](https://github.com/microsoft/copilot-sdk/blob/bc4f9a19d190021c27554d3c1d95121ab61e8d43/nodejs/src/session.ts) found no `voice`, `dictat`, `speech`, or `transcrib` matches. Matches for `transcript` concerned conversation history/recovery. This is a bounded source audit, not proof that private host facilities do not exist.
+The helper loads the model, then captures the default microphone. **Listening** marks when to speak. Releasing during loading cancels startup. Push-to-talk finishes on release of the main key or a required modifier; toggle mode uses a second press. Capture stops before transcription. Audio stays in memory; no audio file is retained.
 
-The public [extension examples](https://github.com/microsoft/copilot-sdk/blob/bc4f9a19d190021c27554d3c1d95121ab61e8d43/nodejs/docs/examples.md) include `onUserPromptSubmitted` and `session.send()`. Those operate on submitted chat messages; they do not provide an unsent dictation draft. Routing voice through submitted chat would be a different interaction with possible agent activity, not direct speech-to-text entry in Explorer.
+Escape, focus loss, edits, navigation, closure, a lost five-second heartbeat, and timeouts cancel capture. Recording is limited to two minutes. Only a matching document, node, and unchanged draft receives the result at the captured selection. Dictation never saves or submits an answer.
 
-## Decision and limits
+Transcription uses public `AudioSession`, `Request`, `ItemQueue`, and final `speechResult` APIs, following Microsoft's [Nemotron tests](https://github.com/microsoft/Foundry-Local/blob/main/sdk_v2/js/test/audio-session.test.ts). PCM is divided into 100 ms frames. The initial synthetic test truncated a sentence when sent as one large item: GenAI 0.18.0 processes one model chunk per call and trims excess buffered audio during flush. [Native implementation](https://github.com/microsoft/onnxruntime-genai/blob/v0.18.0/src/models/preprocessing/nemotron_streaming_processor.cpp#L101-L137). Frame normalization produced the complete synthetic sentence: “Our neighbors can borrow tools from the community library”.
 
-Keep Explorer's ordinary editable answer field and use the host's configured voice shortcut. No Explorer voice implementation is needed for the confirmed workflow. The owner performed the manual check; no browser or desktop automation was used.
+The adapter avoids public-catalog discovery, which can refresh metadata online. Local registration references existing assets. Foundry initialization can emit operational telemetry even with `disableNonessentialTelemetry`; the native library is not guaranteed network-silent. Audio is processed locally and is not sent to the attached agent for transcription.
 
-The inspected public contracts still provide no supported way for Explorer to query downloaded voice models, read the host shortcut, start recording, or subscribe to raw speech transcripts. Those capabilities are unnecessary for the working focus-and-dictate flow. Do not add undocumented IPC or personal-settings reads to detect them. Broader operating-system, host-version, and draft-preservation coverage was not tested here.
+## Compatibility and verification
+
+The first adapter supports Windows x64, Nemotron English CPU, the default microphone, English/auto language, and physical-key shortcuts. Other models/devices/platforms or incompatible native libraries receive a visible explanation. Loading latency applies to each recording. Settings refresh when the answer gains focus; reopen Explorer after a Copilot native-component upgrade.
+
+Automated tests cover configuration rejection, asynchronous cancellation, reordered requests, timeout/closure, HTTP authorization, shortcut matching, both recording modes, selection insertion, unsaved drafts, focus loss, edits, and stale results. The installed runtime fixture checks the shipped asset and clean unavailability in a disposable home.
+
+Copilot runs extensions with its single-executable Node runtime. A normal `fork(worker)` would launch the CLI instead of that file. The adapter uses the installed extension bootstrap with the helper path and updated parent PID. The runtime fixture probes this exact nested launch without loading a model or microphone. Sandboxed extension sessions are explicitly unsupported; the adapter preserves their restrictions.
+
+`node scripts/voice-smoke.mjs` runs the shipped helper with synthetic silence. An optional file argument accepts at most 30 seconds of raw PCM16 mono at 16 kHz, never microphone input. Synthetic spoken audio verified complete transcription using the existing model, both under Node and through Copilot's actual bundled runtime. No browser/desktop automation, microphone capture, model download, or paid inference was used.
+
+These checks do not establish live desktop key delivery, microphone permission, device selection, or speech quality. Those remain the owner's manual acceptance check in the installed app.

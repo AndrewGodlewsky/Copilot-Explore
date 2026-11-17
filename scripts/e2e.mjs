@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
+import { fork } from 'node:child_process';
 
 const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_PATH;
 assert.ok(sdkDirectory && cli, 'Set COPILOT_SDK_DIR and COPILOT_CLI_PATH to the inspected installed desktop SDK/runtime.');
@@ -31,6 +32,23 @@ async function until(read, predicate, label) {
   throw new Error(`Timed out: ${label}`);
 }
 try {
+  // Run the launcher inside the actual SEA extension bootstrap; plain Node misses this path.
+  await new Promise((resolve, reject) => {
+    let ready = false;
+    const probe = fork(join(dirname(cli), 'preloads', 'extension_bootstrap.mjs'), [], {
+      execPath: cli, execArgv: [], windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      env: { ...environment, COPILOT_SDK_PATH: sdkDirectory, EXTENSION_PATH: join(root, 'test', 'fixtures', 'voice-runtime.mjs'), COPILOT_EXTENSION_PARENT_PID: String(process.pid), COPILOT_EXTENSION_SANDBOXED: '0' },
+    });
+    const timer = setTimeout(() => { probe.kill(); reject(new Error('Installed runtime voice launcher timed out.')); }, 12000);
+    probe.once('error', error => { clearTimeout(timer); reject(error); });
+    probe.once('exit', code => { clearTimeout(timer); if (!ready) reject(new Error(`Voice launcher exited ${code} before readiness.`)); });
+    probe.once('message', message => {
+      clearTimeout(timer);
+      if (message.voiceWorker !== 'ready') { probe.kill(); reject(new Error('Unexpected voice launcher fixture response.')); return; }
+      ready = true; resolve();
+    });
+  });
+  console.log('Installed extension runtime launched the isolated voice helper; no microphone or model opened.');
   await client.start();
   session = await client.createSession({ workingDirectory: project, availableTools: [], requestExtensions: true, requestCanvasRenderer: true,
     extensionSdkPath: sdkDirectory, pluginDirectories: [root], enableConfigDiscovery: false,
@@ -45,6 +63,10 @@ try {
   const opened = await session.rpc.canvas.open({ canvasId: 'explorer', instanceId, input: {} });
   assert.ok(opened.url);
   assert.match(await (await fetch(opened.url)).text(), /Explorer/);
+  assert.match(await (await fetch(opened.url + 'voice.mjs')).text(), /matchesShortcut/);
+  const voice = await (await fetch(opened.url + 'api/voice')).json();
+  assert.equal(voice.ready, false, 'The disposable home has no configured host voice model; do not record or download.');
+  assert.ok(voice.error);
   const state = async () => (await fetch(opened.url + 'api/state')).json();
   const action = async (name, input = {}) => {
     const current = await state();

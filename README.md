@@ -1,6 +1,6 @@
 # Explorer for GitHub Copilot
 
-**Proof of concept, v0.1.8.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
+**Proof of concept, v0.1.9.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
 
 ## Install from GitHub
 
@@ -74,15 +74,17 @@ Pan by dragging the map background. Use the zoom controls or Ctrl+wheel. **Colla
 
 AI work is queued in the canvas's attached Copilot chat and uses that session's model, tools, permissions, and normal usage accounting. It can appear in chat and wait behind other work. Web research depends on browsing tools being available there. Research never saves an answer for you. Cancel discards the pending result; it does not stop the host's chat turn. A three-minute timeout releases a stalled request and preserves saved answers.
 
-**Voice dictation:** Configure **Voice dictation** in Copilot's settings, including its local transcription model, microphone access, and your preferred shortcut. Click inside Explorer's **Your answer** box, then use that same shortcut to dictate. Review the text and choose **Save answer** or **Save & explore deeper** when ready. Copilot manages recording and the model; Explorer receives the text as an editable draft.
+**Voice dictation (Windows preview):** Explorer reads your Copilot voice shortcut and reuses the downloaded **Nemotron English** model with the **default microphone**. Focus **Your answer**, hold your shortcut (for example Ctrl+Space), wait for **Listening**, then speak. Release to transcribe into the draft; toggle mode uses a second press instead. Review the text before saving. Escape, leaving the answer, or editing while recording cancels dictation. Recordings are limited to two minutes. Each recording initially loads the local model.
 
-The owner confirmed direct dictation into Explorer on the installed desktop app with Explorer v0.1.7. No Explorer update or second voice setup was needed. The inspected canvas SDK does not expose model-download status or the user's voice shortcut, so Explorer does not automatically report voice availability. See the [voice integration findings](docs/voice-integration-research.md) for evidence and scope.
+The earlier v0.1.8 claim that Copilot automatically dictated into Explorer was incorrect: native dictation is bound to the main chat composer. v0.1.9 adds an Explorer adapter that explains unsupported configurations beneath the answer. It never downloads a model or changes Copilot settings. It currently supports installed Foundry SDK 2.2.1 and recorder 1.2.9 with matching desktop libraries. See the [voice integration findings](docs/voice-integration-research.md) for compatibility and pending live desktop verification.
 
 ## Files and privacy
 
 Each canvas autosaves a versioned JSON document under `~/.copilot/plugin-data/explorer/` (`COPILOT_HOME` is respected). `EXPLORER_DATA_DIR` can override this for testing. Finish also saves a Markdown sibling there. Export names use an exploration identifier; every node's ID and parent relationship are preserved in the resumable file.
 
 Question/answer/research data is stored locally as plain text and sent to your attached Copilot session when generating questions or researching. The plugin reads no repository files and loads no external UI assets. Downloaded files contain the exploration text. Imported files replace the current canvas after confirmation; save the current map first if you want to retain it. Unsaved text-area drafts are not part of exports; save them before leaving.
+
+Dictation reads Copilot's voice settings record and local voice assets. Audio stays in memory in a separate helper and is processed locally; no recording file is saved. Temporary Explorer catalog metadata is removed when the helper exits. Foundry's native library can emit operational telemetry. Dictated text follows the same save/research behavior as typed answers.
 
 There is no fixed depth limit. This POC supports up to 5,000 nodes, 20,000 characters per answer, 9 MiB of saved map data, and 10 MiB imports. The saved-data limit keeps exports reloadable. Very large maps or prompts can hit host/context limits sooner. A crashed process may leave a `.lock` file; fully exit Copilot before removing only the matching lock, then reopen the map. Corrupt files are preserved and reported, never silently reset.
 
@@ -109,8 +111,9 @@ For the real SDK/runtime smoke test, set `COPILOT_SDK_DIR` to the installed SDK 
 
 Manual acceptance in Copilot:
 
-- Update to v0.1.8, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.8**.
+- Update to v0.1.9, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.9**.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
+- Focus the answer, hold your configured voice shortcut until **Listening**, speak, then release. Confirm the text enters the draft and is not saved automatically. Check Escape cancellation and switching questions.
 - Answer a question and confirm relevant deeper questions appear.
 - Research another question; inspect the options, source links and uncertainty.
 - Export both files, open the JSON in a new canvas, and confirm the full map returns.

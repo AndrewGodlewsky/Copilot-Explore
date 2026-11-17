@@ -3,25 +3,27 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { toMarkdown } from './model.mjs';
+import { VoiceService } from './voice.mjs';
 
 const assets = new Map([
   ['', ['index.html', 'text/html; charset=utf-8']],
   ['app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
   ['layout.mjs', ['layout.mjs', 'text/javascript; charset=utf-8']],
+  ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
   ['style.css', ['style.css', 'text/css; charset=utf-8']],
 ]);
 const MAX_BODY = 10 * 1024 * 1024;
-async function body(req) {
+async function body(req, limit = MAX_BODY) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw new Error('Expected JSON.');
   const chunks = []; let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY) throw new Error('The file exceeds the 10 MiB POC limit.');
+    if (size > limit) throw new Error('Request exceeds the size limit.');
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
-export async function startServer(explorer) {
+export async function startServer(explorer, voice = new VoiceService()) {
   const { version } = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
   const token = randomBytes(24).toString('hex');
   const prefix = `/${token}/`;
@@ -37,6 +39,13 @@ export async function startServer(explorer) {
       const url = new URL(req.url, origin);
       if (!url.pathname.startsWith(prefix)) return json(404, { error: 'Not found.' });
       const route = url.pathname.slice(prefix.length);
+      if (req.method === 'GET' && route === 'api/voice') return json(200, await voice.status());
+      if (req.method === 'POST' && route === 'api/voice') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        const input = await body(req, 1024);
+        if (!['start', 'poll', 'finish', 'cancel'].includes(input.action) || typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || Object.keys(input).some(k => !['action', 'id'].includes(k))) throw new Error('Invalid voice request.');
+        return json(200, voice[input.action](input.id));
+      }
       if (req.method === 'GET' && route === 'api/state') return json(200, explorer.snapshot());
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
@@ -62,6 +71,7 @@ export async function startServer(explorer) {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   origin = `http://127.0.0.1:${server.address().port}`;
   return { url: origin + prefix, async close() {
+    voice.close();
     await explorer.close();
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));

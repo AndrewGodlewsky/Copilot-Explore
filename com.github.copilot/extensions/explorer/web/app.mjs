@@ -1,4 +1,5 @@
 import { layout } from './layout.mjs';
+import { attachVoice } from './voice.mjs';
 
 const $ = id => document.getElementById(id);
 const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'];
@@ -6,6 +7,12 @@ let state = { document: null, pending: null, error: '' };
 let selected = null, expanded = false, signature = '', positions = new Map(), busy = false, firstFit = true;
 let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame;
 const drafts = new Map(), nodeUi = new Map();
+const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args),
+  context: () => `${state.document?.id}/${selected}/${expanded}`,
+  insert: (value, caret) => {
+    drafts.set(selected, value); $('answer').value = value; $('answer').setSelectionRange(caret, caret);
+    answerStatus(state.document.nodes.find(n => n.id === selected));
+  }, changed: () => scheduleLayout() });
 const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, manualOpen: false, category: null, question: '' }); return nodeUi.get(id); };
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -52,6 +59,7 @@ function apply(next) {
   const firstQuestions = (state.document?.nodes.length ?? 0) <= 1 && (next.document?.nodes.length ?? 0) > 1;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    voice.cancel();
     drafts.clear(); nodeUi.clear(); positions.clear(); $('node-workspace').replaceChildren();
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
   }
@@ -81,12 +89,14 @@ function focusTop(id, height) {
 }
 function select(id) {
   if (!state.document?.nodes.some(n => n.id === id)) return;
+  voice.cancel();
   const rect = $('map').getBoundingClientRect(), width = Math.min(560, rect.width - 32), old = anchorPoint(id);
   const anchor = { id, x: Math.max(width / 2 + 16, Math.min(rect.width - width / 2 - 16, old?.x ?? rect.width / 2)), y: focusTop(id, rect.height) };
   captureWorkspace(); selected = id; expanded = true; view.zoom = 1;
   renderWorkspace(); refreshScene(anchor); $('expanded-title').focus({ preventScroll: true });
 }
 function collapseNode(focus = true) {
+  voice.cancel();
   const anchor = anchorPoint(); captureWorkspace(); expanded = false;
   renderWorkspace(); refreshScene(anchor);
   if (focus) [...$('nodes').children].find(e => e.dataset.nodeId === selected)?.focus({ preventScroll: true });
@@ -138,6 +148,7 @@ function renderMap() {
 }
 function transform() { $('world').style.transform = `translate(${view.x}px,${view.y}px) scale(${view.zoom})`; $('zoom-level').textContent = `${Math.round(view.zoom * 100)}%`; }
 function fit() {
+  voice.cancel();
   if (!positions.size) return;
   const values = [...positions.values()], rect = $('map').getBoundingClientRect();
   const minX = Math.min(...values.map(p => p.x)), maxX = Math.max(...values.map(p => p.x + p.width));
@@ -186,6 +197,7 @@ function renderWorkspace() {
     answer.value = drafts.get(node.id) ?? node.answer;
     answer.addEventListener('input', () => { drafts.set(node.id, answer.value); answerStatus(node); });
     const save = async deepen => {
+      voice.cancel();
       if (!answer.value.trim()) return notice('Write an answer before saving.');
       const value = answer.value;
       if (await api('answer', { nodeId: node.id, answer: value, expand: deepen })) {
@@ -196,7 +208,10 @@ function renderWorkspace() {
     };
     form.addEventListener('submit', event => { event.preventDefault(); void save(true); });
     form.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void save(true); } });
-    form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), el('span', { id: 'answer-status', class: 'quiet' })), answer, el('div', { class: 'actions' }, button('Save answer', () => save(false), { id: 'save-answer', disabled: pending }), el('button', { type: 'submit', id: 'save-deeper', class: 'primary', disabled: pending }, 'Save & explore deeper')));
+    const voiceStatus = el('p', { id: 'voice-status', class: 'quiet voice-status', role: 'status', 'aria-live': 'polite' });
+    answer.setAttribute('aria-describedby', 'voice-status');
+    voice.bind(answer, voiceStatus);
+    form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), el('span', { id: 'answer-status', class: 'quiet' })), answer, voiceStatus, el('div', { class: 'actions' }, button('Save answer', () => { voice.cancel(); void save(false); }, { id: 'save-answer', disabled: pending }), el('button', { type: 'submit', id: 'save-deeper', class: 'primary', disabled: pending }, 'Save & explore deeper')));
     content.append(form); answerStatus(node);
     const research = el('details', { class: 'research-disclosure' }, el('summary', { id: 'research-summary' }, 'Explore options')); research.open = ui.researchOpen;
     research.addEventListener('toggle', () => { if (research.isConnected) { ui.researchOpen = research.open; scheduleLayout(); } });

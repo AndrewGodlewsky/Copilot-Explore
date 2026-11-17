@@ -1,6 +1,8 @@
 # Explorer for GitHub Copilot
 
-**Proof of concept, v0.1.12.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
+<!-- explorer-current-version:start -->
+**Proof of concept, v0.1.13.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
+<!-- explorer-current-version:end -->
 
 ## Install from GitHub
 
@@ -192,9 +194,13 @@ For the real SDK/runtime smoke tests, set `COPILOT_SDK_DIR` to the installed SDK
 
 `npm run package` creates a clean, dependency-free installable directory under `dist/`. Register that directory as a local marketplace if you prefer a snapshot. There is no build step; the checked JavaScript/HTML/CSS is the shipped code.
 
+For each release, run `npm version <next-version> --no-git-tag-version --ignore-scripts` to update the root package and both lockfile version fields. Update `plugin.json`, `.github/plugin/marketplace.json`, and `com.github.copilot/extensions/explorer/package.json` to the same version. Change only the current-version and installation-check sections marked below and near the top of this README; leave historical version references in place. Prepend a `release-notes.json` entry with the new version and a user-facing summary of at most 400 characters, preserving older entries. Run `npm test`, `npm run check`, and `npm run package` before committing. The check rejects missing or mismatched current release fields, and packaging runs it again.
+
 Manual acceptance in Copilot:
 
-- Update to v0.1.11, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.11**.
+<!-- explorer-install-check:start -->
+- Update to v0.1.13, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.13**.
+<!-- explorer-install-check:end -->
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
 - Focus the answer, hold your configured voice shortcut until **Listening**, speak, then release. Confirm the text enters the draft and is not saved automatically. Check Escape cancellation and switching questions.
 - Open **Voice settings**, choose a microphone and downloaded model, save, and reopen Explorer to check persistence. Disconnect a selected device and confirm Explorer explains the problem. Check that the recording bars respond to your speech, stay flat in silence, and stop during transcription.

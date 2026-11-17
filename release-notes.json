@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.13",
+    "summary": "Added release checks for package metadata, the lockfile, current README instructions, and release notes. Updated the installation checklist and documented a consistent version-bump procedure."
+  },
+  {
     "version": "0.1.12",
     "summary": "Fixed map dragging, accidental text selection, lost zoom on resize and stale refreshes hiding saved answers. Drag cards or question headings, wheel/pinch to zoom up to 300%, and reset with the percentage button. Improved keyboard recovery, large-map fitting, research scrolling, and draft scroll/selection/composition stability."
   },

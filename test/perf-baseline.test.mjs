@@ -27,12 +27,22 @@ test('synthetic performance fixtures are deterministic, validated and cover topo
   }
 });
 
-test('benchmark schema requires real samples or a bounded phase failure', () => {
-  const item = { fixture: { fingerprint: 'a' }, phases: { layout: { status: 'ok', sampleMs: [2, 4], minMs: 2, medianMs: 3, maxMs: 4 } } };
+test('benchmark schema rejects missing cases/phases and nonfinite or negative samples', () => {
+  const sample = { status: 'ok', sampleMs: [2, 4], minMs: 2, medianMs: 3, maxMs: 4 };
+  const item = { fixture: { name: 'small-deep', fingerprint: 'a' }, phases: { layout: sample } };
   const result = { schema: 1, config: { warmups: 1, samples: 2 }, cases: [item] };
-  assert.equal(validResult(result), true);
-  assert.equal(validResult({ ...result, cases: [{ ...item, phases: { layout: { status: 'ok', sampleMs: [], minMs: 0, medianMs: 0, maxMs: 0 } } }] }), false);
-  assert.equal(validResult({ ...result, cases: [{ ...item, phases: { layout: { status: 'failed', error: { message: 'Actual valid-map failure' } } } }] }), true);
+  const contract = { cases: ['small-deep'], phases: ['layout'] };
+  const valid = value => validResult(value, contract);
+  assert.equal(valid(result), true);
+  assert.equal(validResult(result), false, 'production default requires all expected cases and phases');
+  for (const cases of [[], [item, item], [{ ...item, fixture: { name: 'unexpected', fingerprint: 'a' } }], [{ ...item, phases: {} }], [{ ...item, phases: { wrong: sample } }]]) assert.equal(valid({ ...result, cases }), false);
+  for (const value of [NaN, Infinity, -1]) {
+    assert.equal(valid({ ...result, cases: [{ ...item, phases: { layout: { ...sample, sampleMs: [value, 4] } } }] }), false);
+    for (const field of ['minMs', 'medianMs', 'maxMs']) assert.equal(valid({ ...result, cases: [{ ...item, phases: { layout: { ...sample, [field]: value } } }] }), false);
+  }
+  assert.equal(valid({ ...result, cases: [{ ...item, phases: { layout: { ...sample, sampleMs: [] } } }] }), false);
+  assert.equal(valid({ ...result, cases: [{ ...item, phases: { layout: { status: 'failed', error: { message: 'Actual valid-map failure' } } } }] }), true);
+  assert.equal(valid({ ...result, cases: [{ fixture: { name: 'small-deep' }, phases: { fixture: { status: 'failed', error: { message: 'x'.repeat(401) } } } }] }), false);
 });
 
 test('sample timing excludes setup, reporting and cleanup', async () => {
@@ -53,7 +63,7 @@ test('fixture failure is retained, later cases run, both artifacts are written a
   t.after(() => rm(dir, { recursive: true, force: true }));
   const source = `import { runBaseline } from './scripts/perf-baseline.mjs';
     const outcome = await runBaseline({ outputDirectory: process.env.PERF_TEST_OUTPUT,
-      specs: [{ name: 'first' }, { name: 'second' }], log: () => {},
+      specs: [{ name: 'first' }, { name: 'second' }], expectedPhases: ['validate'], log: () => {},
       runCase: async spec => {
         if (spec.name === 'first') throw new Error('Synthetic valid fixture failed at preparation');
         return { fixture: { name: spec.name, fingerprint: 'fixed' }, phases: { validate: {
@@ -71,7 +81,7 @@ test('fixture failure is retained, later cases run, both artifacts are written a
   assert.match(json.cases[0].phases.fixture.error.message, /Synthetic valid fixture failed/);
   assert.ok(json.cases[0].phases.fixture.error.message.length <= 400);
   assert.equal(json.cases[1].phases.validate.status, 'ok');
-  assert.equal(validResult(json), true);
+  assert.equal(validResult(json, { cases: ['first', 'second'], phases: ['validate'] }), true);
   assert.match(markdown, /first.*fixture: Synthetic valid fixture failed/);
   assert.match(markdown, /second.*validate/);
 });

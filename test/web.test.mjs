@@ -64,7 +64,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const navigationDialog = document.getElementById('navigation-dialog');
   navigationDialog.showModal = () => { navigationDialog.open = true; };
   navigationDialog.close = () => { navigationDialog.open = false; };
-  const requests = new Set();
+  const requests = new Set(), actions = [];
   t.after(async () => {
     window.dispatchEvent(new window.Event('pagehide'));
     await Promise.allSettled([...requests]); await delay(0);
@@ -91,6 +91,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.HTMLElement.prototype.animate = () => ({ cancel() {}, finished: Promise.resolve() });
   window.AbortController = AbortController; // The fixture uses Node fetch, which requires its own AbortSignal brand.
   window.fetch = (path, options) => {
+    if (path === 'api/action' && options?.body) actions.push(JSON.parse(options.body));
     const request = (async () => {
       if (holdAnswer && options?.body && JSON.parse(options.body).action === 'answer') await holdAnswer();
       if (holdAdd && options?.body && JSON.parse(options.body).action === 'add-direction') await holdAdd();
@@ -119,7 +120,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.QuestionHelpClient = QuestionHelpClient;
   window.attachNavigation = attachNavigation;
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
-  const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
+  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
   window.eval(script.replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
@@ -129,7 +130,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   };
   const type = (id, value) => { const e = document.getElementById(id); assert.ok(e, id); e.value = value; e.dispatchEvent(new window.Event('input', { bubbles: true })); };
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
-  return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
+  return { explorer, window, document, open, type, click, actions, poll: () => window.__updates.poll(), resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
@@ -220,7 +221,7 @@ test('historical question rationale is disclosed near expanded question without 
   const newer = structuredClone(f.explorer.doc); newer.objective = 'Another goal'; await f.explorer.save(newer, 'Guidance changed');
   await until(() => f.explorer.doc.objective === 'Another goal', 'saved during composition');
   assert.equal($('answer'), composingAnswer); composingAnswer.dispatchEvent(new f.window.Event('compositionend', { bubbles: true }));
-  await until(() => $('answer') !== composingAnswer, 'composition-safe rerender');
+  await f.poll(); assert.equal($('answer'), composingAnswer, 'composition end keeps the actual editor');
   assert.equal($('answer').value, 'Local draft'); assert.equal($('question-rationale').open, true);
   assert.equal(f.explorer.pending, null);
 });
@@ -424,10 +425,14 @@ test('Clean My Answer observes streamed dictation mutations without breaking dur
   f.type('answer', 'Original'); $('clean-answer').click(); await until(() => runs.length === 1, 'cleanup starts');
   $('answer').focus(); $('answer').setSelectionRange(8, 8); $('voice-record').click(); await until(() => !$('voice-stop').disabled, 'listening');
   let release; f.pauseDraftWrite(() => new Promise(resolve => { release = resolve; }));
+  const streamAnswer = $('answer');
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Independent saved answer' }); await f.poll();
+  assert.equal($('answer'), streamAnswer);
   voice.publish(1, 'new words'); await until(() => $('answer').value.includes('new words'), 'programmatic insertion');
   await until(() => runs[0].signal.aborted, 'dictation invalidates cleanup');
   await until(() => release, 'durability pending'); assert.deepEqual(voice.counts().acknowledgments, []);
   f.pauseDraftWrite(null); release(); await until(() => voice.counts().acknowledgments.length === 1, 'ack after persistence');
+  assert.equal($('answer'), streamAnswer); assert.equal(voice.counts().acknowledgments.length, 1);
   assert.equal($('apply-cleanup'), null);
   $('clean-answer').click(); await until(() => runs.length === 2 && voice.counts().cancels === 1, 'cleanup explicitly cancels capture');
   assert.equal(runs[1].text, $('answer').value); runs[1].resolve('Proposed'); await until(() => $('apply-cleanup'), 'proposal');
@@ -657,10 +662,12 @@ test('library opens, searches, pins and archives journeys at narrow pane width',
   await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'two library entries');
   f.type('library-search', 'Another');
   await until(() => f.document.querySelectorAll('.library-entry').length === 1, 'library search');
-  f.document.querySelector('.library-entry [data-action="pin"]').click();
+  const pin = f.document.querySelector('.library-entry [data-action="pin"]'); pin.focus(); pin.click();
   await until(() => f.document.querySelector('.library-entry [data-action="pin"]')?.textContent === 'Unpin', 'pin saved');
-  f.document.querySelector('.library-entry [data-action="archive"]').click();
+  assert.equal(f.document.activeElement, pin); assert.equal(f.document.getElementById('library-search').value, 'Another');
+  const archive = f.document.querySelector('.library-entry [data-action="archive"]'); archive.focus(); archive.click();
   await until(() => f.document.querySelectorAll('.library-entry').length === 0, 'archived hidden');
+  assert.equal(f.document.activeElement.id, 'library-search');
   const archived = f.document.getElementById('library-archived'); archived.checked = true; archived.dispatchEvent(new f.window.Event('change'));
   await until(() => f.document.querySelectorAll('.library-entry').length === 1, 'archive filter');
   f.document.querySelector('.library-entry [data-action="open"]').click();
@@ -927,7 +934,7 @@ test('background refresh preserves text scroll, selection direction and IME comp
   let answer = f.document.getElementById('answer'); answer.focus(); answer.setSelectionRange(12, 40, 'backward'); answer.scrollTop = 200;
   await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Shared fund' });
   await until(() => f.document.getElementById('progress').textContent.startsWith('1 answered'), 'background answer');
-  answer = f.document.getElementById('answer');
+  assert.equal(f.document.getElementById('answer'), answer, 'ordinary polling retains the actual editor');
   assert.equal(answer.scrollTop, 200); assert.equal(answer.selectionDirection, 'backward');
   answer.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
   await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Different fund' });
@@ -935,9 +942,10 @@ test('background refresh preserves text scroll, selection direction and IME comp
   assert.equal(f.document.getElementById('answer'), answer, 'composition target stays mounted');
   answer.dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, isComposing: true, bubbles: true }));
   await delay(50); assert.equal(f.explorer.doc.nodes[1].answer, '', 'confirming an IME candidate does not submit an answer');
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionupdate', { data: 'My completed composition', bubbles: true }));
   f.type('answer', 'My completed composition');
   answer.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
-  await delay(50); assert.equal(f.document.getElementById('answer').value, 'My completed composition');
+  await delay(50); assert.equal(f.document.getElementById('answer'), answer, 'composition end retains editor'); assert.equal(answer.value, 'My completed composition');
 });
 
 test('whole map fits a wide or deep tree instead of stopping at an unreadable zoom limit', async t => {
@@ -1201,7 +1209,7 @@ test('keyboard focus survives research, cancellation, and background map updates
   f.click('Cancel request'); await until(() => !f.document.querySelector('#node-workspace .pending'), 'cancellation rendered');
   assert.equal(f.document.activeElement.id, 'expanded-title');
   f.document.getElementById('fit').click();
-  f.document.querySelector(`[data-node-id="${a.id}"]`).focus();
+  const target = f.document.querySelector(`[data-node-id="${a.id}"]`); assert.equal(target.tagName, 'BUTTON', 'edge identity cannot shadow node controls'); target.focus();
   await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Repairs from a shared fund' });
   await until(() => f.document.getElementById('nodes').textContent.includes('Repairs from a shared fund'), 'background update');
   assert.equal(f.document.activeElement.dataset.nodeId, a.id);
@@ -2393,7 +2401,7 @@ test('question preview acceptance reveals focused folded children and keeps edit
   answer.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
   await e.receive('questions', { requestId: e.pending.id, questions: [{ question: 'Next generated?', category: 'Scope' }] });
   await delay(1400); assert.equal(d.getElementById('answer'), answer, 'live composition keeps the editor mounted');
-  assert.equal(d.getElementById('question-preview'), null);
+  assert.ok(d.getElementById('question-preview'), 'the proposal updates independently while composition stays mounted');
   answer.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
   await until(() => d.getElementById('question-preview'), 'deeper preview');
   assert.equal(d.activeElement.id, 'answer'); assert.equal(d.getElementById('answer').selectionStart, 2);
@@ -2550,4 +2558,96 @@ test('another canvas replacing historical accepted brief preserves fresh proposa
  assert.equal($('brief-content').querySelector('[data-brief-statement="goal"]'), editor);
  $('accept-brief').click(); await until(() => f.explorer.doc.brief.sections.goal[0].text === 'Unsaved reviewed wording \u03bb', 'retained text accepted');
  assert.equal(f.explorer.doc.brief.sections.goal[0].edited, true);
+});
+
+
+test('same-node updates keep connected editors and bounded listeners, and detached actions cannot target a later selection', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id), [a, b] = f.explorer.doc.nodes.slice(1);
+  f.open(a.id); f.type('answer', 'Recoverable draft');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'draft durable');
+  await f.poll();
+  const answer = $('answer'), form = answer.closest('form'), save = $('save-answer'), manual = $('manual-question');
+  const sibling = [...$('nodes').children].find(e => e.dataset.nodeId === b.id);
+  const mutations = [], observer = new f.window.MutationObserver(records => mutations.push(...records)); observer.observe($('node-workspace'), { childList: true, subtree: true });
+  answer.focus(); answer.setSelectionRange(2, 8, 'backward'); answer.scrollTop = 90; manual.value = 'Local direction'; manual.dispatchEvent(new f.window.Event('input'));
+  let listeners = 0;
+  const listen = f.window.EventTarget.prototype.addEventListener;
+  f.window.EventTarget.prototype.addEventListener = function (...args) { listeners++; return listen.apply(this, args); };
+  for (let i = 0; i < 20; i++) f.window.__updates.workspace();
+  f.window.EventTarget.prototype.addEventListener = listen;
+  assert.equal(listeners, 0, 'unchanged workspace adds no listeners');
+  for (let i = 0; i < 3; i++) {
+    await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: `Sibling ${i}` }); await f.poll();
+    assert.equal($('answer'), answer); assert.equal(answer.closest('form'), form); assert.equal($('manual-question'), manual);
+    assert.equal(f.document.activeElement, answer); assert.equal(answer.selectionDirection, 'backward'); assert.equal(answer.scrollTop, 90);
+    assert.equal([...$('nodes').children].find(e => e.dataset.nodeId === b.id), sibling);
+  }
+  assert.equal([...mutations, ...observer.takeRecords()].some(record => [...record.removedNodes].some(node => node === answer || node.contains?.(answer))), false, 'editor is never detached, even temporarily'); observer.disconnect();
+  const before = f.actions.filter(a => a.action === 'answer').length; save.click();
+  await until(() => f.explorer.doc.nodes.find(n => n.id === a.id).answer === 'Recoverable draft', 'one save');
+  assert.equal(f.actions.filter(a => a.action === 'answer').length, before + 1);
+  f.open(b.id); f.open(a.id);
+  const replacement = $('answer'), actionCount = f.actions.length;
+  answer.value = 'Detached stale input'; answer.dispatchEvent(new f.window.Event('input')); save.click();
+  form.dispatchEvent(new f.window.Event('submit', { cancelable: true }));
+  await delay(30); assert.equal(f.actions.length, actionCount); assert.equal(replacement.value, 'Recoverable draft');
+});
+
+test('hidden Outline does no DOM work on selection, visible content refreshes without losing search focus or scroll', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id), [a, b] = f.explorer.doc.nodes.slice(1);
+  assert.equal($('outline-list').children.length, 0);
+  f.open(a.id); f.open(b.id); assert.equal($('outline-list').children.length, 0);
+  $('outline-toggle').click(); assert.equal($('outline-list').querySelectorAll('.outline-row').length, 3);
+  f.type('search', 'borrow'); const row = $('outline-list').firstChild;
+  $('search').focus(); $('outline-list').scrollTop = 40;
+  await f.poll(); assert.equal($('outline-list').firstChild, row);
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: a.id, answer: 'New saved answer' }); await f.poll();
+  assert.equal($('search').value, 'borrow'); assert.equal(f.document.activeElement, $('search')); assert.equal($('outline-list').scrollTop, 40);
+  $('outline-toggle').click(); const hiddenRow = $('outline-list').firstChild;
+  f.open(a.id); f.open(b.id); assert.equal($('outline-list').firstChild, hiddenRow);
+});
+
+test('removed selected question disposes its editor and returns focus while retaining recoverable text', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id), a = f.explorer.doc.nodes[1];
+  f.open(a.id); f.type('answer', 'Keep this removed-node draft');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'draft durable');
+  const answer = $('answer'); answer.focus();
+  const next = structuredClone(f.explorer.doc); next.nodes = next.nodes.filter(n => n.id !== a.id);
+  await f.explorer.save(next, 'Remove a question'); await f.poll();
+  assert.equal(answer.isConnected, false); assert.equal($('answer'), null);
+  assert.equal(f.document.activeElement.dataset.nodeId, f.explorer.doc.rootId);
+  await until(() => $('orphan-drafts').textContent.includes('Draft for a removed question'), 'recoverable removed draft');
+  assert.equal($('orphan-drafts').querySelector('textarea').value, 'Keep this removed-node draft');
+});
+
+
+test('preview and manual composition editors remain connected when the current batch becomes stale', async t => {
+  const f = await fixture(t, 340, undefined, false, { preview: true }), $ = id => f.document.getElementById(id);
+  const candidate = $('candidate-question-0'), manual = $('manual-question');
+  f.type(candidate.id, 'My adjusted wording'); candidate.focus(); candidate.setSelectionRange(3, 9, 'backward'); candidate.scrollTop = 24;
+  candidate.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  const mutations = [], observer = new f.window.MutationObserver(records => mutations.push(...records)); observer.observe($('node-workspace'), { childList: true, subtree: true });
+  const next = structuredClone(f.explorer.doc); next.objective = 'Changed objective'; await f.explorer.save(next, 'Changed objective'); await f.poll();
+  assert.equal($('candidate-question-0'), candidate); assert.equal(candidate.value, 'My adjusted wording'); assert.equal(candidate.selectionDirection, 'backward'); assert.equal(candidate.scrollTop, 24);
+  assert.equal($('manual-question'), manual); assert.equal(f.document.activeElement, candidate); assert.equal($('accept-questions').disabled, true);
+  candidate.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  manual.focus(); manual.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true })); f.type('manual-question', 'Composed direction');
+  for (let i = 0; i < 3; i++) f.window.__updates.workspace();
+  manual.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  assert.equal($('manual-question'), manual); assert.equal(manual.value, 'Composed direction'); assert.equal(f.document.activeElement, manual);
+  assert.equal([...mutations, ...observer.takeRecords()].some(record => [...record.removedNodes].some(node => [candidate, manual].some(editor => node === editor || node.contains?.(editor)))), false); observer.disconnect();
+});
+
+
+test('library row moves preserve keyboard action focus and visible scroll, with a surviving-row fallback', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  await f.explorer.library.import(createDocument('Second journey')); $('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'two journeys');
+  const row = $('library-list').lastElementChild, pin = row.querySelector('[data-action="pin"]');
+  $('welcome').scrollTop = 120; pin.focus(); pin.click();
+  await until(() => pin.textContent === 'Unpin', 'pin moves row'); assert.equal(f.document.activeElement, pin); assert.equal($('welcome').scrollTop, 120);
+  pin.click(); await until(() => pin.textContent === 'Pin', 'unpin'); assert.equal(f.document.activeElement, pin); assert.equal($('welcome').scrollTop, 120);
+  const archive = row.querySelector('[data-action="archive"]'); archive.focus(); archive.click();
+  await until(() => !row.isConnected, 'archive removes row');
+  assert.equal(f.document.activeElement, $('library-list').querySelector('[data-action="archive"]')); assert.equal($('welcome').scrollTop, 120);
 });

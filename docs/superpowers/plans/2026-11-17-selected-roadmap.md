@@ -790,6 +790,30 @@ Read issue-46.md, task-23-design-notes.md and AGENTS.md. BASE is `88868a42131671
 - Run npm test/check/package and applicable fixtures only when integration actually changes. Synchronize the confirmed patch/release metadata/README and include the controller plan update. Self-review and commit; no merge/push/issue closure or nested agents.
 - Report task-23-report.md with module/API seams, fixture and sample definitions, exact commands/exit evidence, observed baseline and limits, artifact path and commit. The controller reviews and publishes.
 
+Published task 23: **v0.1.35**, `5775e02`, required checks passed and bounded benchmark evidence retained; independent review approved and remote main verified.
+
+## Task 24: Preserve editors through incremental updates (#33 / original43)
+
+Read issue-43.md, task-24-design-notes.md, AGENTS.md and the task23 benchmark report. BASE is `5775e0259cdbf9e2e204b23165d843c2ed102c72`; ship version **0.1.36**. Read task-23-report.md and its retained benchmark results for the exact fixture/measurement contract and any concrete rendering failures. Resolve the carried task2/task6 minors named below.
+
+### Behavior and boundaries
+
+- Update the selected workspace, node cards, status, research/help/proposal areas and library rows by stable identity. Preserve the actual active answer textarea element during unrelated polling, status changes and sibling updates where its identity has not changed; copying value/caret into a replacement is not equivalent for IME or dictation.
+- Keep draft text/state and text-mutation generation, selection range/direction, editor scroll, focus, composition, disclosure state and transient helper/proposal state intact. Respect existing source invalidation and voice cancellation boundaries; DOM reuse must not keep an old node's callback active or accept a stale result.
+- Use small targeted rendering seams in the existing modules, without a framework/runtime dependency, generic virtual DOM or full application rewrite. A real journey or selected-node replacement may rebuild its workspace, with existing explicit draft flush and cancellation behavior. Document where replacement is necessary.
+- Each reusable element must resolve actions against current valid identity, not stale captured node data. Bound listener lifetimes and detached elements; repeated renders must not multiply operations, subscriptions, timers or acknowledgments.
+- Fix carried task2 Minor: Pin/Unpin/Archive library operations retain a sensible keyboard focus target on the same surviving row, or the nearest remaining control if it disappears. Preserve the search/filter and visible scroll position; announce meaningful status without stealing focus.
+- Fix carried task6 Minor: selection must not rebuild the hidden Outline. Refresh it when revealed or its visible content actually changes, preserving visible search, focus and scroll. Keep full-map accessibility even when branches are folded or focused.
+- Preserve the selected editor through relevant non-destructive updates where possible, but do not disguise a removed/replaced node as still editable. After removal or journey replacement, move focus to an existing meaningful target and retain recoverable drafts according to existing contracts.
+
+### Evidence and release
+
+- Use actual-app HTTP/jsdom regressions for element identity, typing during polling and research, selection/scroll, composition start/update/end, synthetic dictation, cleanup Apply/Undo, question help, references/rationale, focus switching and removed nodes. Exercise repeated updates with deterministic operation/listener counts and prove one user activation causes one action. No browser/desktop automation, real microphone, paid provider or existing session.
+- Compare the same task23 benchmark cases before/after, including hidden-outline work and repeated selected-workspace updates; retain machine-readable artifacts and explain changed counters. Use the final task23-specific retained JSON/MD and procedure, not an earlier superseded run or an overwritten .perf-baseline output. Preserve original comparable phases; label any extra steady-state/update counters separately so a changed harness cannot masquerade as a performance improvement. Do not claim jsdom measurements prove native paint/typing latency. Do not broaden this task into task25 viewport virtualization or task26 HTTP polling redesign.
+- While extending benchmark counters, resolve carried task23 Minor from task-23-review.md: reject missing/empty expected cases or phases and nonfinite/negative samples in the result validator. Preserve the explicit bounded fixture-failure representation; deterministic malformed-result tests belong here, not new timing thresholds.
+- Run npm test/check/package, and installed fixtures only if host integration changes. Synchronize the confirmed patch metadata/README/release note and include the controller plan update. Self-review and commit; no nested agents, publishing or issue closure.
+- Write task-24-report.md with rendering ownership and disposal contracts, carried Minor resolutions, actual checks/benchmark evidence, SHA and owner-only native IME/typing/layout checks. Controller independently reviews and publishes.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

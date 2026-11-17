@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.36",
+    "summary": "Keep answer editors connected during polling, research and sibling updates, preserving typing, composition, caret and dictation. Reuse map and library rows, retain library keyboard focus, and refresh Outline only when visible. Add stable-editor regressions and separately labeled update performance counters."
+  },
+  {
     "version": "0.1.35",
     "summary": "Add a repeatable synthetic performance baseline for validated maps, context preparation, exports, layout, saved history writes and shipped panel DOM work. Reports include fixture fingerprints, bounded samples and explicit failures; native interaction checks remain manual."
   },

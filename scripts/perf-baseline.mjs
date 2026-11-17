@@ -144,18 +144,44 @@ async function benchmark(spec) {
     const { window } = resource; await window.__perf.poll(); window.__perf.stopPoll();
     return { stateRequests: 1, nodes: window.document.querySelectorAll('#nodes [data-node-id]').length };
   }, { setup: researchDom, dispose: closeDom });
-  return { fixture: definition, phases };
+  const steadyState = {};
+  const countedDom = async () => {
+    const resource = await researchDom(), { window } = resource;
+    let createdElements = 0, addedListeners = 0;
+    const create = window.document.createElement.bind(window.document), listen = window.EventTarget.prototype.addEventListener;
+    window.document.createElement = (...args) => { createdElements++; return create(...args); };
+    window.EventTarget.prototype.addEventListener = function (...args) { addedListeners++; return listen.apply(this, args); };
+    const answer = window.document.getElementById('answer');
+    const mutations = [], observer = new window.MutationObserver(records => mutations.push(...records)); observer.observe(window.document.getElementById('node-workspace'), { childList: true, subtree: true });
+    resource.counts = () => ({ updates: 10, createdElements, addedListeners, sameEditor: window.document.getElementById('answer') === answer,
+      editorRemovals: [...mutations, ...observer.takeRecords()].filter(record => [...record.removedNodes].some(node => node === answer || node.contains?.(answer))).length,
+      outlineRows: window.document.querySelectorAll('#outline-list .outline-row').length });
+    return resource;
+  };
+  await measure(steadyState, 'workspaceUpdates', 'additional: ten same-selection workspace updates', (_, resource) => {
+    for (let i = 0; i < 10; i++) resource.window.__perf.renderWorkspace();
+  }, { setup: countedDom, report: (_, resource) => resource.counts(), dispose: closeDom });
+  await measure(steadyState, 'hiddenOutlineUpdates', 'additional: ten hidden Outline calls', (_, resource) => {
+    for (let i = 0; i < 10; i++) resource.window.__perf.renderOutline();
+  }, { setup: countedDom, report: (_, resource) => resource.counts(), dispose: closeDom });
+  return { fixture: definition, phases, steadyState };
 }
 
-export function validResult(result) {
+export const phaseNames = ['validate', 'contextResearch', 'contextBrief', 'contextCheck', 'markdown', 'nativeExport', 'branchView', 'layout', 'atomicWrite', 'controllerHistoryWrite', 'renderMap', 'renderWorkspace', 'renderOutline', 'poll'];
+export function validResult(result, { cases = fixtureSpecs.map(spec => spec.name), phases = phaseNames } = {}) {
+  const finite = value => Number.isFinite(value) && value >= 0;
+  const failure = phase => phase?.status === 'failed' && typeof phase.error?.message === 'string' && phase.error.message.length > 0 && phase.error.message.length <= 400;
+  const validPhase = phase => failure(phase) || phase?.status === 'ok' && Array.isArray(phase.sampleMs) && phase.sampleMs.length === samples &&
+    phase.sampleMs.every(finite) && [phase.minMs, phase.medianMs, phase.maxMs].every(finite) && phase.minMs <= phase.medianMs && phase.medianMs <= phase.maxMs;
   return result?.schema === 1 && result.config?.warmups === warmups && result.config?.samples === samples &&
-    Array.isArray(result.cases) && result.cases.every(item =>
-      (item.fixture?.name && item.phases?.fixture?.status === 'failed' && !!item.phases.fixture.error?.message) ||
-      (item.fixture?.fingerprint && Object.values(item.phases).every(phase =>
-        phase.status === 'failed' ? !!phase.error?.message : phase.status === 'ok' && phase.sampleMs.length === samples && phase.minMs <= phase.medianMs && phase.medianMs <= phase.maxMs)));
+    cases.length > 0 && phases.length > 0 && Array.isArray(result.cases) && result.cases.length === cases.length &&
+    new Set(result.cases.map(item => item.fixture?.name)).size === cases.length && result.cases.every(item =>
+      cases.includes(item.fixture?.name) && (failure(item.phases?.fixture) && Object.keys(item.phases).length === 1 ||
+      !!item.fixture?.fingerprint && item.phases && Object.keys(item.phases).length === phases.length && phases.every(name => validPhase(item.phases[name]))) &&
+      (!item.steadyState || ['workspaceUpdates', 'hiddenOutlineUpdates'].every(name => validPhase(item.steadyState[name]))));
 }
 
-export async function runBaseline({ specs = fixtureSpecs, runCase = benchmark, outputDirectory = output, log = console.log } = {}) {
+export async function runBaseline({ specs = fixtureSpecs, runCase = benchmark, outputDirectory = output, expectedPhases = phaseNames, log = console.log } = {}) {
   await mkdir(outputDirectory, { recursive: true });
   const version = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8')).version;
   const result = { schema: 1, version, commit: git('rev-parse', 'HEAD'), dirty: !!git('status', '--porcelain'),
@@ -166,7 +192,7 @@ export async function runBaseline({ specs = fixtureSpecs, runCase = benchmark, o
     catch (error) { result.cases.push({ fixture: { name: String(spec?.name ?? 'unknown').slice(0, 80) }, phases: { fixture: { status: 'failed', error: errorInfo(error) } } }); }
     log(`${spec.name}: ${Object.entries(result.cases.at(-1).phases).filter(([, phase]) => phase.status === 'failed').map(([name]) => name).join(', ') || 'measured'}`);
   }
-  if (!validResult(result)) throw new Error('Benchmark result schema is invalid.');
+  if (!validResult(result, { cases: specs.map(spec => spec.name), phases: expectedPhases })) throw new Error('Benchmark result schema is invalid.');
   const json = join(outputDirectory, 'baseline.json'), markdown = join(outputDirectory, 'baseline.md');
   await writeFile(json, JSON.stringify(result, null, 2) + '\n');
   const lines = [`# Explorer ${version} synthetic baseline`, '', `Commit: ${result.commit}; dirty: ${result.dirty}.`,
@@ -176,11 +202,13 @@ export async function runBaseline({ specs = fixtureSpecs, runCase = benchmark, o
   for (const item of result.cases) lines.push(`| ${item.fixture.name} | ${item.fixture.nodes ?? '—'} | ${item.fixture.questions ?? '—'} | ${item.fixture.bytes ?? '—'} | ${Object.entries(item.phases).filter(([, p]) => p.status === 'failed').map(([n, p]) => `${n}: ${p.error.message}`).join('; ') || 'none'} |`);
   lines.push('', '| Fixture | Phase | Operations | Median [min, max] ms |', '| --- | --- | --- | ---: |');
   for (const item of result.cases) for (const [name, phase] of Object.entries(item.phases)) if (phase.status === 'ok') lines.push(`| ${item.fixture.name} | ${name} | ${JSON.stringify(phase.operations)} | ${phase.medianMs.toFixed(2)} [${phase.minMs.toFixed(2)}, ${phase.maxMs.toFixed(2)}] |`);
+  lines.push('', '## Additional steady-state counters (not task23 phases)', '', '| Fixture | Update | Operations | Median ms |', '| --- | --- | --- | ---: |');
+  for (const item of result.cases) for (const [name, phase] of Object.entries(item.steadyState ?? {})) if (phase.status === 'ok') lines.push(`| ${item.fixture.name} | ${name} | ${JSON.stringify(phase.operations)} | ${phase.medianMs.toFixed(2)} |`);
   lines.push('', 'jsdom measures JavaScript and DOM mutations only. It does not measure native paint, frame rate, pointer latency, IME, or desktop embedding.',
     'Targets are informational: watch for repeatable changes above 2× the same phase and fixture on the same machine. Compare only when fixture fingerprints and procedures match.');
   await writeFile(markdown, lines.join('\n') + '\n');
   log(`Results: ${json}\nSummary: ${markdown}`);
-  return { result, json, markdown, exitCode: result.cases.some(item => Object.values(item.phases).some(phase => phase.status === 'failed')) ? 1 : 0 };
+  return { result, json, markdown, exitCode: result.cases.some(item => [...Object.values(item.phases), ...Object.values(item.steadyState ?? {})].some(phase => phase.status === 'failed')) ? 1 : 0 };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

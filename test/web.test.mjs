@@ -2773,3 +2773,42 @@ test('large-map journey replacement transfers a compact control focus to the new
   assert.equal(card.isConnected, false);
   assert.equal(d.activeElement.id, 'map', 'removed compact owner has an explicit surviving focus target');
 });
+
+test('Outline folding an offscreen ancestor reveals and mounts the moved selection before focusing it', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: explorer => {
+    for (const [index, top] of explorer.doc.nodes.slice(1).entries()) {
+      let parentId = top.id;
+      for (let depth = 1; depth < 30; depth++) {
+        const id = `chain-${index}-${depth}`;
+        explorer.doc.nodes.push({ ...top, id, parentId, question: `Branch ${index}, depth ${depth}` });
+        parentId = id;
+      }
+    }
+  } });
+  const d = f.document, ui = f.window.__updates, ancestor = f.explorer.doc.nodes[1], leaf = 'chain-0-29';
+  f.open(leaf); f.type('answer', 'Keep this deep draft'); chooseState(f, 'assumption');
+  await until(() => d.getElementById('answer-status').textContent === 'Draft saved locally', 'deep draft persisted');
+  const logical = JSON.stringify(f.explorer.doc);
+  assert.equal(d.querySelector(`#nodes [data-node-id="${ancestor.id}"]`), null, 'ancestor starts outside mounted viewport');
+  const before = ui.scene(), box = before.positions.get(ancestor.id);
+  assert.ok(before.view.y + (box.y + box.height) * before.view.zoom < 0, 'ancestor is above the viewport');
+  d.getElementById('outline-toggle').click();
+  const fold = d.querySelector(`#outline-list [data-branch-id="${ancestor.id}"]`);
+  fold.focus(); fold.click();
+  const target = d.querySelector(`#nodes [data-node-id="${ancestor.id}"]`);
+  assert.ok(target?.isConnected, 'fold reveals and mounts the replacement compact selection');
+  assert.equal(d.activeElement, target, 'focus transfers to the revealed ancestor');
+  assert.equal(ui.scene().selected, ancestor.id);
+  assert.equal(d.getElementById('node-workspace').hidden, true);
+  assert.equal(ui.scene().positions.has('chain-1-29'), true, 'other tall branch keeps the full vertical extent');
+  const after = ui.scene(), revealed = after.positions.get(ancestor.id);
+  assert.ok(after.view.x + revealed.x * after.view.zoom >= 15);
+  assert.ok(after.view.y + revealed.y * after.view.zoom >= 15);
+  assert.ok(after.view.y + (revealed.y + revealed.height) * after.view.zoom <= 705);
+  assert.equal(JSON.stringify(f.explorer.doc), logical, 'fold and reveal do not change logical data');
+  d.querySelector(`#outline-list [data-node-id="${leaf}"]`).click();
+  assert.equal(d.getElementById('answer').value, 'Keep this deep draft', 'unfolded path recovers the draft');
+  assert.equal(d.getElementById('answer-state').value, 'assumption');
+  assert.equal(d.activeElement.id, 'expanded-title');
+  assert.equal(JSON.stringify(f.explorer.doc), logical, 'draft recovery remains separate from saved answers');
+});

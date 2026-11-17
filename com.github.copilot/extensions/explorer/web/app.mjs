@@ -363,6 +363,7 @@ function toggleBranch(id, source) {
   }
   branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
   renderWorkspace(); refreshScene(anchor); renderOutline();
+  if (moved) revealNode(id);
   const focus = moved ? [...$('nodes').children].find(e => e.dataset.nodeId === id) :
     source === 'outline' ? [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === id) :
     expanded && selected === id ? $('branch-workspace') :

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.2",
+    "summary": "Added four interactive question-placement prototypes: expanded node, floating card, bottom drawer, and focus overlay. Compare answer and research views with sample data using npm run prototype:layouts. The installed canvas layout is unchanged."
+  },
+  {
     "version": "0.1.1",
     "summary": "Documented the required version-and-publish workflow so each completed iteration is available to install from main under a new plugin version."
   },

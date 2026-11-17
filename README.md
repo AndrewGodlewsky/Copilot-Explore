@@ -1,6 +1,6 @@
 # Explorer for GitHub Copilot
 
-**Proof of concept, v0.1.1.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need.
+**Proof of concept, v0.1.2.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need.
 
 ## Install from GitHub
 
@@ -91,6 +91,8 @@ npm run preview
 ```
 
 Preview prints a local URL to open in Brave. It uses the real UI and persistence, but has no Copilot connection; AI actions report that limitation. Manual questions, answers, imports and exports work. No browser opens automatically.
+
+For four interactive alternatives to the question sidebar, run `npm run prototype:layouts`. These [layout studies](docs/prototypes/README.md) use in-memory example data and are separate from the installed canvas. Compare an expanded node, floating card, bottom drawer, and focus overlay before choosing a production direction.
 
 For the real SDK/runtime smoke test, set `COPILOT_SDK_DIR` to the installed SDK directory containing `index.js`, and `COPILOT_CLI_PATH` to its paired runtime executable, then run `npm run e2e`. The test uses a disposable home/session and a loopback model fixture. It checks actual plugin discovery, HTTP serving, queued chat delivery, canvas callbacks, persistence and export/import without paid inference or browser automation.
 

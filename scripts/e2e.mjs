@@ -86,14 +86,17 @@ try {
   assert.ok(JSON.stringify(requests).includes('Synthetic garden fixture'));
   assert.ok(JSON.stringify(requests).includes('submit_questions'));
   let snapshot = await state();
-  await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_questions', input: { requestId: snapshot.pending.id, questions: [{ question: 'Who will care for it?', category: 'People' }] } });
+  const rationale = 'Unclear ownership could delay the synthetic garden pilot.';
+  await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_questions', input: { requestId: snapshot.pending.id, questions: [{ question: 'Who will care for it?', category: 'People', rationale }] } });
   snapshot = await state(); assert.equal(snapshot.document.nodes.length, 1); assert.equal(snapshot.pending, null);
   assert.equal(snapshot.preview.questions.length, 1);
+  assert.equal(snapshot.preview.questions[0].rationale, rationale);
   const native = await session.rpc.canvas.action.invoke({ instanceId, actionName: 'get_exploration', input: {} });
   assert.ok(!JSON.stringify(native).includes('Who will care for it?'), 'Native context excludes candidates');
   assert.equal((await (await fetch(opened.url + 'export.json')).json()).nodes.length, 1);
   snapshot = await action('accept-questions', { batchId: snapshot.preview.id, selected: [{ index: 0, question: 'Who will care for it?' }] });
   assert.equal(snapshot.document.nodes.length, 2); assert.equal(snapshot.preview, null);
+  assert.equal(snapshot.document.nodes[1].rationale, rationale);
   const nodeId = snapshot.document.nodes[1].id;
   await action('answer', { nodeId, answer: 'Neighbors', expand: false });
   await action('research', { nodeId });
@@ -104,6 +107,7 @@ try {
   await action('finish');
   const exported = await (await fetch(opened.url + 'export.json')).json();
   assert.equal(exported.nodes[1].answer, 'Neighbors'); assert.equal(exported.nodes[1].research, null);
+  assert.equal(exported.nodes[1].rationale, rationale);
   assert.match(await (await fetch(opened.url + 'export.md')).text(), /Neighbors/);
   const pendingLate = await action('questions', { nodeId });
   await action('cancel');

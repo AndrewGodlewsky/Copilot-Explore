@@ -547,12 +547,41 @@ Published task14 integration: attachVoice insert(value,caret) synchronously upda
 
 ### Verification and release
 
-- [ ] RED/GREEN tests for empty/maximum/Unicode answers, strict malformed output, names/numbers/uncertainty prompt contract, cancellation, rapid replacement, delayed response, edits/dictation during the request, node/journey changes, state preservation, proposal review, Apply/Reject/conditional Undo and no automatic save or attached-chat send.
-- [ ] Verify actual HTTP input/client/identity/Origin guards and safe text rendering with local fixtures. Exercise narrow DOM structure/keyboard focus using jsdom without opening a browser or recording the real microphone.
-- [ ] Test isolated SDK account/model/workspace/tool-free assertions, cancellation/release, usage attribution/deduplication/recovery and no ambient configuration. Use installed runtime with a disposable Copilot home/local model fixture, never a paid provider or existing user session. If the common research lifecycle changes, run its existing installed local fixture too.
-- [ ] Run npm test, npm run check, npm run package, applicable installed runtime fixtures. Use run-npm.mjs with unique task-15 labels for clean stdout/stderr/exit evidence; do not repeat passing tests solely for reassurance.
-- [ ] Bump confirmed patch and synchronize all release metadata/README/release note; include controller plan update, self-review and commit. Controller reviews/publishes; do not push/merge/close the issue and do not spawn nested agents.
-- [ ] Write task-15-report.md with final helper and UI APIs, context limits, original/Undo lifecycle, TDD/final evidence, SHA and native/live-model quality limitations. Raise concrete integration conflicts while continuing independent work.
+- [x] RED/GREEN tests for empty/maximum/Unicode answers, strict malformed output, names/numbers/uncertainty prompt contract, cancellation, rapid replacement, delayed response, edits/dictation during the request, node/journey changes, state preservation, proposal review, Apply/Reject/conditional Undo and no automatic save or attached-chat send.
+- [x] Verify actual HTTP input/client/identity/Origin guards and safe text rendering with local fixtures. Exercise narrow DOM structure/keyboard focus using jsdom without opening a browser or recording the real microphone.
+- [x] Test isolated SDK account/model/workspace/tool-free assertions, cancellation/release, usage attribution/deduplication/recovery and no ambient configuration. Use installed runtime with a disposable Copilot home/local model fixture, never a paid provider or existing user session. If the common research lifecycle changes, run its existing installed local fixture too.
+- [x] Run npm test, npm run check, npm run package, applicable installed runtime fixtures. Use run-npm.mjs with unique task-15 labels for clean stdout/stderr/exit evidence; do not repeat passing tests solely for reassurance.
+- [x] Bump confirmed patch and synchronize all release metadata/README/release note; include controller plan update, self-review and commit. Controller reviews/publishes; do not push/merge/close the issue and do not spawn nested agents.
+- [x] Write task-15-report.md with final helper and UI APIs, context limits, original/Undo lifecycle, TDD/final evidence, SHA and native/live-model quality limitations. Raise concrete integration conflicts while continuing independent work.
+
+Published task 15: **v0.1.27**, `bc50a35`, 281 tests/check/package and installed cleanup/research/canvas fixtures passed; remote main verified.
+
+## Task 16: Explain why a question was suggested (#23 / original31)
+
+Read issue-31.md, task-16-design-notes.md and AGENTS.md. BASE is `bc50a352900516982b3f66386939f21c57b1d2f2`; ship version **0.1.28**. Task15 is published and independently approved. Read the installed canvas SDK declarations before changing callback schemas. This task augments attached-chat question generation; it does not create another model operation.
+
+### Contract
+
+- Add optional nonblank rationale text, at most 1,000 JavaScript characters, to generated question candidates and accepted ordinary question nodes. Preserve absence on older payloads/maps; do not invent legacy explanations. Reject invalid type/empty/overlong fields, and do not attach generated rationale to the idea or user-supplied direction seeds. Retain sparse metadata and the existing total document byte/node bounds.
+- Request a concise explanation of the uncertainty being explored and its consequence for the exploration objective/relevant context. Rationale is model reasoning at generation time, distinct from answer certainty and the later Low/Medium/High importance feature. No automatic importance ranking or confidence scores in this issue.
+- Carry rationale through callback staging, browser preview, subset acceptance, native import/export, revision history, Markdown and relevant further-generation context. Preserve request/instance/source correlation and existing legacy callback acceptance. Only explicit user acceptance adds the candidate and rationale to the saved map.
+- Show an optional **Why this question?** disclosure near the expanded question and an unobtrusive equivalent in candidate review. Keep compact map cards uncluttered. Render rationale as text, with no arbitrary HTML/links. Preserve the active draft, state, caret, IME, reference disclosure and voice controls through ordinary rerenders.
+- Rationale is historical: explain that it was generated for the original suggested wording and context. When the user adjusted wording in preview, clearly associate the rationale with generation.originalQuestion rather than asserting it explains the rewritten question. Ancestor-review indicators remain visible where applicable. Objective/answer changes must not silently regenerate or relabel historical rationale as current advice.
+- Use that explicit historical contract instead of a whole-context hash that becomes stale immediately when its own batch is accepted. No automatic inference on polls, legacy selection or objective edits. A freshly accepted unchanged question must not appear stale merely because acceptance added siblings.
+- For later generation context, label any included rationale as historical model explanation, not a user fact/decision; keep the normal context bounds. Never add unavailable rationale text to legacy maps just to satisfy a prompt.
+- Fix the carried task11 Minor in root skills/explore/SKILL.md:10 while updating this same skill: "starts an exploration, saves an answer and asks for follow-ups, or explicitly adds a missing direction." Record the Minor resolution in the report/open-minors ledger through the controller.
+
+### Verification and release
+
+- [ ] RED/GREEN model/controller tests for optional legacy values, validation bounds/types, direction/root exclusion, batch staging with no commit, edited/subset acceptance, source-change rejection, export/import/history preservation and document-size failure without mutation.
+- [ ] UI tests for missing rationale, expanded and preview disclosure, changed wording attribution, ancestor/goal changes retaining historical meaning, plain-text malicious content, draft/state/caret/voice safety, and no inference caused by reading explanations.
+- [ ] Update skill/callback contracts and the installed local canvas fixture to prove rationale reaches preview then accepted native data. Run npm test, npm run check, npm run package and applicable installed fixture through run-npm.mjs with unique task-16 labels. No paid provider, existing session or browser/desktop automation.
+- [ ] Synchronize confirmed patch metadata/README/release notes, include controller plan update, self-review and commit. No nested agents, push, merge or issue closure.
+- [ ] Write task-16-report.md with schema/context/UI decisions, tests, SHA, Minor resolution and remaining native/live-generation quality checks.
+
+Published task15 integration: DraftClient.textGeneration identifies actual text mutations separately from state-only edits. CleanupClient owns transient proposal/Undo state across same-node rerenders. Preserve that controller and its focus/scroll state when adding rationale disclosures; do not trigger text edits or cleanup requests merely by reading rationale. Retain the established voice blur/cancellation boundary when focus leaves the answer/voice controls; do not create a new microphone focus exemption. The shared SDK lifecycle is now owned-helper.mjs; this issue should not need to change it.
+
+Canvas/model preflight: canvas.mjs object() currently makes all properties required; make rationale explicitly optional without weakening required question/category or additionalProperties restrictions. acceptQuestions() reconstructs editable question plus original category; copy rationale only from the validated staged batch. Do not accept a browser-supplied replacement rationale or weaken the selected-object extra-key rejection.
 
 ## Issue index
 

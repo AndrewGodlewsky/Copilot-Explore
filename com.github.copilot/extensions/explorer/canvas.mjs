@@ -8,11 +8,11 @@ import { createCleaner } from './cleanup.mjs';
 
 const string = (maxLength = 5000) => ({ type: 'string', minLength: 1, maxLength });
 const array = (items, maxItems) => ({ type: 'array', items, maxItems });
-const object = properties => ({ type: 'object', additionalProperties: false, properties, required: Object.keys(properties) });
+const object = (properties, required = Object.keys(properties)) => ({ type: 'object', additionalProperties: false, properties, required });
 const requestId = string(100);
 export const actionSchemas = {
   get_exploration: object({}),
-  submit_questions: object({ requestId, questions: { ...array(object({ question: string(600), category: string(60) }), 6), minItems: 1 } }),
+  submit_questions: object({ requestId, questions: { ...array(object({ question: string(600), category: string(60), rationale: string(1000) }, ['question', 'category']), 6), minItems: 1 } }),
   fail_request: object({ requestId, message: string(2000) }),
 };
 

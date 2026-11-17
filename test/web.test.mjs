@@ -36,7 +36,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     researcher: { run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
   }).load();
   await explorer.command('start', { topic: 'A tool library' });
-  await explorer.receive('questions', { requestId: explorer.pending.id, questions: [
+  await explorer.receive('questions', { requestId: explorer.pending.id, questions: options.questions ?? [
     { category: 'People', question: 'Who should borrow first?' }, { category: 'Trust', question: 'What if a tool breaks?' },
   ] });
   if (!options.preview) await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: explorer.preview.questions.map((q, index) => ({ index, question: q.question })) });
@@ -120,6 +120,53 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
+
+test('historical question rationale is disclosed near expanded question without changing drafts or voice', async t => {
+  const explanation = '<img src=x onerror=alert(1)> Unclear audience affects the pilot.';
+  const f = await fixture(t, 340, undefined, false, { questions: [{ question: 'Who should borrow first?', category: 'People', rationale: explanation }] });
+  f.open(f.explorer.doc.nodes[1].id);
+  const $ = id => f.document.getElementById(id);
+  assert.equal($('question-rationale').open, false);
+  assert.equal($('question-rationale').textContent.includes(explanation), true);
+  assert.equal($('question-rationale').querySelector('img'), null);
+  f.type('answer', 'Local draft'); $('answer').focus(); $('answer').setSelectionRange(5, 5);
+  $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  $('references').open = true;
+  $('question-rationale').open = true;
+  const changed = structuredClone(f.explorer.doc); changed.objective = 'Changed goal'; changed.nodes[1].review = true;
+  await f.explorer.save(changed, 'Guidance changed');
+  await until(() => $('question-rationale')?.open && /An earlier answer changed/.test(f.document.querySelector('.note')?.textContent ?? ''), 'historical rationale rerender');
+  assert.match($('question-rationale').textContent, /original suggested wording and context/i);
+  assert.equal($('answer').value, 'Local draft'); assert.equal($('answer').selectionStart, 5);
+  assert.equal($('answer').selectionEnd, 5); assert.equal($('answer-state').value, 'assumption');
+  assert.equal($('references').open, true); assert.ok($('voice-status'));
+  const composingAnswer = $('answer'); composingAnswer.dispatchEvent(new f.window.Event('compositionstart', { bubbles: true }));
+  const newer = structuredClone(f.explorer.doc); newer.objective = 'Another goal'; await f.explorer.save(newer, 'Guidance changed');
+  await until(() => f.explorer.doc.objective === 'Another goal', 'saved during composition');
+  assert.equal($('answer'), composingAnswer); composingAnswer.dispatchEvent(new f.window.Event('compositionend', { bubbles: true }));
+  await until(() => $('answer') !== composingAnswer, 'composition-safe rerender');
+  assert.equal($('answer').value, 'Local draft'); assert.equal($('question-rationale').open, true);
+  assert.equal(f.explorer.pending, null);
+});
+
+test('candidate rationale follows original wording through edited preview and legacy absence', async t => {
+  const f = await fixture(t, 340, undefined, false, { preview: true, questions: [{ question: 'Who starts?', category: 'People', rationale: 'Uncertain first audience affects the pilot.' }] });
+  const $ = id => f.document.getElementById(id);
+  await until(() => $('candidate-rationale-0'), 'preview rationale');
+  f.type('candidate-question-0', 'Who starts this week?');
+  assert.match($('candidate-rationale-0').textContent, /Who starts\?/);
+  assert.match($('candidate-rationale-0').textContent, /original suggested wording/i);
+  $('accept-questions').click();
+  await until(() => f.explorer.doc.nodes.length === 2, 'accepted question');
+  assert.equal(f.explorer.doc.nodes[1].rationale, 'Uncertain first audience affects the pilot.');
+  await until(() => [...f.document.querySelectorAll('#nodes button')].some(b => b.title === 'Who starts this week?'), 'accepted map node');
+  f.open(f.explorer.doc.nodes[1].id);
+  assert.match($('question-rationale').textContent, /Who starts\?/);
+  assert.match($('question-rationale').textContent, /original suggested wording/i);
+  const legacy = await fixture(t, 340);
+  legacy.open(legacy.explorer.doc.nodes[1].id);
+  assert.equal(legacy.document.getElementById('question-rationale'), null);
+});
 
 test('Clean My Answer reviews safely in a narrow pane, preserves state/polling, and applies with conditional undo', async t => {
   const runs = [];

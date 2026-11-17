@@ -29,6 +29,7 @@ export function questions(value) {
   const result = list(value, 'questions', 6, q => ({
     question: text(q?.question, 'Question', 600),
     category: text(q?.category, 'Category', 60),
+    ...(q && Object.hasOwn(q, 'rationale') ? { rationale: text(q.rationale, 'Question rationale', 1000) } : {}),
   }));
   if (!result.length) throw new Error('Return at least one question.');
   return result;
@@ -61,6 +62,7 @@ export function acceptQuestions(doc, parentId, batch, selected) {
   nodes.forEach((node, i) => {
     const original = batch.questions[selected[i].index];
     node.generation = generation({ requestId: batch.id, originalQuestion: original.question, originalCategory: original.category, adjusted: node.question !== original.question }, node.question, node.category);
+    if (Object.hasOwn(original, 'rationale')) node.rationale = text(original.rationale, 'Question rationale', 1000);
   });
   next.finishedAt = null;
   validateDocument(next);
@@ -107,6 +109,7 @@ export function validateDocument(value) {
     ...(Object.hasOwn(n, 'kind') ? { kind: n.kind } : {}),
     question: n.kind === 'direction' ? directionText(n.question) : text(n.question, 'Question', n.id === value.rootId ? 4000 : 600),
     category: text(n.category, 'Category', 60), answer: guidanceText(n.answer, 'Answer', 20000),
+    ...(Object.hasOwn(n, 'rationale') ? { rationale: text(n.rationale, 'Question rationale', 1000) } : {}),
     ...(Object.hasOwn(n, 'answerState') ? { answerState: n.answerState } : {}),
     research: n.research === null ? null : research(n.research), review: n.review === true,
     ...(Object.hasOwn(n, 'generation') ? { generation: generation(n.generation, text(n.question, 'Question', 600), text(n.category, 'Category', 60)) } : {}),
@@ -114,6 +117,7 @@ export function validateDocument(value) {
   const byId = new Map(nodes.map(n => [n.id, n]));
   for (const node of nodes) {
     if (Object.hasOwn(node, 'kind') && (node.kind !== 'direction' || node.id === value.rootId)) throw new Error('Invalid node kind.');
+    if (Object.hasOwn(node, 'rationale') && (node.id === value.rootId || !isQuestion(node) || !node.generation)) throw new Error('Only generated ordinary questions can have a rationale.');
     if (!isQuestion(node) && node.kind === 'direction' && (node.answer !== '' || Object.hasOwn(node, 'answerState') || node.research !== null || Object.hasOwn(node, 'generation'))) throw new Error('A direction cannot have an answer, answer state, research or AI generation provenance.');
     const error = answerStateError(node.answer, Object.hasOwn(node, 'answerState') ? node.answerState : effectiveAnswerState(node));
     if (error) throw new Error(error);
@@ -204,7 +208,12 @@ export function contextFor(doc, nodeId) {
   for (let node = findNode(doc, nodeId); node; node = byId.get(node.parentId)) {
     path.push({ id: node.id, question: node.question, answer: node.answer, ...(isQuestion(node) ? { answerState: effectiveAnswerState(node) } : node.kind === 'direction' ? { kind: 'direction', origin: 'user' } : {}), review: node.review });
   }
-  return { topic: doc.topic, objective: doc.objective ?? '', successCriteria: doc.successCriteria ?? '', path: path.reverse(),
+  const relevant = [...doc.nodes.filter(n => n.parentId === nodeId), ...path.map(p => byId.get(p.id))];
+  const historicalRationales = relevant.filter(n => n && isQuestion(n) && n.rationale && n.generation).slice(-12).map(n => ({
+    question: n.question, originalQuestion: n.generation.originalQuestion, rationale: n.rationale,
+    provenance: 'Historical model explanation for the original suggested wording and context; not a user fact or decision.',
+  }));
+  return { topic: doc.topic, objective: doc.objective ?? '', successCriteria: doc.successCriteria ?? '', path: path.reverse(), historicalRationales,
     existingQuestions: doc.nodes.filter(n => n.parentId === nodeId && isQuestion(n)).map(n => n.question),
     directions: doc.nodes.filter(n => n.parentId === nodeId && n.kind === 'direction').map(n => ({ kind: 'direction', origin: 'user', text: n.question })),
     decisionsElsewhere: doc.nodes.filter(n => isQuestion(n) && (n.answer.trim() || effectiveAnswerState(n) !== 'unanswered') && !path.some(p => p.id === n.id)).map(n => ({ question: n.question, answer: n.answer, answerState: effectiveAnswerState(n), review: n.review })) };
@@ -229,6 +238,11 @@ export function toMarkdown(doc) {
     if (!isQuestion(n)) { lines.push('Direction (user supplied). Original direction text; not an answer or decision.', ''); continue; }
     lines.push('### User answer', '', `State: ${ANSWER_STATES[effectiveAnswerState(n)]}.`, '', n.answer ? md(n.answer) : '_No answer text._', '');
     if (n.generation) lines.push('### Question provenance', '', `Generated question: ${md(n.generation.originalQuestion)}`, '', `Generated category: ${md(n.generation.originalCategory)}. ${n.generation.adjusted ? 'Wording adjusted by the user before acceptance.' : 'Accepted without wording changes.'}`, '');
+    if (n.rationale) {
+      lines.push('### Why this question?', '', 'Historical model explanation for the original suggested wording and context; not a user fact or decision.', '');
+      if (n.generation?.adjusted) lines.push(`Original suggested wording: ${md(n.generation.originalQuestion)}`, '');
+      lines.push(md(n.rationale), '');
+    }
     if (n.research) {
       const r = n.research;
       lines.push('### AI research', '', `Basis: ${r.basis === 'sources' ? 'Consulted sources' : 'Model reasoning; not externally verified'}.`, '', md(r.summary), '');

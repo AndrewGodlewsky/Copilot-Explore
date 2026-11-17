@@ -41,7 +41,7 @@ const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args)
 const navigation = attachNavigation({ document, window, fetch: (...args) => fetch(...args),
   zoom: (factor, point) => zoom(factor, point),
   pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); } });
-const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, manualOpen: false, question: '' }); return nodeUi.get(id); };
+const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, rationaleOpen: false, manualOpen: false, question: '' }); return nodeUi.get(id); };
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -77,6 +77,7 @@ function captureWorkspace() {
     const ui = uiFor(panel.dataset.nodeId);
     ui.scroll = content.scrollTop;
     ui.researchOpen = panel.querySelector('.research-disclosure')?.open ?? false;
+    ui.rationaleOpen = panel.querySelector('#question-rationale')?.open ?? false;
     ui.manualOpen = panel.querySelector('.manual')?.open ?? false;
     if (!references.error) references.open = panel.querySelector('#references')?.open ?? references.open;
   }
@@ -100,7 +101,7 @@ function apply(next, reset = false) {
   }
   signature = stamp; state = next;
   if (changedDocument) switchReferences();
-  if (state.preview?.id !== previewEdits?.id) previewEdits = state.preview ? { id: state.preview.id, questions: state.preview.questions.map(q => ({ question: q.question, selected: true })) } : null;
+  if (state.preview?.id !== previewEdits?.id) previewEdits = state.preview ? { id: state.preview.id, questions: state.preview.questions.map(q => ({ question: q.question, selected: true, rationaleOpen: false })) } : null;
   if (next.acceptedIds) {
     acceptedIds = new Set(next.acceptedIds); acceptedParentId = next.acceptedParentId;
     collapsed = revealPath(state.document.nodes, collapsed, next.acceptedIds[0]);
@@ -550,6 +551,15 @@ function renderWorkspace() {
   const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.kind === 'direction' ? nodeStatus(node) : node.category), el('div', { class: 'node-head-actions' }, button('Focus branch', () => focusBranch(node.id), { id: 'focus-branch', 'aria-pressed': String(focusId === node.id), 'aria-label': `Focus branch: ${node.question}` }), branchButton(node, true), button('Collapse node', () => collapseNode(), { id: 'collapse-node' }))), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
   if (collapsed.has(node.id)) heading.append(el('p', { class: 'branch-count' }, hiddenSummary(node.id)));
   const content = el('div', { class: 'node-content' }); panel.append(heading, content);
+  if (node.rationale) {
+    const why = el('details', { id: 'question-rationale', class: 'question-rationale' }, el('summary', { id: 'question-rationale-summary' }, 'Why this question?'),
+      el('p', { class: 'quiet' }, 'Historical model explanation for the original suggested wording and context. It is not a user fact, decision, or confidence score.'),
+      node.generation?.adjusted ? el('p', { class: 'quiet' }, 'Original suggested wording: ', node.generation.originalQuestion) : null,
+      el('p', {}, node.rationale));
+    why.open = ui.rationaleOpen;
+    why.addEventListener('toggle', () => { if (why.isConnected) ui.rationaleOpen = why.open; });
+    content.append(why);
+  }
   content.append(renderReferences(node));
   if (pending) {
     const workNode = byId.get(state.pending.nodeId);
@@ -688,7 +698,17 @@ function renderQuestionPreview() {
     check.addEventListener('change', () => { edit.selected = check.checked; $('accept-questions').disabled = batch.stale || !edits.some(q => q.selected); });
     const wording = el('textarea', { id: `candidate-question-${index}`, rows: '2', maxlength: '600', 'aria-label': `Question ${index + 1} wording` }); wording.value = edit.question;
     wording.addEventListener('input', () => { edit.question = wording.value; });
-    section.append(el('div', { class: 'candidate' }, el('label', { for: check.id }, check, `Include ${batch.questions[index].category} question`), wording));
+    const row = el('div', { class: 'candidate' }, el('label', { for: check.id }, check, `Include ${batch.questions[index].category} question`), wording);
+    if (batch.questions[index].rationale) {
+      const why = el('details', { id: `candidate-rationale-${index}`, class: 'candidate-rationale' }, el('summary', {}, 'Why suggested?'),
+        el('p', { class: 'quiet' }, 'Historical model explanation for the original suggested wording and context. It will stay with this question if you accept an adjusted version.'),
+        el('p', { class: 'quiet' }, 'Original suggested wording: ', batch.questions[index].question),
+        el('p', {}, batch.questions[index].rationale));
+      why.open = edit.rationaleOpen;
+      why.addEventListener('toggle', () => { if (why.isConnected) edit.rationaleOpen = why.open; });
+      row.append(why);
+    }
+    section.append(row);
   });
   section.append(el('div', { class: 'actions' }, button('Accept selected', async () => {
     const result = await api('accept-questions', { batchId: batch.id, selected: edits.flatMap((q, index) => q.selected ? [{ index, question: q.question }] : []) });

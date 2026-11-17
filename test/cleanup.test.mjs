@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { createCleaner, cleanupText, parseCleanup } from '../com.github.copilot/extensions/explorer/cleanup.mjs';
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
+import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 
 test('cleanup validates exact Unicode, maximum characters and strict bounded JSON without truncation', () => {
   const text = ' 😀 Élodie 42, maybe?\n';
@@ -38,7 +41,7 @@ async function fixture(t, options = {}) {
   const runtime = async () => ({ path: process.execPath, sdk: { RuntimeConnection: { forStdio: value => value }, CopilotClient: class {
     constructor(config) { calls.client = config; }
     async start() { options.start?.(); }
-    async forceStop() { calls.stops++; }
+    async forceStop() { calls.stops++; await options.stop?.(); }
     async createSession(config) {
       calls.config = config;
       return { sessionId: config.sessionId, rpc: { ...parent.rpc, gitHubAuth: { getStatus: async () => options.auth ?? auth },
@@ -52,7 +55,7 @@ async function fixture(t, options = {}) {
       } };
     }
   } } });
-  const cleaner = createCleaner(parent, { runtime, usageDirectory: join(dir, 'usage'), ...(options.usageRecorder ? { usageRecorder: options.usageRecorder } : {}) });
+  const cleaner = createCleaner(parent, { runtime, usageDirectory: join(dir, 'usage'), ...(options.usageRecorder ? { usageRecorder: options.usageRecorder } : {}), ...(options.stopTimeoutMs ? { stopTimeoutMs: options.stopTimeoutMs } : {}) });
   t.after(async () => { await cleaner.close(); if (calls.client) { const owned = dirname(calls.client.workingDirectory); assert.equal(dirname(resolve(owned)), resolve(tmpdir())); await rm(owned, { recursive: true, force: true }); } await rm(dir, { recursive: true, force: true }); });
   return { cleaner, calls, dir };
 }
@@ -70,6 +73,36 @@ test('cleanup sends only captured text and fixed conservative instructions with 
   const [id] = await readdir(join(dir, 'usage', 'session-state'));
   const journal = await readFile(join(dir, 'usage', 'session-state', id, 'events.jsonl'), 'utf8');
   assert.match(journal, /Explorer Answer Cleanup/); assert.match(journal, /session.usage_record/); assert.ok(!journal.includes('Élodie'));
+});
+
+test('owned helper distinguishes failed and timed-out shutdown from confirmed release', async t => {
+  const failed = await fixture(t, { stop: () => { throw new Error('stop failed'); }, stopTimeoutMs: 20 });
+  const failedError = await failed.cleaner.run('Draft').then(() => null, error => error);
+  assert.match(failedError.message, /Recovery files were retained/);
+  assert.equal(await failedError.releaseConfirmed, false);
+  let releaseStop;
+  const timed = await fixture(t, { stop: () => new Promise(resolve => { releaseStop = resolve; }), stopTimeoutMs: 20 });
+  const timedError = await timed.cleaner.run('Draft').then(() => null, error => error);
+  assert.match(timedError.message, /Recovery files were retained/);
+  assert.equal(timed.calls.stops, 1);
+  releaseStop(); assert.equal(await timedError.releaseConfirmed, true);
+});
+
+test('actual failed owned-client stop blocks another controller-owned operation', async t => {
+  const { cleaner, dir } = await fixture(t, { stop: () => { throw new Error('stop failed'); }, stopTimeoutMs: 20 });
+  let helpRuns = 0;
+  const explorer = await new Explorer({ file: join(dir, 'journey.explore.json'), send: async () => {}, target: {}, cleaner,
+    questionHelper: { run() { helpRuns++; return Promise.resolve('Help'); }, close() {} } }).load();
+  await explorer.command('start', { topic: 'Topic' });
+  await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ question: 'Question?', category: 'A' }] });
+  await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: [{ index: 0, question: 'Question?' }] });
+  const common = { id: randomUUID(), journey: explorer.doc.id, nodeId: explorer.doc.nodes[1].id };
+  await explorer.cleanupRequest({ action: 'start', ...common, mutation: 0, text: 'Draft' });
+  let status;
+  for (let i = 0; i < 50; i++) { status = await explorer.cleanupRequest({ action: 'poll', ...common, mutation: 0 }); if (status.status === 'error') break; await delay(10); }
+  assert.equal(status.status, 'error'); assert.match(status.error, /Recovery files were retained/);
+  await assert.rejects(explorer.helpRequest({ action: 'start', ...common, operation: 'terms' }), /not confirmed shutdown/);
+  assert.equal(helpRuns, 0); await explorer.close();
 });
 
 test('cleanup fails closed before inference for tools/accounts and preserves input on errors/cancel', async t => {

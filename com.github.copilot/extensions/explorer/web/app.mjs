@@ -705,12 +705,13 @@ function renderQuestionHelp() {
   const area = $('question-help-results'); if (!area) return;
   const running = questionHelp.work?.status === 'pending';
   for (const id of ['help-rephrase', 'help-example', 'help-terms']) if ($(id)) $(id).disabled = running || cleanup.work?.status === 'pending';
-  const stamp = JSON.stringify({ work: questionHelp.work, results: [...questionHelp.results] });
+  const stamp = JSON.stringify({ work: questionHelp.work, cleanupPending: cleanup.work?.status === 'pending', results: [...questionHelp.results] });
   if (area.dataset.signature === stamp) return;
   const focus = area.contains(document.activeElement) ? document.activeElement.id : null;
   area.dataset.signature = stamp; area.replaceChildren();
   if (running) area.append(el('p', { role: 'status' }, `${questionHelp.work.progress ?? 'Helping with the question'}… Your draft stays editable. Cancel this before Clean My Answer.`),
     button('Cancel question help', () => { questionHelp.cancel(); $('question-help-summary')?.focus({ preventScroll: true }); }, { id: 'cancel-question-help' }));
+  else if (cleanup.work?.status === 'pending') area.append(el('p', { role: 'status' }, 'Cancel answer cleanup before starting question help.'));
   else if (questionHelp.work?.status === 'error') {
     const changedSource = /saved question context changed|saved journey changed|another canvas updated/i.test(questionHelp.work.error);
     area.append(el('p', { role: 'status' }, changedSource ? questionHelp.work.error : `${questionHelp.work.error} Choose an action to try again.`));
@@ -1067,7 +1068,7 @@ new ResizeObserver(() => {
 new ResizeObserver(() => { if (expanded) scheduleLayout(); }).observe($('node-workspace'));
 window.addEventListener('pagehide', event => {
   cleanup.cancel();
-  questionHelp.cancel();
+  questionHelp.dispose();
   void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;
   closed = true; clearTimeout(pollTimer); cancelAnimationFrame(layoutFrame); endDrag();
@@ -1079,7 +1080,7 @@ async function poll() {
     const response = await fetch('api/state');
     if (!response.ok) throw new Error('Canvas connection lost. Reopen Explorer in Copilot.');
     const next = await response.json();
-    if (!closed && !busy && epoch === actionEpoch) apply(next);
+    if (!closed && !busy && epoch === actionEpoch) { apply(next); await questionHelp.checkRetained(); }
   } catch (error) { if (!closed && !busy && epoch === actionEpoch) notice(error.message); }
   finally { if (!closed) pollTimer = setTimeout(poll, document.hidden ? 4000 : 1200); }
 }

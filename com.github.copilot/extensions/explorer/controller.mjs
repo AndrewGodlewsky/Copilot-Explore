@@ -18,7 +18,7 @@ export class Explorer {
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
     this.researcher = researcher; this.researchTasks = new Set();
-    this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.closed = false;
+    this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
     this.library = library; this.binding = binding; this.activeKey = null;
   }
   async load() {
@@ -41,6 +41,17 @@ export class Explorer {
     if (help && (help.journey !== (this.activeKey ?? this.doc?.id) || !sameHelpContext(help.context, this.doc))) {
       help.abort.abort(); this.help = null;
     }
+    for (const [id, result] of this.helpContexts) if (result.journey !== (this.activeKey ?? this.doc?.id)) this.helpContexts.delete(id);
+  }
+  trackToolFreeRelease(error) {
+    if (!error?.releaseConfirmed) return;
+    const marker = {}; this.unconfirmedToolFreeRelease = marker;
+    Promise.resolve(error.releaseConfirmed).then(confirmed => {
+      if (confirmed && this.unconfirmedToolFreeRelease === marker) this.unconfirmedToolFreeRelease = null;
+    }).catch(() => {});
+  }
+  requireToolFreeRelease() {
+    if (this.unconfirmedToolFreeRelease) throw new Error('An earlier helper has not confirmed shutdown. Cleanup and question help are blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
   }
   cleanupRequest(input) {
     return this.transact(() => {
@@ -56,6 +67,7 @@ export class Explorer {
       const current = () => this.doc && input.journey === (this.activeKey ?? this.doc.id) && this.doc.nodes.some(n => n.id === input.nodeId && isQuestion(n));
       if (!current()) throw new Error('The selected journey or answer changed. Try Clean My Answer again.');
       if (input.action === 'start') {
+        this.requireToolFreeRelease();
         const text = cleanupText(input.text);
         if (!this.cleaner) throw new Error('Clean My Answer requires the installed Copilot desktop SDK.');
         if (this.help?.status === 'pending') throw new Error('Cancel question help before cleaning your answer.');
@@ -66,9 +78,11 @@ export class Explorer {
         this.toolFreeTask = this.toolFreeTask.then(async () => {
           if (this.cleanup !== work || work.abort.signal.aborted || !current()) return;
           try {
+            this.requireToolFreeRelease();
             const result = await this.cleaner.run(text, { signal: work.abort.signal, onProgress: progress => { if (this.cleanup === work) work.progress = progress; } });
             if (this.cleanup === work && !work.abort.signal.aborted && current()) { work.text = cleanupText(result); work.status = 'proposal'; }
           } catch (error) {
+            this.trackToolFreeRelease(error);
             if (this.cleanup === work && !work.abort.signal.aborted) { work.error = error.message; work.status = 'error'; }
           }
         });
@@ -79,6 +93,29 @@ export class Explorer {
   }
   helpRequest(input) {
     return this.transact(async () => {
+      if (input?.action === 'check' || input?.action === 'forget') {
+        if (this.closed || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'action,ids,journey,nodeId' ||
+          typeof input.journey !== 'string' || input.journey.length > 100 || typeof input.nodeId !== 'string' || input.nodeId.length > 100 ||
+          !Array.isArray(input.ids) || input.ids.length < 1 || input.ids.length > 3 || input.ids.some(item => !item || typeof item !== 'object' || Array.isArray(item) ||
+            Object.keys(item).sort().join(',') !== 'id,operation' || typeof item.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(item.id) || !HELP_OPERATIONS.includes(item.operation)) ||
+          new Set(input.ids.map(item => item.id)).size !== input.ids.length) throw new Error('Invalid question help check.');
+        if (input.action === 'forget') {
+          for (const item of input.ids) {
+            const saved = this.helpContexts.get(item.id);
+            if (saved?.journey === input.journey && saved.nodeId === input.nodeId && saved.operation === item.operation) this.helpContexts.delete(item.id);
+          }
+          return { status: 'forgotten' };
+        }
+        let current;
+        try { current = await this.readCurrent(); } catch { /* Treat unavailable or replaced committed sources as stale. */ }
+        const staleIds = input.ids.filter(item => {
+          const saved = this.helpContexts.get(item.id);
+          return !saved || saved.journey !== input.journey || saved.nodeId !== input.nodeId || saved.operation !== item.operation ||
+            !current || input.journey !== (this.activeKey ?? this.doc?.id) || !sameHelpContext(saved.context, this.doc) || !sameHelpContext(saved.context, current);
+        }).map(item => item.id);
+        for (const id of staleIds) this.helpContexts.delete(id);
+        return { status: 'checked', staleIds };
+      }
       if (this.closed || !input || typeof input !== 'object' || Array.isArray(input) || !['start', 'poll', 'cancel'].includes(input.action) ||
         Object.keys(input).sort().join(',') !== (input.action === 'start' ? 'action,id,journey,nodeId,operation' : 'action,id,journey,nodeId,operation') ||
         typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || typeof input.journey !== 'string' || input.journey.length > 100 ||
@@ -89,9 +126,11 @@ export class Explorer {
         return { id: input.id, operation: input.operation, status: 'cancelled' };
       }
       if (input.action === 'start') {
+        this.requireToolFreeRelease();
         if (!this.questionHelper) throw new Error('Question help requires the installed Copilot desktop SDK.');
         if (this.cleanup?.status === 'pending') throw new Error('Cancel answer cleanup before starting question help.');
         if (!this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw new Error('The selected journey changed. Refresh it and try again.');
+        for (const [id, result] of this.helpContexts) if (result.journey !== input.journey || result.nodeId !== input.nodeId) this.helpContexts.delete(id);
         const context = helpContext(this.doc, input.nodeId);
         let current;
         try { current = await this.readCurrent(); } catch { throw new Error('The saved journey changed. Refresh it before asking for question help.'); }
@@ -102,9 +141,15 @@ export class Explorer {
         this.toolFreeTask = this.toolFreeTask.then(async () => {
           if (this.help !== work || work.abort.signal.aborted) return;
           try {
+            this.requireToolFreeRelease();
             const result = await this.questionHelper.run(work.operation, work.context, { signal: work.abort.signal, onProgress: progress => { if (this.help === work) work.progress = progress; } });
-            if (this.help === work && !work.abort.signal.aborted) { work.text = helpText(result); work.status = 'result'; }
+            if (this.help === work && !work.abort.signal.aborted) {
+              work.text = helpText(result); work.status = 'result';
+              this.helpContexts.delete(work.id); this.helpContexts.set(work.id, { journey: work.journey, nodeId: work.nodeId, operation: work.operation, context: work.context });
+              if (this.helpContexts.size > 3) this.helpContexts.delete(this.helpContexts.keys().next().value);
+            }
           } catch (error) {
+            this.trackToolFreeRelease(error);
             if (this.help === work && !work.abort.signal.aborted) { work.error = error.message; work.status = 'error'; }
           }
         });
@@ -445,5 +490,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.closed = true; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
+  async close() { this.closed = true; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
 }

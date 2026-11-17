@@ -12,21 +12,48 @@ export class QuestionHelpClient {
       body: JSON.stringify({ action, id: work.id, journey: work.journey, nodeId: work.nodeId, operation: work.operation }) });
     const result = await response.json(); if (!response.ok) throw new Error(result.error); return result;
   }
+  forget(entries, selection = this.selection) {
+    if (!selection || !entries.length) return;
+    void this.fetch('api/question-help', { method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
+      body: JSON.stringify({ action: 'forget', journey: selection.journey, nodeId: selection.nodeId,
+        ids: entries.map(([operation, result]) => ({ operation, id: result.id })) }) }).catch(() => {});
+  }
   sync() {
     const current = this.context();
     if (!same(this.selection, current)) {
-      this.cancel(); this.selection = current; this.results.clear(); this.changed();
+      this.cancel(); this.forget([...this.results]); this.selection = current; this.results.clear(); this.changed();
     } else {
       if (this.work?.context && !sameHelpContext(this.work.context, this.source())) this.cancel();
-      let cleared = false;
-      for (const [operation, result] of this.results) if (!sameHelpContext(result.context, this.source())) { this.results.delete(operation); cleared = true; }
-      if (cleared) this.changed();
+      const stale = [...this.results].filter(([, result]) => !sameHelpContext(result.context, this.source()));
+      for (const [operation] of stale) this.results.delete(operation);
+      if (stale.length) { this.forget(stale); this.changed(); }
     }
   }
   cancel() {
     const old = this.work; this.work = null; clearTimeout(this.timer);
     if (old) void this.request('cancel', old).catch(() => {});
     if (old) this.changed();
+  }
+  dispose() { this.cancel(); this.forget([...this.results]); this.results.clear(); }
+  async checkRetained() {
+    this.sync();
+    if (this.checking || !this.selection || !this.results.size) return;
+    const selection = this.selection, ids = [...this.results].map(([operation, result]) => ({ id: result.id, operation }));
+    const abort = new AbortController(), timeout = setTimeout(() => abort.abort(), 5000);
+    this.checking = true;
+    try {
+      const response = await this.fetch('api/question-help', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
+        body: JSON.stringify({ action: 'check', journey: selection.journey, nodeId: selection.nodeId, ids }) });
+      const result = await response.json();
+      if (!response.ok || result.status !== 'checked' || !Array.isArray(result.staleIds)) throw new Error('Question help freshness check failed.');
+      if (!same(selection, this.selection)) return;
+      let changed = false;
+      for (const [operation, value] of this.results) if (result.staleIds.includes(value.id)) { this.results.delete(operation); changed = true; }
+      if (changed) this.changed();
+    } catch {
+      if (same(selection, this.selection) && this.results.size) { this.results.clear(); this.changed(); }
+    } finally { clearTimeout(timeout); this.checking = false; }
   }
   async start(operation) {
     if (!operations.includes(operation)) throw new Error('Invalid question help operation.');
@@ -47,7 +74,9 @@ export class QuestionHelpClient {
       if (result.status === 'result') {
         if (typeof result.text !== 'string' || !result.text.trim() || result.text.length > 4000) throw new Error('Question help returned an invalid explanation.');
         if (!work.context) throw new Error('Question help did not identify its saved context.');
-        this.results.delete(work.operation); this.results.set(work.operation, { text: result.text, context: work.context });
+        const previous = this.results.get(work.operation);
+        if (previous) this.forget([[work.operation, previous]]);
+        this.results.delete(work.operation); this.results.set(work.operation, { id: work.id, text: result.text, context: work.context });
         work.status = 'result';
       } else if (result.status === 'pending') {
         work.progress = result.progress; this.timer = setTimeout(() => void this.receive(work, 'poll'), 300);
@@ -55,6 +84,7 @@ export class QuestionHelpClient {
       else { this.cancel(); return; }
     } catch (error) {
       if (this.work !== work) return;
+      if (/saved question context changed|saved journey changed|another canvas updated/i.test(error.message)) { this.forget([...this.results]); this.results.clear(); }
       work.status = 'error'; work.error = error.message;
     }
     this.changed();

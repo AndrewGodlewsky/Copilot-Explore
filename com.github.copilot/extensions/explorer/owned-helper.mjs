@@ -28,7 +28,7 @@ const eligible = model => model?.provider?.kind === 'copilot' && typeof model.id
 const sameAccount = (a, b) => a?.isAuthenticated === true && b?.isAuthenticated === true && !!a.login && !!a.host && a.login.toLowerCase() === b.login?.toLowerCase() && a.host.toLowerCase() === b.host?.toLowerCase();
 
 // Only fixtures inject a runtime. Production resolves the pair supplied by the desktop bootstrap.
-export function createOwnedHelper(parent, operation, prepare, { usageDirectory, runtime = desktopRuntime, usageRecorder = createUsageRecorder } = {}) {
+export function createOwnedHelper(parent, operation, prepare, { usageDirectory, runtime = desktopRuntime, usageRecorder = createUsageRecorder, stopTimeoutMs = 10000 } = {}) {
   if (!['research', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
   const label = { research: 'Research', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
   const fail = message => new HelperError(message.replaceAll('Research', label).replaceAll('research', label.toLowerCase()));
@@ -44,12 +44,18 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
     return task;
   }
   async function execute(context, controller, progress) {
-    let client, directory, usage, stop, phase = 'preparing the SDK';
+    let client, directory, usage, stop, stopAttempt, phase = 'preparing the SDK';
     const sessionId = randomUUID();
     let terminalFailure;
     const stopWith = message => { terminalFailure ??= fail(message); controller.abort(); };
     const check = () => { if (terminalFailure) throw terminalFailure; if (controller.signal.aborted) throw cancelled(); };
-    const stopClient = () => { if (client) stop ??= deadline(client.forceStop(), 10000).then(() => true, () => false); return stop; };
+    const stopClient = () => {
+      if (client && !stop) {
+        stopAttempt = Promise.resolve().then(() => client.forceStop()).then(() => true, () => false);
+        stop = deadline(stopAttempt, stopTimeoutMs).then(value => value, () => false);
+      }
+      return stop;
+    };
     controller.signal.addEventListener('abort', () => void stopClient(), { once: true });
     const timer = setTimeout(() => controller.abort(), 180000); timer.unref?.();
     const stage = value => { phase = value; progress(value); check(); };
@@ -121,7 +127,9 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
         if (directory && usageDirectory) {
           await mkdir(usageDirectory, { recursive: true }).then(() => writeFile(join(usageDirectory, `recovery-${sessionId}.json`), JSON.stringify({ sessionId, directory }), { mode: 0o600 })).catch(() => {});
         }
-        throw fail('Helper cleanup or usage accounting failed. Recovery files were retained locally; no additional model call was made.');
+        const error = fail('Helper cleanup or usage accounting failed. Recovery files were retained locally; no additional model call was made.');
+        if (stopped === false) error.releaseConfirmed = stopAttempt;
+        throw error;
       }
       if (directory) {
         const inside = relative(tmpdir(), directory);

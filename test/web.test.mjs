@@ -247,6 +247,38 @@ test('question help refreshes an external source change before explicit retry', 
   assert.equal(runs.length, 2); assert.equal(runs[1].context.objective, 'A new saved goal');
 });
 
+test('ordinary polling removes externally stale completed help but retains unrelated edits', async t => {
+  const helper = { async run() { return 'Retained explanation.'; }, close() {} };
+  const f = await fixture(t, 340, undefined, false, { questionHelper: helper });
+  const [node, unrelated] = f.explorer.doc.nodes.slice(1); f.open(node.id);
+  const $ = id => f.document.getElementById(id); $('question-help').open = true;
+  $('help-rephrase').click(); await until(() => /Retained explanation/.test($('question-help-results').textContent), 'completed help');
+  const other = await new Explorer({ file: f.explorer.file }).load();
+  await other.command('answer', { revision: other.doc.revision, nodeId: unrelated.id, answer: 'Another branch', answerState: 'tentative' });
+  await delay(1400);
+  assert.match($('question-help-results').textContent, /Retained explanation/, 'unrelated committed branch preserves help');
+  await other.command('guidance', { revision: other.doc.revision, objective: 'Changed saved goal', successCriteria: '' });
+  await until(() => !$('question-help-results').textContent.includes('Retained explanation'), 'poll removes stale completed help');
+  assert.equal(f.explorer.doc.objective, '', 'freshness check does not refresh or save the canvas');
+});
+
+test('stale start error immediately suppresses multiple retained help results', async t => {
+  const runs = [];
+  const helper = { async run(operation) { runs.push(operation); return `Explanation for ${operation}.`; }, close() {} };
+  const f = await fixture(t, 340, undefined, false, { questionHelper: helper });
+  const node = f.explorer.doc.nodes[1]; f.open(node.id);
+  const $ = id => f.document.getElementById(id); $('question-help').open = true;
+  $('help-rephrase').click(); await until(() => /Explanation for rephrase/.test($('question-help-results').textContent), 'first result');
+  $('help-example').click(); await until(() => /Explanation for example/.test($('question-help-results').textContent), 'second result');
+  const other = await new Explorer({ file: f.explorer.file }).load();
+  await other.command('guidance', { revision: other.doc.revision, objective: 'New committed guidance', successCriteria: '' });
+  $('help-terms').click();
+  await until(() => $('refresh-question-help'), 'stale source error');
+  assert.doesNotMatch($('question-help-results').textContent, /Explanation for (rephrase|example)/);
+  await until(() => f.explorer.helpContexts.size === 0, 'obsolete retained context IDs forgotten');
+  assert.deepEqual(runs, ['rephrase', 'example'], 'stale error does not start inference');
+});
+
 test('candidate rationale follows original wording through edited preview and legacy absence', async t => {
   const f = await fixture(t, 340, undefined, false, { preview: true, questions: [{ question: 'Who starts?', category: 'People', rationale: 'Uncertain first audience affects the pilot.' }] });
   const $ = id => f.document.getElementById(id);

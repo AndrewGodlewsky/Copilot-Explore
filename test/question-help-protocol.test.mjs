@@ -41,6 +41,8 @@ test('private help HTTP is isolated, stale-safe and serialized with cleanup', as
   const unrelated = JSON.parse(await readFile(explorer.file, 'utf8')); unrelated.nodes[2].answer = 'Other branch saved'; unrelated.nodes[2].answerState = 'tentative'; unrelated.revision++;
   await writeFile(explorer.file, JSON.stringify(unrelated));
   assert.equal((await post({ ...second, action: 'poll' }).then(r => r.json())).status, 'result', 'other branch disk edit is not an input dependency');
+  assert.equal((await post({ action: 'check', journey: base.journey, nodeId, ids: [{ id: second.id, operation: second.operation }], context: runs[1].context })).status, 400, 'browser cannot provide replacement check context');
+  assert.deepEqual((await post({ action: 'check', journey: base.journey, nodeId, ids: [{ id: second.id, operation: second.operation }] }).then(r => r.json())).staleIds, [], 'retained result survives unrelated committed edit');
   assert.equal(explorer.doc.nodes[1].answer, ''); assert.equal(explorer.doc.nodes[1].question, 'What is λ?');
   assert.equal(sends.length, 1, 'only initial attached question generation');
   const other = { ...base, id: randomUUID(), operation: 'terms' };
@@ -49,9 +51,43 @@ test('private help HTTP is isolated, stale-safe and serialized with cleanup', as
   await writeFile(explorer.file, JSON.stringify(disk));
   const stale = await post({ ...other, action: 'poll' }).then(r => r.json());
   assert.equal(stale.status, 'error'); assert.match(stale.error, /saved question context changed/i);
+  assert.deepEqual((await post({ action: 'check', journey: base.journey, nodeId, ids: [{ id: second.id, operation: second.operation }] }).then(r => r.json())).staleIds, [second.id], 'retained result fails committed-source check');
   assert.equal(runs[2].signal.aborted, true);
   runs[2].resolve('Late');
   assert.equal((await post({ ...base, id: randomUUID(), action: 'start' })).status, 400, 'stale local canvas cannot start over changed disk source');
+});
+
+test('unconfirmed failed or timed-out shutdown blocks queued and new cross-feature work in both directions', async t => {
+  for (const first of ['cleanup', 'help']) for (const stop of ['failed', 'timeout']) {
+    const dir = await mkdtemp(join(tmpdir(), 'explorer-help-stop-'));
+    let sourceSignal, releaseStop; const targetRuns = [];
+    const releaseConfirmed = stop === 'failed' ? Promise.resolve(false) : new Promise(resolve => { releaseStop = resolve; });
+    const failingRun = (_, options) => new Promise((_, reject) => {
+      sourceSignal = options.signal;
+      options.signal.addEventListener('abort', () => setTimeout(() => {
+        const error = new Error('Helper cleanup failed.'); error.releaseConfirmed = releaseConfirmed; reject(error);
+      }, 15), { once: true });
+    });
+    const targetRun = () => { targetRuns.push(1); return Promise.resolve('Safe result'); };
+    const explorer = new Explorer({ file: join(dir, 'map.explore.json'), send: async () => {}, target: {},
+      cleaner: { run: first === 'cleanup' ? failingRun : targetRun, close() {} },
+      questionHelper: { run: first === 'help' ? (operation, context, options) => failingRun(operation, options) : targetRun, close() {} } });
+    t.after(async () => { await explorer.close(); await rm(dir, { recursive: true, force: true }); });
+    await explorer.command('start', { topic: 'Topic' });
+    await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ question: 'Question?', category: 'A' }] });
+    await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: [{ index: 0, question: 'Question?' }] });
+    const common = { id: randomUUID(), journey: explorer.doc.id, nodeId: explorer.doc.nodes[1].id };
+    const cleanup = { ...common, mutation: 0 }, help = { ...common, operation: 'rephrase' };
+    const source = first === 'cleanup' ? () => explorer.cleanupRequest({ action: 'start', ...cleanup, text: 'Draft' }) : () => explorer.helpRequest({ action: 'start', ...help });
+    const cancel = first === 'cleanup' ? () => explorer.cleanupRequest({ action: 'cancel', ...cleanup }) : () => explorer.helpRequest({ action: 'cancel', ...help });
+    const target = first === 'cleanup' ? () => explorer.helpRequest({ action: 'start', ...help }) : () => explorer.cleanupRequest({ action: 'start', ...cleanup, text: 'Draft' });
+    await source(); await delay(0); assert.ok(sourceSignal);
+    await cancel(); await target(); await delay(35);
+    assert.equal(targetRuns.length, 0, `${first} ${stop}: queued target cannot start after unconfirmed release`);
+    await assert.rejects(target(), /not confirmed shutdown/);
+    if (stop === 'timeout') { releaseStop(true); await delay(0); await target(); await delay(0); assert.equal(targetRuns.length, 1, 'confirmed late release allows an explicit retry'); }
+    else { await delay(0); await assert.rejects(target(), /not confirmed shutdown/); }
+  }
 });
 
 test('replacing the journey aborts help without exposing its late result', async t => {

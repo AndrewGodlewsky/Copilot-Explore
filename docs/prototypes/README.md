@@ -24,3 +24,7 @@ Try the same task in each layout:
 All data lives in memory until refresh or **Reset**. Research and follow-ups are illustrative, not generated. This study does not implement production pan/zoom, map layout, persistence, import/export, or Copilot integration. The prototype server serves only this HTML page over loopback; it does not open a browser or alter an exploration.
 
 Visual comparison remains a manual check by the owner, in accordance with the repository's browser restriction. Once a direction is chosen, implement it in the real canvas rather than promoting this prototype into runtime code.
+
+## Research follow-up
+
+The [sourced interaction research](../explorer-interaction-research.md) investigates broader alternatives after the initial placement study. Open [research-directions.html](research-directions.html) directly in Brave for three explanatory sketches: local branch + workspace, research cards on the map, and branch notebook. The layout selector and narrow-width control work; the screen controls inside each sketch are illustrative. This file is self-contained and requires no preview server.

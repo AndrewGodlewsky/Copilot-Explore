@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.3",
+    "summary": "Added sourced research on alternatives to the question panel, comparing six products and interaction studies. Three concept sketches explore a local branch workspace, research cards, and a branch notebook. The installed plugin layout is unchanged."
+  },
+  {
     "version": "0.1.2",
     "summary": "Added four interactive question-placement prototypes: expanded node, floating card, bottom drawer, and focus overlay. Compare answer and research views with sample data using npm run prototype:layouts. The installed canvas layout is unchanged."
   },

@@ -66,7 +66,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     offsetWidth: { get() { return parseFloat(this.style.width) || (this.id === 'map' ? width : 220); } },
     offsetHeight: { get() { return this.id === 'node-workspace' ? Math.min(540, parseFloat(this.style.maxHeight) || 540) : 110; } },
   });
-  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null, holdHistory = null, holdNavigationRead = null, holdReferencesRead = options.holdReferencesRead;
+  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null, holdHistory = null, holdNavigationRead = null, holdReferencesRead = options.holdReferencesRead, holdVoiceCancel = options.holdVoiceCancel;
   const captured = new Set(), observers = new Map();
   map.setPointerCapture = id => { captures++; captured.add(id); };
   map.hasPointerCapture = id => captured.has(id);
@@ -84,6 +84,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
       if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, Origin: new URL(server.url).origin } };
       const response = await fetch(new URL(path, server.url), options);
       const body = await response.arrayBuffer();
+      if (path === 'api/voice' && options?.body && JSON.parse(options.body).action === 'cancel' && holdVoiceCancel) await holdVoiceCancel();
       if (holdState && path === 'api/state') await holdState();
       if (holdDraftRead && path.startsWith('api/drafts?')) await holdDraftRead();
       if (holdHistory && path.startsWith('api/history?')) await holdHistory();
@@ -1213,6 +1214,146 @@ test('toggle dictation ignores key release and finishes with the same configured
   await until(() => /^Listening/.test(f.document.getElementById('voice-status').textContent), 'listening');
   key(f, 'keyup'); await delay(20); assert.equal(voice.counts().finishes, 0);
   key(f, 'keydown'); await until(() => answer.value === 'our neighbors', 'toggle finish');
+});
+
+test('Record and Stop preserve the answer selection and state without committing', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 340, voice), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  chooseState(f, 'needs-evidence');
+  const answer = f.document.getElementById('answer'); answer.focus(); f.type('answer', 'For everyone nearby.'); answer.setSelectionRange(4, 12);
+  const record = f.document.getElementById('voice-record'); record.dispatchEvent(new f.window.Event('pointerdown', { bubbles: true })); record.focus();
+  assert.equal(voice.counts().cancels, 0, 'moving to Record keeps the answer workspace active');
+  record.click(); await until(() => f.document.getElementById('voice-stop')?.disabled === false, 'Stop ready');
+  key(f, 'keyup'); assert.equal(voice.counts().finishes, 0, 'shortcut release cannot stop button recording');
+  f.document.getElementById('voice-stop').click();
+  await until(() => answer.value === 'For our neighbors nearby.', 'transcript inserted at captured selection');
+  assert.equal(f.document.getElementById('answer-state').value, 'needs-evidence');
+  assert.equal(node.answer, ''); assert.equal(voice.counts().starts, 1); assert.equal(voice.counts().finishes, 1);
+});
+
+test('button recording can finish once by deliberate shortcut and can cancel from its controls', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 1100, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  const answer = f.document.getElementById('answer'); answer.focus(); f.document.getElementById('voice-record').focus();
+  f.document.getElementById('voice-record').click(); await until(() => voice.counts().starts === 1, 'button start');
+  f.document.getElementById('voice-cancel').focus(); assert.equal(voice.counts().cancels, 0);
+  f.document.getElementById('voice-cancel').click(); await until(() => voice.counts().cancels === 1, 'button cancel');
+  assert.equal(f.document.activeElement, answer, 'focus returns to answer');
+  f.document.getElementById('voice-record').click(); await until(() => voice.counts().starts === 2, 'retry');
+  answer.focus(); key(f, 'keydown'); key(f, 'keydown', { repeat: true }); key(f, 'keyup');
+  await until(() => voice.counts().finishes === 1, 'shortcut finish');
+  assert.equal(voice.counts().starts, 2); assert.equal(answer.value, 'our neighbors');
+});
+
+test('leaving voice controls cancels while focus moving within them does not', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 1100, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  const answer = f.document.getElementById('answer'); answer.focus(); f.document.getElementById('voice-record').click();
+  await until(() => voice.counts().starts === 1, 'start');
+  f.document.getElementById('voice-cancel').focus(); assert.equal(voice.counts().cancels, 0);
+  f.document.getElementById('answer-state').focus(); await until(() => voice.counts().cancels === 1, 'workspace exit cancels');
+  assert.equal(answer.value, '');
+});
+
+test('loading cannot be stopped as recorded audio and Cancel works through transcription', async t => {
+  const voice = voiceFixture(); let id, phase = 'loading', cancelCount = 0, finishCount = 0, starts = 0;
+  voice.start = recordingId => { starts++; id = recordingId; phase = 'loading'; return { id, phase }; };
+  voice.poll = recordingId => ({ id: recordingId, phase: recordingId === id ? phase : 'cancelled', text: phase === 'done' ? 'late words' : undefined });
+  voice.finish = () => { finishCount++; phase = 'transcribing'; return { id, phase }; };
+  voice.cancel = recordingId => { cancelCount++; if (recordingId === id) phase = 'cancelled'; return { id: recordingId, phase: 'cancelled' }; };
+  const f = await fixture(t, 340, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  f.document.getElementById('voice-record').click(); await until(() => starts === 1, 'loading start');
+  assert.equal(f.document.getElementById('voice-stop').disabled, true);
+  assert.equal(f.document.getElementById('voice-cancel').disabled, false);
+  assert.match(f.document.getElementById('voice-status').textContent, /Wait for/);
+  f.document.getElementById('voice-cancel').click(); await until(() => cancelCount === 1, 'loading cancelled');
+  f.document.getElementById('voice-record').click(); await until(() => starts === 2, 'retry started'); phase = 'listening';
+  await until(() => !f.document.getElementById('voice-stop').disabled, 'listening');
+  f.document.getElementById('voice-stop').click(); await until(() => phase === 'transcribing', 'transcribing');
+  assert.equal(f.document.getElementById('voice-stop').disabled, true);
+  assert.equal(f.document.getElementById('voice-cancel').disabled, false);
+  f.document.getElementById('voice-cancel').click(); phase = 'done';
+  await delay(250); assert.equal(f.document.getElementById('answer').value, '');
+  assert.equal(cancelCount, 2); assert.equal(finishCount, 1);
+});
+
+test('cancelled pending start cannot replace a rapidly retried recording', async t => {
+  const voice = voiceFixture(); let release, starts = 0, id;
+  voice.start = recordingId => { starts++; if (starts === 1) return new Promise(resolve => { release = () => resolve({ id: recordingId, phase: 'done', text: 'stale words' }); }); id = recordingId; return { id, phase: 'listening' }; };
+  voice.poll = () => ({ id, phase: 'listening' });
+  const f = await fixture(t, 1100, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  f.document.getElementById('voice-record').click(); await until(() => starts === 1, 'first pending start');
+  f.document.getElementById('voice-cancel').click(); f.document.getElementById('voice-record').click();
+  await until(() => starts === 2, 'second start'); release(); await delay(30);
+  assert.equal(f.document.getElementById('answer').value, '');
+  assert.equal(f.document.getElementById('voice-stop').disabled, false, 'new recording remains active');
+  f.document.getElementById('voice-cancel').click();
+});
+
+test('rapid retry waits for cancellation to release the previous microphone owner', async t => {
+  const voice = voiceFixture(); let release, starts = 0, id;
+  const gate = new Promise(resolve => { release = resolve; });
+  voice.start = recordingId => { starts++; id = recordingId; return { id, phase: 'listening' }; };
+  voice.poll = () => ({ id, phase: 'listening' });
+  t.after(release);
+  const f = await fixture(t, 1100, voice, false, { holdVoiceCancel: () => gate }); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  f.document.getElementById('voice-record').click(); await until(() => starts === 1, 'first start');
+  f.document.getElementById('voice-cancel').click(); await until(() => voice.counts().cancels === 1, 'cancel pending');
+  f.document.getElementById('voice-record').click(); await delay(40);
+  assert.equal(starts, 1, 'a retry must wait for owner release');
+  release(); await until(() => starts === 2, 'retry begins after release');
+});
+
+test('same-question rerender keeps an active Stop control and its recording', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 1100, voice), [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  f.document.getElementById('voice-record').click(); await until(() => !f.document.getElementById('voice-stop').disabled, 'Stop ready');
+  f.document.getElementById('voice-stop').focus();
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Background change' });
+  await until(() => f.document.getElementById('nodes').textContent.includes('Background change'), 'rerender');
+  assert.equal(f.document.activeElement.id, 'voice-stop'); assert.equal(voice.counts().cancels, 0);
+  f.document.getElementById('voice-stop').click();
+  await until(() => f.document.getElementById('answer').value === 'our neighbors', 'final result');
+  assert.equal(voice.counts().starts, 1); assert.equal(voice.counts().finishes, 1);
+});
+
+test('unavailable local dictation leaves settings accessible for recovery', async t => {
+  const voice = { ...voiceFixture(), status: async () => ({ ready: false, error: 'Microphone unavailable. Check access and refresh devices.' }) };
+  const f = await fixture(t, 340, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => /Microphone unavailable/.test(f.document.getElementById('voice-status')?.textContent ?? ''), 'unavailable reason');
+  assert.equal(f.document.getElementById('voice-record').disabled, true);
+  assert.equal(f.document.getElementById('voice-settings').hidden, false);
+  f.document.getElementById('voice-settings').open = true;
+  assert.ok(f.document.getElementById('voice-refresh'));
+});
+
+test('no speech and worker errors keep the draft intact for another attempt', async t => {
+  const voice = voiceFixture(); let id, finishCount = 0;
+  voice.start = recordingId => { id = recordingId; return { id, phase: 'listening' }; };
+  voice.poll = () => ({ id, phase: 'listening' });
+  voice.finish = () => ++finishCount === 1 ? { id, phase: 'done', text: '  ' } : { id, phase: 'error', error: 'Local voice timed out. Try again.' };
+  const f = await fixture(t, 1100, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  f.type('answer', 'Keep this draft');
+  f.document.getElementById('voice-record').click(); await until(() => !f.document.getElementById('voice-stop').disabled, 'first listening');
+  f.document.getElementById('voice-stop').click(); await until(() => /No speech/.test(f.document.getElementById('voice-status').textContent), 'no speech');
+  assert.equal(f.document.getElementById('answer').value, 'Keep this draft');
+  f.document.getElementById('voice-record').click(); await until(() => !f.document.getElementById('voice-stop').disabled, 'retry listening');
+  f.document.getElementById('voice-stop').click(); await until(() => /timed out/.test(f.document.getElementById('voice-status').textContent), 'worker error');
+  assert.equal(f.document.getElementById('answer').value, 'Keep this draft');
+  assert.equal(f.document.getElementById('voice-record').disabled, false);
+});
+
+test('window blur and pagehide cancel button recordings', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 1100, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  f.document.getElementById('voice-record').click(); await until(() => voice.counts().starts === 1, 'first start');
+  f.window.dispatchEvent(new f.window.Event('blur')); await until(() => voice.counts().cancels === 1, 'window blur cancel');
+  f.document.getElementById('voice-record').click(); await until(() => voice.counts().starts === 2, 'second start');
+  f.window.dispatchEvent(new f.window.Event('pagehide')); await until(() => voice.counts().cancels === 2, 'pagehide cancel');
 });
 
 test('a late dictation result cannot cross into another question', async t => {

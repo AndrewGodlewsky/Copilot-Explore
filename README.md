@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.24.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.25.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -101,7 +101,7 @@ Research has a three-minute deadline. It reads public web pages, compares practi
 
 ## Voice dictation
 
-Focus **Your answer**, hold your Copilot voice shortcut (for example **Ctrl+Space**), wait for **Listening**, then speak. Release to transcribe into the draft; toggle mode uses a second press instead. Review the text before saving. Explorer reads your shortcut and recording mode from Copilot, so you do not need to learn another combination.
+Select **Record** beside **Your answer**, wait for **Listening**, then speak hands-free. Select **Stop** to transcribe, or **Cancel** to discard the recording, including while the model loads or transcribes. **Stop** is available only after Listening begins; cancelling during loading captures no audio. You can also focus the answer and use your Copilot voice shortcut (for example **Ctrl+Space**): hold and release in push-to-talk mode, or press twice in toggle mode. A deliberate shortcut press can finish a button-started recording; releasing a shortcut key cannot stop one. Explorer reads your shortcut and recording mode from Copilot without changing either setting. Review the text before saving.
 
 The bar beneath the answer distinguishes three stages:
 
@@ -111,7 +111,7 @@ The bar beneath the answer distinguishes three stages:
 | Listening | Moving audio bars and elapsed recording time | Your microphone is recording. The bars reflect measured input loudness; silence stays flat. |
 | Transcribing | Transcription indicator | The microphone has stopped. The local model is converting the recording into text. |
 
-There is no live partial transcript: the complete text appears after transcription finishes. The indicators respect reduced-motion preferences, and recording states are also provided as text. Each recording loads the model afresh. Escape, leaving the answer, editing the draft, or switching questions cancels dictation. Releasing during loading cancels startup. Recordings are limited to two minutes.
+There is no live partial transcript: the complete text appears after transcription finishes. The indicators respect reduced-motion preferences, and recording states are also provided as text. Each recording loads the model afresh. Escape, leaving the answer and voice controls, editing the draft, or switching questions cancels dictation. Releasing the shortcut during loading cancels startup. No speech, errors and timeouts leave your draft intact so you can retry. Recordings are limited to two minutes.
 
 ### Microphone and model settings
 
@@ -222,14 +222,14 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.24, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.24**.
+- Update to v0.1.25, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.25**.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
 - Pin a saved question, open another question, and expand References in a narrow pane. Check long answer disclosure, source jump with an unsent draft, keyboard focus after Remove reference, and unavailable-source text after restoring an earlier history version.
 - Collapse a branch with an active descendant editor, confirm focus moves to the visible ancestor, then select the hidden question from Outline. Check that its draft text and state return, the other branches stay as they were, and the compact hidden/unresolved counts remain readable in a narrow pane.
 - Focus a deep branch and a leaf, use Fit visible map, then Show whole map. Check root and ancestors remain visible during focus, unrelated branches return with their prior folds, and the answer editor and caret remain usable in a narrow pane. Select a hidden question from Outline and check focus exits.
-- Focus the answer, hold your configured voice shortcut until **Listening**, speak, then release. Confirm the text enters the draft and is not saved automatically. Check Escape cancellation and switching questions.
+- Focus the answer, select **Record**, wait for **Listening**, speak, then select **Stop**. Confirm the text enters the draft at the earlier caret and is not saved automatically. Repeat with the configured voice shortcut, and check Cancel during loading/listening/transcribing, Escape, Tab through controls, moving to References or another question, and narrow-pane button focus.
 - Open **Voice settings**, choose a microphone and downloaded model, save, and reopen Explorer to check persistence. Disconnect a selected device and confirm Explorer explains the problem. Check that the recording bars respond to your speech, stay flat in silence, and stop during transcription.
 - Answer a question and confirm relevant deeper questions appear.
 - Research another question; confirm progress appears in the node and the main chat stays quiet. Inspect relevance, source links and uncertainty. Add a recommendation and selected details to an existing draft, undo an addition, then save explicitly. Cancel another research run and confirm your answer is preserved.

@@ -3,7 +3,7 @@ export function matchesShortcut(event, shortcut) {
 }
 
 export function attachVoice({ document, window, fetch, context, insert, changed }) {
-  let settings, binding, recording, message = 'Checking local dictation…', checking = false;
+  let settings, binding, recording, message = 'Checking local dictation…', checking = false, pendingRelease = Promise.resolve();
   let options, choices, settingsOpen = false, optionsBusy = false, optionsMessage = '', feedback = { phase: 'idle' };
   const hint = () => settings?.ready ? `${settings.mode === 'toggle' ? 'Press' : 'Hold'} ${settings.label} to dictate · local model` : settings?.error || 'Checking local dictation…';
   const show = (text, result = { phase: 'idle' }) => {
@@ -28,6 +28,9 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     if (!binding) return;
     binding.mic.disabled = binding.model.disabled = binding.save.disabled = optionsBusy || !!recording || !options;
     binding.refresh.disabled = optionsBusy || !!recording;
+    binding.record.disabled = !settings?.ready || optionsBusy || !!recording;
+    binding.stop.disabled = !recording || recording.phase !== 'listening' || !!recording.finishing;
+    binding.cancel.disabled = !recording;
   }
   function paintChoices() {
     if (!binding) return;
@@ -58,6 +61,15 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
   }
   function buildControls(answer, root) {
     const status = element('p', 'quiet voice-status'); status.id = 'voice-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+    const voiceActions = element('div', 'voice-actions');
+    const record = element('button', '', 'Record'), stop = element('button', '', 'Stop'), discard = element('button', '', 'Cancel');
+    record.id = 'voice-record'; stop.id = 'voice-stop'; discard.id = 'voice-cancel';
+    record.type = stop.type = discard.type = 'button'; voiceActions.append(record, stop, discard);
+    let pointerSelection;
+    record.addEventListener('pointerdown', () => { pointerSelection = { start: answer.selectionStart, end: answer.selectionEnd }; });
+    record.addEventListener('click', () => { void start('button', pointerSelection); pointerSelection = null; });
+    stop.addEventListener('click', () => { void finish(); answer.focus({ preventScroll: true }); });
+    discard.addEventListener('click', () => { cancel(); answer.focus({ preventScroll: true }); });
     const bar = element('div', 'voice-feedback'); bar.id = 'voice-feedback'; bar.setAttribute('aria-hidden', 'true');
     const activity = element('span', 'voice-activity'), spinner = element('span', 'voice-spinner'), meter = element('span', 'voice-meter'), elapsed = element('span', 'voice-elapsed');
     const bars = Array.from({ length: 24 }, () => element('i', 'voice-level')); meter.append(...bars); bar.append(spinner, activity, meter, elapsed);
@@ -73,8 +85,8 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     save.addEventListener('click', () => { void loadOptions(true); }); refresh.addEventListener('click', () => { void loadOptions(); });
     const note = element('p', 'quiet'); note.setAttribute('role', 'status');
     fields.append(actions, note, element('p', 'quiet', 'Your shortcut and recording mode follow Copilot. Model downloads are managed in Copilot.'));
-    details.append(summary, fields); root.replaceChildren(bar, status, details);
-    binding = { answer, status, bar, bars, elapsed, activity, mic, model, save, refresh, note };
+    details.append(summary, fields); root.replaceChildren(voiceActions, bar, status, details);
+    binding = { answer, root, record, stop, cancel: discard, status, bar, bars, elapsed, activity, mic, model, save, refresh, note };
     details.addEventListener('toggle', () => { if (!details.isConnected) return; settingsOpen = details.open; if (settingsOpen && !options) void loadOptions(); changed(); });
     paintFeedback(); paintChoices();
   }
@@ -92,7 +104,7 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
   function cancel() {
     if (!recording) return;
     const old = recording; recording = null;
-    void request('cancel', old.id, true).catch(() => {});
+    pendingRelease = Promise.allSettled([pendingRelease, request('cancel', old.id, true)]).then(() => {});
     show('Dictation cancelled. ' + hint());
   }
   function sameContext(job) {
@@ -112,34 +124,37 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
       insert(value, before.length + addition.length);
       show('Dictation added to your draft. Review it before saving.');
     } else if (['cancelled', 'error'].includes(result.phase)) { recording = null; show(result.error || 'Dictation stopped.'); }
-    else { job.phase = result.phase; show(result.phase === 'listening' ? `Listening… ${job.settings.mode === 'toggle' ? 'Press ' + job.settings.label + ' to finish' : 'Release to finish'} · Esc to cancel` : result.phase === 'transcribing' ? 'Transcribing locally…' : 'Loading local voice model… Wait for “Listening” before speaking.', result); }
+    else { job.phase = result.phase; show(result.phase === 'listening' ? `Listening… ${job.initiator === 'button' ? 'Select Stop or press ' + job.settings.label + ' to finish' : job.settings.mode === 'toggle' ? 'Press ' + job.settings.label + ' to finish' : 'Release to finish'} · Esc to cancel` : result.phase === 'transcribing' ? 'Transcribing locally… Cancel to discard.' : 'Loading local voice model… Wait for “Listening” before speaking.', result); }
   }
-  async function start() {
+  async function start(initiator = 'shortcut', selection) {
     if (!settings?.ready || !binding || recording || optionsBusy) return;
     const answer = binding.answer;
-    const job = recording = { id: window.crypto.randomUUID(), settings, context: context(), value: answer.value, start: answer.selectionStart, end: answer.selectionEnd, phase: 'loading' };
+    const job = recording = { id: window.crypto.randomUUID(), settings, initiator, context: context(), value: answer.value, start: selection?.start ?? answer.selectionStart, end: selection?.end ?? answer.selectionEnd, phase: 'loading' };
     show('Loading local voice model… Wait for “Listening” before speaking.', { phase: 'loading' });
-    try { receive(job, await request('start', job.id)); }
+    try { await pendingRelease; if (recording === job) receive(job, await request('start', job.id)); }
     catch (error) { if (recording === job) { cancel(); show(error.message); } }
   }
   async function finish() {
     const job = recording;
-    if (!job || job.finishing) return;
+    if (!job || job.finishing || job.phase === 'transcribing') return;
+    if (job.phase === 'loading') { cancel(); show('Stopped before Listening; no audio was captured. ' + hint()); return; }
+    if (job.phase !== 'listening') return;
     job.finishing = true;
+    lockControls();
     try { receive(job, await request('finish', job.id)); }
     catch (error) { if (recording === job) { cancel(); show(error.message); } }
   }
   document.addEventListener('keydown', event => {
     if (recording && event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); cancel(); return; }
     const bindingSettings = recording?.settings || settings;
-    if (document.activeElement !== binding?.answer || !bindingSettings?.ready || !matchesShortcut(event, bindingSettings.shortcut) || event.isComposing) return;
+    if (!(document.activeElement === binding?.answer || binding?.root.contains(document.activeElement)) || !bindingSettings?.ready || !matchesShortcut(event, bindingSettings.shortcut) || event.isComposing) return;
     event.preventDefault(); event.stopImmediatePropagation();
     if (event.repeat) return;
-    if (recording) { if (recording.settings.mode === 'toggle') void finish(); }
+    if (recording) { if (recording.initiator === 'button' || recording.settings.mode === 'toggle') void finish(); }
     else void start();
   }, true);
   document.addEventListener('keyup', event => {
-    if (!recording || recording.settings.mode !== 'push_to_talk') return;
+    if (!recording || recording.initiator !== 'shortcut' || recording.settings.mode !== 'push_to_talk') return;
     const shortcut = recording.settings.shortcut;
     if (event.code === shortcut.code || ['ctrl', 'alt', 'shift', 'meta'].some(key => shortcut[key] && !event[key + 'Key'])) {
       event.preventDefault(); event.stopImmediatePropagation(); void finish();
@@ -162,7 +177,11 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     bind(answer, root) {
       buildControls(answer, root);
       answer.addEventListener('focus', () => { if (!recording) void check(); });
-      answer.addEventListener('blur', cancel);
+      const leave = () => window.setTimeout(() => {
+        if (recording && document.activeElement !== binding?.answer && !binding?.root.contains(document.activeElement)) cancel();
+      }, 0);
+      answer.addEventListener('blur', leave);
+      root.addEventListener('focusout', leave);
       answer.addEventListener('input', () => { if (recording && answer.value !== recording.value) cancel(); });
       if (recording && !sameContext(recording)) cancel();
       if (!settings) void check();

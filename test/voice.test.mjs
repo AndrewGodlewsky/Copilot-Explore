@@ -52,6 +52,17 @@ test('finish stops capture and returns only the matching completed transcript', 
   f.service.cancel(id); assert.equal(f.service.poll(id).text, undefined);
 });
 
+test('cancel releases the local microphone owner and worker for an immediate retry', async t => {
+  const f = fixture(); t.after(() => f.service.close());
+  f.service.start(id); await delay(10); f.child.emit('message', { phase: 'listening' });
+  const first = f.child; f.service.cancel(id);
+  assert.equal(first.killed, true);
+  const retry = id.replace('12345678', 'abcdefgh');
+  assert.equal(f.service.start(retry).phase, 'loading'); await delay(10);
+  assert.equal(f.launches, 2);
+  f.service.cancel(retry); assert.equal(f.child.killed, true);
+});
+
 test('voice HTTP requires the canvas origin and rejects injected model paths and oversized bodies', async t => {
   const f = fixture(), server = await startServer({ close: async () => {} }, f.service); t.after(() => server.close());
   const headers = { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(server.url).origin };

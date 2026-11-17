@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.25",
+    "summary": "Record hands-free beside an answer, then Stop to transcribe or Cancel to discard during loading, listening or transcription. Voice buttons share the existing shortcut lifecycle, preserve the answer caret and draft, and keep recording controls usable by keyboard. Leaving the answer workspace still cancels recording."
+  },
+  {
     "version": "0.1.24",
     "summary": "Pin up to three saved questions as optional references beside the active editor. Read their saved answer, state and review status, jump to a source, or remove a pin without changing the map. Private per-journey pins survive reopening, show unavailable sources after history restore, and require an explicit refresh to retry conflicting edits."
   },

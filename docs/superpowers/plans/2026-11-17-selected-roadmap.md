@@ -436,13 +436,41 @@ Read issue-22.md and task-12-design-notes.md in this workspace, AGENTS.md, and f
 
 ### Verification and release
 
-- [ ] RED/GREEN store/controller tests for cap, duplicates, invalid/missing node IDs, same-ID divergent journeys, direct-file support, reopen, stale writer conflicts, bounded/corrupt/linked files and failed-write preservation. Missing-after-restore behavior must remain removable/recoverable.
-- [ ] Real HTTP/jsdom tests for answer/state/review updates, long/Unicode/unsafe text, disclosure and keyboard removal/focus, source jumps through focus/folds retaining drafts, delayed reads across journey changes, and no document/history/native context effect.
-- [ ] Run npm test, npm run check, npm run package; installed runtime fixture if host/data-root integration changes. No paid providers/existing user sessions or browser/desktop UI automation.
-- [ ] Bump to **0.1.24**, sync release metadata/README/release notes, document private-view semantics; include controller plan changes, self-review/commit, no merge/push/issue closure.
-- [ ] Write task-12-report.md with exact store/API contract, TDD and final command evidence, SHA and native limits. No nested agents. Raise concrete conflicts while continuing independent work.
+- [x] RED/GREEN store/controller tests for cap, duplicates, invalid/missing node IDs, same-ID divergent journeys, direct-file support, reopen, stale writer conflicts, bounded/corrupt/linked files and failed-write preservation. Missing-after-restore behavior must remain removable/recoverable.
+- [x] Real HTTP/jsdom tests for answer/state/review updates, long/Unicode/unsafe text, disclosure and keyboard removal/focus, source jumps through focus/folds retaining drafts, delayed reads across journey changes, and no document/history/native context effect.
+- [x] Run npm test, npm run check, npm run package; installed runtime fixture if host/data-root integration changes. No paid providers/existing user sessions or browser/desktop UI automation.
+- [x] Bump to **0.1.24**, sync release metadata/README/release notes, document private-view semantics; include controller plan changes, self-review/commit, no merge/push/issue closure.
+- [x] Write task-12-report.md with exact store/API contract, TDD and final command evidence, SHA and native limits. No nested agents. Raise concrete conflicts while continuing independent work.
 
 For clean native command evidence, use the controller-provided ignored helper: `node .superpowers/sdd/2026-11-17-selected-roadmap/run-npm.mjs task-12-test test` (and unique labels with `run check`, `run package`, applicable `run e2e`). It invokes the installed adjacent npm CLI through Node, captures stdout/stderr separately and writes result JSON with the exact exit code. Do not rerun a passing suite only to improve logging. The demonstrated installed runtime executable is sibling `copilot.exe`, not `copilot-runtime.exe`.
+
+Published task 12: **v0.1.24**, `a6f754f`, 239 tests, checks/package/installed local SDK fixture passed; remote main verified.
+
+## Task 13: Visible dictation controls (#20 / selection23)
+
+Read issue-23.md and task-13-design-notes.md, AGENTS.md and final preceding UI reports. BASE is `a6f754f683a577c2f186efc7ecdf984fe5638a34`; ship version **0.1.25**. Reuse the installed local dictation path; this issue makes it discoverable, not a new speech service.
+
+Task12's current UI seam: optional #references disclosure and #references-summary live inside the question workspace. Go to source uses existing select() and cancels voice; Remove focuses the reference summary. These are separate reference/navigation actions, not voice controls: preserve their established behavior while narrowing the answer-to-voice-control focus boundary. Task12 independent review approved without findings. Read task-12-report.md only for these integration seams.
+
+### Contract
+
+- Add labeled Record, Stop and Cancel controls beside the answer's existing voice status/meter/settings. Record starts a hands-free recording until Stop, independent of Copilot's configured hold/toggle mode. Keep the current configured shortcut and its host hold/toggle behavior unchanged for shortcut-started recordings. Never change host settings or install another runtime/model.
+- One shared recording lifecycle owns buttons and shortcuts; track initiation so releasing a shortcut key cannot stop a button-started job accidentally. A deliberate configured shortcut press during a button-started recording may finish it once; repeats and subsequent keyup cannot restart/finish another job. Define and test that behavior. No duplicate capture or microphone ownership.
+- Make phases understandable: loading explains to wait for Listening; listening has the existing real input-level and elapsed feedback; transcribing shows progress/state. Stop is available when listening; Cancel remains available during loading/listening/transcribing. Do not pretend an early Stop captured audio. Show recoverable error/no-speech/timeout states and the existing microphone/model settings when unavailable.
+- The current answer blur handler cancels immediately, so change the focus boundary deliberately. Moving by Tab or pointer between the answer and its voice controls must not cancel before Stop/Cancel can run. Genuinely leaving that answer workspace, editing its text, switching node/journey, window blur, hidden/pagehide and Escape still invalidate/cancel the recording. Normal action/menu navigation should not keep a hidden microphone running. Account for app rerenders without leaking listeners or losing the active control focus.
+- Capture answer context/value/caret before button focus changes. On a valid final transcript, insert once at the captured selection using the existing draft insertion callback; preserve state choice and the answer limit. Do not auto-save, submit or launch generation. Late/cancelled/old-node/old-value transcripts cannot overwrite new text or a later recording. Keep the original draft when transcription fails or exceeds the limit.
+- Respect the existing Map settings effective motion behavior. Retain useful text/status/input-level information with reduced motion. Keep controls usable by keyboard at narrow width, with accessible names and focus return after Stop/Cancel where appropriate.
+- Existing service contracts remain: one module-wide microphone owner, job IDs/cancel-before-start protection, heartbeat and bounded duration/phase timeouts, process close/release and no audio persisted to disk. Longer dictation is the next issue; do not expand limits here. Actual worker is voice-worker.mjs. Keep installed-component discovery, existing microphone/model choices and owned storage.
+
+### Verification and release
+
+- [ ] RED/GREEN browser/voice fixture tests for pointer and keyboard button use, captured caret, focus moving within/outside voice controls, Record/Stop/Cancel in each phase, shortcut hold/toggle interoperation/repeat/keyup, rapid retry, pending requests, app refresh, edits/navigation and stale transcript rejection.
+- [ ] Assert exactly-once draft insertion, state preservation, answer limit, no implicit commit, unavailable settings/error recovery, and microphone process/owner release with local mocked hardware/worker fixtures. Do not record the real microphone or drive desktop/browser UI.
+- [ ] Run npm test, npm run check, npm run package; run existing installed local runtime fixture only if SDK/canvas integration changes. Installed component smoke may inspect availability without capture/download. No paid providers/existing sessions.
+- [ ] Bump confirmed patch, synchronize metadata/README/release notes, document button versus shortcut semantics; include controller plan update, self-review and commit. No merge/push/issue closure.
+- [ ] Write task-13-report.md with lifecycle/focus contracts, TDD/final checks, SHA and native microphone/appearance limits. No nested agents. Raise concrete conflicts while continuing independent work.
+
+For clean native command evidence, use the controller-provided ignored helper: `node .superpowers/sdd/2026-11-17-selected-roadmap/run-npm.mjs task-13-test test` (and unique labels with `run check`, `run package`, applicable `run e2e`). It invokes the installed adjacent npm CLI through Node, captures stdout/stderr separately and writes result JSON with the exact exit code. Do not rerun a passing suite only to improve logging. The demonstrated installed runtime executable is sibling `copilot.exe`, not `copilot-runtime.exe`.
 
 ## Issue index
 

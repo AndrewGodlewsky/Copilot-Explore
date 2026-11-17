@@ -1,0 +1,219 @@
+<!doctype html>
+<!-- Throwaway expanded-node refinement. In-memory sample data; no Copilot connection. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Explorer — expanding node refinement</title>
+<style>
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;padding:20px;background:var(--background,#fff);color:var(--foreground,#203744);font:14px/1.5 var(--font-sans,"Segoe UI",system-ui,sans-serif)}
+main{max-width:1160px;margin:auto}h1{font-size:24px;line-height:1.3;letter-spacing:-.4px;margin:0 0 7px}.intro{color:var(--muted-foreground,#5c7380);margin:0 0 18px;max-width:780px}
+button,select,textarea{font:inherit}button{cursor:pointer}button:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--ring,#3882a2);outline-offset:3px}
+.tools{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;font-size:12px}.tools p{margin:0;color:var(--muted-foreground,#5c7380)}.controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.tools button,.tools select{background:var(--card,#fff);color:var(--card-foreground,#203744);border:1px solid var(--border,#cbdbe3);padding:6px 9px;border-radius:5px;font-size:12px}
+.frame{width:100%;margin:auto}.frame.narrow{max-width:540px}
+/* The mockup keeps Explorer's palette; the surrounding review page follows the chat theme. */
+.app{--paper:#fff;--base:#f2f6f8;--ink:#203d4c;--soft:#617c8a;--edge:#cbdce4;--blue:#246e8b;--tint:#e8f2f6;--green:#356d56;--green-bg:#edf7f1;background:var(--base);color:var(--ink);border:1px solid var(--edge);border-radius:10px;overflow:hidden;color-scheme:light;container-type:inline-size}
+.app.dark{--paper:#1e3341;--base:#142734;--ink:#deebf1;--soft:#adc3ce;--edge:#3e5969;--blue:#83cce4;--tint:#294a5c;--green:#b1dfc3;--green-bg:#244537;color-scheme:dark}
+.app :focus-visible{outline-color:var(--blue)}.app-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 17px;background:var(--paper);border-bottom:1px solid var(--edge)}.brand{display:flex;gap:9px;align-items:center;font-size:17px;font-weight:650}.brand svg{width:23px;height:23px;fill:none;stroke:var(--blue);stroke-width:1.7}.brand small{font-size:11px;color:var(--soft);font-weight:400}.navigation{display:flex;gap:7px}
+.quiet{border:1px solid var(--edge);border-radius:5px;background:var(--paper);color:var(--ink);padding:7px 10px;font-size:11px}.quiet:hover{background:var(--tint)}.solid{background:var(--blue);color:var(--paper);border:1px solid var(--blue);padding:8px 12px;border-radius:5px;font-weight:600;font-size:12px}.app.dark .solid{color:var(--base)}
+.trail{display:flex;align-items:center;gap:8px;padding:10px 17px;min-height:40px;font-size:11px;overflow:auto;white-space:nowrap;border-bottom:1px solid var(--edge)}.trail button{background:none;border:0;color:var(--blue);font-size:11px;padding:2px 0;max-width:230px;overflow:hidden;text-overflow:ellipsis}.trail span{color:var(--soft)}.trail strong{font-weight:600}
+.viewport{height:650px;overflow:auto;overscroll-behavior:contain;position:relative;scrollbar-color:var(--edge) var(--base);background-image:radial-gradient(#8dabb854 .75px,transparent .75px);background-size:18px 18px}.scene{position:relative;min-width:100%;min-height:100%;isolation:isolate}.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:-1}.wires path{fill:none;stroke:var(--edge);stroke-width:1.7}.wires path.current{stroke:var(--blue);stroke-width:2}.wires circle{fill:var(--paper);stroke:var(--blue);stroke-width:2}
+.map-node{position:absolute;width:184px;padding:12px 14px;border:1px solid var(--edge);border-radius:8px;background:var(--paper);color:var(--ink);text-align:left}.map-node:hover{border-color:var(--blue);background:var(--paper);box-shadow:0 0 0 1px var(--blue)}.map-node small{display:flex;justify-content:space-between;gap:8px;font-size:10px;color:var(--soft);margin-bottom:5px}.map-node b{font-size:12px;line-height:1.4;display:block;font-weight:600}.map-node.root{background:var(--tint);width:205px}.map-node.root b{font-size:13px}.map-node .saved{color:var(--green)}.map-node .excerpt{font-size:11px;color:var(--soft);line-height:1.5;margin:9px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.map-node.selected{border:2px solid var(--blue)}
+.workspace{position:absolute;border:2px solid var(--blue);border-radius:10px;background:var(--paper);box-shadow:0 5px 18px #173c4c0c;z-index:1;overflow:hidden}.node-head{padding:15px 20px 0}.node-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:11px;color:var(--blue);margin-bottom:9px}.node-meta strong{font-weight:600}.node-meta button{background:none;border:0;color:var(--soft);font-size:11px;padding:3px 0}.node-head h2{font-size:21px;line-height:1.35;font-weight:600;letter-spacing:-.25px;margin:0}.node-head h2:focus{outline:none}.hint{font-size:12px;color:var(--soft);margin:9px 0 0;line-height:1.6}
+.answer-area{padding:18px 20px 15px}.answer-label{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}.answer-label label{font-size:12px;font-weight:600}.answer-label small{font-size:10px;color:var(--soft)}textarea{display:block;width:100%;min-height:100px;max-height:240px;resize:vertical;border:1px solid var(--edge);border-radius:5px;background:var(--base);color:var(--ink);padding:10px 12px;font-size:13px;line-height:1.6}.actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px}.actions small{font-size:10px;color:var(--soft)}.actions div{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.research{border-top:1px solid var(--edge)}.research>summary{list-style:none;display:flex;justify-content:space-between;gap:12px;align-items:center;padding:13px 20px;cursor:pointer;color:var(--blue);font-size:12px;font-weight:600}.research>summary::-webkit-details-marker{display:none}.research>summary:after{content:'+';font-size:18px;font-weight:400}.research[open]>summary:after{content:'−'}.research>summary:hover{background:var(--tint)}.research summary small{font-weight:400;color:var(--soft);display:block;margin-top:2px;font-size:11px}.research-content{padding:0 20px 18px}.research-note{font-size:11px;color:var(--soft);margin:0 0 14px}.options{display:grid;grid-template-columns:1fr 1fr;gap:20px}.option+.option{border-left:1px solid var(--edge);padding-left:20px}.option h3{font-size:14px;line-height:1.4;margin:0 0 9px}.option p{font-size:12px;color:var(--soft);line-height:1.55;margin:7px 0}.option b{color:var(--ink);font-weight:600}.option details{font-size:11px;color:var(--soft);margin:10px 0}.option summary{color:var(--blue);cursor:pointer}.option .quiet{color:var(--blue)}.recommendation{font-size:12px;line-height:1.55;background:var(--tint);border-left:3px solid var(--blue);padding:10px 12px;margin-top:17px}.branch-note{padding:11px 20px;font-size:11px;color:var(--green);background:var(--green-bg);border-top:1px solid var(--edge)}.branch-note button{color:inherit;font-size:11px;background:none;border:0;text-decoration:underline;text-underline-offset:3px;padding:0;cursor:pointer}
+.status{display:flex;justify-content:space-between;gap:15px;padding:10px 16px;background:var(--paper);border-top:1px solid var(--edge);font-size:11px;color:var(--soft);min-height:39px}.status #message{color:var(--ink)}
+.review{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin:18px 0;color:var(--muted-foreground,#5c7380);font-size:12px}.review p{margin:0}.review b{display:block;color:var(--foreground,#203744);margin-bottom:4px}.state{font-size:11px;color:var(--muted-foreground,#5c7380);border-top:1px solid var(--border,#d1dde3);padding-top:12px;margin:0}
+@container(max-width:650px){.viewport{height:620px}.brand small{display:none}.app-head{padding:11px 13px}.navigation{gap:5px}.navigation button{padding:6px 8px}.trail{padding:9px 13px}.trail button{max-width:165px}.node-head{padding:13px 15px 0}.node-head h2{font-size:19px}.answer-area{padding:16px 15px 14px}.research>summary{padding:12px 15px}.research-content{padding:0 15px 16px}.options{grid-template-columns:1fr;gap:15px}.option+.option{border-left:0;border-top:1px solid var(--edge);padding:15px 0 0}.actions small{display:none}.actions div{width:100%}.branch-note{padding:10px 15px}.status{flex-wrap:wrap;gap:5px}.status #progress{font-size:10px}}
+@media(max-width:600px){body{padding:12px}.intro{font-size:13px}.review{grid-template-columns:1fr;gap:12px}.tools{align-items:flex-start}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body><main>
+<h1>One node, room to think.</h1>
+<p class="intro">The expanding-node direction, refined. The question stays in its branch, research unfolds inside it, and your draft stays with it. Collapse it to see your decision back on the map.</p>
+<div class="tools"><p>Try opening research, adding a thought, then saving and going deeper.</p><div class="controls"><label for="width">Canvas</label><select id="width"><option value="wide">Wide</option><option value="narrow">Narrow</option></select><button id="theme" type="button">Dark preview</button><button id="reset" type="button">Reset demo</button></div></div>
+<div id="frame" class="frame"><section id="app" class="app" aria-label="Explorer expanding-node prototype">
+ <header class="app-head"><div class="brand"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M14 14 4 5M14 14 24 5M14 14 4 24M14 14 24 24"/><circle cx="14" cy="14" r="4"/><circle cx="4" cy="5" r="2"/><circle cx="24" cy="5" r="2"/><circle cx="4" cy="24" r="2"/><circle cx="24" cy="24" r="2"/></svg>Explorer <small>Prototype</small></div><div class="navigation"><button id="center" class="quiet" type="button">Center question</button><button id="overview" class="quiet" type="button">Whole map</button></div></header>
+ <nav id="trail" class="trail" aria-label="Question ancestry"></nav>
+ <div id="viewport" class="viewport" tabindex="0" aria-label="Exploration map. Scroll to move around; select a question to expand it."><div id="scene" class="scene"><svg id="wires" class="wires" aria-hidden="true"></svg><div id="nodes"></div>
+  <section id="workspace" class="workspace" aria-labelledby="question">
+   <header id="node-head" class="node-head"><div class="node-meta"><strong id="category"></strong><button id="collapse" type="button">Collapse node</button></div><h2 id="question" tabindex="-1"></h2><p id="hint" class="hint"></p></header>
+   <div class="answer-area"><div class="answer-label"><label for="answer">Your answer</label><small id="save-state"></small></div><textarea id="answer" maxlength="4000" placeholder="A decision, a hunch, or what you know so far…"></textarea><div class="actions"><small>Ctrl / ⌘ + Enter to go deeper</small><div><button id="save" type="button" class="quiet">Save answer</button><button id="deeper" type="button" class="solid">Save & go deeper</button></div></div></div>
+   <details id="research" class="research"><summary><span>Explore options<small>Compare possibilities before you decide</small></span></summary><div class="research-content"><p class="research-note">Example reasoning only. No AI request or web research is running.</p><div id="options" class="options"></div><div id="recommendation" class="recommendation"></div></div></details>
+   <div id="branch-note" class="branch-note" hidden><button id="follow" type="button">Open the follow-up connected below</button></div>
+  </section>
+ </div></div>
+ <footer class="status"><span id="message" role="status">Scroll to move around. Select any question to expand it.</span><span id="progress"></span></footer>
+</section></div>
+<div class="review"><p><b>The node keeps its place</b>Expansion makes room in the same branch. Research grows down from a steady question header; nearby branches remain on the map.</p><p><b>Research supports your answer</b>Options open below your draft. Adding an option keeps anything you have already written and leaves the decision yours.</p><p><b>The map remembers your decision</b>Collapsed nodes show a short answer preview. Follow-ups grow directly below, with an ancestry trail for finding your way back.</p></div>
+<p id="state" class="state"></p>
+<script>
+const initial = [
+ {
+  "id": "trust",
+  "parentId": "root",
+  "category": "Trust",
+  "question": "What happens if a borrowed tool breaks?",
+  "hint": "Think about an agreement you would be comfortable making with a neighbor.",
+  "options": [
+   {
+    "title": "Shared repair fund",
+    "pro": "Spreads the cost of ordinary wear.",
+    "con": "Needs a clear contribution agreement.",
+    "detail": "The group would still need to distinguish normal wear from accidental damage. These options are sample content for evaluating the interface.",
+    "answer": "Use a small shared repair fund for normal wear, and discuss accidental damage separately."
+   },
+   {
+    "title": "Borrower handles repairs",
+    "pro": "Responsibility is easy to explain.",
+    "con": "Potential repair costs could discourage borrowing.",
+    "detail": "This direction needs reasonable limits and a way to resolve disagreements. No research was performed in this demo.",
+    "answer": "Agree on borrower responsibility before each loan, with reasonable limits."
+   }
+  ],
+  "recommendation": "Separate normal wear from accidental damage before choosing a rule.",
+  "followup": "How will you distinguish wear from damage?"
+ },
+ {
+  "id": "people",
+  "parentId": "root",
+  "category": "People",
+  "question": "Who should be able to borrow tools first?",
+  "hint": "Start with a group you can learn from before opening the library more widely.",
+  "options": [
+   {
+    "title": "One block of neighbors",
+    "pro": "Simple introductions and handovers.",
+    "con": "A smaller group may have fewer tools to share.",
+    "detail": "A small pilot can make it easier to notice problems with pickup times or instructions. This is illustrative reasoning, not sourced research.",
+    "answer": "Start with neighbors on our block, then review the first month before expanding."
+   },
+   {
+    "title": "The whole neighborhood",
+    "pro": "More people and a broader collection of tools.",
+    "con": "More coordination and trust-building from the start.",
+    "detail": "A wider group may need a clearer introduction and handover routine. In the real plugin, this area would include consulted sources and uncertainty.",
+    "answer": "Open to the whole neighborhood, with an introduction before the first loan."
+   }
+  ],
+  "recommendation": "Choose a group whose lending routine you can realistically support.",
+  "followup": "How will you invite the first group?"
+ },
+ {
+  "id": "cost",
+  "parentId": "root",
+  "category": "Costs",
+  "question": "How should the library cover its costs?",
+  "hint": "Decide what needs funding before choosing how to collect money.",
+  "options": [
+   {
+    "title": "Small member contribution",
+    "pro": "Creates a predictable shared budget.",
+    "con": "Could make joining harder for some neighbors.",
+    "detail": "A voluntary or sliding contribution might be worth exploring. This is a demonstration of longer option content, not verified advice.",
+    "answer": "Try a small voluntary contribution, keeping access open to the first group."
+   },
+   {
+    "title": "Contribute when needed",
+    "pro": "Keeps the initial commitment low.",
+    "con": "Expenses may arrive before contributions do.",
+    "detail": "This direction relies on agreement about which expenses are shared. Actual research results would keep consulted sources attached here.",
+    "answer": "Ask for contributions when an agreed expense comes up during the pilot."
+   }
+  ],
+  "recommendation": "List the likely first expenses before settling on a contribution rule.",
+  "followup": "What costs do you expect in the first month?"
+ }
+];
+const root={id:'root',category:'Your idea',question:'A neighborhood tool-sharing library'};
+const $=id=>document.getElementById(id);
+let nodes=structuredClone(initial),selected='people',opened=true,answers={},drafts={},researchOpen={},layoutFrame,pendingAnchor=null,centerNext=true,animation=null;
+const current=()=>nodes.find(n=>n.id===selected);
+const childrenOf=id=>nodes.filter(n=>n.parentId===id);
+function el(tag,attrs={},...children){const e=document.createElement(tag);for(const [key,value] of Object.entries(attrs)){if(key.startsWith('on'))e.addEventListener(key.slice(2),value);else e.setAttribute(key,value)}for(const child of children.flat())if(child!==null&&child!==undefined)e.append(child instanceof Node?child:document.createTextNode(child));return e}
+const btn=(label,handler,attrs={})=>el('button',{type:'button',onclick:handler,...attrs},label);
+function notify(message){$('message').textContent=message}
+function scheduleLayout(){cancelAnimationFrame(layoutFrame);layoutFrame=requestAnimationFrame(layout)}
+function nodeElement(id){return opened&&id===selected?$('workspace'):$('nodes').querySelector('[data-node="'+id+'"]')}
+function rememberAnchor(id){const e=nodeElement(id);if(!e)return;const r=e.getBoundingClientRect(),v=$('viewport').getBoundingClientRect();pendingAnchor={id,x:r.left-v.left+r.width/2,y:r.top-v.top,rect:r}}
+function selectNode(id){if(id==='root'){showOverview();return}rememberAnchor(id);const v=$('viewport');if(pendingAnchor&&(pendingAnchor.y<0||pendingAnchor.y>v.clientHeight-80||pendingAnchor.x<0||pendingAnchor.x>v.clientWidth)){pendingAnchor=null;centerNext=true}selected=id;opened=true;render();$('question').focus({preventScroll:true});notify('Question expanded. Your draft stays with this node.')}
+function collapseNode(){if(!opened)return;rememberAnchor(selected);opened=false;render();nodeElement(selected)?.focus({preventScroll:true});notify('Node collapsed. Drafts and answers stay with their questions.')}
+function showOverview(){pendingAnchor=null;opened=false;centerNext=true;render();$('viewport').focus({preventScroll:true});notify('Whole map. Select a question to expand it; scroll to reach other branches.')}
+function render(){
+ $('workspace').hidden=!opened;
+ const n=current();$('category').textContent=n.category+' · Question';$('question').textContent=n.question;$('hint').textContent=n.hint;
+ $('answer').value=drafts[selected]??answers[selected]??'';
+ $('research').open=!!researchOpen[selected];
+ $('options').replaceChildren(...n.options.map(option=>el('article',{class:'option'},el('h3',{},option.title),el('p',{},el('b',{},'Upside: '),option.pro),el('p',{},el('b',{},'Tradeoff: '),option.con),el('details',{},el('summary',{},'More context'),el('p',{},option.detail)),btn('Add to my answer',()=>addOption(option.answer),{class:'quiet'}))));
+ $('recommendation').replaceChildren(el('b',{},'Consider: '),n.recommendation);
+ $('branch-note').hidden=!childrenOf(selected).length;
+ renderMap();renderTrail();renderState();scheduleLayout();
+}
+function renderMap(){
+ $('nodes').replaceChildren(...[root,...nodes].filter(n=>!opened||n.id!==selected).map(n=>btn([
+  el('small',{},n.category,answers[n.id]?el('span',{class:'saved'},'Answered'):null),el('b',{},n.question),answers[n.id]?el('p',{class:'excerpt'},answers[n.id]):null
+ ],()=>selectNode(n.id),{class:'map-node'+(n.id==='root'?' root':'')+(n.id===selected?' selected':''),'data-node':n.id,'aria-label':n.question+(answers[n.id]?' — answered':'')})));
+}
+function renderTrail(){
+ const path=[];let n=current();while(n){path.unshift(n);n=nodes.find(item=>item.id===n.parentId)}
+ $('trail').replaceChildren(btn(root.question,showOverview));
+ for(const item of path)$('trail').append(el('span',{'aria-hidden':'true'},'/'),item.id===selected?el('strong',{'aria-current':'location'},item.category):btn(item.question,()=>selectNode(item.id)));
+}
+function renderState(){
+ const value=drafts[selected]??answers[selected]??'',dirty=value!==(answers[selected]??'');
+ $('save-state').textContent=dirty?'Draft, not saved':answers[selected]?'Answer saved':'No answer yet';
+ $('progress').textContent=Object.keys(answers).length+' / '+nodes.length+' answered';
+ $('state').textContent='Prototype state: '+current().category+' · '+(opened?'expanded node':'map overview')+' · '+(researchOpen[selected]?'options open':'options folded')+' · '+(dirty?'unsaved draft':'no pending edits')+'. All example data resets on refresh. The installed canvas is unchanged.';
+}
+function addOption(value){
+ const existing=(drafts[selected]??answers[selected]??'').trim();
+ const next=existing?existing+'\n\n'+value:value;
+ if(next.length>4000){notify('There is not enough room to add this option. Shorten your answer first.');return}
+ drafts[selected]=next;$('answer').value=next;renderState();$('answer').focus({preventScroll:true});$('answer').setSelectionRange(next.length,next.length);notify(existing?'Option added after your draft. Edit it into your own answer.':'Option added as a starting point. Edit it into your own answer.');
+ $('answer').scrollIntoView({block:'nearest',inline:'nearest'});
+}
+function save(deeper){
+ const value=(drafts[selected]??answers[selected]??'').trim();if(!value){notify('Write an answer or add a research option before saving.');$('answer').focus({preventScroll:true});return}
+ answers[selected]=value;drafts[selected]=value;$('answer').value=value;
+ if(deeper&&!childrenOf(selected).length){const n=current();nodes.push({id:'follow-'+n.id,parentId:n.id,category:n.category,question:n.followup,hint:'Think about one practical next step. This is an example follow-up.',options:[{title:'Start with a small trial',pro:'Learn before making a larger commitment.',con:'A small trial may miss some situations.',detail:'This is sample reasoning. A real research request would consider the exploration and attach consulted sources.',answer:'Try one small step with the first group, then review what we learn.'},{title:'Decide with the group',pro:'Members can shape the decision.',con:'A discussion takes more coordination.',detail:'A discussion may surface constraints you have not considered yet. No research was performed in this demo.',answer:'Ask the first group to agree on the approach before proceeding.'}],recommendation:'Choose a next step you can revisit after learning more.',followup:'What would help you evaluate that first step?'})}
+ $('branch-note').hidden=!childrenOf(selected).length;renderMap();renderState();scheduleLayout();notify(deeper?'Saved. A follow-up is connected below this node.':'Answer saved. Collapse this node to see it on the map.');
+}
+function layout(){
+ const viewport=$('viewport'),scene=$('scene'),w=viewport.clientWidth,compact=w<=650,work=$('workspace');
+ work.style.width=Math.min(560,w-40)+'px';
+ for(const n of [root,...nodes]){const element=nodeElement(n.id);if(element!==work)element.style.width=(n.id==='root'?205:compact?155:184)+'px'}
+ const gap=compact?24:36,margin=w/2,sizes=new Map();
+ function measure(n){const e=nodeElement(n.id),children=childrenOf(n.id),childWidths=children.map(measure),width=Math.max(e.offsetWidth,childWidths.reduce((a,b)=>a+b,0)+Math.max(0,children.length-1)*gap);sizes.set(n.id,width);return width}
+ const treeWidth=measure(root);scene.style.width=(treeWidth+2*margin)+'px';let bottom=0;
+ function position(n,left,top){const e=nodeElement(n.id),branchWidth=sizes.get(n.id);e.style.left=(left+branchWidth/2-e.offsetWidth/2)+'px';e.style.top=top+'px';bottom=Math.max(bottom,top+e.offsetHeight);const children=childrenOf(n.id),total=children.reduce((sum,child)=>sum+sizes.get(child.id),0)+Math.max(0,children.length-1)*gap;let childLeft=left+(branchWidth-total)/2;for(const child of children){position(child,childLeft,top+e.offsetHeight+65);childLeft+=sizes.get(child.id)+gap}}
+ position(root,margin,28);scene.style.height=Math.max(viewport.clientHeight,bottom+viewport.clientHeight/2)+'px';
+ if(pendingAnchor){
+  const anchor=pendingAnchor;pendingAnchor=null;const e=nodeElement(anchor.id),r=e.getBoundingClientRect(),v=viewport.getBoundingClientRect();
+  const targetX=opened?Math.max(r.width/2+20,Math.min(w-r.width/2-20,anchor.x)):anchor.x;
+  viewport.scrollLeft+=r.left-v.left+r.width/2-targetX;viewport.scrollTop+=r.top-v.top-anchor.y;
+  if(opened&&e===work&&!matchMedia('(prefers-reduced-motion: reduce)').matches){const end=e.getBoundingClientRect();animation?.cancel();work.style.transformOrigin='top left';animation=work.animate([{transform:`translate(${anchor.rect.left-end.left}px,${anchor.rect.top-end.top}px) scale(${anchor.rect.width/end.width},${anchor.rect.height/end.height})`},{transform:'none'}],{duration:200,easing:'cubic-bezier(.2,.7,.2,1)'});const trace=()=>{drawEdges();if(animation?.playState==='running')requestAnimationFrame(trace)};requestAnimationFrame(trace)}
+ }
+ if(centerNext){centerNext=false;centerQuestion(opened?selected:'root')}
+ drawEdges();
+}
+function centerQuestion(id=selected){const viewport=$('viewport'),e=nodeElement(id);if(!e)return;viewport.scrollLeft=e.offsetLeft+e.offsetWidth/2-viewport.clientWidth/2;viewport.scrollTop=Math.max(0,e.offsetTop-(id==='root'?28:180))}
+function drawEdges(){
+ const scene=$('scene'),rect=scene.getBoundingClientRect(),svg=$('wires');svg.replaceChildren();svg.setAttribute('viewBox',`0 0 ${scene.clientWidth} ${scene.clientHeight}`);
+ for(const n of nodes){const from=nodeElement(n.parentId).getBoundingClientRect(),to=nodeElement(n.id).getBoundingClientRect(),x1=from.left-rect.left+from.width/2,y1=from.bottom-rect.top,x2=to.left-rect.left+to.width/2,y2=to.top-rect.top,mid=(y1+y2)/2,active=n.id===selected||n.parentId===selected;const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',`M${x1} ${y1} C${x1} ${mid} ${x2} ${mid} ${x2} ${y2}`);if(active)path.setAttribute('class','current');svg.append(path);if(active){const dot=document.createElementNS('http://www.w3.org/2000/svg','circle');dot.setAttribute('cx',x2);dot.setAttribute('cy',y2);dot.setAttribute('r','3.5');svg.append(dot)}}
+}
+$('answer').addEventListener('input',()=>{drafts[selected]=$('answer').value;renderState()});
+$('research').addEventListener('toggle',()=>{researchOpen[selected]=$('research').open;renderState();scheduleLayout()});
+$('save').addEventListener('click',()=>save(false));$('deeper').addEventListener('click',()=>save(true));
+$('follow').addEventListener('click',()=>{const child=childrenOf(selected)[0];if(child){selectNode(child.id);centerNext=true;scheduleLayout()}});
+$('collapse').addEventListener('click',collapseNode);$('overview').addEventListener('click',showOverview);$('center').addEventListener('click',()=>centerQuestion());
+$('width').addEventListener('change',()=>{$('frame').classList.toggle('narrow',$('width').value==='narrow');pendingAnchor=null;centerNext=true;scheduleLayout()});
+$('theme').addEventListener('click',()=>{const dark=$('app').classList.toggle('dark');$('theme').textContent=dark?'Light preview':'Dark preview'});
+$('reset').addEventListener('click',()=>{animation?.cancel();nodes=structuredClone(initial);selected='people';opened=true;answers={};drafts={};researchOpen={};pendingAnchor=null;centerNext=true;render();notify('Example data reset. Start with the first question.')});
+$('app').addEventListener('keydown',event=>{if(event.key==='Escape'&&opened){event.preventDefault();collapseNode()}else if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&opened){event.preventDefault();save(true)}});
+new ResizeObserver(scheduleLayout).observe($('workspace'));
+new ResizeObserver(()=>{centerNext=true;scheduleLayout()}).observe($('viewport'));
+render();
+</script>
+</main></body></html>

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.5",
+    "summary": "Refined the selected expanding-node design with expansion in its branch, research below a preserved draft, answer previews on collapsed nodes, and connected follow-up navigation. The new prototype is the default for npm run prototype:layouts. The installed canvas is unchanged."
+  },
+  {
     "version": "0.1.4",
     "summary": "Added working attached-drawer and expanded-node prototypes to keep questions visibly connected to their answers and research. Compare shared drafts, sample research, and connected follow-ups with npm run prototype:layouts. The installed canvas is unchanged."
   },

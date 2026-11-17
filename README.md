@@ -1,6 +1,6 @@
 # Explorer for GitHub Copilot
 
-**Proof of concept, v0.1.4.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need.
+**Proof of concept, v0.1.5.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need.
 
 ## Install from GitHub
 
@@ -92,9 +92,9 @@ npm run preview
 
 Preview prints a local URL to open in Brave. It uses the real UI and persistence, but has no Copilot connection; AI actions report that limitation. Manual questions, answers, imports and exports work. No browser opens automatically.
 
-For the latest working prototypes, run `npm run prototype:layouts`. Compare an **attached drawer** with an **expanded node**, both keeping the selected question visibly joined to its research and answer. You can switch questions and designs, retain drafts, try sample research, and save answers to reveal connected follow-ups. These [layout studies](docs/prototypes/README.md) use in-memory example data and are separate from the installed canvas. The earlier four placements remain at `/question-placement.html` on the same preview server.
+For the latest working prototype, run `npm run prototype:layouts`. The owner selected the **expanding node** as the direction to refine. Questions expand in their own branches, research opens below the draft, and collapsed nodes show saved answer previews. Try saving an answer and opening its connected follow-up. These [layout studies](docs/prototypes/README.md) use in-memory example data and are separate from the installed canvas. Earlier studies remain available on the same preview server.
 
-The [interaction research](docs/explorer-interaction-research.md) examines six product precedents and relevant studies. It records the owner's clarification that the drawer feels detached from the selected node and explains the current prototype pair. Its [earlier concept sketches](docs/prototypes/research-directions.html) remain available for reference. No prototype has been selected as an installed canvas mode.
+The [interaction research](docs/explorer-interaction-research.md) examines six product precedents and relevant studies. It records why the owner preferred the expanding node and the remaining interaction questions. Its [earlier concept sketches](docs/prototypes/research-directions.html) remain available for reference. The selected direction is being refined in prototypes before production integration.
 
 For the real SDK/runtime smoke test, set `COPILOT_SDK_DIR` to the installed SDK directory containing `index.js`, and `COPILOT_CLI_PATH` to its paired runtime executable, then run `npm run e2e`. The test uses a disposable home/session and a loopback model fixture. It checks actual plugin discovery, HTTP serving, queued chat delivery, canvas callbacks, persistence and export/import without paid inference or browser automation.
 

@@ -4,9 +4,9 @@ Research checked 2026-11-16. Recommendation for the next prototype, not an appro
 
 ## Recommendation
 
-The owner has now identified the issue: **the bottom drawer feels detached from the selected node**. Prioritize a workspace that visibly opens from the node itself. The [current working prototypes](prototypes/connected-workspace.html) compare an attached drawer, with the node forming its upper edge, against an expanded node within the map. Both retain graph connections and keep the question, research, and answer within one continuous surface.
+The owner identified the issue: **the bottom drawer feels detached from the selected node**, then selected the **expanding node** from the [connected-workspace pair](prototypes/connected-workspace.html): "That feels right to me." The [current refinement](prototypes/expanded-node.html) keeps the question in its branch, unfolds research below a preserved draft, and adds answer previews and connected follow-up navigation.
 
-The earlier recommendation was a local branch above a full-width question document. That could still reproduce the owner's concern if the two surfaces feel separate. The preference for visible attachment is confirmed; the attached drawer and expanded node remain proposals to test, not approved production choices.
+The earlier recommendation was a local branch above a full-width question document. That could still reproduce the owner's concern if the two surfaces feel separate. The expanding node is now the chosen direction for iteration. Exact sizing, movement, and long-research behavior remain proposals to test before production integration. The new prototype uses a simple tree and native scrolling to make those tradeoffs tangible.
 
 The research supports investigating different levels of detail and complementary representations. It does **not** establish that one of these layouts will work best in Copilot. Read the [product evidence](explorer-product-patterns.md) and compare the [three concept sketches](prototypes/research-directions.html).
 

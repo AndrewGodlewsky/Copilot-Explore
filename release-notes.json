@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.12",
+    "summary": "Fixed map dragging, accidental text selection, lost zoom on resize and stale refreshes hiding saved answers. Drag cards or question headings, wheel/pinch to zoom up to 300%, and reset with the percentage button. Improved keyboard recovery, large-map fitting, research scrolling, and draft scroll/selection/composition stability."
+  },
+  {
     "version": "0.1.11",
     "summary": "Research options now uses an isolated Copilot SDK researcher with dedicated instructions, web search, source checks, progress and cancellation. The main chat stays focused on questions. Apply recommendations, options or selected details to an editable draft with safe undo. Research usage receipts are retained locally."
   },

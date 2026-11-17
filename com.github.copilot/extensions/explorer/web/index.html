@@ -13,13 +13,13 @@
     <h1>Make room for the questions.</h1>
     <p>Start with an idea, a problem, or something you want to understand. Follow the branches that matter to you.</p>
     <form id="start-form"><label for="topic">What would you like to explore?</label><textarea id="topic" maxlength="4000" rows="4" required placeholder="I'm thinking about…"></textarea><button class="primary" type="submit">Start exploring</button></form>
-    <p class="quiet">Your map saves as you go. Research uses the Copilot chat connected to this canvas.</p>
+    <p class="quiet">Your map saves as you go. Questions use your connected Copilot chat. Research runs in a separate helper.</p>
   </section>
   <main id="workspace" hidden>
     <section class="map-section" aria-label="Exploration map">
       <div class="map-heading"><div><h1 id="map-title"></h1><p id="progress" class="quiet"></p><button id="request-status" hidden></button></div><button id="outline-toggle" aria-expanded="false">Outline</button></div>
-      <div id="map" class="map" tabindex="0" aria-label="Question map. Drag background to pan; use zoom buttons or arrow keys. Select a question to expand it. Escape collapses it."><div id="world"><svg id="edges" aria-hidden="true"></svg><div id="nodes"></div><section id="node-workspace" class="expanded-node" aria-labelledby="expanded-title" hidden></section></div><div id="map-hint">Select a question to expand it. Drag the background to move around.</div></div>
-      <div class="map-controls"><button id="zoom-out" aria-label="Zoom out">−</button><span id="zoom-level">100%</span><button id="zoom-in" aria-label="Zoom in">+</button><button id="fit">Whole map</button><button id="center-question">Center question</button><span class="legend"><i></i> Open <i class="answered"></i> Answered</span></div>
+      <div id="map" class="map" tabindex="0" aria-label="Question map. Drag the background, a card, or a question heading to pan. Wheel or plus and minus keys zoom; zero resets zoom; Home fits the map. Arrow keys pan. Escape collapses a question."><div id="world"><svg id="edges" aria-hidden="true"></svg><div id="nodes"></div><section id="node-workspace" class="expanded-node" aria-labelledby="expanded-title" hidden></section></div><div id="map-hint">Drag to move. Scroll to zoom. Select a question to expand it.</div></div>
+      <div class="map-controls"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-level" aria-label="Reset zoom to 100%" title="Reset zoom to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="fit">Whole map</button><button id="center-question">Center question</button><span class="legend"><i></i> Open <i class="answered"></i> Answered</span></div>
       <div id="outline" class="outline" hidden><label for="search">Find a question</label><input id="search" type="search" placeholder="Search questions and answers"><div id="outline-list"></div></div>
     </section>
   </main>

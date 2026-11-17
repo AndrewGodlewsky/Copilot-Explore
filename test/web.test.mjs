@@ -33,31 +33,47 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom, document = window.document;
-  t.after(async () => { dom.window.close(); await server.close(); assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true }); });
+  const requests = new Set();
+  t.after(async () => {
+    window.dispatchEvent(new window.Event('pagehide'));
+    await Promise.allSettled([...requests]); await delay(0);
+    dom.window.close(); await server.close(); assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true });
+  });
   const map = document.getElementById('map');
   // jsdom has no visual layout. Only geometry inputs are stubbed; DOM events,
   // the shipped app, HTTP server, controller, persistence and callbacks are real.
-  map.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: width, bottom: 720, width, height: 720 });
+  let height = 720;
+  map.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height });
   Object.defineProperties(window.HTMLElement.prototype, {
     offsetWidth: { get() { return parseFloat(this.style.width) || (this.id === 'map' ? width : 220); } },
-    offsetHeight: { get() { return this.id === 'node-workspace' ? 540 : 110; } },
+    offsetHeight: { get() { return this.id === 'node-workspace' ? Math.min(540, parseFloat(this.style.maxHeight) || 540) : 110; } },
   });
-  let captures = 0, holdAnswer = null;
-  map.setPointerCapture = () => { captures++; };
-  window.ResizeObserver = class { observe() {} disconnect() {} };
+  let captures = 0, holdAnswer = null, holdState = null;
+  const captured = new Set(), observers = new Map();
+  map.setPointerCapture = id => { captures++; captured.add(id); };
+  map.hasPointerCapture = id => captured.has(id);
+  map.releasePointerCapture = id => captured.delete(id);
+  window.ResizeObserver = class { constructor(callback) { this.callback = callback; } observe(element) { observers.set(element.id, this.callback); } disconnect() {} };
   window.matchMedia = () => ({ matches: true });
   window.HTMLElement.prototype.scrollIntoView = function () {};
   window.HTMLElement.prototype.animate = () => ({ cancel() {}, finished: Promise.resolve() });
-  window.fetch = async (path, options) => {
-    if (holdAnswer && options?.body && JSON.parse(options.body).action === 'answer') await holdAnswer();
-    if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, Origin: new URL(server.url).origin } };
-    return fetch(new URL(path, server.url), options);
+  window.fetch = (path, options) => {
+    const request = (async () => {
+      if (holdAnswer && options?.body && JSON.parse(options.body).action === 'answer') await holdAnswer();
+      if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, Origin: new URL(server.url).origin } };
+      const response = await fetch(new URL(path, server.url), options);
+      const body = await response.arrayBuffer();
+      if (holdState && path === 'api/state') await holdState();
+      return new Response(body, { status: response.status, headers: response.headers });
+    })();
+    requests.add(request); request.then(() => requests.delete(request), () => requests.delete(request));
+    return request;
   };
   window.layout = layout;
   window.attachVoice = attachVoice;
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
   window.eval(script.replace("import { layout } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", ''));
-  await until(() => document.querySelectorAll('#nodes button').length >= 3, 'initial map');
+  await until(() => width ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
     const button = [...document.querySelectorAll('#nodes button')].find(b => b.title === question);
@@ -65,8 +81,210 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   };
   const type = (id, value) => { const e = document.getElementById(id); assert.ok(e, id); e.value = value; e.dispatchEvent(new window.Event('input', { bubbles: true })); };
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
-  return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, pauseAnswer: fn => { holdAnswer = fn; } };
+  return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, pauseAnswer: fn => { holdAnswer = fn; },
+    resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; } };
 }
+
+function viewOf(f) {
+  const numbers = f.document.getElementById('world').style.transform.match(/-?[\d.]+/g).map(Number);
+  return { x: numbers[0], y: numbers[1], zoom: numbers[2] };
+}
+function pointer(f, type, target, x, y, extra = {}) {
+  const event = new f.window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y, ...extra });
+  Object.defineProperty(event, 'pointerId', { value: extra.pointerId ?? 1 });
+  target.dispatchEvent(event); return event;
+}
+function wheel(f, target, deltaY, extra = {}) {
+  const event = new f.window.WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY, clientX: 320, clientY: 260, ...extra });
+  target.dispatchEvent(event); return event;
+}
+
+test('dragging cards pans without selecting text or opening a question; clicks still open', async t => {
+  const f = await fixture(t), map = f.document.getElementById('map'), node = f.document.querySelector('.node .question');
+  const before = viewOf(f);
+  assert.equal(pointer(f, 'pointerdown', node, 300, 250).defaultPrevented, true, 'native text selection is suppressed');
+  pointer(f, 'pointermove', map, 380, 300); pointer(f, 'pointerup', map, 380, 300);
+  assert.equal(viewOf(f).x, before.x + 80); assert.equal(viewOf(f).y, before.y + 50);
+  node.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+  assert.ok(f.document.getElementById('node-workspace').hidden, 'drag does not activate the card');
+  assert.equal(map.classList.contains('dragging'), false);
+  const next = f.document.querySelector('.node');
+  pointer(f, 'pointerdown', next, 380, 300); pointer(f, 'pointerup', next, 380, 300); next.click();
+  assert.equal(f.document.getElementById('node-workspace').hidden, false, 'normal click still activates');
+});
+
+test('an expanded heading can pull the map back while answer selection stays native', async t => {
+  const f = await fixture(t); f.open(f.explorer.doc.nodes[1].id);
+  const map = f.document.getElementById('map'), title = f.document.getElementById('expanded-title'), before = viewOf(f);
+  pointer(f, 'pointerdown', title, 400, 250); pointer(f, 'pointermove', map, 460, 300); pointer(f, 'pointerup', map, 460, 300);
+  assert.equal(viewOf(f).x, before.x + 60);
+  const answer = f.document.getElementById('answer'), after = viewOf(f);
+  assert.equal(pointer(f, 'pointerdown', answer, 400, 350).defaultPrevented, false);
+  pointer(f, 'pointermove', answer, 500, 400); pointer(f, 'pointerup', answer, 500, 400);
+  assert.deepEqual(viewOf(f), after, 'selecting answer text never drags the map');
+  pointer(f, 'pointerdown', map, 100, 100); pointer(f, 'pointermove', map, 100000, 100000); pointer(f, 'pointerup', map, 100000, 100000);
+  assert.ok(Math.abs(viewOf(f).x) < 3000 && Math.abs(viewOf(f).y) < 3000, 'map cannot be thrown arbitrarily far away');
+  const edge = viewOf(f);
+  pointer(f, 'pointerdown', title, 100, 100); pointer(f, 'pointermove', map, 80, 80); pointer(f, 'pointerup', map, 80, 80);
+  assert.equal(viewOf(f).x, edge.x - 20, 'reverse dragging responds immediately at the boundary');
+});
+
+test('pan tracks one pointer and ends on cancellation, capture loss or window blur', async t => {
+  const f = await fixture(t), map = f.document.getElementById('map');
+  for (const ending of ['pointercancel', 'lostpointercapture', 'blur']) {
+    pointer(f, 'pointerdown', map, 200, 200);
+    const start = viewOf(f);
+    pointer(f, 'pointermove', map, 500, 500, { pointerId: 2 });
+    assert.deepEqual(viewOf(f), start, 'another pointer cannot move the drag');
+    pointer(f, 'pointerup', map, 500, 500, { pointerId: 2 });
+    pointer(f, 'pointermove', map, 220, 220);
+    assert.equal(viewOf(f).x, start.x + 20, 'another pointer cannot end the drag');
+    if (ending === 'blur') f.window.dispatchEvent(new f.window.Event('blur'));
+    else pointer(f, ending, map, 220, 220);
+    const end = viewOf(f);
+    pointer(f, 'pointermove', map, 250, 250);
+    assert.deepEqual(viewOf(f), end); assert.equal(map.hasPointerCapture(1), false);
+  }
+});
+
+test('touch or pen capture transferring from a card to the map does not cancel panning', async t => {
+  const f = await fixture(t), map = f.document.getElementById('map'), label = f.document.querySelector('.node .question');
+  const before = viewOf(f);
+  pointer(f, 'pointerdown', label, 200, 200); pointer(f, 'pointermove', label, 220, 220);
+  pointer(f, 'lostpointercapture', label, 220, 220);
+  pointer(f, 'pointermove', map, 240, 240);
+  assert.equal(viewOf(f).x, before.x + 40); assert.ok(map.hasPointerCapture(1));
+  pointer(f, 'pointerup', map, 240, 240);
+});
+
+test('wheel zoom anchors at the pointer, reaches 300%, resets, and respects text scrolling', async t => {
+  const f = await fixture(t), map = f.document.getElementById('map'), before = viewOf(f);
+  assert.equal(wheel(f, map, -100).defaultPrevented, true);
+  const after = viewOf(f);
+  assert.ok(after.zoom > before.zoom);
+  assert.ok(Math.abs((320 - after.x) / after.zoom - (320 - before.x) / before.zoom) < 1e-8);
+  assert.ok(Math.abs((260 - after.y) / after.zoom - (260 - before.y) / before.zoom) < 1e-8);
+  for (let i = 0; i < 20; i++) f.document.getElementById('zoom-in').click();
+  assert.equal(viewOf(f).zoom, 3); assert.ok(f.document.getElementById('zoom-in').disabled);
+  f.document.getElementById('zoom-level').click(); assert.equal(viewOf(f).zoom, 1);
+  f.open(f.explorer.doc.nodes[1].id);
+  const answer = f.document.getElementById('answer'), stable = viewOf(f);
+  assert.equal(wheel(f, answer, 100).defaultPrevented, false); assert.deepEqual(viewOf(f), stable);
+  assert.equal(wheel(f, answer, -100, { ctrlKey: true }).defaultPrevented, true, 'pinch/Ctrl-wheel cannot zoom the host page');
+  assert.ok(viewOf(f).zoom > stable.zoom);
+});
+
+test('an expanded answer remains reachable at 300% in a narrow pane', async t => {
+  const f = await fixture(t, 340); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep my draft');
+  for (let i = 0; i < 20; i++) f.document.getElementById('zoom-in').click();
+  const panel = f.document.getElementById('node-workspace'), v = viewOf(f);
+  assert.equal(v.zoom, 3);
+  const left = v.x + parseFloat(panel.style.left) * v.zoom, top = v.y + parseFloat(panel.style.top) * v.zoom;
+  assert.ok(left >= 15 && left + panel.offsetWidth * v.zoom <= 325, 'editor stays inside the pane width');
+  assert.ok(top >= 15 && top + panel.offsetHeight * v.zoom <= 705, 'heading and scrollable editor remain reachable');
+  f.document.getElementById('save-answer').focus();
+  assert.equal(f.document.activeElement.id, 'save-answer'); assert.equal(f.document.getElementById('answer').value, 'Keep my draft');
+  assert.equal(viewOf(f).zoom, 3, 'focusing controls does not reset zoom');
+  const map = f.document.getElementById('map');
+  pointer(f, 'pointerdown', map, 100, 100); pointer(f, 'pointermove', map, 300, 200); pointer(f, 'pointerup', map, 300, 200);
+  f.document.getElementById('answer').focus();
+  const focused = viewOf(f), x = focused.x + parseFloat(panel.style.left) * focused.zoom;
+  assert.ok(x >= 15 && x + panel.offsetWidth * focused.zoom <= 325, 'focusing the editor brings a panned-off card back');
+});
+
+test('resizing preserves manual zoom and view instead of resetting to whole map', async t => {
+  const f = await fixture(t);
+  f.resize(1100); f.document.getElementById('zoom-in').click(); f.document.getElementById('zoom-in').click();
+  const before = viewOf(f); f.resize(1000, 680);
+  const after = viewOf(f);
+  assert.equal(after.zoom, before.zoom);
+  assert.equal(after.x, before.x - 50); assert.equal(after.y, before.y - 20);
+  f.resize(1000, 680); assert.deepEqual(viewOf(f), after, 'repeated resize notification is a no-op');
+});
+
+test('a canvas first loaded while hidden fits once it becomes visible', async t => {
+  const f = await fixture(t, 0); f.resize(1100, 720);
+  assert.equal(f.document.querySelectorAll('.node').length, 3);
+  assert.equal(viewOf(f).zoom, 1);
+  f.document.getElementById('zoom-in').click(); const before = viewOf(f);
+  f.resize(0, 0); f.resize(1100, 720); assert.deepEqual(viewOf(f), before, 'hiding and revealing does not change the view');
+});
+
+test('keyboard navigation zooms, recovers the map, and reveals off-screen focused nodes', async t => {
+  const f = await fixture(t), map = f.document.getElementById('map'); map.focus();
+  const key = key => map.dispatchEvent(new f.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  key('+'); assert.ok(viewOf(f).zoom > 1); key('0'); assert.equal(viewOf(f).zoom, 1);
+  for (let i = 0; i < 40; i++) key('ArrowLeft');
+  const node = f.document.querySelector('.node'); node.focus();
+  const p = viewOf(f), x = p.x + parseFloat(node.style.left) * p.zoom, y = p.y + parseFloat(node.style.top) * p.zoom;
+  assert.ok(x >= 0 && x + parseFloat(node.style.width) * p.zoom <= 1100, 'focused node is horizontally visible');
+  assert.ok(y >= 0 && y + parseFloat(node.style.height) * p.zoom <= 720, 'focused node is vertically visible');
+  f.document.getElementById('outline-toggle').click();
+  f.document.getElementById('search').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.ok(f.document.getElementById('outline').hidden); assert.equal(f.document.activeElement.id, 'outline-toggle');
+});
+
+test('background refresh preserves text scroll, selection direction and IME composition', async t => {
+  const f = await fixture(t), [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
+  f.type('answer', 'A long draft\n'.repeat(60));
+  let answer = f.document.getElementById('answer'); answer.focus(); answer.setSelectionRange(12, 40, 'backward'); answer.scrollTop = 200;
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Shared fund' });
+  await until(() => f.document.getElementById('progress').textContent.startsWith('1 answered'), 'background answer');
+  answer = f.document.getElementById('answer');
+  assert.equal(answer.scrollTop, 200); assert.equal(answer.selectionDirection, 'backward');
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Different fund' });
+  await delay(1350);
+  assert.equal(f.document.getElementById('answer'), answer, 'composition target stays mounted');
+  answer.dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, isComposing: true, bubbles: true }));
+  await delay(50); assert.equal(f.explorer.doc.nodes[1].answer, '', 'confirming an IME candidate does not submit an answer');
+  f.type('answer', 'My completed composition');
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  await delay(50); assert.equal(f.document.getElementById('answer').value, 'My completed composition');
+});
+
+test('whole map fits a wide or deep tree instead of stopping at an unreadable zoom limit', async t => {
+  const f = await fixture(t, 340), template = structuredClone(f.explorer.doc);
+  for (const deep of [false, true]) {
+    const doc = structuredClone(template);
+    for (let i = 0; i < 100; i++) doc.nodes.push({ ...template.nodes[1], id: `large-${i}`, parentId: deep && i ? `large-${i - 1}` : doc.rootId });
+    await f.explorer.command('import', { revision: f.explorer.doc.revision, document: doc });
+    await until(() => f.document.querySelectorAll('.node').length === doc.nodes.length &&
+      (deep ? Math.max(...[...f.document.querySelectorAll('.node')].map(e => parseFloat(e.style.top))) > 10000 : true), 'large map rendered');
+    f.document.getElementById('fit').click(); const v = viewOf(f);
+    assert.ok(v.zoom < .1, 'map can fit below 10%');
+    for (const node of f.document.querySelectorAll('.node')) {
+      const left = v.x + parseFloat(node.style.left) * v.zoom, top = v.y + parseFloat(node.style.top) * v.zoom;
+      assert.ok(left >= 0 && left + parseFloat(node.style.width) * v.zoom <= 340, 'whole width fits');
+      assert.ok(top >= 0 && top + parseFloat(node.style.height) * v.zoom <= 720, 'whole height fits');
+    }
+    f.document.getElementById('zoom-in').click(); assert.ok(viewOf(f).zoom > v.zoom);
+  }
+});
+
+test('late background reads cannot undo a completed save in the UI', async t => {
+  const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  let release, started = false;
+  f.pauseState(() => { started = true; return new Promise(resolve => { release = resolve; }); });
+  await until(() => started, 'old state response held');
+  f.type('answer', 'The saved answer'); f.click('Save answer');
+  await until(() => f.document.getElementById('answer-status').textContent === 'Answer saved', 'saved response applied');
+  f.pauseState(null); release(); await delay(50);
+  assert.equal(f.document.getElementById('answer').value, 'The saved answer');
+  assert.equal(f.document.getElementById('progress').textContent.startsWith('1 answered'), true);
+});
+
+test('adding research scrolls only the answer pane, without native scrolling of the map', async t => {
+  const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options');
+  await until(() => f.explorer.pending?.kind === 'research', 'research request'); f.resolveResearch(findings);
+  await until(() => f.document.getElementById('use-recommendation'), 'research rendered');
+  const answer = f.document.getElementById('answer'), pane = f.document.querySelector('.node-content'), before = viewOf(f);
+  answer.scrollIntoView = () => assert.fail('scrollIntoView can scroll hidden ancestors of the map');
+  pane.scrollTop = 400; pane.getBoundingClientRect = () => ({ top: 240 }); answer.getBoundingClientRect = () => ({ top: 0 });
+  f.click('Use recommendation');
+  assert.deepEqual(viewOf(f), before); assert.ok(pane.scrollTop < 400); assert.equal(f.document.activeElement, answer);
+});
 
 test('installed questions expand inside the map, preserve drafts, and collapse to saved previews', async t => {
   const f = await fixture(t), [a, b] = f.explorer.doc.nodes.slice(1);

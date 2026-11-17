@@ -5,7 +5,9 @@ const $ = id => document.getElementById(id);
 const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'];
 let state = { document: null, pending: null, error: '' };
 let selected = null, expanded = false, signature = '', positions = new Map(), busy = false, firstFit = true;
-let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame;
+let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame, viewportSize;
+let suppressClick = false, restoringFocus = false, composing = null, workspaceDirty = false;
+let actionEpoch = 0, closed = false, pollTimer;
 const drafts = new Map(), nodeUi = new Map();
 const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args),
   context: () => `${state.document?.id}/${selected}/${expanded}`,
@@ -28,14 +30,15 @@ function el(tag, attrs = {}, ...children) {
 const button = (label, handler, attrs = {}) => el('button', { type: 'button', onclick: handler, ...attrs }, label);
 function notice(message) { $('notice').textContent = message; $('notice').hidden = !message; }
 async function api(action, input = {}) {
-  if (busy) return null;
-  busy = true;
+  if (busy || closed) return null;
+  busy = true; actionEpoch++;
   try {
     const response = await fetch('api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, revision: state.document?.revision, ...input }) });
     const result = await response.json();
+    if (closed) return null;
     if (!response.ok) throw new Error(result.error);
     apply(result); return result;
-  } catch (error) { notice(error.message); return null; }
+  } catch (error) { if (!closed) notice(error.message); return null; }
   finally { busy = false; }
 }
 function anchorPoint(id = selected) {
@@ -80,7 +83,10 @@ function apply(next) {
     $('request-status').textContent = `${state.pending.kind === 'research' ? 'Researching' : 'Finding questions for'} ${work?.category ?? 'this map'}…`;
   }
   renderWorkspace(); refreshScene(anchor); renderOutline();
-  if (firstFit || firstQuestions) { expanded ? centerSelected() : fit(); firstFit = false; }
+  if (firstFit || firstQuestions) {
+    const rect = $('map').getBoundingClientRect(); firstFit = !rect.width || !rect.height;
+    if (!firstFit) expanded ? centerSelected() : fit();
+  }
 }
 function focusTop(id, height) {
   const node = state.document.nodes.find(n => n.id === id);
@@ -89,6 +95,7 @@ function focusTop(id, height) {
 }
 function select(id) {
   if (!state.document?.nodes.some(n => n.id === id)) return;
+  endDrag();
   voice.cancel();
   const rect = $('map').getBoundingClientRect(), width = Math.min(560, rect.width - 32), old = anchorPoint(id);
   const anchor = { id, x: Math.max(width / 2 + 16, Math.min(rect.width - width / 2 - 16, old?.x ?? rect.width / 2)), y: focusTop(id, rect.height) };
@@ -96,6 +103,7 @@ function select(id) {
   renderWorkspace(); refreshScene(anchor); $('expanded-title').focus({ preventScroll: true });
 }
 function collapseNode(focus = true) {
+  endDrag();
   voice.cancel();
   const anchor = anchorPoint(); captureWorkspace(); expanded = false;
   renderWorkspace(); refreshScene(anchor);
@@ -104,11 +112,13 @@ function collapseNode(focus = true) {
 function refreshScene(anchor = anchorPoint()) {
   if (!state.document) return;
   const panel = $('node-workspace'), rect = $('map').getBoundingClientRect();
-  const width = Math.min(560, Math.max(180, rect.width - 32));
-  const top = Math.max(16, Math.min(rect.height - 160, anchor?.y ?? 24));
-  const height = Math.max(140, rect.height - top - 16);
+  if (!rect.width || !rect.height) return;
+  viewportSize ??= { width: rect.width, height: rect.height };
+  const scale = Math.max(1, view.zoom), width = Math.min(560, Math.max(100, rect.width - 32) / scale);
+  // Panel size must not change merely because the user pans it up or down.
+  const height = Math.max(80, rect.height - focusTop(selected, rect.height) - 16) / scale;
   panel.style.width = `${width}px`; panel.style.maxHeight = `${height}px`;
-  panel.style.setProperty('--heading-limit', `${Math.max(64, Math.min(190, height * .42))}px`);
+  panel.style.setProperty('--heading-limit', `${Math.min(190, height * .42)}px`);
   const sizes = new Map(state.document.nodes.map(n => [n.id, { width: 220, height: n.answer ? 150 : 110 }]));
   if (expanded) sizes.set(selected, { width, height: panel.offsetHeight });
   positions = layout(state.document.nodes, state.document.rootId, sizes);
@@ -119,7 +129,7 @@ function refreshScene(anchor = anchorPoint()) {
   if (expanded) { const p = positions.get(selected); panel.style.left = `${p.x}px`; panel.style.top = `${p.y}px`; }
   renderMap(); transform();
 }
-function scheduleLayout() { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(() => refreshScene()); }
+function scheduleLayout() { if (!closed) { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(() => refreshScene()); } }
 function renderMap() {
   const doc = state.document, fragment = document.createDocumentFragment();
   const focused = $('nodes').contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
@@ -130,6 +140,7 @@ function renderMap() {
       const node = button('', () => select(n.id), { class: `node ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''}`,
         title: n.question, 'data-node-id': n.id, 'aria-expanded': 'false', 'aria-label': `${n.category}: ${n.question}. ${n.answer ? 'Answered' : root ? 'Central idea' : 'Open'}` });
       node.style.left = `${p.x}px`; node.style.top = `${p.y}px`; node.style.width = `${p.width}px`; node.style.height = `${p.height}px`; node.style.setProperty('--branch', colors[p.branch % colors.length]);
+      node.addEventListener('focus', () => { if (!restoringFocus) revealNode(n.id); });
       node.append(el('span', { class: 'category' }, n.category), el('span', { class: 'question' }, n.question));
       if (n.answer) node.append(el('span', { class: 'answer-preview' }, n.answer));
       node.append(el('span', { class: 'status' }, root ? `${doc.nodes.length - 1} questions` : n.review ? 'Needs review' : n.answer ? 'Answered' : 'Open question'));
@@ -144,26 +155,61 @@ function renderMap() {
     }
   }
   $('nodes').replaceChildren(fragment);
+  restoringFocus = true;
   if (focused) [...$('nodes').children].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
+  restoringFocus = false;
 }
-function transform() { $('world').style.transform = `translate(${view.x}px,${view.y}px) scale(${view.zoom})`; $('zoom-level').textContent = `${Math.round(view.zoom * 100)}%`; }
-function fit() {
-  voice.cancel();
+function bounds() {
+  const boxes = [...positions.values()];
+  return { left: Math.min(...boxes.map(p => p.x)), right: Math.max(...boxes.map(p => p.x + p.width)),
+    top: Math.min(...boxes.map(p => p.y)), bottom: Math.max(...boxes.map(p => p.y + p.height)) };
+}
+function fitScale() {
+  if (!positions.size) return 1;
+  const b = bounds(), rect = $('map').getBoundingClientRect();
+  return Math.min(1, Math.max(1, rect.width - 60) / (b.right - b.left), Math.max(1, rect.height - 60) / (b.bottom - b.top));
+}
+function transform() {
   if (!positions.size) return;
-  const values = [...positions.values()], rect = $('map').getBoundingClientRect();
-  const minX = Math.min(...values.map(p => p.x)), maxX = Math.max(...values.map(p => p.x + p.width));
-  const minY = Math.min(...values.map(p => p.y)), maxY = Math.max(...values.map(p => p.y + p.height));
-  view.zoom = Math.max(.12, Math.min(1, (rect.width - 60) / (maxX - minX), (rect.height - 60) / (maxY - minY)));
-  view.x = rect.width / 2 - (minX + maxX) / 2 * view.zoom; view.y = rect.height / 2 - (minY + maxY) / 2 * view.zoom; transform();
+  const rect = $('map').getBoundingClientRect(), b = bounds();
+  if (!rect.width || !rect.height) return;
+  const reachX = Math.min(64, rect.width / 2, (b.right - b.left) * view.zoom);
+  const reachY = Math.min(64, rect.height / 2, (b.bottom - b.top) * view.zoom);
+  view.x = Math.min(rect.width - reachX - b.left * view.zoom, Math.max(reachX - b.right * view.zoom, view.x));
+  view.y = Math.min(rect.height - reachY - b.top * view.zoom, Math.max(reachY - b.bottom * view.zoom, view.y));
+  $('world').style.transform = `translate(${view.x}px,${view.y}px) scale(${view.zoom})`;
+  $('zoom-level').textContent = `${Number((view.zoom * 100).toPrecision(3))}%`;
+  $('zoom-in').disabled = view.zoom >= 3;
+  $('zoom-out').disabled = view.zoom <= Math.min(.1, fitScale());
+}
+function fit() {
+  endDrag(); voice.cancel();
+  if (!positions.size) return;
+  const b = bounds(), rect = $('map').getBoundingClientRect();
+  view.zoom = fitScale();
+  view.x = rect.width / 2 - (b.left + b.right) / 2 * view.zoom; view.y = rect.height / 2 - (b.top + b.bottom) / 2 * view.zoom; transform();
 }
 function centerSelected() {
   if (!selected || !positions.has(selected)) return;
+  endDrag();
   const rect = $('map').getBoundingClientRect(); view.zoom = 1;
   refreshScene({ id: selected, x: rect.width / 2, y: focusTop(selected, rect.height) });
 }
-function zoom(factor) {
-  const rect = $('map').getBoundingClientRect(), next = Math.max(.12, Math.min(1.6, view.zoom * factor)), ratio = next / view.zoom;
-  view.x = rect.width / 2 - (rect.width / 2 - view.x) * ratio; view.y = rect.height / 2 - (rect.height / 2 - view.y) * ratio; view.zoom = next; transform();
+function zoom(factor, point) {
+  if (!positions.size || drag) return;
+  const rect = $('map').getBoundingClientRect(), next = Math.max(Math.min(.1, fitScale()), Math.min(3, view.zoom * factor)), ratio = next / view.zoom;
+  const x = point?.x ?? rect.width / 2, y = point?.y ?? rect.height / 2;
+  view.x = x - (x - view.x) * ratio; view.y = y - (y - view.y) * ratio; view.zoom = next; transform();
+  if (expanded) { refreshScene(); revealNode(selected); }
+}
+function revealNode(id) {
+  const p = positions.get(id); if (!p) return;
+  const rect = $('map').getBoundingClientRect();
+  view.zoom = Math.min(view.zoom, (rect.width - 32) / p.width, (rect.height - 32) / p.height);
+  const left = view.x + p.x * view.zoom, top = view.y + p.y * view.zoom;
+  view.x += Math.max(16 - left, Math.min(0, rect.width - 16 - left - p.width * view.zoom));
+  view.y += Math.max(16 - top, Math.min(0, rect.height - 16 - top - p.height * view.zoom));
+  transform();
 }
 function answerStatus(node) {
   const dirty = drafts.has(node.id) && drafts.get(node.id).trim() !== node.answer;
@@ -174,9 +220,12 @@ function answerStatus(node) {
 function renderWorkspace() {
   const panel = $('node-workspace'); captureWorkspace(); panel.hidden = !expanded;
   if (!expanded) return;
+  if (composing?.isConnected && panel.dataset.nodeId === selected) { workspaceDirty = true; return; }
+  workspaceDirty = false;
   const doc = state.document, node = doc.nodes.find(n => n.id === selected), ui = uiFor(node.id), root = node.id === doc.rootId, pending = !!state.pending;
   const active = document.activeElement, sameNode = panel.dataset.nodeId === node.id;
-  const focus = sameNode && active?.id && panel.contains(active) ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
+  const focus = sameNode && active?.id && panel.contains(active) ? { id: active.id, start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection } : null;
+  const textScroll = new Map(sameNode ? [...panel.querySelectorAll('textarea')].map(e => [e.id, { top: e.scrollTop, left: e.scrollLeft, height: e.style.height }]) : []);
   panel.dataset.nodeId = node.id; panel.replaceChildren();
   const path = [], byId = new Map(doc.nodes.map(n => [n.id, n]));
   for (let n = node; n; n = byId.get(n.parentId)) path.push(n);
@@ -209,7 +258,7 @@ function renderWorkspace() {
       }
     };
     form.addEventListener('submit', event => { event.preventDefault(); void save(true); });
-    form.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void save(true); } });
+    form.addEventListener('keydown', event => { if (!event.isComposing && event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void save(true); } });
     const voiceStatus = el('div', { class: 'voice-controls' });
     answer.setAttribute('aria-describedby', 'voice-status');
     voice.bind(answer, voiceStatus);
@@ -236,13 +285,15 @@ function renderWorkspace() {
   category.addEventListener('input', () => { ui.category = category.value; }); question.addEventListener('input', () => { ui.question = question.value; });
   manual.append(el('label', { for: 'manual-category' }, 'Category'), category, el('label', { for: 'manual-question' }, 'Question'), question, el('button', { type: 'submit', id: 'add-question', disabled: pending }, 'Add question'));
   manual.addEventListener('submit', async event => { event.preventDefault(); const value = question.value; if (await api('add', { nodeId: node.id, question: value, category: category.value })) { if (ui.question === value) ui.question = ''; renderWorkspace(); refreshScene(); } });
-  details.append(manual); content.append(details); content.scrollTop = ui.scroll;
+  details.append(manual); content.append(details);
   if (focus) {
     const target = $(focus.id);
     const restored = target && !target.disabled ? target : $('cancel-request') ?? $('expanded-title');
-    restored.focus({ preventScroll: true });
-    if (restored === target && typeof focus.start === 'number') restored.setSelectionRange(focus.start, focus.end);
+    restoringFocus = true; restored.focus({ preventScroll: true }); restoringFocus = false;
+    if (restored === target && typeof focus.start === 'number') restored.setSelectionRange(focus.start, focus.end, focus.direction);
   }
+  for (const [id, scroll] of textScroll) { const input = $(id); if (input) { input.style.height = scroll.height; input.scrollTop = scroll.top; input.scrollLeft = scroll.left; } }
+  content.scrollTop = ui.scroll;
 }
 function renderResearch(node) {
   const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r);
@@ -252,7 +303,10 @@ function renderResearch(node) {
     if (value.length > 20000) return notice('Your answer is too long to add this suggestion. Shorten it first.');
     voice.cancel(); ui.addition = { before: previous, after: value };
     drafts.set(node.id, value); $('answer').value = value; answerStatus(node);
-    $('answer').focus({ preventScroll: true }); $('answer').setSelectionRange(value.length, value.length); $('answer').scrollIntoView({ block: 'nearest' });
+    const answer = $('answer'), content = answer.closest('.node-content');
+    answer.focus({ preventScroll: true }); answer.setSelectionRange(value.length, value.length);
+    // Scroll only the editor, never an ancestor of the transformed map.
+    content.scrollTop += (answer.getBoundingClientRect().top - content.getBoundingClientRect().top) / view.zoom - 40;
     notice('Added to your draft. Edit it before saving, or undo the addition.');
   };
   const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'), el('p', {}, r.summary));
@@ -300,26 +354,102 @@ $('finish').addEventListener('click', async () => { const dirty = dirtyNodes(); 
 $('save-file').addEventListener('click', event => { if (dirtyNodes().length) { event.preventDefault(); notice('Save your draft answers before downloading the map.'); } });
 $('close-export').addEventListener('click', () => $('export-dialog').close());
 $('outline-toggle').addEventListener('click', () => { $('outline').hidden = !$('outline').hidden; $('outline-toggle').setAttribute('aria-expanded', String(!$('outline').hidden)); if (!$('outline').hidden) $('search').focus(); });
+$('outline').addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || event.isComposing) return;
+  event.preventDefault(); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); $('outline-toggle').focus({ preventScroll: true });
+});
 $('search').addEventListener('input', renderOutline);
 $('request-status').addEventListener('click', () => { if (state.pending) select(state.pending.nodeId); });
 $('fit').addEventListener('click', () => { collapseNode(false); fit(); }); $('center-question').addEventListener('click', centerSelected);
 $('zoom-in').addEventListener('click', () => zoom(1.2)); $('zoom-out').addEventListener('click', () => zoom(1 / 1.2));
-$('map').addEventListener('pointerdown', event => { if (event.button !== 0 || event.target.closest('button,a,input,textarea,select,summary,.expanded-node')) return; drag = { x: event.clientX, y: event.clientY, vx: view.x, vy: view.y }; $('map').setPointerCapture(event.pointerId); });
-$('map').addEventListener('pointermove', event => { if (drag) { view.x = drag.vx + event.clientX - drag.x; view.y = drag.vy + event.clientY - drag.y; transform(); } });
-for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) $('map').addEventListener(name, () => { drag = null; });
+$('zoom-level').addEventListener('click', () => zoom(1 / view.zoom));
+function endDrag(event) {
+  if (!drag || (event?.pointerId !== undefined && event.pointerId !== drag.id)) return;
+  const id = drag.id; drag = null; $('map').classList.remove('dragging');
+  if ($('map').hasPointerCapture(id)) $('map').releasePointerCapture(id);
+}
+$('map').addEventListener('pointerdown', event => {
+  if (drag || event.isPrimary === false || ![0, 1].includes(event.button)) return;
+  suppressClick = false;
+  const card = event.target.closest('.node'), control = event.target.closest('button,a,input,textarea,select,summary');
+  if (event.button === 0 && ((control && control !== card) || (event.target.closest('.expanded-node') && !event.target.closest('.node-head')))) return;
+  event.preventDefault();
+  if (!card && !event.target.closest('.expanded-node')) $('map').focus({ preventScroll: true });
+  drag = { id: event.pointerId, x: event.clientX, y: event.clientY, active: false };
+});
+window.addEventListener('pointermove', event => {
+  if (!drag || event.pointerId !== drag.id) return;
+  if (!event.buttons) return endDrag(event);
+  const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+  if (!drag.active && Math.hypot(dx, dy) < 4) return;
+  if (!drag.active) {
+    drag.active = true; suppressClick = true;
+    $('map').setPointerCapture(event.pointerId); $('map').classList.add('dragging'); $('map').focus({ preventScroll: true });
+    const selection = window.getSelection();
+    if ($('map').contains(selection?.anchorNode)) selection.removeAllRanges();
+  }
+  event.preventDefault();
+  view.x += dx; view.y += dy; drag.x = event.clientX; drag.y = event.clientY; transform();
+});
+for (const name of ['pointerup', 'pointercancel']) window.addEventListener(name, endDrag);
+$('map').addEventListener('lostpointercapture', event => { if (event.target === $('map')) endDrag(event); });
+window.addEventListener('blur', () => endDrag());
+document.addEventListener('visibilitychange', () => { if (document.hidden) endDrag(); });
+$('map').addEventListener('click', event => {
+  if (suppressClick && event.detail > 0) { event.preventDefault(); event.stopImmediatePropagation(); suppressClick = false; }
+}, true);
+$('map').addEventListener('auxclick', event => { if (event.button === 1) event.preventDefault(); });
+$('map').addEventListener('dragstart', event => { if (event.target.closest('.node,.node-head') || drag?.active) event.preventDefault(); });
+$('node-workspace').addEventListener('focusin', () => { if (expanded && !restoringFocus) revealNode(selected); });
+$('node-workspace').addEventListener('compositionstart', event => { composing = event.target; });
+$('node-workspace').addEventListener('compositionend', () => {
+  composing = null;
+  setTimeout(() => { if (workspaceDirty) { renderWorkspace(); refreshScene(); } }, 0);
+});
 $('map').addEventListener('keydown', event => {
+  if (event.isComposing || event.defaultPrevented || event.target.matches('select')) return;
   if (event.key === 'Escape' && expanded) { event.preventDefault(); collapseNode(); return; }
   if (event.target !== $('map')) return;
   const direction = { ArrowLeft: [40, 0], ArrowRight: [-40, 0], ArrowUp: [0, 40], ArrowDown: [0, -40] }[event.key];
   if (direction) { event.preventDefault(); view.x += direction[0]; view.y += direction[1]; transform(); }
+  if (['+', '=', '-', '0', 'Home'].includes(event.key)) {
+    event.preventDefault();
+    if (event.key === 'Home') { collapseNode(false); fit(); }
+    else zoom(event.key === '0' ? 1 / view.zoom : event.key === '-' ? 1 / 1.2 : 1.2);
+  }
 });
-$('map').addEventListener('wheel', event => { if (event.target.closest('.expanded-node')) return; if (event.ctrlKey || event.metaKey) { event.preventDefault(); zoom(event.deltaY < 0 ? 1.1 : 1 / 1.1); } }, { passive: false });
+$('map').addEventListener('wheel', event => {
+  if (event.target.closest('.expanded-node') && !event.ctrlKey && !event.metaKey) return;
+  event.preventDefault(); if (!event.deltaY) return;
+  const rect = $('map').getBoundingClientRect();
+  const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1);
+  zoom(Math.exp(-Math.max(-120, Math.min(120, delta)) * .002), { x: event.clientX - rect.left, y: event.clientY - rect.top });
+}, { passive: false });
 window.addEventListener('beforeunload', event => { if (dirtyNodes().length) { event.preventDefault(); event.returnValue = ''; } });
-new ResizeObserver(() => { if (positions.size && !drag) { expanded ? centerSelected() : fit(); } }).observe($('map'));
+new ResizeObserver(() => {
+  const rect = $('map').getBoundingClientRect();
+  if (!state.document || !rect.width || !rect.height) return;
+  if (firstFit) { viewportSize = { width: rect.width, height: rect.height }; refreshScene(null); expanded ? centerSelected() : fit(); firstFit = false; return; }
+  if (viewportSize && rect.width === viewportSize.width && rect.height === viewportSize.height) return;
+  endDrag();
+  if (viewportSize) { view.x += (rect.width - viewportSize.width) / 2; view.y += (rect.height - viewportSize.height) / 2; }
+  viewportSize = { width: rect.width, height: rect.height };
+  refreshScene();
+}).observe($('map'));
 new ResizeObserver(() => { if (expanded) scheduleLayout(); }).observe($('node-workspace'));
+window.addEventListener('pagehide', event => {
+  if (event.persisted) return;
+  closed = true; clearTimeout(pollTimer); cancelAnimationFrame(layoutFrame); endDrag();
+});
 async function poll() {
-  try { const response = await fetch('api/state'); if (!response.ok) throw new Error('Canvas connection lost. Reopen Explorer in Copilot.'); apply(await response.json()); }
-  catch (error) { notice(error.message); }
-  finally { setTimeout(poll, document.hidden ? 4000 : 1200); }
+  const epoch = actionEpoch;
+  try {
+    if (busy || closed) return;
+    const response = await fetch('api/state');
+    if (!response.ok) throw new Error('Canvas connection lost. Reopen Explorer in Copilot.');
+    const next = await response.json();
+    if (!closed && !busy && epoch === actionEpoch) apply(next);
+  } catch (error) { if (!closed && !busy && epoch === actionEpoch) notice(error.message); }
+  finally { if (!closed) pollTimer = setTimeout(poll, document.hidden ? 4000 : 1200); }
 }
 void poll();

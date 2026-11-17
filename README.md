@@ -1,6 +1,6 @@
 # Explorer for GitHub Copilot
 
-**Proof of concept, v0.1.11.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
+**Proof of concept, v0.1.12.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
 
 ## Install from GitHub
 
@@ -70,7 +70,7 @@ Local marketplace installs can show a generic native tab icon due to a host issu
 4. Write your answer. **Save answer** records it; **Save & explore deeper** also generates follow-up questions on that branch. You can add a question manually.
 5. **Finish exploration** saves the record and offers two downloads: Markdown and `.explore.json`. Use **Open file** to resume the latter in another canvas/session.
 
-Pan by dragging the map background. Use the zoom controls or Ctrl+wheel. **Collapse node** keeps your place and shows a saved-answer preview; **Whole map** collapses the workspace and fits the tree. **Center question** returns to the selected node at reading size. Keyboard users can Tab to nodes, use the map's arrow-key pan, navigate the outline, or press Escape to collapse. Ctrl/Command + Enter saves an answer and explores deeper. Revising an answered node preserves its descendants and marks them for review.
+Pan by dragging the background, a compact card, or an expanded question heading. Middle-button dragging also works over the editor. Scroll over the map to zoom around the pointer, or use Ctrl/Command+wheel (including trackpad pinch) anywhere on the map. Normal scrolling inside an expanded node scrolls its contents. The +/? controls zoom up to 300%; click the percentage to return to 100%. **Collapse node** keeps your place and shows a saved-answer preview; **Whole map** collapses the workspace and fits the tree. **Center question** returns to the selected node at reading size. Keyboard users can Tab to nodes (including those off screen), navigate the outline, or press Escape to close the outline or collapse a question. With the map focused, arrow keys pan, +/? zoom, 0 resets zoom, and Home fits the whole map. Window resizing preserves your zoom and position. Ctrl/Command + Enter saves an answer and explores deeper. Revising an answered node preserves its descendants and marks them for review.
 
 Initial questions and **Save & explore deeper** are queued in the attached Copilot chat. Research uses a fresh SDK session with the same verified account and selected enabled Copilot model; normal Copilot usage applies. It receives your saved question path and decisions with a dedicated [research skill](com.github.copilot/extensions/explorer/research/skills/explorer-research/SKILL.md), and checks web search/fetch availability before inference. The main chat receives no research transcript. Status shows preparation, search, reading and comparison; Cancel stops the research helper. Question cancellation still only discards the result, since Explorer cannot stop the main chat turn.
 

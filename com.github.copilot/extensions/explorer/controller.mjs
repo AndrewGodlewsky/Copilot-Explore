@@ -1,8 +1,9 @@
-import { mkdir, readFile, open, unlink } from 'node:fs/promises';
+import { mkdir, readFile, open, unlink, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createDocument, validateDocument, findNode, addQuestions, answerNode, contextFor, research, text, toMarkdown } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
+import { Drafts, draftBase, draftHash } from './drafts.mjs';
 export { atomicWrite } from './storage.mjs';
 
 export class Explorer {
@@ -26,6 +27,31 @@ export class Explorer {
   async attach(key) {
     const record = await this.library.opened(key, this.binding);
     this.file = record.file; this.doc = record.document; this.activeKey = key;
+  }
+  async draftIdentity(journey) {
+    if (!this.doc || journey !== (this.activeKey ?? this.doc.id)) throw new Error('The active journey changed. This draft request was rejected.');
+    this.draftStore ??= new Drafts(this.library?.directory ?? dirname(this.file));
+    return this.activeKey ?? draftHash(`${await realpath(this.file)}\0${this.doc.id}`);
+  }
+  readDrafts(journey) {
+    return this.transact(async () => {
+      const key = await this.draftIdentity(journey), entries = await this.draftStore.list(key);
+      return { journey, entries: entries.map(entry => {
+        const node = this.doc.nodes.find(n => n.id === entry.nodeId);
+        return { ...entry, stale: !node || entry.base !== draftBase(node), orphaned: !node };
+      }) };
+    });
+  }
+  writeDraft(input) {
+    return this.transact(async () => {
+      if (!input || Object.keys(input).some(k => !['journey', 'nodeId', 'base', 'text', 'revision'].includes(k))) throw new Error('Invalid draft request.');
+      const key = await this.draftIdentity(input.journey);
+      if (input.text !== null) {
+        const node = findNode(this.doc, input.nodeId);
+        if (node.id === this.doc.rootId) throw new Error('Select an answer to draft.');
+      } else if (!this.doc.nodes.some(n => n.id === input.nodeId) && !(await this.draftStore.list(key)).some(e => e.nodeId === input.nodeId)) throw new Error('Unknown draft node.');
+      return this.draftStore.update({ key, nodeId: input.nodeId, base: draftBase(input.base), text: input.text, revision: input.revision });
+    });
   }
   transact(fn) {
     const work = this.queue.then(fn);
@@ -124,8 +150,17 @@ export class Explorer {
           await this.attach(input.key);
           break;
         case 'answer':
+          if (input.draftRevision !== undefined) {
+            if (!Number.isSafeInteger(input.draftRevision) || input.draftRevision < 0) throw new Error('Invalid draft revision.');
+            await this.draftIdentity(input.draftJourney);
+          }
           answerNode(next, input.nodeId, input.answer); next.finishedAt = null;
           await this.save(next);
+          if (input.draftRevision !== undefined) {
+            try {
+              await this.draftStore.update({ key: await this.draftIdentity(input.draftJourney), nodeId: input.nodeId, base: draftBase(findNode(next, input.nodeId)), text: null, revision: input.draftRevision }, { matchingText: input.answer });
+            } catch { this.error = 'Answer saved, but its local draft could not be cleared. Review or discard it after reconnecting.'; }
+          }
           if (input.expand === true) this.request('questions', input.nodeId);
           break;
         case 'questions':

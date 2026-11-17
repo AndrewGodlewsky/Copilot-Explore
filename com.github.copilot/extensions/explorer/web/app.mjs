@@ -1,5 +1,6 @@
 import { layout } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
+import { DraftClient } from './drafts.mjs';
 
 const $ = id => document.getElementById(id);
 const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'];
@@ -10,10 +11,13 @@ let suppressClick = false, restoringFocus = false, composing = null, workspaceDi
 let actionEpoch = 0, closed = false, pollTimer;
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
 const drafts = new Map(), nodeUi = new Map();
+const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
+  changed: () => { const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); } },
+  restored: (id, value) => { if (id === selected && $('answer') && !composing) $('answer').value = value; } });
 const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args),
   context: () => `${state.document?.id}/${selected}/${expanded}`,
   insert: (value, caret) => {
-    drafts.set(selected, value); $('answer').value = value; $('answer').setSelectionRange(caret, caret);
+    draftClient.edit(selected, value); $('answer').value = value; $('answer').setSelectionRange(caret, caret);
     answerStatus(state.document.nodes.find(n => n.id === selected));
   }, changed: () => scheduleLayout() });
 const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, manualOpen: false, category: null, question: '' }); return nodeUi.get(id); };
@@ -68,6 +72,8 @@ function apply(next, reset = false) {
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
   }
   signature = stamp; state = next;
+  if (changedDocument) draftClient.reset(state.activeKey ?? state.document?.id, state.document?.nodes ?? []);
+  else draftClient.updateNodes(state.document?.nodes ?? []);
   if (state.library && !state.document) void refreshLibrary();
   const doc = state.document;
   if (doc && !doc.nodes.some(n => n.id === selected)) { selected = doc.rootId; expanded = false; }
@@ -85,6 +91,7 @@ function apply(next, reset = false) {
     $('request-status').textContent = `${state.pending.kind === 'research' ? 'Researching' : 'Finding questions for'} ${work?.category ?? 'this map'}…`;
   }
   renderWorkspace(); refreshScene(anchor); renderOutline();
+  renderDraftSummary();
   if (firstFit || firstQuestions) {
     const rect = $('map').getBoundingClientRect(); firstFit = !rect.width || !rect.height;
     if (!firstFit) expanded ? centerSelected() : fit();
@@ -120,12 +127,12 @@ async function refreshLibrary() {
   } catch (error) { if (epoch === libraryEpoch && !closed) $('library-errors').textContent = `Could not load the library: ${error.message}`; }
 }
 function switchAllowed() {
-  if (busy || closed) return false;
+  if (busy || closed || draftClient.savingAnswer) return false;
   if (state.pending) { notice('Cancel the current Copilot request before opening another journey.'); return false; }
-  if (dirtyNodes().length || [...nodeUi].some(([id, ui]) => {
+  if ([...nodeUi].some(([id, ui]) => {
     const node = state.document?.nodes.find(n => n.id === id);
     return ui.question.length || (ui.category && ui.category !== (node?.id === state.document?.rootId ? '' : node?.category));
-  })) { notice('Save or clear your answer and manual-question drafts before opening another journey. Back to current map keeps your drafts.'); return false; }
+  })) { notice('Save or clear your manual-question drafts before opening another journey. Back to current map keeps your drafts.'); return false; }
   return true;
 }
 async function switchJourney(action, input) {
@@ -133,7 +140,8 @@ async function switchJourney(action, input) {
   voice.cancel();
   $('workspace').inert = true; $('welcome').inert = true;
   let result;
-  try { result = await api(action, input); }
+  try { await draftClient.flush(); result = await api(action, input); }
+  catch (error) { notice(`Draft could not be saved. ${error.message} Return to the map to retry or explicitly discard the draft.`); }
   finally { $('workspace').inert = false; $('welcome').inert = false; }
   if (result?.importConflict) {
     importDocument = input.document;
@@ -269,10 +277,44 @@ function revealNode(id) {
   transform();
 }
 function answerStatus(node) {
-  const dirty = drafts.has(node.id) && drafts.get(node.id).trim() !== node.answer;
-  if ($('answer-status')) $('answer-status').textContent = dirty ? 'Unsaved draft' : node.answer ? 'Answer saved' : 'No answer yet';
+  const entry = draftClient.entries.get(node.id);
+  if ($('answer-status')) $('answer-status').textContent = draftClient.loadError ? 'Draft could not be saved' : entry?.status || (node.answer ? 'Answer saved' : 'No answer yet');
   const undo = $('undo-addition'), addition = uiFor(node.id).addition;
   if (undo) { undo.hidden = !addition; undo.disabled = !addition || (drafts.get(node.id) ?? node.answer) !== addition.after; }
+}
+function renderDraftRecovery(node) {
+  const area = $('draft-recovery'); if (!area) return;
+  const entry = draftClient.entries.get(node.id), conflict = entry?.conflict;
+  const choose = choice => { voice.cancel(); void draftClient.choose(node.id, choice, node).catch(error => notice(error.message)); };
+  area.replaceChildren();
+  if (draftClient.loadError || entry?.error) area.append(el('p', { class: 'notice' }, draftClient.loadError || entry.error));
+  if (conflict) {
+    area.append(el('p', {}, conflict.text === null ? 'Another canvas cleared this draft. Your editor text is still here.' : 'A saved draft needs review. Your committed answer and editor text have been kept.'));
+    if (conflict.text !== null) {
+      const recovered = el('textarea', { readonly: '', rows: '4', 'aria-label': 'Recovered draft' }); recovered.value = conflict.text;
+      area.append(recovered, button('Use recovered draft', () => choose('recover'), { id: 'recover-draft' }));
+    }
+    area.append(button('Keep editor text', () => choose('keep'), { id: 'keep-draft' }));
+  }
+  if ((entry?.dirty || draftClient.loadError) && !conflict) area.append(button('Retry saving draft', () => { void draftClient.retry().catch(error => notice(error.message)); }, { id: 'retry-draft' }));
+  if (entry?.dirty && (entry.error || draftClient.loadError)) area.append(button('Discard unsaved editor text', () => {
+    voice.cancel(); void draftClient.discardUnsaved(node.id, node).catch(error => notice(error.message));
+  }, { id: 'discard-unsaved-draft' }));
+  if (drafts.has(node.id) || conflict) area.append(button('Discard draft', () => choose('discard'), { id: 'discard-draft' }));
+}
+function renderDraftSummary() {
+  const summary = $('draft-summary'), area = $('orphan-drafts');
+  if (!summary || !area) return;
+  const entries = [...draftClient.entries.values()];
+  summary.textContent = draftClient.loadError || entries.some(e => e.error) ? 'Draft could not be saved. Open the question to retry or discard unsaved editor text.' :
+    entries.some(e => e.dirty || e.saving) ? 'Saving drafts locally…' : draftClient.uncommitted() ? 'Local drafts are separate from saved answers and exports.' : '';
+  area.replaceChildren();
+  for (const [id, orphan] of draftClient.entries) {
+    if (!orphan.orphaned || orphan.conflict?.text == null) continue;
+    const text = el('textarea', { readonly: '', rows: '3', 'aria-label': 'Draft for a removed question' }); text.value = orphan.conflict.text;
+    area.append(el('p', {}, 'Draft for a removed question. Copy the text to keep it elsewhere.'), text,
+      button('Discard removed-question draft', () => { void draftClient.choose(id, 'discard').catch(error => notice(error.message)); }));
+  }
 }
 function renderWorkspace() {
   const panel = $('node-workspace'); captureWorkspace(); panel.hidden = !expanded;
@@ -303,16 +345,19 @@ function renderWorkspace() {
   } else {
     const form = el('form', { class: 'answer-form' }), answer = el('textarea', { id: 'answer', rows: '4', maxlength: '20000', placeholder: 'A decision, a hunch, or what you know so far…' });
     answer.value = drafts.get(node.id) ?? node.answer;
-    answer.addEventListener('input', () => { drafts.set(node.id, answer.value); answerStatus(node); });
+    answer.addEventListener('input', () => { draftClient.edit(node.id, answer.value); answerStatus(node); });
+    answer.addEventListener('focus', () => draftClient.touch(node.id));
+    answer.addEventListener('compositionstart', () => draftClient.touch(node.id));
     const save = async deepen => {
       voice.cancel();
       if (!answer.value.trim()) return notice('Write an answer before saving.');
-      const value = answer.value;
-      if (await api('answer', { nodeId: node.id, answer: value, expand: deepen })) {
-        if (drafts.get(node.id) === value) drafts.delete(node.id);
-        renderWorkspace(); refreshScene();
-        if (deepen) notice('Answer saved. Copilot will add follow-up questions to this branch.');
-      }
+      try {
+        if (!drafts.has(node.id)) draftClient.edit(node.id, answer.value);
+        if (await draftClient.save(node.id, (value, draftRevision, draftJourney) => api('answer', { nodeId: node.id, answer: value, expand: deepen, draftRevision, draftJourney }), () => state.document.nodes.find(n => n.id === node.id))) {
+          renderWorkspace(); refreshScene();
+          if (deepen) notice('Answer saved. Copilot will add follow-up questions to this branch.');
+        }
+      } catch (error) { notice(error.message); }
     };
     form.addEventListener('submit', event => { event.preventDefault(); void save(true); });
     form.addEventListener('keydown', event => { if (!event.isComposing && event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void save(true); } });
@@ -323,10 +368,11 @@ function renderWorkspace() {
     form.append(button('Undo addition', () => {
       const addition = ui.addition;
       if (!addition || (drafts.get(node.id) ?? node.answer) !== addition.after) return;
-      voice.cancel(); drafts.set(node.id, addition.before); answer.value = addition.before; ui.addition = null;
+      voice.cancel(); draftClient.edit(node.id, addition.before); answer.value = addition.before; ui.addition = null;
       answerStatus(node); answer.focus({ preventScroll: true }); notice('Addition undone. Your earlier draft is restored.');
     }, { id: 'undo-addition', class: 'undo-addition' }));
-    content.append(form); answerStatus(node);
+    form.append(el('div', { id: 'draft-recovery', 'aria-live': 'polite' }));
+    content.append(form); answerStatus(node); renderDraftRecovery(node);
     const research = el('details', { class: 'research-disclosure' }, el('summary', { id: 'research-summary' }, 'Explore options')); research.open = ui.researchOpen;
     research.addEventListener('toggle', () => { if (research.isConnected) { ui.researchOpen = research.open; scheduleLayout(); } });
     research.append(el('p', { class: 'quiet' }, 'A separate researcher compares possibilities using your saved decisions. Suggestions stay separate from your answer; normal Copilot usage applies.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; void api('research', { nodeId: node.id }); }, { id: 'research-request', disabled: pending }));
@@ -365,7 +411,7 @@ function renderResearch(node) {
     const previous = drafts.get(node.id) ?? node.answer, value = previous ? `${previous}\n\n${suggestion}` : suggestion;
     if (value.length > 20000) return notice('Your answer is too long to add this suggestion. Shorten it first.');
     voice.cancel(); ui.addition = { before: previous, after: value };
-    drafts.set(node.id, value); $('answer').value = value; answerStatus(node);
+    draftClient.edit(node.id, value); $('answer').value = value; answerStatus(node);
     const answer = $('answer'), content = answer.closest('.node-content');
     answer.focus({ preventScroll: true }); answer.setSelectionRange(value.length, value.length);
     // Scroll only the editor, never an ancestor of the transformed map.
@@ -401,7 +447,7 @@ function renderOutline() {
   $('outline-list').replaceChildren(...nodes.map(n => button([n.question, el('small', {}, `${n.category} · ${n.answer ? 'Answered' : 'Open'}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id })));
   if (focused) [...$('outline-list').children].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
 }
-function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) && drafts.get(n.id).trim() !== n.answer) ?? []; }
+function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) || draftClient.entries.get(n.id)?.conflict) ?? []; }
 $('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value }); });
 $('library-toggle').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); void refreshLibrary(); $('library-search').focus(); });
 $('library-return').addEventListener('click', () => { libraryView = false; showView(); refreshScene(); $('map').focus({ preventScroll: true }); });
@@ -422,8 +468,14 @@ $('file').addEventListener('change', async () => {
   try { const document = JSON.parse(await file.text()); await switchJourney('import', { document }); }
   catch (error) { notice(`Could not open that file: ${error.message}`); }
 });
-$('finish').addEventListener('click', async () => { const dirty = dirtyNodes(); if (dirty.length) { select(dirty[0].id); return notice('Save your draft answer before finishing.'); } if (await api('finish')) $('export-dialog').showModal(); });
-$('save-file').addEventListener('click', event => { if (dirtyNodes().length) { event.preventDefault(); notice('Save your draft answers before downloading the map.'); } });
+$('finish').addEventListener('click', async () => {
+  await draftClient.ready;
+  if (draftClient.loadError) return notice('Draft recovery is unavailable. Retry recovery before finishing.');
+  const dirty = dirtyNodes();
+  if (draftClient.uncommitted()) { if (dirty.length) select(dirty[0].id); return notice('Save your draft answer before finishing. Recover or discard drafts for removed questions.'); }
+  if (await api('finish')) $('export-dialog').showModal();
+});
+$('save-file').addEventListener('click', () => { notice('This download contains saved decisions only. Local answer drafts are not included.'); });
 $('close-export').addEventListener('click', () => $('export-dialog').close());
 $('outline-toggle').addEventListener('click', () => { $('outline').hidden = !$('outline').hidden; $('outline-toggle').setAttribute('aria-expanded', String(!$('outline').hidden)); if (!$('outline').hidden) $('search').focus(); });
 $('outline').addEventListener('keydown', event => {
@@ -466,7 +518,7 @@ window.addEventListener('pointermove', event => {
 for (const name of ['pointerup', 'pointercancel']) window.addEventListener(name, endDrag);
 $('map').addEventListener('lostpointercapture', event => { if (event.target === $('map')) endDrag(event); });
 window.addEventListener('blur', () => endDrag());
-document.addEventListener('visibilitychange', () => { if (document.hidden) endDrag(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { endDrag(); void draftClient.flush(true).catch(() => {}); } });
 $('map').addEventListener('click', event => {
   if (suppressClick && event.detail > 0) { event.preventDefault(); event.stopImmediatePropagation(); suppressClick = false; }
 }, true);
@@ -497,7 +549,7 @@ $('map').addEventListener('wheel', event => {
   const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1);
   zoom(Math.exp(-Math.max(-120, Math.min(120, delta)) * .002), { x: event.clientX - rect.left, y: event.clientY - rect.top });
 }, { passive: false });
-window.addEventListener('beforeunload', event => { if (dirtyNodes().length) { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if (draftClient.pending()) { void draftClient.flush(true).catch(() => {}); event.preventDefault(); event.returnValue = ''; } });
 new ResizeObserver(() => {
   const rect = $('map').getBoundingClientRect();
   if (!state.document || !rect.width || !rect.height) return;
@@ -510,6 +562,7 @@ new ResizeObserver(() => {
 }).observe($('map'));
 new ResizeObserver(() => { if (expanded) scheduleLayout(); }).observe($('node-workspace'));
 window.addEventListener('pagehide', event => {
+  void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;
   closed = true; clearTimeout(pollTimer); cancelAnimationFrame(layoutFrame); endDrag();
 });

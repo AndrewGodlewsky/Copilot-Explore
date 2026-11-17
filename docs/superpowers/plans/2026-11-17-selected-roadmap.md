@@ -92,15 +92,61 @@ Provide a library inside Explorer with recent, pinned, archived, and searchable 
 
 ### Test-first steps
 
-- [ ] Add focused failing tests: legacy discovery; create two journeys; reopen from a different canvas/session; same-file simultaneous writers; pin/archive/recent/search; malformed/oversized files; safe entry resolution; duplicate import identical versus divergent; metadata conflicts; preservation of unsaved drafts and pending callbacks during switching.
-- [ ] Run the focused tests and record meaningful RED output.
-- [ ] Implement the library service and controller lifecycle, then HTTP/UI wiring, preserving existing behaviors.
-- [ ] Extend the local installed-SDK fixture to create a journey in one canvas and reopen it in another without using paid inference or another existing user session.
-- [ ] Run focused tests as needed, then `npm test`, `npm run check`, `npm run e2e` with the specified installed runtime variables, and `npm run package`. Run research fixture only if research integration changes materially.
-- [ ] Update README usage, a short durable library architecture note, current version/release notes, and commit. Use the preceding issue's release procedure. Do not merge or push.
-- [ ] Self-review and write `.superpowers/sdd/2026-11-17-selected-roadmap/task-2-report.md` with tests/RED/GREEN, commit, chosen APIs/storage contracts, and honest native-UI limitations. Return a concise status/commit/test summary.
+- [x] Add focused failing tests: legacy discovery; create two journeys; reopen from a different canvas/session; same-file simultaneous writers; pin/archive/recent/search; malformed/oversized files; safe entry resolution; duplicate import identical versus divergent; metadata conflicts; preservation of unsaved drafts and pending callbacks during switching.
+- [x] Run the focused tests and record meaningful RED output.
+- [x] Implement the library service and controller lifecycle, then HTTP/UI wiring, preserving existing behaviors.
+- [x] Extend the local installed-SDK fixture to create a journey in one canvas and reopen it in another without using paid inference or another existing user session.
+- [x] Run focused tests as needed, then `npm test`, `npm run check`, `npm run e2e` with the specified installed runtime variables, and `npm run package`. Run research fixture only if research integration changes materially.
+- [x] Update README usage, a short durable library architecture note, current version/release notes, and commit. Use the preceding issue's release procedure. Do not merge or push.
+- [x] Self-review and write `.superpowers/sdd/2026-11-17-selected-roadmap/task-2-report.md` with tests/RED/GREEN, commit, chosen APIs/storage contracts, and honest native-UI limitations. Return a concise status/commit/test summary.
 
 Do not spawn subagents. No browser/desktop automation. The controller supplies the independent reviewer. Raise concrete architecture conflicts to the controller, not the user; keep working on independent parts.
+
+Published task 2: **v0.1.14**, `8353367`, 110 tests, check, package and installed-SDK cross-session fixture passed; remote main verified.
+
+## Task 3: Automatic answer-draft recovery (GitHub #2, selection 2)
+
+Read `.superpowers/sdd/2026-11-17-selected-roadmap/issue-2.md`, `task-3-design-notes.md` in that same directory, AGENTS.md, and the completed task-2-report.md library report before editing. Library is published at 835336774557e49abc6ae58b5a22028e3f857845. Ship version **0.1.15**. No main-chat or research generation changes.
+
+## Goal
+
+Recover unfinished typed/dictated answers after reload, canvas close, or restart, without silently committing them as decisions or overwriting newer text. Preserve drafts across node navigation and journey reopen.
+
+## Consumed library interfaces
+
+The preceding task adds `Library(directory)`, `list({search,archived})`, `resolve(key) -> {key,file,document}`, `opened(key,binding)`, and `bound(binding)`. `Explorer` has optional `library`, `binding`, and `activeKey`; production snapshots identify `library: true` and `activeKey`, while direct-file fixtures remain supported. Current document data stays in `explorer.doc`; library data is not part of attached-chat context. Re-read its final report for changes to this contract.
+
+## Design decisions
+
+- Add a focused `drafts.mjs` local store and a small browser coordinator if needed. Keep draft persistence outside `doc.nodes[].answer`, document revisions, model prompts, and native/Markdown exports of committed decisions.
+- Key drafts by stable library entry and node identity (use a stable direct-file equivalent in fixtures/preview). Legacy divergent files sharing a document ID must not exchange drafts. Include a base fingerprint of both the question and committed answer so a recovered draft can be recognized as stale.
+- Each persisted draft has exact text, a revision, and a timestamp. Keep tombstones/revision identity when clearing so late writes cannot resurrect a discarded or committed draft. Use serialized atomic writes and cross-instance locks/revision comparisons. Never silently overwrite another canvas's newer draft.
+- Bound individual text at the existing 20,000-character limit and aggregate storage sensibly. Validate files, identities, shapes, size, and canonical paths; preserve malformed files. Reuse existing safe storage utilities where appropriate, without moving unrelated code.
+- Debounce edits (approximately 500 ms), persist dictated text and research-proposal additions/undo, and expose Saving draft / Draft saved locally / Draft could not be saved states distinct from Answer saved.
+- Initial recovery is asynchronous: do not overwrite local typing, selection, or IME that started while a recovery read was pending. Guard both source journey/node identity and local edit generation.
+- On a clean matching base, restore the draft into the editor. On a changed committed base, keep both and provide an explicit recover/use or discard choice; no automatic overwrite of the newer answer. Keep orphaned draft text recoverable rather than silently deleting it.
+- Before switching/importing/creating another journey, flush pending writes and preserve persisted drafts; if saving fails, keep text and block the switch unless the user explicitly discards. Cancel active dictation before changing context. Manual missing-direction drafts remain under the existing guard; this issue persists answer drafts only.
+- An explicit answer save clears only the matching saved draft, never subsequent typing or a newer draft from another canvas. Failed answer saves retain the draft. Discard is explicit and revision-checked.
+- Keep finishing/export behavior honest about uncommitted drafts; they are not answered questions. Do not send drafts to AI implicitly. A saved local draft need not trigger an unsaved-data close warning, but pending/failed persistence must remain visible and warn appropriately.
+- Lifecycle flush is best effort; document the debounce window and avoid claiming recovery of unflushed keystrokes after abrupt process termination.
+
+## Files and interfaces
+
+- Create `com.github.copilot/extensions/explorer/drafts.mjs` and `test/drafts.test.mjs`. A focused `web/drafts.mjs` is allowed if it keeps persistence coordination out of rendering; register any new asset and load the real module in the DOM fixture.
+- Add explicit controller methods and bounded GET/POST draft endpoints in `server.mjs`; require the instance token, Host checks, same write Origin and client header. Draft operations must verify the active journey identity so delayed requests cannot cross a switch. Do not expose drafts through the agent-callable canvas snapshot.
+- Integrate the existing `drafts` Map, answer input, voice insertion callback, recommendation application/undo, answer save, import/library switching, and page lifecycle in `web/app.mjs`. Avoid broad rendering refactors (separate issue #33).
+- Document exact store/client APIs in the report; upcoming Clean My Answer and search issues will use them.
+
+## Test-first steps
+
+- [ ] Add failing store/controller tests for reload/restart, exact Unicode/whitespace, multiple nodes, source answer change, identical IDs in divergent files, overlapping writers, malformed storage, failed writes, and stale write after clear.
+- [ ] Add real HTTP/jsdom regressions for typing during recovery, debounced save, dictation/recommendation persistence, save while typing, switch with pending/failed write, discard/reopen, and no draft content in exports or AI context.
+- [ ] Run focused RED tests, implement the smallest complete design, and run focused GREEN tests.
+- [ ] Run `npm test`, `npm run check`, and `npm run package`. Run local installed-SDK fixture if canvas/host wiring changes; no paid inference or existing user sessions.
+- [ ] Update README limitations/usage and release metadata/notes with the current documented procedure, self-review, and commit on the current isolated branch. Include the controller's roadmap update. Do not merge, push, or close the issue.
+- [ ] Write the full report to `.superpowers/sdd/2026-11-17-selected-roadmap/task-3-report.md`: RED/GREEN, commands/results, commit, APIs, and remaining manual native checks. Return a concise status/commit/test summary.
+
+No subagents or browser/desktop automation. The controller performs independent review and publishes after approval. Raise concrete conflicts to the controller while continuing independent work.
 
 ## Issue index
 

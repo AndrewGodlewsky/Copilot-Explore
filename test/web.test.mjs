@@ -11,6 +11,7 @@ import { createDocument } from '../com.github.copilot/extensions/explorer/model.
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { layout } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
+import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
 
 const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', options: [
   { title: 'One block', description: 'Start with the nearest neighbors.', pros: ['Easy handovers'], cons: ['Fewer tools'] },
@@ -22,7 +23,7 @@ async function until(read, label) {
   assert.fail('Timed out: ' + label);
 }
 
-async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false) {
+async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
   const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
@@ -32,6 +33,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [
     { category: 'People', question: 'Who should borrow first?' }, { category: 'Trust', question: 'What if a tool breaks?' },
   ] });
+  await options.before?.(explorer);
   const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom, document = window.document;
@@ -50,7 +52,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     offsetWidth: { get() { return parseFloat(this.style.width) || (this.id === 'map' ? width : 220); } },
     offsetHeight: { get() { return this.id === 'node-workspace' ? Math.min(540, parseFloat(this.style.maxHeight) || 540) : 110; } },
   });
-  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null;
+  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null;
   const captured = new Set(), observers = new Map();
   map.setPointerCapture = id => { captures++; captured.add(id); };
   map.hasPointerCapture = id => captured.has(id);
@@ -63,10 +65,12 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     const request = (async () => {
       if (holdAnswer && options?.body && JSON.parse(options.body).action === 'answer') await holdAnswer();
       if (holdAdd && options?.body && JSON.parse(options.body).action === 'add') await holdAdd();
+      if (holdDraftWrite && path === 'api/drafts' && options?.method === 'POST') await holdDraftWrite();
       if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, Origin: new URL(server.url).origin } };
       const response = await fetch(new URL(path, server.url), options);
       const body = await response.arrayBuffer();
       if (holdState && path === 'api/state') await holdState();
+      if (holdDraftRead && path.startsWith('api/drafts?')) await holdDraftRead();
       return new Response(body, { status: response.status, headers: response.headers });
     })();
     requests.add(request); request.then(() => requests.delete(request), () => requests.delete(request));
@@ -74,8 +78,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   };
   window.layout = layout;
   window.attachVoice = attachVoice;
+  window.DraftClient = DraftClient;
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
-  window.eval(script.replace("import { layout } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", ''));
+  window.eval(script.replace("import { layout } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", ''));
   await until(() => width ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -85,7 +90,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const type = (id, value) => { const e = document.getElementById(id); assert.ok(e, id); e.value = value; e.dispatchEvent(new window.Event('input', { bubbles: true })); };
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
   return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, pauseAnswer: fn => { holdAnswer = fn; },
-    resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; } };
+    resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
+    pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; } };
 }
 
 test('library opens, searches, pins and archives journeys at narrow pane width', async t => {
@@ -107,7 +113,7 @@ test('library opens, searches, pins and archives journeys at narrow pane width',
   assert.equal(f.document.activeElement.id, 'map', 'keyboard focus follows the opened map');
 });
 
-test('switching blocks unsaved answer and manual-question drafts and pending AI', async t => {
+test('switching blocks manual-question drafts and pending AI', async t => {
   const f = await fixture(t, 340, undefined, true), first = f.explorer.doc.id, node = f.explorer.doc.nodes[1];
   await f.explorer.library.import(createDocument('Second journey'));
   assert.ok(f.document.getElementById('library-toggle'), 'header offers Library');
@@ -118,9 +124,7 @@ test('switching blocks unsaved answer and manual-question drafts and pending AI'
     await delay(20); assert.equal(f.explorer.doc.id, first);
     f.document.getElementById('library-return').click();
   };
-  f.open(node.id); f.type('answer', 'My unsaved draft'); await trySwitch();
-  assert.match(f.document.getElementById('notice').textContent, /draft/i);
-  assert.equal(f.document.getElementById('answer').value, 'My unsaved draft');
+  f.open(node.id);
   f.type('answer', ''); f.type('manual-question', 'A manual question'); await trySwitch();
   assert.equal(f.document.getElementById('manual-question').value, 'A manual question');
   f.type('manual-question', ''); f.type('manual-category', 'My custom category'); await trySwitch();
@@ -473,7 +477,7 @@ test('typing while saving survives the response and editing does not drag the ca
   await until(() => f.explorer.doc.nodes[1].answer === 'Submitted answer', 'save delivered');
   await delay(80);
   assert.equal(f.document.getElementById('answer').value, 'Newer unsaved thought');
-  assert.match(f.document.getElementById('answer-status').textContent, /Unsaved/);
+  assert.match(f.document.getElementById('answer-status').textContent, /Saving draft|Draft saved locally/);
 });
 
 test('recommendations and selected details append to editable drafts with safe undo', async t => {
@@ -532,6 +536,7 @@ test('manual question drafts survive navigation and unsaved answers block finish
   await until(() => f.document.getElementById('manual-question').value === '', 'manual input cleared');
   assert.equal(f.explorer.doc.nodes[3].parentId, a.id);
   f.type('answer', 'Not saved yet'); f.document.getElementById('finish').click();
+  await until(() => f.document.getElementById('notice').textContent.includes('Save your draft'), 'finish guard');
   assert.match(f.document.getElementById('notice').textContent, /Save your draft/);
   assert.equal(f.explorer.doc.finishedAt, null);
 });
@@ -576,6 +581,199 @@ function voiceFixture(mode = 'push_to_talk') {
 }
 const key = (f, type, props = {}) => f.document.getElementById('answer').dispatchEvent(new f.window.KeyboardEvent(type, { bubbles: true, cancelable: true, key: ' ', code: 'Space', ctrlKey: true, ...props }));
 
+const draftInput = (e, node = e.doc.nodes[1], text = 'Recovered 🌿\n  exact  ') => ({ journey: e.activeKey ?? e.doc.id, nodeId: node.id, text, base: { question: node.question, answer: node.answer }, revision: 0 });
+
+test('draft recovery does not overwrite typing, selection or IME while its read is pending', async t => {
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, 340, undefined, false, { before: e => e.writeDraft(draftInput(e)), holdDraftRead: () => gate });
+  t.after(release);
+  const node = f.explorer.doc.nodes[1]; f.open(node.id);
+  const editor = f.document.getElementById('answer'); editor.focus();
+  editor.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  f.type('answer', 'New text 日本語'); editor.setSelectionRange(2, 4);
+  release();
+  await until(() => f.document.getElementById('recover-draft'), 'explicit recovery choice');
+  assert.equal(editor.value, 'New text 日本語'); assert.equal(editor.selectionStart, 2); assert.equal(editor.selectionEnd, 4);
+  assert.equal(f.document.querySelector('[aria-label="Recovered draft"]').value, 'Recovered 🌿\n  exact  ');
+  editor.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  f.document.getElementById('keep-draft').click();
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'chosen local text persisted');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, 'New text 日本語');
+});
+
+test('matching draft recovery and discard are explicit and survive journey reopen', async t => {
+  const f = await fixture(t, 340, undefined, true, { before: e => e.writeDraft(draftInput(e)) });
+  await delay(50); const node = f.explorer.doc.nodes[1]; f.open(node.id);
+  assert.equal(f.document.getElementById('answer').value, 'Recovered 🌿\n  exact  ');
+  assert.equal(node.answer, '');
+  f.document.getElementById('discard-draft').click();
+  await until(() => f.document.getElementById('answer').value === '', 'discard restored committed answer');
+  const first = f.explorer.activeKey;
+  f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelector('.library-entry [data-action="open"]'), 'library entry');
+  f.document.querySelector('.library-entry [data-action="open"]').click();
+  await until(() => !f.document.getElementById('workspace').hidden, 'reopen'); await delay(50);
+  f.open(node.id); assert.equal(f.explorer.activeKey, first); assert.equal(f.document.getElementById('answer').value, '');
+});
+
+test('draft writes debounce, preserve exact whitespace and flush before switching journeys', async t => {
+  const f = await fixture(t, 340, undefined, true), first = f.explorer.activeKey, node = f.explorer.doc.nodes[1];
+  await f.explorer.library.import(createDocument('Second with drafts'));
+  f.open(node.id); f.type('answer', ' first '); f.type('answer', '  final 🌿\n ');
+  await delay(100); assert.equal((await f.explorer.readDrafts(first)).entries.length, 0);
+  f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'entries');
+  [...f.document.querySelectorAll('.library-entry')].find(e => e.textContent.includes('Second with drafts')).querySelector('[data-action="open"]').click();
+  await until(() => f.explorer.activeKey !== first && f.document.getElementById('map-title').textContent === 'Second with drafts' && !f.document.getElementById('workspace').hidden, 'flushed switch');
+  f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'entries reopened');
+  [...f.document.querySelectorAll('.library-entry')].find(e => e.textContent.includes('A tool library')).querySelector('[data-action="open"]').click();
+  await until(() => f.explorer.activeKey === first && f.document.getElementById('map-title').textContent === 'A tool library' && !f.document.getElementById('workspace').hidden, 'first journey'); await delay(50);
+  f.open(node.id); assert.equal(f.document.getElementById('answer').value, '  final 🌿\n ');
+});
+
+test('failed draft flush blocks switching and keeps text available for retry', async t => {
+  const f = await fixture(t, 340, undefined, true), first = f.explorer.activeKey, node = f.explorer.doc.nodes[1];
+  await f.explorer.library.import(createDocument('Second draft failure'));
+  await f.explorer.readDrafts(first); const write = f.explorer.draftStore.write;
+  f.explorer.draftStore.write = async () => { throw new Error('Disk full'); };
+  f.open(node.id); f.type('answer', 'Do not lose this');
+  f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'library visible');
+  [...f.document.querySelectorAll('.library-entry')].find(e => e.textContent.includes('Second draft failure')).querySelector('[data-action="open"]').click();
+  await until(() => f.document.getElementById('notice').textContent.includes('Disk full'), 'failed flush');
+  assert.equal(f.explorer.activeKey, first); f.document.getElementById('library-return').click();
+  assert.equal(f.document.getElementById('answer').value, 'Do not lose this');
+  f.explorer.draftStore.write = write; f.document.getElementById('retry-draft').click();
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'retried');
+});
+
+test('changed committed base keeps answer and recovered draft separate until chosen', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    await e.writeDraft(draftInput(e));
+    await e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, answer: 'New committed decision' });
+  } });
+  await delay(40); f.open(f.explorer.doc.nodes[1].id);
+  assert.equal(f.document.getElementById('answer').value, 'New committed decision');
+  assert.equal(f.document.querySelector('[aria-label="Recovered draft"]').value, 'Recovered 🌿\n  exact  ');
+  f.document.getElementById('recover-draft').click();
+  await until(() => f.document.getElementById('answer').value.startsWith('Recovered'), 'chosen recovery');
+  assert.equal(f.explorer.doc.nodes[1].answer, 'New committed decision');
+});
+
+test('answer save captures the click text while a draft flush is still pending', async t => {
+  const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  let release, started; const gate = new Promise(resolve => { release = resolve; }), entered = new Promise(resolve => { started = resolve; });
+  f.pauseDraftWrite(() => { started(); return gate; }); t.after(release);
+  f.type('answer', 'Clicked save'); f.click('Save answer'); await entered;
+  f.type('answer', 'Typed after click'); release(); f.pauseDraftWrite(null);
+  await until(() => f.explorer.doc.nodes[1].answer, 'committed captured text');
+  assert.equal(f.explorer.doc.nodes[1].answer, 'Clicked save');
+  assert.equal(f.document.getElementById('answer').value, 'Typed after click');
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'later typing saved locally');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, 'Typed after click');
+});
+
+test('initial draft storage failure can be retried without losing editor text', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    await e.readDrafts(e.doc.id); const read = e.draftStore.read.bind(e.draftStore); let fail = true;
+    e.draftStore.read = () => { if (fail) { fail = false; throw new Error('Temporary read failure'); } return read(); };
+  } });
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Typed despite read failure');
+  await until(() => f.document.getElementById('retry-draft'), 'retry available');
+  f.document.getElementById('retry-draft').click();
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'recovery retried');
+  assert.equal(f.document.getElementById('answer').value, 'Typed despite read failure');
+});
+
+test('another canvas draft stays separate and explicit conflict choices use revision checks', async t => {
+  const f = await fixture(t), node = f.explorer.doc.nodes[1]; await delay(30); f.open(node.id);
+  const remote = await f.explorer.writeDraft(draftInput(f.explorer, node, 'Remote writer'));
+  f.type('answer', 'Local writer');
+  await until(() => f.document.getElementById('keep-draft'), 'conflict discovered');
+  assert.equal(f.document.getElementById('answer').value, 'Local writer');
+  assert.equal(f.document.querySelector('[aria-label="Recovered draft"]').value, 'Remote writer');
+  await f.explorer.writeDraft({ ...draftInput(f.explorer, node, 'Remote writer newer'), revision: remote.revision });
+  f.document.getElementById('keep-draft').click();
+  await until(() => f.document.getElementById('notice').textContent.includes('Another canvas'), 'stale explicit choice refused');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, 'Remote writer newer');
+  assert.equal(f.document.getElementById('answer').value, 'Local writer');
+});
+
+test('keyboard answer save clears its draft without treating restored focus as typing', async t => {
+  const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id); const editor = f.document.getElementById('answer');
+  editor.focus(); f.type('answer', 'Committed keyboard answer');
+  editor.dispatchEvent(new f.window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter', ctrlKey: true }));
+  await until(() => f.explorer.pending?.kind === 'questions', 'keyboard answer saved');
+  await delay(100);
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, null);
+  assert.equal(f.document.getElementById('answer-status').textContent, 'Answer saved');
+});
+
+test('recovery based on an older state read cannot replace a newer committed answer', async t => {
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, 340, undefined, false, { before: e => e.writeDraft(draftInput(e)), holdDraftRead: () => gate }); t.after(release);
+  const node = f.explorer.doc.nodes[1]; f.open(node.id);
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Committed during recovery' });
+  await until(() => f.document.getElementById('answer').value === 'Committed during recovery', 'new state');
+  release(); await until(() => f.document.getElementById('recover-draft'), 'stale read choice');
+  assert.equal(f.document.getElementById('answer').value, 'Committed during recovery');
+});
+
+test('failed writes permit explicit loss of unsaved editor text before a switch', async t => {
+  const f = await fixture(t, 340, undefined, true), first = f.explorer.activeKey;
+  await f.explorer.library.import(createDocument('After discard'));
+  await f.explorer.readDrafts(first); f.explorer.draftStore.write = async () => { throw new Error('Disk full'); };
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Explicitly abandon me');
+  await until(() => f.document.getElementById('discard-unsaved-draft'), 'discard unsaved option');
+  f.document.getElementById('discard-unsaved-draft').click(); await until(() => f.document.getElementById('answer').value === '', 'local discard');
+  f.document.getElementById('library-toggle').click(); await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'entries');
+  [...f.document.querySelectorAll('.library-entry')].find(e => e.textContent.includes('After discard')).querySelector('[data-action="open"]').click();
+  await until(() => f.explorer.activeKey !== first, 'switch after explicit discard');
+});
+
+test('one conflicting node does not prevent other nodes from saving drafts', async t => {
+  const f = await fixture(t), [first, second] = f.explorer.doc.nodes.slice(1); await delay(30);
+  await f.explorer.writeDraft(draftInput(f.explorer, first, 'Other canvas'));
+  f.open(first.id); f.type('answer', 'Conflicting local text');
+  await until(() => f.document.getElementById('keep-draft'), 'first conflict');
+  f.open(second.id); f.type('answer', 'Independent draft');
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'second persisted independently');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries.find(e => e.nodeId === second.id).text, 'Independent draft');
+});
+
+test('discarding failed editor changes keeps the previous persisted draft visible', async t => {
+  const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id); f.type('answer', 'Previously persisted');
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'initial save');
+  f.explorer.draftStore.write = async () => { throw new Error('Disk full'); }; f.type('answer', 'Failed later edit');
+  await until(() => f.document.getElementById('discard-unsaved-draft'), 'failure option');
+  f.document.getElementById('discard-unsaved-draft').click();
+  await until(() => f.document.querySelector('[aria-label="Recovered draft"]'), 'previous persisted draft still visible');
+  assert.equal(f.document.getElementById('answer').value, '');
+  assert.equal(f.document.querySelector('[aria-label="Recovered draft"]').value, 'Previously persisted');
+  f.document.getElementById('finish').click();
+  await until(() => f.document.getElementById('notice').textContent.includes('Save your draft'), 'finish still honest');
+  assert.equal(f.explorer.doc.finishedAt, null);
+});
+
+test('dictated text and recommendation undo persist without committing an answer', async t => {
+  const f = await fixture(t, 340, voiceFixture()), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  await until(() => f.document.getElementById('voice-status').textContent.includes('Hold Ctrl'), 'voice ready');
+  f.document.getElementById('answer').focus(); key(f, 'keydown');
+  await until(() => /^Listening/.test(f.document.getElementById('voice-status').textContent), 'listening'); key(f, 'keyup');
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'dictation persisted');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, 'our neighbors');
+  f.click('Research options'); await until(() => f.explorer.pending?.kind === 'research', 'research pending');
+  f.resolveResearch(findings); await until(() => f.document.getElementById('use-recommendation'), 'recommendation ready');
+  f.document.getElementById('use-recommendation').click();
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'addition persisted');
+  assert.match((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, /Try a small pilot/);
+  f.document.getElementById('undo-addition').click();
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'undo persisted');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, 'our neighbors');
+  assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
+
 test('Ctrl+Space dictates only into a focused answer, at the selection, without saving', async t => {
   const voice = voiceFixture(), f = await fixture(t, 1100, voice), node = f.explorer.doc.nodes[1];
   f.open(node.id);
@@ -590,7 +788,7 @@ test('Ctrl+Space dictates only into a focused answer, at the selection, without 
   key(f, 'keyup', { key: 'Control', code: 'ControlLeft', ctrlKey: false });
   await until(() => answer.value.includes('our neighbors'), 'dictated draft');
   assert.equal(answer.value, 'For our neighbors nearby.'); assert.equal(node.answer, '');
-  assert.match(f.document.getElementById('answer-status').textContent, /Unsaved/);
+  assert.match(f.document.getElementById('answer-status').textContent, /Saving draft|Draft saved locally/);
   assert.equal(voice.counts().finishes, 1);
 });
 

@@ -11,6 +11,7 @@ const assets = new Map([
   ['app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
   ['layout.mjs', ['layout.mjs', 'text/javascript; charset=utf-8']],
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
+  ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
   ['style.css', ['style.css', 'text/css; charset=utf-8']],
 ]);
 const MAX_BODY = 10 * 1024 * 1024;
@@ -55,6 +56,11 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         return json(200, voice[input.action](input.id));
       }
       if (req.method === 'GET' && route === 'api/state') return json(200, explorer.snapshot());
+      if (req.method === 'GET' && route === 'api/drafts') return json(200, await explorer.readDrafts(url.searchParams.get('journey')));
+      if (req.method === 'POST' && route === 'api/drafts') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.writeDraft(await body(req, 160 * 1024)));
+      }
       if (req.method === 'GET' && route === 'api/library') {
         if (!explorer.library) return json(200, { revision: 0, entries: [], errors: [] });
         return json(200, await explorer.library.list({ search: url.searchParams.get('search') ?? '', archived: url.searchParams.get('archived') === 'true' }));

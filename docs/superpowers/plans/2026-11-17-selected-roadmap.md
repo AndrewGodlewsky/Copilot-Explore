@@ -499,11 +499,11 @@ Inspect installed Foundry/PvRecorder declarations and actual selected model capa
 
 ### Verification and release
 
-- [ ] RED/GREEN worker/service/browser tests for segment order/identity/duplicate deliveries, silence/Unicode/boundary behavior, partial failure, cancellation at each phase, stale responses, Stop/Cancel/shortcut interplay, resource/backlog/time limits, draft/state/caret preservation and exact answer limit.
-- [ ] Prove memory/resource cleanup and recoverable partial drafts using deterministic synthetic PCM/local worker fixtures; no real microphone capture, desktop/browser UI automation, paid provider or existing user session.
-- [ ] Run npm test, npm run check, npm run package and applicable installed-runtime/voice synthetic smoke if protocol integration changes. Capture native logs through the ignored run-npm.mjs helper; use installed sibling copilot.exe for CLI fixtures.
-- [ ] Bump confirmed patch and synchronize release metadata/README/release notes; record installed API findings/limitations and protocol. Include controller plan change, self-review/commit; no merge/push/issue closure.
-- [ ] Write task-14-report.md with feasibility evidence, exact selected limits, APIs, TDD/final command outputs, SHA and remaining native speech-quality limits. No nested agents. Return a precise blocker if unavailable, never add a dependency to get around the owner's constraint.
+- [x] RED/GREEN worker/service/browser tests for segment order/identity/duplicate deliveries, silence/Unicode/boundary behavior, partial failure, cancellation at each phase, stale responses, Stop/Cancel/shortcut interplay, resource/backlog/time limits, draft/state/caret preservation and exact answer limit.
+- [x] Prove memory/resource cleanup and recoverable partial drafts using deterministic synthetic PCM/local worker fixtures; no real microphone capture, desktop/browser UI automation, paid provider or existing user session.
+- [x] Run npm test, npm run check, npm run package and applicable installed-runtime/voice synthetic smoke if protocol integration changes. Capture native logs through the ignored run-npm.mjs helper; use installed sibling copilot.exe for CLI fixtures.
+- [x] Bump confirmed patch and synchronize release metadata/README/release notes; record installed API findings/limitations and protocol. Include controller plan change, self-review/commit; no merge/push/issue closure.
+- [x] Write task-14-report.md with feasibility evidence, exact selected limits, APIs, TDD/final command outputs, SHA and remaining native speech-quality limits. No nested agents. Return a precise blocker if unavailable, never add a dependency to get around the owner's constraint.
 
 ### Revised protocol ruling after installed-model probe
 
@@ -517,6 +517,42 @@ The installed Nemotron model emitted 45 immutable decoded-token speechSegment it
 - Prove exact native token-to-aggregate equality with the existing offline speech fixture. Add deterministic chunk splitting, repeated-word, Unicode, aggregate mismatch, persistence failure, timeout/resource/cancellation and stale-context tests. Update README/diagram and API findings to distinguish text transport chunks from speech boundaries.
 
 Ruling rationale: decoded tokens are append-only in the actual installed runtime, enabling recoverable text during recording without fabricated finalization or a second model. If compatibility changes, fail explicitly and preserve accepted drafts rather than guessing about revised hypotheses.
+
+Published task 14: **v0.1.26**, `ab19622`, 272 tests/check/package/installed local SDK fixture and native speech smoke passed; remote main verified. Native smoke has expected host startup diagnostics.
+
+## Task 15: Clean My Answer (#22 / original28)
+
+Read issue-28.md and task-15-design-notes.md, AGENTS.md, docs/copilot-integration.md, docs/research-sdk-tools.md, and the installed SDK declarations. BASE is `ab19622ef60cd14f2a39758f6250dccb78770f2e`; ship version **0.1.27**. Task14 is published and independently approved.
+
+Published task14 integration: attachVoice insert(value,caret) synchronously updates DraftClient and the textarea, returns draftClient.flush(false,selected), and acknowledges the exact voice sequence only after that promise succeeds. Cleanup must observe these programmatic text changes while preserving the returned durability promise and current voice context/caret guards. Starting cleanup is an action outside the answer/voice-control focus boundary; cancel any active voice explicitly. Reopening the same node after polling must preserve pending cleanup/review controls without replacing newer text.
+
+### User behavior
+
+- Add the exact button **Clean My Answer** beside the current answer editor. It operates on the current nonblank unsaved answer text, using an owned isolated SDK helper. It must never enqueue a cleanup request into the attached chat, submit an answer, generate nodes, change answer state, or select a different host model.
+- Request conservative punctuation, clarity and repetition cleanup while preserving the user's meaning, uncertainty, names, numbers and voice. No invented facts or new decisions. Model compliance is not guaranteed: present original and proposed text for explicit Apply/Reject, with plain text rendering and a reminder to review meaning where appropriate.
+- Until Apply, the original remains the editable, recoverable draft. Apply uses the ordinary draft-edit path, preserves current answerState/stateSelected and caret/focus sensibly, and never saves the answer. Offer an immediate Undo that restores the captured original only while the applied text still matches; later editing or changing journey/node invalidates that undo rather than overwriting newer work. Keep this bounded transient proposal/undo state through same-node polling/rerenders; document that reload/navigation ends proposal review and immediate undo. Do not add a new historical draft store for this issue.
+- Bind each operation to its request ID, journey, node and captured draft text/edit generation. Typing, dictation, journey/node change, replacement request or cancellation invalidates an older result. A state-only choice should be preserved, never replaced by the helper. Keep editing usable during the request; a pending cleanup must not become an implicit document commit or attached-chat request.
+- Use a text-mutation identity, not the DraftClient generation blindly: selectState() currently calls edit() and increments generations without necessarily changing text. State-only choices remain valid, whereas text A-to-B-to-A, dictation and recovered/programmatically replaced drafts must invalidate an earlier proposal even if the final string matches again. Cover both cases.
+- Expose understandable progress, cancellation and retry after errors. A cancelled/failed/malformed/overlong result leaves original/current text untouched. One active cleanup per Explorer instance; cancellation and close release the owned session. Do not silently retry model inference after cleanup/accounting failure.
+
+### SDK and data contract
+
+- The current helper lifecycle is in research.mjs, not a research-sdk.mjs file. Reuse the genuinely common owned-session/account/model/receipt/cleanup foundation through a small shared seam; preserve existing research behavior. Avoid duplicating that full lifecycle and avoid a speculative general agent framework.
+- Inspect actual installed declarations and verify the effective helper configuration with the local SDK fixture: an empty availableTools allowlist alone is not sufficient evidence. Initialize/validate and require zero actual tool metadata before sending. Deny tool/permission hooks, disable GitHub MCP/config discovery and all ambient plugins, instructions, skills, memory, project reads and chat inheritance. Keep managed settings/account/model policy checks, empty owned workspace/home, bounded force-stop and safe cleanup/recovery files.
+- Only send the captured answer plus fixed cleanup instructions. Question, other answers, history, library metadata, audio, host chat and project files are unnecessary for text cleanup. Treat user text as data, including embedded instructions.
+- Keep captured draft text, cleanup proposals and temporary Undo state out of the native canvas snapshot/get_exploration response and main-chat notifications. They are private browser/helper workflow data, like existing drafts; use the protected UI protocol. Review the actual snapshot/UI-snapshot separation before choosing the endpoint shape.
+- Existing answer limit is 20,000 JavaScript characters. Validate nonblank input and nonblank output within that limit without truncating user text. Keep exact original Unicode. Use a strict output schema and reject unknown/malformed fields; bound the serialized response as well as decoded text, allowing legitimate JSON escaping expansion. HTTP input limits must support the permitted text after encoding but stay bounded. Do not conflate character and byte limits.
+- Keep the shared helper's current 180-second overall lifetime ceiling and existing bounded phase deadlines unless installed API evidence requires a controller ruling. Do not extend research timeouts or network policy as part of cleanup.
+- Usage accounting currently labels sessions Explorer Research. Add explicit bounded operation attribution for cleanup while preserving legacy research receipts and journal reconciliation/deduplication. Retained normal receipts must not contain raw answer text, prompts, audio, unrelated context or credentials. Failed/cancelled calls retain usage when the runtime supplies it; missing usage is not fabricated as zero. Existing recovery handling must not delete the only unreconciled journal.
+
+### Verification and release
+
+- [ ] RED/GREEN tests for empty/maximum/Unicode answers, strict malformed output, names/numbers/uncertainty prompt contract, cancellation, rapid replacement, delayed response, edits/dictation during the request, node/journey changes, state preservation, proposal review, Apply/Reject/conditional Undo and no automatic save or attached-chat send.
+- [ ] Verify actual HTTP input/client/identity/Origin guards and safe text rendering with local fixtures. Exercise narrow DOM structure/keyboard focus using jsdom without opening a browser or recording the real microphone.
+- [ ] Test isolated SDK account/model/workspace/tool-free assertions, cancellation/release, usage attribution/deduplication/recovery and no ambient configuration. Use installed runtime with a disposable Copilot home/local model fixture, never a paid provider or existing user session. If the common research lifecycle changes, run its existing installed local fixture too.
+- [ ] Run npm test, npm run check, npm run package, applicable installed runtime fixtures. Use run-npm.mjs with unique task-15 labels for clean stdout/stderr/exit evidence; do not repeat passing tests solely for reassurance.
+- [ ] Bump confirmed patch and synchronize all release metadata/README/release note; include controller plan update, self-review and commit. Controller reviews/publishes; do not push/merge/close the issue and do not spawn nested agents.
+- [ ] Write task-15-report.md with final helper and UI APIs, context limits, original/Undo lifecycle, TDD/final evidence, SHA and native/live-model quality limitations. Raise concrete integration conflicts while continuing independent work.
 
 ## Issue index
 

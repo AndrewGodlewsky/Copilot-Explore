@@ -14,6 +14,7 @@ const assets = new Map([
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
   ['answer-state.mjs', ['answer-state.mjs', 'text/javascript; charset=utf-8']],
   ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
+  ['cleanup.mjs', ['cleanup.mjs', 'text/javascript; charset=utf-8']],
   ['navigation.mjs', ['navigation.mjs', 'text/javascript; charset=utf-8']],
   ['style.css', ['style.css', 'text/css; charset=utf-8']],
 ]);
@@ -70,6 +71,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         return json(200, voice[input.action](input.id, input.sequence));
       }
       if (req.method === 'GET' && route === 'api/state') return json(200, explorer.uiSnapshot());
+      if (req.method === 'POST' && route === 'api/cleanup') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.cleanupRequest(await body(req, 128 * 1024)));
+      }
       if (req.method === 'GET' && route === 'api/history') {
         const selected = url.searchParams.get('snapshotRevision');
         if (selected !== null && !/^(0|[1-9][0-9]*)$/.test(selected)) throw new Error('Invalid history revision.');

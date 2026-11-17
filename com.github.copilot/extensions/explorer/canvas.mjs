@@ -4,6 +4,7 @@ import { Explorer } from './controller.mjs';
 import { Library } from './library.mjs';
 import { startServer } from './server.mjs';
 import { createResearcher } from './research.mjs';
+import { createCleaner } from './cleanup.mjs';
 
 const string = (maxLength = 5000) => ({ type: 'string', minLength: 1, maxLength });
 const array = (items, maxItems) => ({ type: 'array', items, maxItems });
@@ -41,6 +42,7 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
           const key = createHash('sha256').update(`${ctx.sessionId}\0${ctx.instanceId}`).digest('hex').slice(0, 32);
           const explorer = await new Explorer({ library, binding: key,
             researcher: createResearcher(getSession(), { usageDirectory: join(directory, 'usage') }),
+            cleaner: createCleaner(getSession(), { usageDirectory: join(directory, 'usage') }),
             target: { extensionId: ctx.extensionId, canvasId: 'explorer', instanceId: ctx.instanceId },
             send: async options => {
               try { return await getSession().send(options); }

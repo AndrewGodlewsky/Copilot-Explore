@@ -1,6 +1,7 @@
 import { layout, branchView, revealPath } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
+import { CleanupClient } from './cleanup.mjs';
 import { attachNavigation } from './navigation.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
 
@@ -19,8 +20,17 @@ let previewEdits = null, acceptedIds = new Set(), acceptedParentId = null;
 let references = { journey: null, revision: 0, nodeIds: [], error: '', loading: false, saving: false, retryIds: null, open: false, epoch: 0 };
 const drafts = new Map(), nodeUi = new Map();
 const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
-  changed: () => { const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); } },
+  changed: () => { cleanup.sync(); const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); renderCleanup(); } },
   restored: (id, value) => { if (id === selected && $('answer') && !composing) { $('answer').value = value; if ($('answer-state')) $('answer-state').value = draftClient.state(id); } } });
+const cleanup = new CleanupClient({ fetch: (...args) => fetch(...args),
+  context: () => {
+    const node = state.document?.nodes.find(n => n.id === selected);
+    return !closed && expanded && !libraryView && node && isQuestion(node) ? { journey: state.activeKey ?? state.document.id, nodeId: selected, mutation: draftClient.entries.get(selected)?.textGeneration ?? 0, text: drafts.get(selected) ?? node.answer } : null;
+  },
+  edit: text => {
+    voice.cancel(); draftClient.edit(selected, text);
+    const answer = $('answer'); answer.value = text; answer.focus({ preventScroll: true }); answer.setSelectionRange(text.length, text.length);
+  }, changed: () => { renderCleanup(); scheduleLayout(); } });
 const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args),
   context: () => `${state.document?.id}/${selected}/${expanded}/${draftClient.state(selected)}/${draftClient.entries.get(selected)?.edits}`,
   insert: (value, caret) => {
@@ -79,6 +89,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    cleanup.cancel();
     voice.cancel();
     drafts.clear(); nodeUi.clear(); positions.clear(); collapsed.clear(); branches = null; focusId = null; wholeView = null; $('node-workspace').replaceChildren();
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
@@ -207,6 +218,7 @@ function renderReferences(active) {
   return section;
 }
 function showView() {
+  cleanup.sync();
   const home = !state.document || libraryView;
   $('welcome').hidden = !home; $('workspace').hidden = home;
   $('library-toggle').hidden = !state.library;
@@ -516,6 +528,7 @@ function renderDraftSummary() {
   }
 }
 function renderWorkspace() {
+  cleanup.sync();
   const panel = $('node-workspace'); captureWorkspace(); panel.hidden = !expanded;
   if (!expanded) return;
   if (composing?.isConnected && panel.dataset.nodeId === selected) { workspaceDirty = true; return; }
@@ -564,6 +577,7 @@ function renderWorkspace() {
     const save = async deepen => {
       if (deepen && state.preview) return notice('Accept or dismiss the unsaved question preview before generating again.');
       voice.cancel();
+      cleanup.cancel();
       const error = answerStateError(answer.value, draftClient.state(node.id));
       if (error) return notice(error);
       if (deepen && draftClient.state(node.id) === 'unanswered') return notice('Choose a state or write an answer before exploring deeper.');
@@ -586,6 +600,8 @@ function renderWorkspace() {
     answer.setAttribute('aria-describedby', 'voice-status');
     voice.bind(answer, voiceStatus);
     form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), el('span', { id: 'answer-status', class: 'quiet' })), answer, voiceStatus,
+      button('Clean My Answer', () => { voice.cancel(); void cleanup.start(); }, { id: 'clean-answer', disabled: !answer.value.trim() }),
+      el('div', { id: 'cleanup-review', 'aria-live': 'polite' }),
       el('div', { class: 'answer-state-field' }, el('label', { for: 'answer-state' }, 'Answer state'), answerState), el('p', { id: 'answer-state-help', class: 'quiet' }, 'Text and state stay a draft until you save. Decided, Tentative and Assumption need text; other states can have no note.'),
       el('div', { class: 'actions' }, button('Save answer', () => { voice.cancel(); void save(false); }, { id: 'save-answer', disabled: pending }), el('button', { type: 'submit', id: 'save-deeper', class: 'primary', disabled: pending }, 'Save & explore deeper')));
     form.append(button('Undo addition', () => {
@@ -595,7 +611,7 @@ function renderWorkspace() {
       answerStatus(node); answer.focus({ preventScroll: true }); notice('Addition undone. Your earlier draft is restored.');
     }, { id: 'undo-addition', class: 'undo-addition' }));
     form.append(el('div', { id: 'draft-recovery', 'aria-live': 'polite' }));
-    content.append(form); answerStatus(node); renderDraftRecovery(node);
+    content.append(form); answerStatus(node); renderDraftRecovery(node); renderCleanup();
     const research = el('details', { class: 'research-disclosure' }, el('summary', { id: 'research-summary' }, 'Explore options')); research.open = ui.researchOpen;
     research.addEventListener('toggle', () => { if (research.isConnected) { ui.researchOpen = research.open; scheduleLayout(); } });
     research.append(el('p', { class: 'quiet' }, 'A separate researcher compares possibilities using your saved answers and states. Suggestions stay separate from your answer; normal Copilot usage applies.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; void api('research', { nodeId: node.id }); }, { id: 'research-request', disabled: pending }));
@@ -633,6 +649,23 @@ function renderWorkspace() {
   if (answerCaret && $('answer')) $('answer').setSelectionRange(answerCaret.start, answerCaret.end, answerCaret.direction);
   for (const [id, scroll] of textScroll) { const input = $(id); if (input) { input.style.height = scroll.height; input.scrollTop = scroll.top; input.scrollLeft = scroll.left; } }
   content.scrollTop = ui.scroll;
+}
+function renderCleanup() {
+  const area = $('cleanup-review'), start = $('clean-answer'); if (!area || !start) return;
+  start.disabled = !cleanup.context()?.text.trim() || !!composing;
+  const work = cleanup.work, signature = JSON.stringify(work);
+  if (area.dataset.signature === signature) return;
+  const focus = area.contains(document.activeElement) ? document.activeElement.id : null;
+  area.dataset.signature = signature; area.replaceChildren();
+  if (work?.status === 'pending') area.append(el('p', { role: 'status' }, `${work.progress ?? 'Cleaning your answer'}… You can keep editing.`), button('Cancel cleanup', () => { cleanup.cancel(); $('answer')?.focus({ preventScroll: true }); }, { id: 'cancel-cleanup' }));
+  else if (work?.status === 'proposal') area.append(
+    el('p', {}, 'Review the meaning before applying. Text and answer state remain drafts until you save.'),
+    el('h3', {}, 'Original'), el('p', { id: 'cleanup-original', class: 'cleanup-text', tabindex: '0' }, work.original),
+    el('h3', {}, 'Proposed'), el('p', { id: 'cleanup-proposal', class: 'cleanup-text', tabindex: '0' }, work.proposed),
+    el('div', { class: 'actions' }, button('Apply', () => cleanup.apply(), { id: 'apply-cleanup' }), button('Reject', () => { cleanup.cancel(); $('answer')?.focus({ preventScroll: true }); }, { id: 'reject-cleanup' })));
+  else if (work?.status === 'undo') area.append(button('Undo cleanup', () => cleanup.undo(), { id: 'undo-cleanup' }));
+  else if (work?.status === 'error') area.append(el('p', { role: 'status' }, `${work.error} Your current draft is unchanged. Use Clean My Answer to retry.`));
+  if (focus) ($(focus) ?? $('answer'))?.focus({ preventScroll: true });
 }
 function renderQuestionFeedback() {
   let feedback = $('question-feedback');
@@ -969,6 +1002,7 @@ new ResizeObserver(() => {
 }).observe($('map'));
 new ResizeObserver(() => { if (expanded) scheduleLayout(); }).observe($('node-workspace'));
 window.addEventListener('pagehide', event => {
+  cleanup.cancel();
   void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;
   closed = true; clearTimeout(pollTimer); cancelAnimationFrame(layoutFrame); endDrag();

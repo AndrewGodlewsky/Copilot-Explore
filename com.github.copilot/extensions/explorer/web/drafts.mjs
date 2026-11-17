@@ -13,7 +13,7 @@ export class DraftClient {
   reset(journey, nodes) {
     for (const entry of this.entries.values()) clearTimeout(entry.timer);
     this.epoch++; this.journey = journey; this.entries.clear(); this.drafts.clear(); this.loadError = '';
-    for (const node of nodes) this.entries.set(node.id, { base: baseOf(node), answerState: effectiveAnswerState(node), deliberate: false, generation: 0, edits: 0, revision: 0, dirty: false, status: '', conflict: null });
+    for (const node of nodes) this.entries.set(node.id, { base: baseOf(node), answerState: effectiveAnswerState(node), deliberate: false, generation: 0, textGeneration: 0, edits: 0, revision: 0, dirty: false, status: '', conflict: null });
     this.ready = this.recover();
   }
   recover() {
@@ -23,11 +23,11 @@ export class DraftClient {
       this.loadError = '';
       for (const record of result.entries) {
         let entry = this.entries.get(record.nodeId);
-        if (!entry) { entry = { base: { question: '', answer: '' }, generation: 0, edits: 0, dirty: false, status: '', orphaned: true }; this.entries.set(record.nodeId, entry); }
+        if (!entry) { entry = { base: { question: '', answer: '' }, generation: 0, textGeneration: 0, edits: 0, dirty: false, status: '', orphaned: true }; this.entries.set(record.nodeId, entry); }
         entry.revision = record.revision;
         if (record.text === null) continue;
         if (record.stale || entry.generation || entry.orphaned || !sameBase(entry.base, bases.get(record.nodeId))) { entry.conflict = record; entry.status = 'Review recovered draft'; }
-        else { entry.answerState = recordState(record); entry.deliberate = record.stateSelected; this.drafts.set(record.nodeId, record.text); entry.status = 'Draft saved locally'; this.restored(record.nodeId, record.text); }
+        else { entry.textGeneration++; entry.answerState = recordState(record); entry.deliberate = record.stateSelected; this.drafts.set(record.nodeId, record.text); entry.status = 'Draft saved locally'; this.restored(record.nodeId, record.text); }
       }
       this.changed();
     }).catch(error => {
@@ -59,9 +59,9 @@ export class DraftClient {
     }
     for (const node of nodes) {
       const entry = this.entries.get(node.id);
-      if (!entry) this.entries.set(node.id, { base: baseOf(node), answerState: effectiveAnswerState(node), deliberate: false, generation: 0, edits: 0, revision: 0, dirty: false, status: '', conflict: null });
+      if (!entry) this.entries.set(node.id, { base: baseOf(node), answerState: effectiveAnswerState(node), deliberate: false, generation: 0, textGeneration: 0, edits: 0, revision: 0, dirty: false, status: '', conflict: null });
       // Keep the original base while there is editor text, including during answer saves.
-      else if (!this.drafts.has(node.id) && !entry.conflict) { entry.base = baseOf(node); entry.answerState = effectiveAnswerState(node); entry.deliberate = false; }
+      else if (!this.drafts.has(node.id) && !entry.conflict) { if (entry.base.answer !== node.answer) entry.textGeneration++; entry.base = baseOf(node); entry.answerState = effectiveAnswerState(node); entry.deliberate = false; }
       else if (!this.savingAnswer && !sameBase(entry.base, baseOf(node)) && this.drafts.has(node.id)) {
         entry.conflict ??= { nodeId: node.id, text: this.drafts.get(node.id), answerState: entry.answerState, stateSelected: entry.deliberate, revision: entry.revision, stale: true };
         entry.status = 'Review recovered draft';
@@ -77,6 +77,7 @@ export class DraftClient {
   edit(id, text) {
     const entry = this.entries.get(id); if (!entry) return;
     if (!entry.deliberate && answerStateError(text, entry.answerState)) entry.answerState = text.trim() ? 'tentative' : 'unanswered';
+    if (text !== (this.drafts.get(id) ?? entry.base.answer)) entry.textGeneration++;
     this.drafts.set(id, text); entry.generation++; entry.edits++; entry.dirty = true;
     entry.status = entry.conflict ? 'Review recovered draft' : 'Saving draft…';
     clearTimeout(entry.timer); entry.timer = setTimeout(() => { void this.flush(false, id).catch(() => {}); }, 500);
@@ -131,7 +132,7 @@ export class DraftClient {
         entry.revision = remote?.revision ?? 0; entry.conflict = remote?.text != null ? remote : null;
       } catch (error) { this.loadError = error.message; }
       if (epoch !== this.epoch || entry.edits !== edits) return;
-      clearTimeout(entry.timer); entry.generation++; entry.dirty = false; entry.error = '';
+      clearTimeout(entry.timer); entry.generation++; entry.textGeneration++; entry.dirty = false; entry.error = '';
       this.drafts.delete(id); entry.answerState = effectiveAnswerState(node); entry.deliberate = false; entry.status = entry.conflict ? 'Review recovered draft' : '';
       this.restored(id, node.answer); this.changed();
     });
@@ -157,6 +158,7 @@ export class DraftClient {
         if (epoch !== this.epoch) return;
         entry.revision = result.revision; entry.base = base; entry.conflict = null; entry.error = '';
         if (generation === entry.edits) {
+          entry.textGeneration++;
           entry.answerState = answerState; entry.deliberate = stateSelected; entry.dirty = false; text === null ? this.drafts.delete(id) : this.drafts.set(id, text);
           entry.status = text === null ? '' : 'Draft saved locally'; this.restored(id, text ?? node?.answer ?? '');
         } else { entry.dirty = true; entry.status = 'Saving draft…'; }
@@ -185,7 +187,7 @@ export class DraftClient {
       const ownNewerText = entry.edits !== generation && remote?.revision === entry.revision && remote?.text === this.drafts.get(id) && recordState(remote) === entry.answerState;
       entry.revision = remote?.revision ?? 0;
       entry.base = baseOf(currentNode()); entry.conflict = remote?.text != null && !ownNewerText ? remote : null;
-      if (entry.edits === generation) { this.drafts.delete(id); entry.answerState = effectiveAnswerState(currentNode()); entry.deliberate = false; entry.dirty = false; this.restored(id, currentNode().answer); }
+      if (entry.edits === generation) { entry.textGeneration++; this.drafts.delete(id); entry.answerState = effectiveAnswerState(currentNode()); entry.deliberate = false; entry.dirty = false; this.restored(id, currentNode().answer); }
       else entry.dirty = true;
       entry.status = entry.conflict ? 'Review recovered draft' : entry.dirty ? 'Saving draft…' : '';
       this.changed(); return result;

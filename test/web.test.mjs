@@ -12,6 +12,7 @@ import { startServer } from '../com.github.copilot/extensions/explorer/server.mj
 import { layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
+import { CleanupClient } from '../com.github.copilot/extensions/explorer/web/cleanup.mjs';
 import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
 import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
 import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
@@ -31,6 +32,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
   const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
+    cleaner: options.cleaner,
     researcher: { run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
   }).load();
   await explorer.command('start', { topic: 'A tool library' });
@@ -101,10 +103,11 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.revealPath = revealPath;
   window.attachVoice = attachVoice;
   window.DraftClient = DraftClient;
+  window.CleanupClient = CleanupClient;
   window.attachNavigation = attachNavigation;
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus });
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
-  window.eval(script.replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", ''));
+  window.eval(script.replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", ''));
   await until(() => width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -117,6 +120,84 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
+
+test('Clean My Answer reviews safely in a narrow pane, preserves state/polling, and applies with conditional undo', async t => {
+  const runs = [];
+  const f = await fixture(t, 340, undefined, false, { cleaner: { run: (text, options) => new Promise(resolve => { runs.push({ text, ...options, resolve }); options.signal.addEventListener('abort', () => resolve('Cancelled')); }), close() {} } });
+  const node = f.explorer.doc.nodes[1], original = 'maybe Élodie needs 42 <unsafe>';
+  f.open(node.id); f.type('answer', original);
+  const $ = id => f.document.getElementById(id);
+  assert.equal($('clean-answer')?.textContent, 'Clean My Answer');
+  $('clean-answer').click(); await until(() => runs.length, 'cleanup starts');
+  assert.equal($('answer').disabled, false); assert.equal(runs[0].text, original);
+  $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  const changed = structuredClone(f.explorer.doc); changed.nodes[1].review = true; await f.explorer.save(changed, 'Review');
+  await until(() => /An earlier answer changed/.test(f.document.querySelector('.note')?.textContent ?? ''), 'same node polling');
+  assert.ok($('cancel-cleanup')); assert.equal(runs[0].signal.aborted, false);
+  runs[0].resolve('Maybe Élodie needs 42 <unsafe>.');
+  await until(() => $('apply-cleanup'), 'proposal arrives');
+  assert.equal($('answer').value, original); assert.equal($('cleanup-original').textContent, original);
+  assert.equal($('cleanup-original').tabIndex, 0); assert.equal($('cleanup-proposal').tabIndex, 0);
+  assert.equal($('cleanup-proposal').querySelector('unsafe'), null);
+  $('apply-cleanup').focus(); $('apply-cleanup').click();
+  assert.equal($('answer').value, 'Maybe Élodie needs 42 <unsafe>.'); assert.equal($('answer-state').value, 'assumption');
+  assert.equal(f.document.activeElement.id, 'answer'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  $('undo-cleanup').click(); assert.equal($('answer').value, original); assert.equal($('answer-state').value, 'assumption');
+  $('clean-answer').click(); await until(() => runs.length === 2, 'second cleanup'); runs[1].resolve('Proposal');
+  await until(() => $('apply-cleanup'), 'second proposal'); $('apply-cleanup').click();
+  f.type('answer', 'New work'); f.type('answer', 'Proposal'); assert.equal($('undo-cleanup'), null);
+  $('clean-answer').click(); await until(() => runs.length === 3, 'third cleanup'); runs[2].resolve('Rejected');
+  await until(() => $('reject-cleanup'), 'reject control'); $('reject-cleanup').click(); assert.equal($('answer').value, 'Proposal');
+});
+
+test('Clean My Answer cancels A-B-A, navigation and replacement; late failures preserve current text and permit retry', async t => {
+  const runs = [];
+  const f = await fixture(t, 340, undefined, false, { cleaner: { run: (text, options) => new Promise((resolve, reject) => { runs.push({ text, ...options, resolve, reject }); options.signal.addEventListener('abort', () => resolve('Cancelled')); }), close() {} } });
+  const $ = id => f.document.getElementById(id), [first, second] = f.explorer.doc.nodes.slice(1);
+  f.open(first.id); f.type('answer', 'A'); $('clean-answer').click(); await until(() => runs.length, 'cleanup starts');
+  f.type('answer', 'B'); f.type('answer', 'A'); await until(() => runs[0].signal.aborted, 'typing cancels'); runs[0].resolve('Late');
+  await delay(50); assert.equal($('apply-cleanup'), null); assert.equal($('answer').value, 'A');
+  $('clean-answer').click(); await until(() => runs.length === 2, 'retry starts');
+  f.open(second.id); await until(() => runs[1].signal.aborted, 'node change cancels'); runs[1].resolve('Late second');
+  f.open(first.id); assert.equal($('answer').value, 'A'); assert.equal($('apply-cleanup'), null);
+  $('clean-answer').click(); await until(() => runs.length === 3, 'error starts'); runs[2].reject(new Error('Cleanup unavailable'));
+  await until(() => /Cleanup unavailable/.test($('cleanup-review')?.textContent ?? ''), 'visible failure');
+  assert.equal($('answer').value, 'A'); $('clean-answer').click(); await until(() => runs.length === 4, 'retry after error');
+  $('cancel-cleanup').click(); runs[3].resolve('Late cancelled'); await delay(50); assert.equal($('answer').value, 'A');
+});
+
+test('Clean My Answer observes streamed dictation mutations without breaking durable acknowledgment and cancels capture when started', async t => {
+  const runs = [], voice = segmentedVoiceFixture();
+  const f = await fixture(t, 340, voice, false, { cleaner: { run: (text, options) => new Promise(resolve => { runs.push({ text, ...options, resolve }); options.signal.addEventListener('abort', () => resolve('Cancelled')); }), close() {} } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => !$('voice-record')?.disabled, 'voice ready');
+  f.type('answer', 'Original'); $('clean-answer').click(); await until(() => runs.length === 1, 'cleanup starts');
+  $('answer').focus(); $('answer').setSelectionRange(8, 8); $('voice-record').click(); await until(() => !$('voice-stop').disabled, 'listening');
+  let release; f.pauseDraftWrite(() => new Promise(resolve => { release = resolve; }));
+  voice.publish(1, 'new words'); await until(() => $('answer').value.includes('new words'), 'programmatic insertion');
+  await until(() => runs[0].signal.aborted, 'dictation invalidates cleanup');
+  await until(() => release, 'durability pending'); assert.deepEqual(voice.counts().acknowledgments, []);
+  f.pauseDraftWrite(null); release(); await until(() => voice.counts().acknowledgments.length === 1, 'ack after persistence');
+  assert.equal($('apply-cleanup'), null);
+  $('clean-answer').click(); await until(() => runs.length === 2 && voice.counts().cancels === 1, 'cleanup explicitly cancels capture');
+  assert.equal(runs[1].text, $('answer').value); runs[1].resolve('Proposed'); await until(() => $('apply-cleanup'), 'proposal');
+});
+
+test('Clean My Answer keeps original available after failed draft persistence and ends review on journey navigation', async t => {
+  const f = await fixture(t, 340, undefined, true, { cleaner: { run: async () => 'Clean proposal', close() {} } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Original');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'original recoverable');
+  $('clean-answer').click(); await until(() => $('apply-cleanup'), 'proposal');
+  const write = f.explorer.draftStore.write;
+  f.explorer.draftStore.write = async () => { throw new Error('Disk full'); };
+  $('apply-cleanup').click(); await until(() => $('answer-status').textContent === 'Draft could not be saved', 'failure shown');
+  assert.equal($('answer').value, 'Clean proposal'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  $('undo-cleanup').click(); assert.equal($('answer').value, 'Original');
+  f.explorer.draftStore.write = write; $('retry-draft').click(); await until(() => $('answer-status').textContent === 'Draft saved locally', 'retry succeeds');
+  $('clean-answer').click(); await until(() => $('apply-cleanup'), 'review again');
+  $('library-toggle').click(); assert.equal($('apply-cleanup'), null);
+  $('library-return').click(); assert.equal($('answer').value, 'Original'); assert.equal($('apply-cleanup'), null);
+});
 
 test('pinned references show committed text and state, remain optional, and jump through the map', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async explorer => {

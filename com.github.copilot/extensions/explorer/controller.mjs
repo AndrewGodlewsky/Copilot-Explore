@@ -6,16 +6,18 @@ import { atomicWrite } from './storage.mjs';
 import { History } from './history.mjs';
 import { Drafts, draftBase, draftHash, matchesDraftBase } from './drafts.mjs';
 import { References, emptyReferences, validateReferenceIds } from './references.mjs';
+import { cleanupText } from './cleanup.mjs';
 import { ANSWER_CONTEXT_GUIDANCE, effectiveAnswerState, isQuestion } from './web/answer-state.mjs';
 export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
 export class Explorer {
-  constructor({ file, library, binding, send, target, researcher, timeoutMs = 240000 }) {
+  constructor({ file, library, binding, send, target, researcher, cleaner, timeoutMs = 240000 }) {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
     this.researcher = researcher; this.researchTasks = new Set();
+    this.cleaner = cleaner; this.cleanup = null; this.cleanupTask = Promise.resolve(); this.closed = false;
     this.library = library; this.binding = binding; this.activeKey = null;
   }
   async load() {
@@ -29,6 +31,46 @@ export class Explorer {
     return this;
   }
   snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
+  reconcileCleanup() {
+    const work = this.cleanup;
+    if (work && (work.journey !== (this.activeKey ?? this.doc?.id) || !this.doc?.nodes.some(n => n.id === work.nodeId && isQuestion(n)))) {
+      work.abort.abort(); this.cleanup = null;
+    }
+  }
+  cleanupRequest(input) {
+    return this.transact(() => {
+      if (this.closed || !input || typeof input !== 'object' || Array.isArray(input) || !['start', 'poll', 'cancel'].includes(input.action) ||
+        Object.keys(input).sort().join(',') !== (input.action === 'start' ? 'action,id,journey,mutation,nodeId,text' : 'action,id,journey,mutation,nodeId') ||
+        typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || typeof input.journey !== 'string' || input.journey.length > 100 ||
+        typeof input.nodeId !== 'string' || input.nodeId.length > 100 || !Number.isSafeInteger(input.mutation) || input.mutation < 0) throw new Error('Invalid answer cleanup request.');
+      const matches = work => work && ['id', 'journey', 'nodeId', 'mutation'].every(key => work[key] === input[key]);
+      if (input.action === 'cancel') {
+        if (matches(this.cleanup)) { this.cleanup.abort.abort(); this.cleanup = null; }
+        return { id: input.id, status: 'cancelled' };
+      }
+      const current = () => this.doc && input.journey === (this.activeKey ?? this.doc.id) && this.doc.nodes.some(n => n.id === input.nodeId && isQuestion(n));
+      if (!current()) throw new Error('The selected journey or answer changed. Try Clean My Answer again.');
+      if (input.action === 'start') {
+        const text = cleanupText(input.text);
+        if (!this.cleaner) throw new Error('Clean My Answer requires the installed Copilot desktop SDK.');
+        this.cleanup?.abort.abort();
+        const work = { id: input.id, journey: input.journey, nodeId: input.nodeId, mutation: input.mutation, status: 'pending', progress: 'Preparing answer cleanup', abort: new AbortController() };
+        this.cleanup = work;
+        // Wait for release of the previous owned session, without blocking edits or HTTP cancellation.
+        this.cleanupTask = this.cleanupTask.then(async () => {
+          if (this.cleanup !== work || work.abort.signal.aborted || !current()) return;
+          try {
+            const result = await this.cleaner.run(text, { signal: work.abort.signal, onProgress: progress => { if (this.cleanup === work) work.progress = progress; } });
+            if (this.cleanup === work && !work.abort.signal.aborted && current()) { work.text = cleanupText(result); work.status = 'proposal'; }
+          } catch (error) {
+            if (this.cleanup === work && !work.abort.signal.aborted) { work.error = error.message; work.status = 'error'; }
+          }
+        });
+      }
+      const work = this.cleanup;
+      return matches(work) ? { id: work.id, status: work.status, progress: work.progress, ...(work.text !== undefined ? { text: work.text } : {}), ...(work.error ? { error: work.error } : {}) } : { id: input.id, status: 'cancelled' };
+    });
+  }
   uiSnapshot() {
     let stale = this.preview?.stale ?? false;
     if (this.preview) {
@@ -51,6 +93,7 @@ export class Explorer {
   async attach(key) {
     const record = await this.library.opened(key, this.binding);
     this.file = record.file; this.doc = record.document; this.activeKey = key;
+    this.reconcileCleanup();
   }
   async draftIdentity(journey) {
     if (!this.doc || journey !== (this.activeKey ?? this.doc.id)) throw new Error('The active journey changed. This draft request was rejected.');
@@ -162,7 +205,7 @@ export class Explorer {
     if (!Number.isSafeInteger(next.revision)) throw new Error('Map revision limit reached.');
     next.updatedAt = new Date(Math.max(Date.now(), Date.parse(this.doc?.updatedAt ?? 0) + 1)).toISOString();
     validateDocument(next);
-    const replace = async () => { await atomicWrite(this.file, JSON.stringify(next, null, 2)); this.doc = next; };
+    const replace = async () => { await atomicWrite(this.file, JSON.stringify(next, null, 2)); this.doc = next; this.reconcileCleanup(); };
     if (saved && saved.id === next.id) await (await this.history(this.activeKey ?? this.doc.id)).commit(saved, next, label, replace);
     else await replace(); // New direct-file identity has independent history, like imported library copies.
     return true;
@@ -320,6 +363,7 @@ export class Explorer {
         case 'refresh-guidance':
           if (!next) throw new Error('Start an exploration first.');
           this.doc = await this.readCurrent();
+          this.reconcileCleanup();
           break;
         case 'finish':
           if (!next) throw new Error('Start an exploration first.');
@@ -347,5 +391,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.clearPending(); await Promise.allSettled([...this.researchTasks]); await this.queue; this.preview = null; this.questionSource = null; }
+  async close() { this.closed = true; this.cleanup?.abort.abort(); this.cleanup = null; this.clearPending(); await Promise.allSettled([...this.researchTasks, this.cleanupTask]); await this.cleaner?.close(); await this.queue; this.preview = null; this.questionSource = null; }
 }

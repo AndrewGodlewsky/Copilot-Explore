@@ -132,7 +132,9 @@ async function replace(file, content) {
     });
     await rename(temporary, file);
 }
-export async function createUsageRecorder(sessionId, root) {
+export async function createUsageRecorder(sessionId, root, operation = 'research') {
+    if (!['research', 'cleanup'].includes(operation)) throw new Error('Invalid helper operation.');
+    const label = operation === 'research' ? 'Explorer Research' : 'Explorer Answer Cleanup';
     if (!uuid.test(sessionId)) throw new Error('Invalid usage session ID.');
     const directory = join(root, 'session-state', sessionId);
     const file = join(directory, 'events.jsonl');
@@ -146,7 +148,7 @@ export async function createUsageRecorder(sessionId, root) {
     });
     await replace(join(directory, 'workspace.yaml'), JSON.stringify({
         id: sessionId,
-        name: `Explorer Research · ${started}`
+        name: `${label} · ${started}`
     }) + '\n');
     let lines = JSON.stringify({
         type: 'session.start',
@@ -155,7 +157,7 @@ export async function createUsageRecorder(sessionId, root) {
         data: {
             sessionId,
             context: {
-                repository: 'Explorer Research'
+                repository: label
             }
         }
     }) + '\n';

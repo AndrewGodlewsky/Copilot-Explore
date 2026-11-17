@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.26.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.27.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -76,6 +76,10 @@ While creating a journey, open **Add an objective and success criteria** if you 
 5. **Finish exploration** saves the record and offers two downloads: Markdown and `.explore.json`. Use **Library** to reopen it from any canvas/session, or **Open file** to import an exported journey.
 
 Answer states distinguish intent from evidence. **Decided**, **Tentative** and **Assumption** require text. **Need evidence**, **Not relevant** and **Revisit later** can have an optional note or no text. Clear the text yourself before saving **Unanswered**. State selection, dictation and research additions remain drafts until Save; changing state alone is recoverable. If another canvas changed the saved journey, use **Refresh saved journey**, then explicitly keep the draft or discard it in favor of the saved answer.
+
+**Clean My Answer** uses only your current nonblank answer text (up to 20,000 JavaScript characters) in a separate, tool-free Copilot helper. It requests conservative punctuation, clarity and repetition edits while preserving meaning, uncertainty, names, numbers and voice. Review the original and proposal: a model can still change meaning. **Apply** updates the local draft; **Reject** keeps your text. Your answer state stays unchanged, and neither action submits an answer or generates questions. Normal Copilot usage applies.
+
+You can keep editing during cleanup. Text changes, including dictation, cancel older results; changing only the answer state preserves the proposal. Starting cleanup cancels active dictation. **Undo cleanup** restores the captured original only until another text edit or navigation. Same-question polling preserves review and undo, but switching questions/journeys, leaving the editor or reloading ends them. The ordinary local draft remains recoverable; cleanup adds no historical draft store.
 
 The root is the idea and is excluded from question counts. **Answered** means nonempty saved text; **resolved** means Decided or Not relevant without a needs-review flag; **deferred** means Revisit later; **unresolved** means total questions minus resolved. These counts overlap. Changed ancestor text or state marks descendants for review. Older nonempty answers are Tentative, and empty answers are Unanswered; no old answer is promoted to Decided. See [answer-state semantics](docs/answer-states.md).
 
@@ -228,7 +232,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.26, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.26**.
+- Update to v0.1.27, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.27**.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

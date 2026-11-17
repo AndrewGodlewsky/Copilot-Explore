@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.27",
+    "summary": "Clean My Answer proposes conservative edits to your current draft in a separate, tool-free Copilot helper. Review original and proposed text, Apply or Reject, and immediately Undo while the applied text is unchanged. Typing, dictation and navigation invalidate stale results; answer state stays yours and nothing submits automatically."
+  },
+  {
     "version": "0.1.26",
     "summary": "Dictate for up to ten minutes with ordered text appearing in recoverable local drafts. Stop finishes captured audio; Cancel keeps inserted text. Draft failures, model lag and resource limits stop capture visibly. Repeated words and Unicode are preserved, and an abandoned Record pointer press no longer reuses an old caret for keyboard activation."
   },

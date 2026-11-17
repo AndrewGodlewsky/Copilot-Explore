@@ -75,3 +75,4 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .reference-row button { font-size: 11px; margin: 6px 8px 0 0; }
 .reference-full { margin: 6px 0; }
 .reference-full p { white-space: pre-wrap; max-height: 180px; overflow: auto; }
+:where(.cleanup-text) { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow-y: auto; }

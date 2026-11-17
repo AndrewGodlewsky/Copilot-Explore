@@ -48,9 +48,9 @@ export class VoiceService {
       const names = await this.devices(inventory.recorder); result.deviceCount = names.length;
       result.microphone = !names.length ? 'unavailable' : 'ready';
       try { microphoneIndex(preferences.microphone, names); }
-      catch (error) { result.microphone = 'unavailable'; result.error = diagnosticError(error); }
+      catch (error) { result.microphone = 'unavailable'; if (result.error === 'none') result.error = diagnosticError(error); }
     } catch (error) {
-      result.error = diagnosticError(error);
+      if (result.error === 'none') result.error = diagnosticError(error);
       if (error?.code === 'VOICE_UNSUPPORTED') result.runtime = 'unsupported';
       if (error?.code === 'VOICE_UNAVAILABLE') result.runtime = 'unavailable';
     }

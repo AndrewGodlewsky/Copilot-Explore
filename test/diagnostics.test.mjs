@@ -134,12 +134,13 @@ test('real speech discovery preserves unknown metadata failures while absence an
     const models = await downloadedModels(root, category => { modelDiscoveryError = category; });
     return { ...inventory, selectedModel: 'nemotron-speech-streaming-en-0.6b', models, modelDiscoveryError };
   } });
-  const check = async (model, error) => {
+  const check = async (model, error, microphone = 'ready') => {
     const speech = await voice.diagnostics();
     assert.equal(speech.model, model); assert.equal(speech.error, error);
-    assert.equal(speech.runtime, 'ready'); assert.equal(speech.microphone, 'ready');
+    assert.equal(speech.runtime, 'ready'); assert.equal(speech.microphone, microphone);
     const bytes = supportBundle({ speech });
     assert.equal(JSON.parse(bytes).speech.error, error);
+    assert.equal(JSON.parse(bytes).speech.model, model); assert.equal(JSON.parse(bytes).speech.microphone, microphone);
     assert.ok(!bytes.includes('PRIVATE-CANARY')); assert.ok(!bytes.includes(root)); assert.ok(!bytes.includes('private.test'));
   };
   await check('unavailable', 'none'); // No installed package.
@@ -161,6 +162,15 @@ test('real speech discovery preserves unknown metadata failures while absence an
   assert.equal((await voice.diagnostics()).modelCount, 1);
   await writeFile(config, '{"model":' + canary);
   await check('unknown', 'inspection-failed'); // Unreadable configuration cannot establish non-speech status.
+  await writeFile(config, JSON.stringify({ model: { type: 'nemotron_speech', sample_rate: 16000 } }));
+  await writeFile(metadata, '{"Name":' + canary);
+  voice.preferences.read = async () => ({ microphone: canary, model: 'copilot' });
+  await check('unknown', 'inspection-failed', 'unavailable'); // Simultaneous selected-device failure must not erase discovery uncertainty.
+  voice.devices = async () => { throw Object.assign(new Error(canary), { code: 'VOICE_DEVICE' }); };
+  await check('unknown', 'inspection-failed', 'unknown'); // Failed enumeration must preserve the earlier category too.
+  voice.devices = async () => ['Other device'];
+  await writeFile(config, JSON.stringify({ model: { type: 'phi3' } }));
+  await check('unavailable', 'device-unavailable', 'unavailable'); // Device-only failure keeps its specific category.
 });
 
 test('private diagnostics and explicit support HTTP export enforce origin, schema, safe failure and snapshot isolation', async t => {

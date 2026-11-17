@@ -146,11 +146,22 @@ try {
   const previewReopen = await secondSession.rpc.canvas.open({ canvasId: 'explorer', instanceId: 'library-other-session', input: {} });
   const previewRestored = await (await fetch(previewReopen.url + 'api/state')).json();
   assert.equal(previewRestored.preview, null); assert.equal(previewRestored.document.nodes.length, 3);
+  const seedResponse = await fetch(previewReopen.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'add-direction', revision: previewRestored.document.revision, nodeId, direction: '  Safety seed  ' }) });
+  assert.equal(seedResponse.status, 200); const seeded = await seedResponse.json();
+  const seed = seeded.document.nodes.find(n => n.id === seeded.directionId);
+  assert.equal(seed.kind, 'direction'); assert.equal(seed.question, '  Safety seed  '); assert.equal(seed.answer, ''); assert.equal(seed.answerState, undefined);
+  await until(async () => requests, values => JSON.stringify(values).includes('user-supplied direction'), 'no-answer seed generation');
+  await secondSession.rpc.canvas.action.invoke({ instanceId: 'library-other-session', actionName: 'submit_questions', input: { requestId: seeded.pending.id, questions: [{ question: 'Which safety concern first?', category: 'Safety' }] } });
+  const seedPreview = await (await fetch(previewReopen.url + 'api/state')).json();
+  assert.equal(seedPreview.document.nodes.length, 4); assert.equal(seedPreview.preview.nodeId, seed.id);
+  const seedAccept = await fetch(previewReopen.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'accept-questions', revision: seedPreview.document.revision, batchId: seedPreview.preview.id, selected: [{ index: 0, question: 'Which safety concern first?' }] }) });
+  assert.equal(seedAccept.status, 200); const developed = await seedAccept.json();
+  assert.equal(developed.document.nodes.at(-1).parentId, seed.id); assert.equal(developed.document.nodes.at(-1).generation.adjusted, false);
   await secondSession.rpc.canvas.close({ instanceId: 'library-other-session' });
   await session.rpc.canvas.close({ instanceId: 'explorer-import' });
   await session.rpc.canvas.close({ instanceId });
   const { version } = JSON.parse(await readFile(join(root, 'plugin.json'), 'utf8'));
-  console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, preview staging/explicit acceptance/native exclusion/close discard, answers, research access guard, exports, stale-response rejection, close/reopen, duplicate import, cross-session library reopen and shared-writer protection. Local fixture only; no paid model or UI automation.`);
+  console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, preview staging/explicit acceptance/native exclusion/close discard, no-answer direction seed/preview acceptance, answers, research access guard, exports, stale-response rejection, close/reopen, duplicate import, cross-session library reopen and shared-writer protection. Local fixture only; no paid model or UI automation.`);
 } finally {
   clearTimeout(deadline);
   await session?.disconnect().catch(() => {});

@@ -50,3 +50,7 @@ The measured icon issue applies to Copilot desktop 1.4.2: local marketplace inst
 - [Plugin installation handoff](https://github.com/AndrewGodlewsky/copilot-enhance-prompt/blob/main/docs/copilot-plugin-installation-handoff.html)
 - [Canvas icon investigation](https://github.com/AndrewGodlewsky/copilot-enhance-prompt/blob/main/docs/canvas-icon-investigation.md)
 - [GitHub canvas documentation](https://docs.github.com/en/copilot/how-tos/github-copilot-app/working-with-canvas-extensions)
+
+## Direction seeds
+
+Missing-direction input uses the existing browser command/persistence boundary, followed by attached-session `send({ mode: 'enqueue' })`; it adds no SDK helper or native action. Generation accepts an unanswered user direction and stages children for explicit preview acceptance. The saved seed remains available after a failed or cancelled send. Direction ancestors remain labeled user context in the isolated research helper and never become user decisions. See [direction schema and counting contracts](question-preview.md#missing-directions). The installed fixtures cover no-answer seed generation/acceptance and direction context reaching isolated research; visible native rendering and live model quality remain manual checks.

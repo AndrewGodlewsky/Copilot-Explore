@@ -1,3 +1,4 @@
+import { questionCounts } from './web/answer-state.mjs';
 import { mkdir, readdir, lstat, realpath, readFile, open, unlink } from 'node:fs/promises';
 import { join, resolve, dirname, basename } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -65,7 +66,7 @@ export class Library {
   }
   summary(record, metadata, ambiguous) {
     const { key, document: doc } = record;
-    return { key, id: doc.id, topic: doc.topic, updatedAt: doc.updatedAt, nodeCount: doc.nodes.length,
+    return { key, id: doc.id, topic: doc.topic, updatedAt: doc.updatedAt, nodeCount: doc.nodes.length, questionCount: questionCounts(doc).total,
       pinned: false, archived: false, lastOpenedAt: null, ...metadata.entries[key],
       ambiguous: ambiguous.has(doc.id) };
   }

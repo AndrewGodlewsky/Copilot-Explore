@@ -1,4 +1,4 @@
-import { isResolvedQuestion } from './answer-state.mjs';
+import { isResolvedQuestion, isQuestion } from './answer-state.mjs';
 
 // The full tree supplies counts; only visible nodes and edges reach layout/rendering.
 export function branchView(nodes, rootId, collapsed, focusId = null) {
@@ -11,15 +11,17 @@ export function branchView(nodes, rootId, collapsed, focusId = null) {
   }
   const order = [nodes.find(node => node.id === rootId)];
   for (let i = 0; i < order.length; i++) order.push(...children.get(order[i].id));
-  const descendants = new Map();
+  const descendants = new Map(), nodeCounts = new Map();
   for (let i = order.length - 1; i >= 0; i--) {
     const node = order[i], count = { total: 0, unresolved: 0 };
+    let nodeCount = 0;
     for (const child of children.get(node.id)) {
+      nodeCount += 1 + nodeCounts.get(child.id);
       const nested = descendants.get(child.id);
-      count.total += 1 + nested.total;
-      count.unresolved += Number(!isResolvedQuestion(child)) + nested.unresolved;
+      count.total += Number(isQuestion(child)) + nested.total;
+      count.unresolved += Number(isQuestion(child) && !isResolvedQuestion(child)) + nested.unresolved;
     }
-    descendants.set(node.id, count);
+    descendants.set(node.id, count); nodeCounts.set(node.id, nodeCount);
   }
   const visible = [order[0]], edges = [];
   for (let i = 0; i < visible.length; i++) {
@@ -30,7 +32,7 @@ export function branchView(nodes, rootId, collapsed, focusId = null) {
       visible.push(child); edges.push(child);
     }
   }
-  return { nodes: visible, edges, descendants };
+  return { nodes: visible, edges, descendants, nodeCounts, parentIds: new Set(nodes.map(n => n.parentId).filter(id => id !== null)) };
 }
 
 export function revealPath(nodes, collapsed, id) {

@@ -30,7 +30,7 @@ test('answer states validate all text combinations and preserve explicit choices
   const doc = createDocument('Topic'), [node] = addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Scope' }]);
   for (const value of [null, '', 'confident', 3, ['unanswered']]) { node.answerState = value; assert.throws(() => validateDocument(doc), /state/i); }
   delete node.answerState; answerNode(doc, node.id, 'New text'); assert.equal(model.effectiveAnswerState(node), 'tentative');
-  assert.throws(() => answerNode(doc, doc.rootId, '', 'not-relevant'), /central idea/);
+  assert.throws(() => answerNode(doc, doc.rootId, '', 'not-relevant'), /question/);
 });
 
 test('legacy answer state defaults remain sparse at the saved-data boundary', () => {

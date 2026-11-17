@@ -77,8 +77,10 @@ const researcher = createResearcher(parent, { runtime, usageDirectory: join(temp
 const deadline = setTimeout(() => { for (const client of owned) void client.forceStop(); }, 55000);
 try {
   const progress = [];
-  const context = { topic: 'Synthetic garden', objective: 'Choose a shared garden 🌿', successCriteria: 'Neighbors agree on one place', path: [{ question: 'Who should join?', answer: 'Neighbors only', answerState: 'assumption', review: true }], decisionsElsewhere: [{ question: 'When?', answer: '', answerState: 'revisit-later', review: false }] };
+  const context = { topic: 'Synthetic garden', objective: 'Choose a shared garden 🌿', successCriteria: 'Neighbors agree on one place', path: [{ kind: 'direction', origin: 'user', question: '  Access for everyone  ', answer: '', review: false }, { question: 'Who should join?', answer: 'Neighbors only', answerState: 'assumption', review: true }], decisionsElsewhere: [{ question: 'When?', answer: '', answerState: 'revisit-later', review: false }] };
   assert.deepEqual(await researcher.run(context, { onProgress: value => progress.push(value) }), findings);
+  assert.ok(JSON.stringify(prompts).includes('Access for everyone'));
+  assert.ok(JSON.stringify(prompts).includes('direction'));
   assert.ok(calls.includes('initialize')); assert.equal(toolCalls.length, 1);
   assert.equal(toolCalls[0].name, 'web_search');
   assert.ok(progress.includes('Searching the web'));

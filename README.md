@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.22.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.23.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -220,7 +220,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.22, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.22**.
+- Update to v0.1.23, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.23**.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
@@ -239,3 +239,5 @@ Automated runtime fixtures cannot establish desktop rendering, actual model rese
 See [AGENTS.md](AGENTS.md) for development rules and [the assessed Copilot practices](docs/copilot-integration.md) imported from Usage Insights and Enhance Prompt.
 
 History retains up to 50 snapshots and 128 MiB per journey, with up to 10 protected named checkpoints. Older unnamed snapshots are pruned first. Restoring preserves local drafts for explicit recovery and creates a new revision when content changes. See [history storage and recovery](docs/history.md) for the commit protocol, limits and recovery instructions.
+
+Suggest a missing direction from a branch's **Missing a direction?** disclosure. **Add & explore** saves your original text and asks Copilot to develop questions underneath it. Seeds are labeled as user directions, stay separate from answers and question counts, and remain available for retry after generation fails or is cancelled. Accept proposed questions in the preview before they enter the map. [Schema and behavior](docs/question-preview.md#missing-directions).

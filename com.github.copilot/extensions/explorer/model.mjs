@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './web/answer-state.mjs';
-export { effectiveAnswerState, questionCounts } from './web/answer-state.mjs';
+import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './web/answer-state.mjs';
+export { effectiveAnswerState, questionCounts, isQuestion, effectiveKind } from './web/answer-state.mjs';
 
 export const FORMAT = 'copilot-explorer';
 export const MAX_NODES = 5000;
@@ -20,6 +20,10 @@ export function text(value, name, max = 20000, empty = false) {
 function list(value, name, max, convert) {
   if (!Array.isArray(value) || value.length > max) throw new Error(`Invalid ${name}.`);
   return value.map(convert);
+}
+export function directionText(value) {
+  text(value, 'Direction', 600);
+  return value;
 }
 export function questions(value) {
   const result = list(value, 'questions', 6, q => ({
@@ -100,7 +104,8 @@ export function validateDocument(value) {
   };
   const nodes = list(value.nodes, 'nodes', MAX_NODES, n => ({
     id: text(n?.id, 'Node ID', 100), parentId: n.parentId === null ? null : text(n.parentId, 'Parent ID', 100),
-    question: text(n.question, 'Question', n.id === value.rootId ? 4000 : 600),
+    ...(Object.hasOwn(n, 'kind') ? { kind: n.kind } : {}),
+    question: n.kind === 'direction' ? directionText(n.question) : text(n.question, 'Question', n.id === value.rootId ? 4000 : 600),
     category: text(n.category, 'Category', 60), answer: guidanceText(n.answer, 'Answer', 20000),
     ...(Object.hasOwn(n, 'answerState') ? { answerState: n.answerState } : {}),
     research: n.research === null ? null : research(n.research), review: n.review === true,
@@ -108,6 +113,8 @@ export function validateDocument(value) {
   }));
   const byId = new Map(nodes.map(n => [n.id, n]));
   for (const node of nodes) {
+    if (Object.hasOwn(node, 'kind') && (node.kind !== 'direction' || node.id === value.rootId)) throw new Error('Invalid node kind.');
+    if (!isQuestion(node) && node.kind === 'direction' && (node.answer !== '' || Object.hasOwn(node, 'answerState') || node.research !== null || Object.hasOwn(node, 'generation'))) throw new Error('A direction cannot have an answer, answer state, research or AI generation provenance.');
     const error = answerStateError(node.answer, Object.hasOwn(node, 'answerState') ? node.answerState : effectiveAnswerState(node));
     if (error) throw new Error(error);
   }
@@ -159,9 +166,19 @@ export function addQuestions(doc, parentId, values) {
   doc.nodes.push(...nodes);
   return nodes;
 }
+export function addDirection(doc, parentId, value) {
+  findNode(doc, parentId);
+  const question = directionText(value);
+  if (doc.nodes.some(n => n.parentId === parentId && n.question.trim().toLowerCase() === question.trim().toLowerCase())) throw new Error('This direction already exists in this branch.');
+  if (doc.nodes.length >= MAX_NODES) throw new Error(`This POC supports up to ${MAX_NODES} nodes per map.`);
+  const node = { id: randomUUID(), parentId, kind: 'direction', question, category: 'Direction', answer: '', research: null, review: false };
+  validateDocument({ ...doc, nodes: [...doc.nodes, node] });
+  doc.nodes.push(node);
+  return node;
+}
 export function answerNode(doc, id, answer, answerState) {
   const node = findNode(doc, id);
-  if (id === doc.rootId) throw new Error('Answer a question rather than the central idea.');
+  if (!isQuestion(node)) throw new Error('Only question nodes can have answers.');
   const next = guidanceText(answer, 'Answer', 20000);
   const previousState = effectiveAnswerState(node);
   const state = answerState === undefined ? (answerStateError(next, previousState) ? (next.trim() ? 'tentative' : 'unanswered') : previousState) : answerState;
@@ -185,11 +202,12 @@ export function contextFor(doc, nodeId) {
   const byId = new Map(doc.nodes.map(n => [n.id, n]));
   const path = [];
   for (let node = findNode(doc, nodeId); node; node = byId.get(node.parentId)) {
-    path.push({ id: node.id, question: node.question, answer: node.answer, ...(node.id !== doc.rootId ? { answerState: effectiveAnswerState(node) } : {}), review: node.review });
+    path.push({ id: node.id, question: node.question, answer: node.answer, ...(isQuestion(node) ? { answerState: effectiveAnswerState(node) } : node.kind === 'direction' ? { kind: 'direction', origin: 'user' } : {}), review: node.review });
   }
   return { topic: doc.topic, objective: doc.objective ?? '', successCriteria: doc.successCriteria ?? '', path: path.reverse(),
-    existingQuestions: doc.nodes.filter(n => n.parentId === nodeId).map(n => n.question),
-    decisionsElsewhere: doc.nodes.filter(n => n.id !== doc.rootId && (n.answer.trim() || effectiveAnswerState(n) !== 'unanswered') && !path.some(p => p.id === n.id)).map(n => ({ question: n.question, answer: n.answer, answerState: effectiveAnswerState(n), review: n.review })) };
+    existingQuestions: doc.nodes.filter(n => n.parentId === nodeId && isQuestion(n)).map(n => n.question),
+    directions: doc.nodes.filter(n => n.parentId === nodeId && n.kind === 'direction').map(n => ({ kind: 'direction', origin: 'user', text: n.question })),
+    decisionsElsewhere: doc.nodes.filter(n => isQuestion(n) && (n.answer.trim() || effectiveAnswerState(n) !== 'unanswered') && !path.some(p => p.id === n.id)).map(n => ({ question: n.question, answer: n.answer, answerState: effectiveAnswerState(n), review: n.review })) };
 }
 const md = value => String(value).replace(/[\\`*_{}[\]<>#+!|]/g, '\\$&');
 export function toMarkdown(doc) {
@@ -203,11 +221,12 @@ export function toMarkdown(doc) {
     'Criteria guide exploration; the user decides when to finish.', '', '## Map', '',
     '| ID | Parent | Category | Question | Status |', '| --- | --- | --- | --- | --- |'];
   const ids = new Map(doc.nodes.map((n, i) => [n.id, `N${i}`]));
-  for (const n of doc.nodes) lines.push(`| ${ids.get(n.id)} | ${ids.get(n.parentId) ?? '—'} | ${md(n.category).replace(/\n/g, ' ')} | ${md(n.question).replace(/\n/g, ' ')} | ${n.id === doc.rootId ? 'Idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''} |`);
+  for (const n of doc.nodes) lines.push(`| ${ids.get(n.id)} | ${ids.get(n.parentId) ?? '—'} | ${md(n.category).replace(/\n/g, ' ')} | ${md(n.question).replace(/\n/g, ' ')} | ${nodeStatus(n)}${n.review ? '; needs review' : ''} |`);
   for (const n of doc.nodes) {
     if (n.id === doc.rootId) continue;
     lines.push('', `## ${ids.get(n.id)}: ${md(n.question)}`, '', `Category: ${md(n.category)}. Parent: ${ids.get(n.parentId)}.`, '');
     if (n.review) lines.push('**Needs review:** an ancestor answer changed after this branch was created.', '');
+    if (!isQuestion(n)) { lines.push('Direction (user supplied). Original direction text; not an answer or decision.', ''); continue; }
     lines.push('### User answer', '', `State: ${ANSWER_STATES[effectiveAnswerState(n)]}.`, '', n.answer ? md(n.answer) : '_No answer text._', '');
     if (n.generation) lines.push('### Question provenance', '', `Generated question: ${md(n.generation.originalQuestion)}`, '', `Generated category: ${md(n.generation.originalCategory)}. ${n.generation.adjusted ? 'Wording adjusted by the user before acceptance.' : 'Accepted without wording changes.'}`, '');
     if (n.research) {

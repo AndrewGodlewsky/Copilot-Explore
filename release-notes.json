@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.23",
+    "summary": "Suggest a missing direction in any branch, then let Copilot propose questions beneath it. Your original direction is saved and labeled as yours, survives failed or cancelled generation, and stays separate from answers and question counts. Review and accept generated questions before adding them."
+  },
+  {
     "version": "0.1.22",
     "summary": "Review generated questions before adding them. Select a subset, adjust wording or dismiss the unsaved preview. Accepted questions retain their original wording, and stale suggestions cannot overwrite changed context. New questions are highlighted without losing answer drafts or branch focus."
   },

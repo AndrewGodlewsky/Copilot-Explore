@@ -369,11 +369,46 @@ Read issue-19.md and task-10-design-notes.md in this workspace, AGENTS.md, docs/
 
 ### Verification and release
 
-- [ ] RED/GREEN model/controller tests for initial and deeper batches, subset acceptance/all dismissed, optional wording and original provenance, duplicate/invalid edits, exact limits and atomic near-limit failure, source changes/disk staleness, cancellation and late/legacy-shaped callbacks, no-op dismissal and acceptance history.
-- [ ] Real HTTP/jsdom tests for preview controls, keyboard/selection, retry, drafts/state/caret, focused/folded parent reveal, polls/restart/journey-switch semantics and unchanged committed exports/context until accepted.
-- [ ] Extend and run the installed local canvas runtime fixture for generation staging and explicit acceptance using simulated authorized user commands; no paid provider or existing user session. Run npm test, npm run check and npm run package. Research fixture only if helper context changes.
-- [ ] Bump to **0.1.22**, synchronize all release metadata/README/release notes, document temporary-preview/provenance contracts, include controller plan update, self-review and commit. No merge/push/issue closure.
-- [ ] Write task-10-report.md in this workspace with APIs/schema, TDD/final command evidence, commit and native limitations. No nested agents or browser/desktop UI automation. Raise concrete conflicts to the controller while continuing independent work.
+- [x] RED/GREEN model/controller tests for initial and deeper batches, subset acceptance/all dismissed, optional wording and original provenance, duplicate/invalid edits, exact limits and atomic near-limit failure, source changes/disk staleness, cancellation and late/legacy-shaped callbacks, no-op dismissal and acceptance history.
+- [x] Real HTTP/jsdom tests for preview controls, keyboard/selection, retry, drafts/state/caret, focused/folded parent reveal, polls/restart/journey-switch semantics and unchanged committed exports/context until accepted.
+- [x] Extend and run the installed local canvas runtime fixture for generation staging and explicit acceptance using simulated authorized user commands; no paid provider or existing user session. Run npm test, npm run check and npm run package. Research fixture only if helper context changes.
+- [x] Bump to **0.1.22**, synchronize all release metadata/README/release notes, document temporary-preview/provenance contracts, include controller plan update, self-review and commit. No merge/push/issue closure.
+- [x] Write task-10-report.md in this workspace with APIs/schema, TDD/final command evidence, commit and native limitations. No nested agents or browser/desktop UI automation. Raise concrete conflicts to the controller while continuing independent work.
+
+Published task10: **v0.1.22**, `27ba4ae`, 222 tests, checks, package and installed local canvas fixture passed; independent review approved and remote main verified.
+
+## Task 11: Suggest a missing direction (#10 / selection11)
+
+Read issue-11.md and task-11-design-notes.md in this workspace, AGENTS.md, and the final task-10 report. BASE is **27ba4aeb507fcdc5b1a7aef16473de804dcfb265**; ship **0.1.23**. The candidate/provenance seams below match the published task10 report. The user explicitly wants guided exploration, not manual map editing.
+
+### Contract
+
+- Replace the visible manual question/category form with one unobtrusive missing-direction input associated with the current branch. Use an explicit action to preserve the direction and ask AI to develop questions underneath it. No general node editing, reparenting, freehand layout or category management.
+- A user-supplied direction is a seed node, not a settled answer or an unresolved research question. Use optional `kind: 'direction'` for these user-origin structural nodes, with a shared effective-kind/question predicate. Missing kind preserves every legacy node's root/question meaning; do not infer kind from wording/category. Reject unknown kinds and kind on the root.
+- Bound direction text to **600 JavaScript characters**, reject empty/whitespace-only and invalid types, preserve Unicode and original user text. Store the original text in the direction node's question field without trimming; ordinary legacy/generated question normalization stays unchanged. Show a clear user-origin Direction label. Retain original direction provenance when saving/importing/exporting; do not fabricate AI authorship or a user answer. No arbitrary file/project instructions are followed from the seed text. A direction seed has empty answer, no answerState field, no research result and no AI generation provenance; validate those distinctions. Its kind identifies user origin and its unchanged text is the original direction, so do not duplicate that text into a second provenance blob without a demonstrated need.
+- Persist the seed through the existing revision-checked atomic history path. Then use the existing attached-session enqueue/correlated generation flow and temporary candidate preview to develop children. This may be a single explicit Add and explore action, but a send failure or cancellation leaves the committed seed available for retry. Generated children are saved only after user acceptance.
+- Allow generation beneath a direction without requiring an answer/state. Direction presentation offers its text, children and explicit generation/retry, not an answer editor that pretends the seed is a question. Reject answer mutations for direction nodes through backend validation too. Existing ordinary legacy manually added questions remain answerable.
+- Keep map-node limits inclusive of roots and seeds, while question counts/answered/resolved/deferred/unresolved/hidden-question counts exclude both idea roots and direction seeds. Reuse the shared predicate in model validation, answer-state counters, branch summaries, outline labels, Markdown, generation/research context, and later-facing summaries. Avoid multiple inconsistent count definitions. Layout/folds/focus still include seed nodes as structural nodes.
+- Preserve unrelated text/state drafts, caret, disclosure and voice cancellation rules when adding a seed. Guard a typed but unsent direction during journey switches just as the old manual form was guarded. Do not switch away from a dirty answer editor silently; make the new seed/preview reachable through existing focus/fold contracts and reduced-motion behavior.
+- Keep request/session/instance identities, cancellation and source-staleness rules from task10. Include original direction as labeled context data; it is not a fact or decision. Research remains isolated; this issue does not add a new helper type.
+- Root skill is skills/explore/SKILL.md. Update generation prompt/docs and runtime fixture for explicit no-answer seed generation and preview acceptance. Keep old add-command support only if existing compatibility requires it; no new visible manual editor.
+
+### Published candidate integration
+
+- Explorer.uiSnapshot() adds browser-only preview to committed native snapshot(); preview is {id:requestId, journey:activeKey||doc.id, nodeId, questions:[{question,category}], stale}. Captured source context stays private.
+- accept-questions takes {revision,batchId,selected:[{index,question}]} and returns UI state plus acceptedIds/acceptedParentId. dismiss-questions takes {batchId}, with no document save. Reuse this explicit acceptance rather than bypassing it for seed-generated questions.
+- Model candidateQuestions(doc,parentId,values) validates proposals; acceptQuestions(doc,parentId,batch,selected) returns {document,ids}.
+- AI-generated question provenance is optional generation={requestId,originalQuestion,originalCategory,adjusted}; bounded lengths match request/question/category, final category equals originalCategory, and adjusted matches normalized wording difference. Do not misuse this AI-generation object for user-origin seed provenance. Keep the new distinction small and validated.
+
+### Verification and release
+
+- [ ] RED/GREEN model/controller tests for Unicode/empty/length/type input, legacy root/question behavior, shared counts and exports, seed provenance round trip, no-answer generation, successful candidate acceptance, failed send/retry, cancel/late callbacks, duplicate/bound/near-limit atomic failure, same-file stale writes and history.
+- [ ] Real HTTP/jsdom tests for lightweight form, existing answer/state draft and unsent direction guards, keyboard access, focused/folded reveal, root/question/seed retry, and safe text rendering. No browser or desktop UI automation.
+- [ ] Run npm test, npm run check, npm run package and installed local canvas runtime fixture. Run research fixture if its actual context changes. Never use a paid provider or existing user session.
+- [ ] Bump to **0.1.23** and synchronize metadata/README/release notes; document seed semantics and update relevant integration notes. Include controller plan update; self-review and commit, no merge/push/issue closure.
+- [ ] Write task-11-report.md with exact chosen schema/API/counting contracts, TDD/final command evidence, SHA and native limitations. No nested agents. Raise concrete conflicts while continuing independent work.
+
+For clean native command evidence, use the controller-provided ignored helper: `node .superpowers/sdd/2026-11-17-selected-roadmap/run-npm.mjs task-11-test test` (and unique labels with `run check`, `run package`, applicable `run e2e`). It invokes the installed adjacent npm CLI through Node, captures stdout/stderr separately and writes result JSON with the exact exit code. Do not rerun a passing suite only to improve logging. The demonstrated installed runtime executable is sibling `copilot.exe`, not `copilot-runtime.exe`.
 
 ## Issue index
 

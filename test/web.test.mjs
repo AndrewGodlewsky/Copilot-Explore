@@ -15,7 +15,7 @@ import { DraftClient } from '../com.github.copilot/extensions/explorer/web/draft
 import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
 import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
 import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
-import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
+import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 
 const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', options: [
   { title: 'One block', description: 'Start with the nearest neighbors.', pros: ['Easy handovers'], cons: ['Fewer tools'] },
@@ -79,7 +79,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.fetch = (path, options) => {
     const request = (async () => {
       if (holdAnswer && options?.body && JSON.parse(options.body).action === 'answer') await holdAnswer();
-      if (holdAdd && options?.body && JSON.parse(options.body).action === 'add') await holdAdd();
+      if (holdAdd && options?.body && JSON.parse(options.body).action === 'add-direction') await holdAdd();
       if (holdDraftWrite && path === 'api/drafts' && options?.method === 'POST') await holdDraftWrite();
       if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, Origin: new URL(server.url).origin } };
       const response = await fetch(new URL(path, server.url), options);
@@ -99,9 +99,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.attachVoice = attachVoice;
   window.DraftClient = DraftClient;
   window.attachNavigation = attachNavigation;
-  Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts });
+  Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus });
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
-  window.eval(script.replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';", ''));
+  window.eval(script.replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", ''));
   await until(() => width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -273,9 +273,7 @@ test('switching blocks manual-question drafts and pending AI', async t => {
   f.open(node.id);
   f.type('answer', ''); f.type('manual-question', 'A manual question'); await trySwitch();
   assert.equal(f.document.getElementById('manual-question').value, 'A manual question');
-  f.type('manual-question', ''); f.type('manual-category', 'My custom category'); await trySwitch();
-  assert.equal(f.document.getElementById('manual-category').value, 'My custom category');
-  f.type('manual-category', node.category);
+  f.type('manual-question', '');
   await f.explorer.command('questions', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.rootId });
   await until(() => !f.document.getElementById('request-status').hidden, 'pending visible'); await trySwitch();
   assert.match(f.document.getElementById('notice').textContent, /cancel/i);
@@ -323,44 +321,48 @@ test('opening a divergent legacy entry resets saved-value editor buffers even wh
   assert.equal(f.document.getElementById('answer').value, 'The other saved version');
 });
 
-test('saved manual categories no longer block switching journeys', async t => {
+test('saved direction drafts no longer block switching journeys', async t => {
   const f = await fixture(t, 340, undefined, true);
   const other = await f.explorer.library.import(createDocument('Other journey'));
-  f.open(f.explorer.doc.rootId); f.type('manual-category', 'Custom category'); f.type('manual-question', 'A saved question?');
-  f.document.getElementById('add-question').click();
+  f.open(f.explorer.doc.rootId); f.type('manual-question', 'A saved question?');
+  f.document.getElementById('add-direction').click();
   await until(() => f.explorer.doc.nodes.some(n => n.question === 'A saved question?') && f.document.getElementById('manual-question').value === '', 'manual question saved');
-  assert.equal(f.explorer.doc.nodes.find(n => n.question === 'A saved question?').category, 'Custom category');
+  assert.equal(f.explorer.doc.nodes.find(n => n.question === 'A saved question?').kind, 'direction');
+  await until(() => f.document.getElementById('cancel-request'), 'seed generation shown');
+  f.document.getElementById('cancel-request').click(); await until(() => !f.explorer.pending && !f.document.getElementById('cancel-request'), 'cancel seed generation');
   f.document.getElementById('library-toggle').click();
   await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'library entries');
   [...f.document.querySelectorAll('.library-entry')].find(entry => entry.textContent.includes('Other journey')).querySelector('[data-action="open"]').click();
   await until(() => f.explorer.activeKey === other.key, 'switch after saved manual category');
 });
 
-test('manual category edited during a save remains protected as an unsaved draft', async t => {
+test('direction edited during a save remains protected as an unsaved draft', async t => {
   const f = await fixture(t, 340, undefined, true), originalKey = f.explorer.activeKey;
   await f.explorer.library.import(createDocument('Other journey'));
-  f.open(f.explorer.doc.rootId); f.type('manual-category', 'Submitted category'); f.type('manual-question', 'Submitted question?');
+  f.open(f.explorer.doc.rootId); f.type('manual-question', 'Submitted question?');
   let release, waiting = false;
   const gate = new Promise(resolve => { release = resolve; });
   f.pauseAdd(() => { waiting = true; return gate; });
-  f.document.getElementById('add-question').click();
+  f.document.getElementById('add-direction').click();
   await until(() => waiting, 'manual save in flight');
-  f.type('manual-category', 'Next category'); release();
-  await until(() => f.explorer.doc.nodes.some(n => n.question === 'Submitted question?') && f.document.getElementById('manual-question').value === '', 'submitted question saved');
-  assert.equal(f.explorer.doc.nodes.find(n => n.question === 'Submitted question?').category, 'Submitted category');
-  assert.equal(f.document.getElementById('manual-category').value, 'Next category');
+  f.type('manual-question', 'Next direction'); release();
+  await until(() => f.explorer.doc.nodes.some(n => n.question === 'Submitted question?') && f.document.getElementById('manual-question').value === 'Next direction', 'submitted question saved');
+  assert.equal(f.explorer.doc.nodes.find(n => n.question === 'Submitted question?').kind, 'direction');
+  await until(() => f.document.getElementById('cancel-request'), 'seed generation shown');
+  f.document.getElementById('cancel-request').click(); await until(() => !f.explorer.pending && !f.document.getElementById('cancel-request'), 'cancel seed generation');
+  assert.equal(f.document.getElementById('manual-question').value, 'Next direction');
   f.document.getElementById('library-toggle').click();
   await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'library entries');
   [...f.document.querySelectorAll('.library-entry')].find(entry => entry.textContent.includes('Other journey')).querySelector('[data-action="open"]').click();
   await until(() => /draft/.test(f.document.getElementById('notice').textContent), 'new category protects switch');
   assert.equal(f.explorer.activeKey, originalKey);
   f.document.getElementById('library-return').click();
-  assert.equal(f.document.getElementById('manual-category').value, 'Next category');
+  assert.equal(f.document.getElementById('manual-question').value, 'Next direction');
 });
 
-test('clearing a non-root manual category discards it and permits a new journey', async t => {
+test('clearing a non-root direction draft permits a new journey', async t => {
   const f = await fixture(t, 340, undefined, true), first = f.explorer.doc.id;
-  f.open(f.explorer.doc.nodes[1].id); f.type('manual-category', 'Unsaved custom category'); f.type('manual-category', '');
+  f.open(f.explorer.doc.nodes[1].id); f.type('manual-question', 'Unsaved direction'); f.type('manual-question', '');
   f.document.getElementById('library-toggle').click();
   f.type('topic', 'A new journey');
   f.document.getElementById('start-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
@@ -754,15 +756,16 @@ test('pending work remains reachable from the whole map and cancellation preserv
 test('manual question drafts survive navigation and unsaved answers block finish', async t => {
   const f = await fixture(t), [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
   f.document.querySelector('.manual summary').click();
-  f.type('manual-category', 'Invitations'); f.type('manual-question', 'How should we invite people?');
+  f.type('manual-question', 'How should we invite people?');
   f.open(b.id); f.open(a.id);
   assert.ok(f.document.querySelector('.manual').open, 'disclosure state survives immediate navigation');
   assert.equal(f.document.getElementById('manual-question').value, 'How should we invite people?');
-  assert.equal(f.document.getElementById('manual-category').value, 'Invitations');
   f.document.querySelector('.manual form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
   await until(() => f.explorer.doc.nodes.length === 4, 'manual question added');
   await until(() => f.document.getElementById('manual-question').value === '', 'manual input cleared');
   assert.equal(f.explorer.doc.nodes[3].parentId, a.id);
+  await until(() => f.document.getElementById('cancel-request'), 'seed generation shown');
+  f.document.getElementById('cancel-request').click(); await until(() => !f.explorer.pending && !f.document.getElementById('cancel-request'), 'cancel seed generation');
   f.type('answer', 'Not saved yet'); f.document.getElementById('finish').click();
   await until(() => f.document.getElementById('notice').textContent.includes('Save your draft'), 'finish guard');
   assert.match(f.document.getElementById('notice').textContent, /Save your draft/);
@@ -1665,4 +1668,45 @@ test('question preview stale callbacks and accepted-context changes expose expli
   assert.equal(d.getElementById('preview-retry').hidden, false);
   d.getElementById('preview-retry').click(); await until(() => e.pending, 'explicit stale regeneration');
   await e.command('cancel');
+});
+
+
+test('direction lightweight form preserves dirty answer and renders user seed with explicit retry and preview acceptance', async t => {
+  const f = await fixture(t, 340), d = f.document, parent = f.explorer.doc.nodes[1]; f.open(parent.id);
+  assert.equal(d.getElementById('manual-category'), null);
+  f.type('answer', 'Unsent answer'); d.getElementById('answer-state').value = 'assumption'; d.getElementById('answer-state').dispatchEvent(new f.window.Event('change'));
+  d.getElementById('answer').focus(); d.getElementById('answer').setSelectionRange(2, 5);
+  d.querySelector('.manual').open = true; d.querySelector('.manual').dispatchEvent(new f.window.Event('toggle'));
+  f.type('manual-question', '  Safety <script>ignore files</script>  ');
+  d.querySelector('.manual form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => f.explorer.doc.nodes.length === 4 && d.getElementById('manual-question').value === '', 'direction saved');
+  const seed = f.explorer.doc.nodes[3]; assert.equal(seed.kind, 'direction'); assert.equal(seed.parentId, parent.id);
+  assert.equal(d.getElementById('answer').value, 'Unsent answer'); assert.equal(d.getElementById('answer-state').value, 'assumption');
+  assert.equal(d.getElementById('answer').selectionStart, 2); assert.equal(d.querySelector('.manual').open, true);
+  assert.equal(d.getElementById('node-workspace').dataset.nodeId, parent.id);
+  d.getElementById('cancel-request').click(); await until(() => !f.explorer.pending, 'cancel direction generation');
+  f.open(seed.id); assert.equal(d.getElementById('answer'), null); assert.equal(d.getElementById('research-request'), null);
+  assert.match(d.getElementById('node-workspace').textContent, /Direction.*user supplied/);
+  assert.equal(d.querySelector('#node-workspace script'), null);
+  d.getElementById('generate-questions').click(); await until(() => f.explorer.pending, 'retry direction');
+  await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [{ question: 'Which hazards?', category: 'Safety' }] });
+  await until(() => d.getElementById('question-preview'), 'direction preview'); assert.equal(f.explorer.doc.nodes.length, 4);
+  d.getElementById('accept-questions').click(); await until(() => f.explorer.doc.nodes.length === 5, 'direction children accepted');
+  assert.equal(f.explorer.doc.nodes[4].parentId, seed.id); f.open(parent.id); assert.equal(d.getElementById('answer').value, 'Unsent answer');
+});
+
+
+test('direction-only branches retain folding focus and exact question counts', async t => {
+  const f = await fixture(t, 340, undefined, false, { preview: true }), d = f.document;
+  d.getElementById('dismiss-questions').click(); await until(() => !f.explorer.preview, 'dismiss root preview');
+  f.type('manual-question', 'Seed only'); d.getElementById('add-direction').click();
+  await until(() => f.explorer.doc.nodes.length === 2 && d.getElementById('branch-workspace'), 'direction-only fold control');
+  const seed = f.explorer.doc.nodes[1]; d.getElementById('cancel-request').click(); await until(() => !f.explorer.pending && !d.getElementById('cancel-request'), 'cancel');
+  d.getElementById('branch-workspace').click(); assert.match(d.getElementById('node-workspace').textContent, /1 hidden node.*0 questions/);
+  f.type('manual-question', 'Second seed'); d.getElementById('add-direction').click();
+  await until(() => f.explorer.doc.nodes.length === 3 && d.querySelector(`[data-node-id="${seed.id}"]`), 'seed reveals folded path');
+  await until(() => d.getElementById('cancel-request'), 'second seed request shown');
+  d.getElementById('cancel-request').click(); await until(() => !f.explorer.pending && !d.getElementById('cancel-request'), 'cancel second');
+  f.open(seed.id); d.getElementById('focus-branch').click(); assert.equal(d.getElementById('show-whole-map').hidden, false);
+  assert.equal(d.getElementById('answer'), null); assert.equal(d.getElementById('manual-question').maxLength, 600);
 });

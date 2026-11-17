@@ -2,7 +2,7 @@ import { layout, branchView, revealPath } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
 import { attachNavigation } from './navigation.mjs';
-import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';
+import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
 
 const $ = id => document.getElementById(id);
 const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'];
@@ -29,7 +29,7 @@ const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args)
 const navigation = attachNavigation({ document, window, fetch: (...args) => fetch(...args),
   zoom: (factor, point) => zoom(factor, point),
   pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); } });
-const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, manualOpen: false, category: null, question: '' }); return nodeUi.get(id); };
+const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, manualOpen: false, question: '' }); return nodeUi.get(id); };
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -73,7 +73,7 @@ function apply(next, reset = false) {
   if (stamp === signature && !reset) return;
   captureWorkspace();
   const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
-  const firstQuestions = (state.document?.nodes.length ?? 0) <= 1 && (next.document?.nodes.length ?? 0) > 1;
+  const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
     voice.cancel();
@@ -145,7 +145,7 @@ async function refreshLibrary() {
     $('library-list').replaceChildren(...result.entries.map(entry => {
       const change = async patch => { if (await api('library-update', { key: entry.key, patch, metadataRevision: libraryRevision })) await refreshLibrary(); };
       return el('article', { class: 'library-entry' }, el('h2', {}, entry.topic),
-        el('p', { class: 'quiet' }, `${entry.pinned ? 'Pinned · ' : ''}${entry.nodeCount - 1} questions · ${entry.lastOpenedAt ? 'Opened' : 'Edited'} ${new Date(entry.lastOpenedAt ?? entry.updatedAt).toLocaleString()}`),
+        el('p', { class: 'quiet' }, `${entry.pinned ? 'Pinned · ' : ''}${entry.questionCount} questions · ${entry.lastOpenedAt ? 'Opened' : 'Edited'} ${new Date(entry.lastOpenedAt ?? entry.updatedAt).toLocaleString()}`),
         entry.ambiguous ? el('p', { class: 'quiet' }, `Multiple saved versions share this identity. Version ${entry.key.slice(0, 8)} is preserved separately.`) : null,
         el('div', { class: 'library-actions' }, button('Open', () => switchJourney('open', { key: entry.key }), { 'data-action': 'open' }),
           button(entry.pinned ? 'Unpin' : 'Pin', () => change({ pinned: !entry.pinned }), { 'data-action': 'pin', 'aria-pressed': String(entry.pinned) }),
@@ -158,10 +158,7 @@ function switchAllowed() {
   if (busy || closed || draftClient.savingAnswer) return false;
   if (state.pending) { notice('Cancel the current Copilot request before opening another journey.'); return false; }
   if (state.preview) { notice('Dismiss the unsaved question preview before switching journeys or restoring. Return to the map to review it.'); return false; }
-  if ([...nodeUi].some(([id, ui]) => {
-    const node = state.document?.nodes.find(n => n.id === id);
-    return ui.question.length || (ui.category && ui.category !== (node?.id === state.document?.rootId ? '' : node?.category));
-  })) { notice('Save or clear your manual-question drafts before opening another journey. Back to current map keeps your drafts.'); return false; }
+  if ([...nodeUi.values()].some(ui => ui.question.length)) { notice('Add or clear your missing-direction drafts before opening another journey. Back to current map keeps your drafts.'); return false; }
   return true;
 }
 async function switchJourney(action, input) {
@@ -202,7 +199,7 @@ function select(id) {
 }
 function toggleBranch(id, source) {
   const node = state.document?.nodes.find(n => n.id === id);
-  if (!node || !branches.descendants.get(id)?.total) return;
+  if (!node || !branches.parentIds.has(id)) return;
   endDrag();
   const folding = !collapsed.has(id), anchor = anchorPoint(id);
   if (folding && focusId && id !== focusId && focusAncestor(id)) { focusId = null; wholeView = null; updateFocusStatus(); }
@@ -223,8 +220,12 @@ function toggleBranch(id, source) {
       [...$('nodes').children].find(e => e.dataset.branchId === id);
   focus?.focus({ preventScroll: true });
 }
+function hiddenSummary(id) {
+  const count = branches.nodeCounts.get(id), questions = branches.descendants.get(id);
+  return `${count} hidden ${count === 1 ? 'node' : 'nodes'} · ${questions.total} questions · ${questions.unresolved} unresolved`;
+}
 function branchButton(node, workspace = false) {
-  if (!branches.descendants.get(node.id)?.total) return null;
+  if (!branches.parentIds.has(node.id)) return null;
   const folded = collapsed.has(node.id), label = `${folded ? 'Expand' : 'Collapse'} branch`;
   return button(label, event => toggleBranch(node.id, event.currentTarget.closest('.outline') ? 'outline' : 'map'), { ...(workspace ? { id: 'branch-workspace' } : {}),
     class: workspace ? 'workspace-branch-toggle' : 'branch-toggle', 'data-branch-id': node.id,
@@ -306,13 +307,13 @@ function renderMap() {
     const p = positions.get(n.id), root = n.id === doc.rootId;
     if (!expanded || n.id !== selected) {
       const hidden = collapsed.has(n.id) ? branches.descendants.get(n.id) : null;
-      const node = button('', () => select(n.id), { class: `node ${acceptedIds.has(n.id) ? 'new-question' : ''} ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''} ${branches.descendants.get(n.id).total ? 'has-branch' : ''}`,
-        title: n.question, 'data-node-id': n.id, 'aria-expanded': 'false', 'aria-label': `${n.category}: ${n.question}. ${root ? 'Central idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden.total} hidden, ${hidden.unresolved} unresolved` : ''}` });
+      const node = button('', () => select(n.id), { class: `node ${acceptedIds.has(n.id) ? 'new-question' : ''} ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''} ${branches.parentIds.has(n.id) ? 'has-branch' : ''}`,
+        title: n.question, 'data-node-id': n.id, 'aria-expanded': 'false', 'aria-label': `${n.category}: ${n.question}. ${nodeStatus(n)}${n.review ? '; needs review' : ''}${hidden ? `; ${hiddenSummary(n.id)}` : ''}` });
       node.style.left = `${p.x}px`; node.style.top = `${p.y}px`; node.style.width = `${p.width}px`; node.style.height = `${p.height}px`; node.style.setProperty('--branch', colors[p.branch % colors.length]);
       node.addEventListener('focus', () => { if (!restoringFocus) revealNode(n.id); });
       node.append(el('span', { class: 'category' }, n.category), el('span', { class: 'question' }, n.question));
       if (n.answer) node.append(el('span', { class: 'answer-preview' }, n.answer));
-      node.append(el('span', { class: 'status' }, hidden ? `${hidden.total} hidden · ${hidden.unresolved} unresolved` : root ? `${doc.nodes.length - 1} questions` : `${ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}`));
+      node.append(el('span', { class: 'status' }, hidden ? hiddenSummary(n.id) : root ? `${questionCounts(doc).total} questions` : `${nodeStatus(n)}${n.review ? '; needs review' : ''}`));
       fragment.append(node);
       const toggle = branchButton(n);
       if (toggle) {
@@ -452,20 +453,22 @@ function renderWorkspace() {
     if (crumbs.childNodes.length) crumbs.append(el('span', {}, '/'));
     crumbs.append(button(n.id === doc.rootId ? 'Your idea' : n.category, () => select(n.id), { id: `ancestor-${n.id}`, title: n.question }));
   }
-  const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.category), el('div', { class: 'node-head-actions' }, button('Focus branch', () => focusBranch(node.id), { id: 'focus-branch', 'aria-pressed': String(focusId === node.id), 'aria-label': `Focus branch: ${node.question}` }), branchButton(node, true), button('Collapse node', () => collapseNode(), { id: 'collapse-node' }))), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
-  if (collapsed.has(node.id)) { const count = branches.descendants.get(node.id); heading.append(el('p', { class: 'branch-count' }, `${count.total} hidden · ${count.unresolved} unresolved`)); }
+  const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.kind === 'direction' ? nodeStatus(node) : node.category), el('div', { class: 'node-head-actions' }, button('Focus branch', () => focusBranch(node.id), { id: 'focus-branch', 'aria-pressed': String(focusId === node.id), 'aria-label': `Focus branch: ${node.question}` }), branchButton(node, true), button('Collapse node', () => collapseNode(), { id: 'collapse-node' }))), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
+  if (collapsed.has(node.id)) heading.append(el('p', { class: 'branch-count' }, hiddenSummary(node.id)));
   const content = el('div', { class: 'node-content' }); panel.append(heading, content);
   if (pending) {
     const workNode = byId.get(state.pending.nodeId);
     content.append(el('div', { class: 'pending', role: 'status' }, el('strong', {}, state.pending.kind === 'research' ? `${state.pending.progress ?? 'Researching'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, state.pending.kind === 'research' ? 'Research runs separately from your chat. Cancelling stops its helper.' : 'Cancelling discards the result; the chat turn may still finish.')));
   }
-  if (node.review) content.append(el('p', { class: 'note' }, 'An earlier answer changed. Review this question and save your answer again when it still fits.'));
+  if (node.review) content.append(el('p', { class: 'note' }, isQuestion(node) ? 'An earlier answer changed. Review this question and save your answer again when it still fits.' : 'An earlier answer changed. Review this direction and generate fresh questions when needed.'));
   if (state.preview && (state.preview.nodeId === node.id || root && !byId.has(state.preview.nodeId))) content.append(renderQuestionPreview());
   if (!state.preview && !pending && /saved question context changed/.test(state.error)) content.append(button('Refresh saved journey & generate again', async () => {
     if (await api('refresh-answer')) await api('questions', { nodeId: node.id });
   }, { id: 'refresh-question-context' }));
   if (root) {
     content.append(el('p', { class: 'quiet' }, 'Pick a connected question to explore it. Each question opens into its own workspace on the map.'), button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
+  } else if (!isQuestion(node)) {
+    content.append(el('p', { class: 'quiet' }, 'Your original direction guides the next questions. It is not an answer or a decision.'), button('Explore this direction', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
   } else {
     const form = el('form', { class: 'answer-form' }), answer = el('textarea', { id: 'answer', rows: '4', maxlength: '20000', placeholder: 'A decision, a hunch, or what you know so far…' });
     answer.value = drafts.get(node.id) ?? node.answer;
@@ -518,18 +521,24 @@ function renderWorkspace() {
     content.append(research);
   }
   const children = doc.nodes.filter(n => n.parentId === node.id);
-  if (children.length) content.append(el('div', { class: 'followups' }, el('h3', {}, root ? 'Explore a direction' : 'Follow-up questions'), el('p', { class: 'quiet' }, 'Connected below this node.'), children.map(child => button(child.question, () => select(child.id), { id: `followup-${child.id}`, class: 'followup' }))));
-  const details = el('details', { class: 'manual' }, el('summary', { id: 'manual-summary' }, 'Add your own question')); details.open = ui.manualOpen;
+  if (children.length) content.append(el('div', { class: 'followups' }, el('h3', {}, root ? 'Explore a direction' : 'Explore this branch'), el('p', { class: 'quiet' }, 'Connected below this node.'), children.map(child => button(child.question, () => select(child.id), { id: `followup-${child.id}`, class: 'followup' }))));
+  const details = el('details', { class: 'manual' }, el('summary', { id: 'manual-summary' }, 'Missing a direction?')); details.open = ui.manualOpen;
   details.addEventListener('toggle', () => { if (details.isConnected) { ui.manualOpen = details.open; scheduleLayout(); } });
-  const manual = el('form'), category = el('input', { id: 'manual-category', required: '', maxlength: '60' }), question = el('textarea', { id: 'manual-question', required: '', rows: '2', maxlength: '600' });
-  category.value = ui.category ?? (root ? '' : node.category); question.value = ui.question;
-  category.addEventListener('input', () => { ui.category = category.value; }); question.addEventListener('input', () => { ui.question = question.value; });
-  manual.append(el('label', { for: 'manual-category' }, 'Category'), category, el('label', { for: 'manual-question' }, 'Question'), question, el('button', { type: 'submit', id: 'add-question', disabled: pending }, 'Add question'));
+  const manual = el('form'), question = el('textarea', { id: 'manual-question', required: '', rows: '2', maxlength: '600' });
+  question.value = ui.question;
+  question.addEventListener('input', () => { ui.question = question.value; });
+  manual.append(el('label', { for: 'manual-question' }, 'A direction to explore in this branch'), question, el('button', { type: 'submit', id: 'add-direction', disabled: pending || !!state.preview }, 'Add & explore'));
   manual.addEventListener('submit', async event => {
-    event.preventDefault(); const value = question.value, submittedCategory = category.value;
-    if (await api('add', { nodeId: node.id, question: value, category: submittedCategory })) {
-      if (ui.question === value) { ui.question = ''; if (ui.category === submittedCategory) ui.category = null; }
+    event.preventDefault(); const value = question.value;
+    if (!value.trim()) return notice('Enter a direction to explore.');
+    voice.cancel();
+    const result = await api('add-direction', { nodeId: node.id, direction: value });
+    if (result) {
+      if (ui.question === value) ui.question = '';
+      collapsed = revealPath(state.document.nodes, collapsed, result.directionId);
+      branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
       renderWorkspace(); refreshScene();
+      notice('Direction saved. Copilot will propose questions beneath it for your review.');
     }
   });
   details.append(manual); content.append(details);
@@ -619,7 +628,7 @@ function renderOutline() {
   const query = $('search').value.toLowerCase();
   const nodes = state.document.nodes.filter(n => `${n.question} ${n.answer} ${n.category}`.toLowerCase().includes(query));
   $('outline-list').replaceChildren(...nodes.map(n => el('div', { class: 'outline-row' },
-    button([n.question, el('small', {}, `${n.category} · ${n.id === state.document.rootId ? 'Idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}${collapsed.has(n.id) ? ` · ${branches.descendants.get(n.id).total} hidden · ${branches.descendants.get(n.id).unresolved} unresolved` : ''}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id }),
+    button([n.question, el('small', {}, `${n.category} · ${nodeStatus(n)}${n.review ? '; needs review' : ''}${collapsed.has(n.id) ? ` · ${hiddenSummary(n.id)}` : ''}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id }),
     branchButton(n))));
   if (focused) [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
   if (focusedBranch) [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === focusedBranch)?.focus({ preventScroll: true });

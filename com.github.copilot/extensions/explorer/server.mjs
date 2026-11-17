@@ -8,6 +8,7 @@ import { briefMarkdown } from './decision-brief.mjs';
 import { VoiceService } from './voice.mjs';
 import { NavigationPreferences, defaultNavigationSettings } from './navigation-preferences.mjs';
 import { Diagnostics, supportBundle } from './diagnostics.mjs';
+import { STORAGE_LIMITS } from './storage-management.mjs';
 
 const assets = new Map([
   ['', ['index.html', 'text/html; charset=utf-8']],
@@ -54,6 +55,12 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       const url = new URL(req.url, origin);
       if (!url.pathname.startsWith(prefix)) return json(404, { error: 'Not found.' });
       const route = url.pathname.slice(prefix.length);
+      if (req.method === 'POST' && route === 'api/storage') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        const value = await explorer.storageRequest(await body(req, 1024));
+        if (Buffer.byteLength(JSON.stringify(value)) > STORAGE_LIMITS.responseBytes) throw new Error('Storage response limit reached. Files are preserved.');
+        return json(200, value);
+      }
       if (req.method === 'POST' && route === 'api/research-review') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.reviewResearch(await body(req, 512 * 1024)));

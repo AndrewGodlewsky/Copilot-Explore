@@ -272,6 +272,7 @@ function showView() {
   cleanup.sync();
   questionHelp.sync();
   const home = !state.document || libraryView;
+  $('storage-home').hidden = !home;
   $('welcome').hidden = !home; $('workspace').hidden = home;
   $('library-toggle').hidden = !state.library;
   $('library-home').hidden = !state.library;
@@ -1208,6 +1209,70 @@ $('diagnostics-voice').addEventListener('click', () => {
   closeDiagnostics(); $('navigation-dialog').close(); settings.open = true; settings.querySelector('summary').focus();
 });
 $('diagnostics-recovery').addEventListener('click', () => { closeDiagnostics(); $('navigation-dialog').close(); $('recovery-open').click(); });
+
+let storageEpoch = 0, storageBusy = false, storagePreview = null, storageRevision = 0, storageSettingsError = false, storageReturn = null;
+function closeStorage() {
+  if (storageBusy) return;
+  storageEpoch++; $('storage-dialog').close(); storageReturn?.focus({ preventScroll: true });
+}
+async function storageRequest(action) {
+  if (storageBusy) return;
+  storageBusy = true; const epoch = storageEpoch, page = pageEpoch;
+  const buttons = ['storage-save', 'storage-refresh', 'storage-preview', 'storage-confirm', 'storage-keep'];
+  for (const id of buttons) $(id).disabled = true;
+  const current = () => !closed && !suspended && pageEpoch === page && storageEpoch === epoch && $('storage-dialog').open;
+  const input = { action, ...(action === 'settings' || action === 'preview' ? { keepHistory: Number($('storage-keep').value) } : {}),
+    ...(action === 'settings' ? { revision: storageRevision } : {}), ...(action === 'clean' ? { id: storagePreview.id } : {}) };
+  if (action === 'preview') { storagePreview = null; $('storage-confirm').hidden = true; $('storage-candidates').replaceChildren(); $('storage-results').replaceChildren(); }
+  $('storage-status').textContent = action === 'clean' ? 'Removing only captured candidates. Close is available when the request finishes.' : 'Inspecting owned storage…';
+  const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 30000);
+  try {
+    const response = await fetch('api/storage', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+    const value = await response.json(); if (!current()) return;
+    if (!response.ok) throw new Error(value.error);
+    if (action === 'inspect') {
+      storageRevision = value.settings.revision; storageSettingsError = !!value.error; $('storage-keep').value = String(storagePreview?.keepHistory ?? value.settings.keepHistory);
+      const inventory = value.inventory;
+      const labels = { journeys: 'Journeys', exports: 'Saved Markdown files', library: 'Library metadata', drafts: 'Drafts and tombstones', history: 'History files and manifests', recovery: 'Recovery, staging and locks', usage: 'Usage receipts and lifecycle', preferences: 'Preferences and references', unknown: 'Unknown files (protected)' };
+      $('storage-inventory').replaceChildren(el('dl', {}, ...Object.entries(inventory.categories).map(([key, row]) => el('div', {}, el('dt', {}, labels[key]), el('dd', {}, `${row.files} files · ${row.apparentBytes.toLocaleString()} bytes`)))),
+        el('p', {}, `${inventory.apparentBytes.toLocaleString()} apparent bytes; ${inventory.uniqueBytes.toLocaleString()} bytes after known file-identity deduplication; ${inventory.duplicateBytes.toLocaleString()} duplicate hardlink bytes. These are file lengths, not allocated disk blocks.`),
+        el('p', {}, `${inventory.manifestDeclaredHistoryBytes.toLocaleString()} retained snapshot bytes declared by ${inventory.manifests} readable manifests. File totals also include metadata and unreferenced staging; declared bytes do not verify snapshot health.`),
+        el('p', {}, `Inspection limits: ${inventory.limits.entries.toLocaleString()} entries, depth ${inventory.limits.depth}; preview at most ${inventory.limits.candidates} snapshots and 256 MiB of validation reads. Nothing outside the owned root or behind recovery pointers is scanned.`),
+        ...inventory.issues.map(issue => el('p', { class: 'notice' }, `${issue.path}: ${issue.message}`)));
+      $('storage-status').textContent = `${inventory.partial ? 'Partial inventory: unscanned or unreadable data is excluded from totals and remains protected.' : 'Inventory complete within known owned directories.'} ${value.error ?? ''}`;
+    } else if (action === 'settings') {
+      storageRevision = value.settings.revision; $('storage-status').textContent = 'Preview preference saved. No files were deleted.';
+    } else if (action === 'preview') {
+      storagePreview = value;
+      $('storage-candidates').replaceChildren(el('h3', {}, 'Exact cleanup candidates'), el('p', {}, `${value.candidates.length} snapshots · ${value.bytes.toLocaleString()} bytes. Preview expires in 15 minutes. Changes to files or protection may make candidates ineligible.`),
+        el('ol', {}, ...value.candidates.map(row => el('li', {}, `${row.topic} · revision ${row.revision} · ${row.bytes.toLocaleString()} bytes · ${row.hash}`))),
+        ...value.issues.map(issue => el('p', { class: 'notice' }, issue)));
+      $('storage-status').textContent = value.candidates.length ? 'Review the exact list, then explicitly remove these history versions.' : 'No eligible history versions. Protected data and unknown files remain untouched.';
+      $('storage-confirm').hidden = !value.candidates.length; $('storage-confirm').textContent = 'Remove listed history versions';
+      if (value.candidates.length) $('storage-confirm').focus();
+    } else {
+      $('storage-results').replaceChildren(el('h3', {}, 'Cleanup outcomes'), el('ol', {}, ...value.results.map(row => el('li', {}, `Revision ${row.revision} · ${row.hash} · ${row.status}: ${row.message}`))), ...value.issues.map(issue => el('p', { class: 'notice' }, issue)));
+      $('storage-status').textContent = `${value.results.filter(row => row.status === 'removed').length} confirmed removed; ${value.results.filter(row => row.status === 'failed').length} failed; ${value.results.filter(row => row.status === 'ineligible').length} ineligible; ${value.results.filter(row => row.status === 'absent').length} already absent with unknown deletion outcome.`;
+      $('storage-confirm').hidden = !value.results.some(row => row.status === 'failed'); $('storage-confirm').textContent = 'Retry original failed candidates';
+      $('storage-close').focus();
+    }
+  } catch (error) {
+    if (current()) $('storage-status').textContent = action === 'clean' ? `${error.message || 'Cleanup response was unavailable.'} Some operations may have completed. Retry the original captured candidates to inspect their outcomes; an expired preview requires a fresh explicit preview.` : error.message || 'Storage inspection failed. Other settings and diagnostics remain available.';
+  } finally {
+    clearTimeout(timer); storageBusy = false;
+    for (const id of buttons) $(id).disabled = false;
+    $('storage-save').disabled = storageSettingsError;
+    if (current() && action === 'preview' && storagePreview?.candidates.length) $('storage-confirm').focus();
+  }
+}
+for (const id of ['storage-open', 'storage-home']) $(id).addEventListener('click', () => { storageReturn = $(id); storageEpoch++; $('storage-dialog').showModal(); $('storage-close').focus(); void storageRequest('inspect'); });
+$('storage-close').addEventListener('click', closeStorage);
+$('storage-dialog').addEventListener('cancel', event => { event.preventDefault(); closeStorage(); });
+$('storage-refresh').addEventListener('click', () => void storageRequest('inspect'));
+$('storage-save').addEventListener('click', () => void storageRequest('settings'));
+$('storage-preview').addEventListener('click', () => void storageRequest('preview'));
+$('storage-confirm').addEventListener('click', () => { if (storagePreview) void storageRequest('clean'); });
+$('storage-keep').addEventListener('change', () => { storagePreview = null; $('storage-confirm').hidden = true; $('storage-candidates').replaceChildren(); $('storage-results').replaceChildren(); });
 
 let recoveryEpoch = 0, recoverySelection = null, recoveryContext = null, recoveryReturn = null;
 function closeRecovery() {

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.47",
+    "summary": "Inspect local storage by category and preview old unnamed history versions before explicitly removing them. Preserve journeys, drafts, checkpoints, undo, usage and recovery evidence. Save a preview preference without automatic deletion, see partial inventory and per-file outcomes, and retry only the exact captured candidates after failures."
+  },
+  {
     "version": "0.1.46",
     "summary": "Challenge selected saved answers with a deliberate tool-free review. Inspect exact context and omissions before starting, then review assumptions, counterarguments, alternatives and evidence gaps with original input links. Keep drafts and decisions unchanged, dismiss findings locally, and retain separately attributed usage with cancellation and source freshness checks."
   },

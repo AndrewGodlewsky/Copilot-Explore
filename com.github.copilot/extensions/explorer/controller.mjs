@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { createDocument, validateDocument, importedDocument, findNode, addQuestions, addDirection, candidateQuestions, acceptQuestions, answerNode, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA, pinnedConstraints } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
 import { History } from './history.mjs';
+import { StorageManagement } from './storage-management.mjs';
 import { Drafts, draftBase, draftHash, matchesDraftBase } from './drafts.mjs';
 import { References, emptyReferences, validateReferenceIds } from './references.mjs';
 import { cleanupText } from './cleanup.mjs';
@@ -477,6 +478,25 @@ export class Explorer {
     const key = await this.draftIdentity(journey);
     if (this.historyStore?.key !== key) this.historyStore = new History(this.library?.directory ?? dirname(this.file), key, this.doc.id);
     return this.historyStore;
+  }
+  storageRequest(input) {
+    return this.transact(async () => {
+      if (this.closed || !input || typeof input !== 'object' || Array.isArray(input) || !['inspect', 'settings', 'preview', 'clean'].includes(input.action) ||
+        Object.keys(input).sort().join(',') !== ({ inspect: 'action', settings: 'action,keepHistory,revision', preview: 'action,keepHistory', clean: 'action,id' })[input.action]) throw new Error('Invalid storage request.');
+      this.storageManager ??= new StorageManagement(this.library?.directory ?? dirname(this.file));
+      const storage = this.storageManager;
+      if (input.action === 'settings') return storage.saveSettings(input.keepHistory, input.revision);
+      if (input.action === 'clean') return storage.clean(input.id);
+      const inventory = await storage.inventory();
+      if (input.action === 'inspect') {
+        const { journeyNames, ...summary } = inventory;
+        return { inventory: summary, ...await storage.settings() };
+      }
+      const direct = !this.library && this.doc ? { key: await this.draftIdentity(this.doc.id), file: this.file, id: this.doc.id, topic: this.doc.topic.slice(0, 160) } : null;
+      const found = await storage.records(this.library ? inventory.journeyNames : [], direct);
+      const preview = await storage.preview(found.records, input.keepHistory);
+      return { ...preview, issues: [...(inventory.partial ? ['Inventory is partial; unscanned and unknown data remain protected.'] : []), ...found.issues, ...preview.issues].slice(0, 100) };
+    });
   }
   async fresh() {
     const current = await this.readCurrent();

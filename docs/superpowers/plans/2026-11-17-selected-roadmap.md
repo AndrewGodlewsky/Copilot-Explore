@@ -1055,6 +1055,90 @@ No prior research/claims, drafts, private references, project context or new evi
 
 One owned helper with zero tools and the existing 180000-ms operation allowance; shutdown/accounting can continue afterward. Operation-specific Explorer Challenge Review receipts. Preview is one frozen slot, 10-minute TTL, existing 1-MiB response and 512-KiB request limits, up to 5000 distinct exclusion IDs of at most100 code units. Existing sequence/tombstone, purpose and one-shot token rules apply. Start validates current disk and in-memory sources and never reprepares strings. Results/dismissals last in the shared canvas check slot until replacement/close/journey change; relevant observed source changes stale them, unrelated/excluded changes preserve them. No automatic rerun or decision write. Tool-free preview/start work without a web researcher.
 
+Published task 34: **v0.1.46**, `25a935a`, required checks recorded in the task report; independent review approved and remote main verified.
+
+## Task 35: Verify and enforce public-network research fetching (#42 / original56)
+
+Read issue-56.md, task-35-design-notes.md, AGENTS.md and the current installed SDK integration notes. BASE is `25a935ab451dc73375c2021cd1ee4625ae6b52ff`; planned version **0.1.47** was not created for this blocked task. Reconcile the published interfaces against the current implementation before editing. Propose concrete bounds, ownership, freshness and verification seams before broad edits; record the accepted contract in this task and its brief.
+
+### Behavior and boundaries
+
+- First establish the installed fetch implementation's actual connection, redirect, resolver, proxy and credential behavior. Cite inspected declarations/implementation and runtime version. Distinguish verified protections, missing guarantees and facts that cannot be established; do not infer a vulnerability from absent documentation.
+- Preserve the installed SDK and account/model/tool/managed-policy isolation. If existing supported controls meet the requirement, use them. If a minimal custom Node fetch is necessary, verify that its network authorization preserves the host's permission and sandbox boundary; custom-tool registration alone is not permission to bypass unavailable or denied web access. Never silently fall back to a less restricted fetch path.
+- Validate every actual connection and bounded redirect against public-network-only destinations, including all returned DNS addresses and IPv4/IPv6/mapped variants. Pin the approved destination for the connection while preserving intended hostname and TLS verification. An ambient proxy or alternate transport must not circumvent this contract. Reject unsupported or unverifiable connection paths visibly.
+- Bound protocols, URL lengths, DNS results, redirects, elapsed time, incoming/decompressed bytes and output. Declare exact limits before implementation, reconcile existing research depth/tool budgets, and propagate cancellation to actual transport release. Never forward ambient authorization, cookies or proxy credentials.
+- Preserve successful-fetch provenance and claim-source associations established by earlier research work. Failed or blocked requests cannot become fetched evidence. Keep error messages useful without exposing restricted destinations or credentials in diagnostic receipts.
+- Keep any resolver/transport injection strictly in test seams; no shipped private-host allowlist or unsafe test-mode bypass. Do not expand this task into the next issue's semantic search-disclosure controls.
+
+### Evidence and release
+
+- Use controlled resolver/transport fixtures for public-to-private redirects, mixed DNS answers, rebinding, unusual address forms, loops, excessive bytes/decompression, timeout, cancellation and TLS/hostname/header behavior. Tests must exercise the actual enforcing boundary, not only a helper predicate. Never probe third-party private systems.
+- Test denied/unavailable managed network capability and actual custom-tool/builtin identity handling if integration changes. Run the installed local research fixture, npm test/check/package and focused tests; no paid provider, existing session, desktop/browser automation or real user data.
+- Document precisely what is enforced in this installed runtime and which host assumptions remain. Synchronize patch metadata/README/release note, self-review and commit; no nested agents, publishing or issue closure.
+- Write task-35-report.md with inspected runtime evidence, authorization/connection contract, exact limits, failure and cancellation semantics, test evidence, SHA and any genuine external blocker. Controller reviews and publishes.
+
+### External blocker, independently reviewed
+
+Task35 remains incomplete and issue #42 stays open. Installed runtime 1.0.106-8.unstable.r43566476370.g869eef3 blocks the controlled loopback target and honors tested built-in managed/sandbox denials. Its native implementation and public contract do not establish every required socket, all-answer DNS, redirect, proxy and credential guarantee. A no-network custom override probe receives generic custom-tool authorization and executes despite the tested host restrictions; that authorization cannot safely substitute for built-in URL policy. No supported exact-URL authorization plus pinned-transport capability was found. This is a verification/integration blocker, not a demonstrated vulnerability.
+
+No production changes or release were made for Task35. Existing research remains unchanged. Upstream unblock requires a version-specific verifiable built-in contract/fixture seam or a supported per-destination managed/sandbox authorization capability for a custom pinned transport. Continue other actionable issues without treating this guarantee as delivered; preserve deferred #44 and #49. Evidence: ignored task-35-report.md, final twelve-case no-network probe and independent task-35-blocker-review.md; public issue #42 retains the finding.
+
+## Task 36: Review and enforce public-search disclosure (#41 / original54)
+
+Read issue-54.md, task-36-design-notes.md, AGENTS.md and the published context-preview/fetch contracts. BASE is `25a935ab451dc73375c2021cd1ee4625ae6b52ff`; target version **0.1.47** if completed. Task35/#42 is externally blocked; its full network guarantee is not available. Preserve current host authorization and verified prechecks, and assess whether this issue can be independently completed without weakening its acceptance criteria. Reconcile actual interfaces, inspect runtime argument/logging order with controlled canaries, and propose concrete scope/bounds/ownership before broad edits. If a required boundary is unsupported, report it precisely before implementing a partial substitute.
+
+### Behavior and boundaries
+
+- Let the user mark sensitive names/internal details and review a generalized public-search scope before research starts. Clearly distinguish context sent to Copilot's model from queries and URLs sent to external services. Private marking must not silently rewrite the saved answer or map.
+- Define an enforceable, bounded disclosure contract at actual search and fetch tool boundaries. Prefer explicitly reviewed public queries and narrowly defined URL permissions over a claim that arbitrary generated prose can be proven semantically secret-free. The design must explain its exact guarantee and preserve useful research intent.
+- Check marked values and obvious normalized/encoded variants at every request, retry and redirect, including URL path/query disclosure. Respect prior network restrictions, tool budgets and permission isolation. Model prompting and tool naming are not enforcement. A disallowed or malformed call must produce a redacted actionable failure rather than silently broadening scope.
+- User-approved exceptions must identify the precise disclosure being allowed, apply only to their captured request/scope and be visible before execution. Later jobs, changed source context or stale prepared requests cannot inherit an exception accidentally. Scope changes require fresh explicit start through the existing context-preview contract.
+- Retain only the minimum bounded local configuration needed; no secret-bearing diagnostic/tool error strings or new raw request logging. Inspect runtime tool logging behavior before claiming private values are absent. State limitations honestly, including what the model already receives and semantic paraphrases that no simple filter can identify.
+- Keep saved answers, draft focus, research source provenance and existing helper cancellation/actual-release ownership intact. No hidden inference on keystrokes, no main-chat research, no additional model downloads or dependency substitution.
+
+### Evidence and release
+
+- Exercise actual tool dispatch for exact, case/whitespace/punctuation/Unicode/encoding variants; multiple values; approved exceptions; malformed requests; retries/tool aliases; search versus fetch URL and redirect disclosure; cancellation and stale captured scope. Canary strings must be absent from rejected outbound calls and retained diagnostic/receipt/error output.
+- Use the installed local research fixture and actual HTTP/jsdom review/start flow as applicable. Run npm test/check/package; no paid provider, existing sessions, native UI automation or real sensitive user content.
+- Synchronize patch metadata/README/release note, document the boundary and its limits, self-review and commit; no nested agents, publication or issue closure.
+- Write task-36-report.md with the actual scope and enforcement API, persistence/privacy choices, precise guarantee, evidence, SHA and owner-only native checks. Controller independently reviews and publishes.
+
+### Blocker and scope decision
+
+Task36 remains incomplete and #41 open. Independent review confirms that original model-generated tool arguments are emitted in native events before the pre-tool callback and later retained in the journal even when denied. Existing hooks and logging settings cannot satisfy the current strict absence-of-marked-text-in-tool-logs criterion. Exact fixed reviewed queries preserve the tested native MCP permission decision and protect outgoing arguments, but arbitrary provider results also enter native journals. The latter is incoming public text persistence, not demonstrated disclosure of user data.
+
+A no-fetch, fixed-reviewed-query mode is a viable narrower direction for outbound privacy; #42 does not automatically block it. It requires an explicit scope decision about local tool-result logs, new provenance/usage ownership design and the full acceptance tests. The owner was offered this scope choice while other actionable work continues. Until changed, retain the original requirement and keep #41 blocked; no partial implementation, version or release was made. Evidence is retained in ignored task-36-report.md and task-36-blocker-review.md with synthetic installed-runtime probes. Existing research is unchanged.
+
+## Task 37: Inspect and manage local storage safely (#43 / original58)
+
+Read issue-58.md, task-37-design-notes.md, AGENTS.md and the published recovery/history/draft contracts. BASE is `25a935ab451dc73375c2021cd1ee4625ae6b52ff`; ship version **0.1.47**. Tasks35/#42 and36/#41 remain open under their documented runtime blockers; this task is independent. Reconcile actual owned storage, locking, recovery and usage interfaces before editing. Propose concrete inventory/retention/deletion bounds, candidate identity, locking and failure semantics before broad edits, then record the accepted contract in this task and its brief.
+
+### Behavior and boundaries
+
+- Inventory only Explorer-owned storage: journeys, library metadata, drafts, history/checkpoints, recovery/staging files, usage receipts and preferences. Report category totals, limits and unreadable/unknown entries honestly. Distinguish logical retained data from physical staging or duplicate accounting; do not follow junctions or scan another plugin/user directory.
+- Provide a dry-run cleanup preview and a separate explicit user action. Bind each candidate to identity, observed version/stat and the applicable data-root/lock contract; revalidate immediately before changing it. The preview must state what remains protected and what will be removed. No automatic deletion on opening settings or exceeding a target.
+- Preserve active/current journeys, recoverable drafts, live/unknown writer locks, pending write-ahead intents, last recoverable versions, named protected checkpoints and unreconciled usage. Respect the published recovery claims/ownership protocol. Unknown corrupt/temp files are not safe merely because they are old.
+- Preserve draft tombstones or introduce and prove an explicit generation/epoch stale-write barrier before pruning them. A late writer must never resurrect discarded text. Retention preferences cannot silently invalidate named checkpoint protection or discard records required to reconcile model usage.
+- Resolve canonical owned roots and each target, reject link/junction escapes and avoid computed recursive deletes. Use selective bounded operations; reparse-point and identity changes between preview and action must be handled conservatively. Do not assume a UI preview authorizes an enlarged later candidate set.
+- Interrupted or partial cleanup reports exactly which operations succeeded, failed or became ineligible. Retry may reconsider the original explicit candidates safely, not expand scope or hide failures. Preserve usable settings and diagnostics if inventory itself is partial.
+
+### Evidence and release
+
+- Use disposable roots for exact accounting, malformed metadata, protected state, changed candidate identity, outside-root symlink/junction attempts, concurrent writers/recoverers, access failures, interrupted deletion and safe retry. Prove no write outside the allowed root and no late draft resurrection. Never test cleanup on the owner's real data.
+- Verify the actual HTTP/UI preview-to-confirm flow, keyboard focus and draft retention with local jsdom. Run npm test/check/package and installed fixtures only if host integration changes; no browser/desktop automation or paid/existing sessions.
+- Synchronize patch metadata/README/release note, document retention and irrecoverability of explicitly removed versions, self-review and commit; no nested agents, publication or issue closure.
+- Write task-37-report.md with the final storage inventory, deletion/ownership contract, exact limits, failure recovery, tests, SHA and owner-only UI checks. Controller reviews and publishes.
+
+### Accepted Task37 implementation contract
+
+Cleanup is deliberately limited to explicitly previewed old unnamed history snapshots. Inventory covers root journeys and Markdown exports, library metadata, drafts/tombstones, history, recovery/staging/lock evidence, usage and preferences/references. All non-history categories remain protected; no receipt or tombstone pruning, external helper-home traversal, pointer following or recursive deletion. Keep-history choices 5/10/25/50 (default50) are saved preview preferences, never automatic cleanup. Preserve newest-N, undo, every named checkpoint, last recovery, intents and unknown/live/recovery locks; protected entries can exceed the target.
+
+Bounds: 10,000 inventory entries/depth4, 100 issue details, 8MiB manifest metadata, 128KiB per manifest, 2,000 journey identities/64MiB discovery, 500 candidates/256MiB preview validation, independently 256MiB reads per cleanup attempt, 15-minute single captured preview/controller, 1KiB HTTP body/512KiB response. Report file-length apparent/deduplicated bytes using bigint device/inode identities, not allocated blocks; separate manifest-declared logical retained bytes from staging/metadata and flag partial/unreadable/unscanned data. Direct-file mode considers only its loaded journey.
+
+Read-only preview never reconciles history. Confirmation supplies only an opaque server-held ID. Revalidate root/parent/file identities, current document, manifest and protection under the existing document lock (`recover:false`) for each exact candidate. Publish the reduced manifest atomically before selective unlink, repeat protection/ancestry checks and validate newest recovery immediately before unlink. No generic reconciliation broadens removal. Report each observed removed/failed/ineligible/absent result; absence alone means outcome unknown. Exact captured retry retains known successes and failures and never adds candidates. Identity/protection changes preserve files.
+
+Accepted lifecycle limit: preview/outcome ledger is canvas memory, not a durable cross-crash audit. Lost HTTP replies can retry the same controller/TTL. Replacement controller/process invalidates the ID, does not automatically resume and does not expand scope. A fresh preview does not authorize orphan files; published History recovery may separately reconcile validated unreferenced snapshots. Cooperative local-filesystem guarantees and observed junction checks do not claim hostile concurrent ancestor-swap atomicity or power-loss durability. All implementation tests use disposable roots. Task35/#42 and Task36/#41 stay blocked; deferred #44/#49 stay untouched.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

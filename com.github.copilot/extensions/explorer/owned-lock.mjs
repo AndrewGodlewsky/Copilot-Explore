@@ -61,10 +61,11 @@ async function reclaim(path) {
     await rename(path, path + '.abandoned');
   } finally { await claim.release(); }
 }
-export async function acquireLock(path, { attempts = 1 } = {}) {
+export async function acquireLock(path, { attempts = 1, recover = true } = {}) {
   for (let attempt = 0; attempt < attempts; attempt++) {
     try { return await create(path); }
     catch (error) { if (error.code !== 'EEXIST') throw storageError(); }
+    if (!recover) throw new LockError('Another writer or retained lock is present. Files are preserved.');
     try { await reclaim(path); return await create(path); }
     catch (error) {
       if (attempt + 1 === attempts) throw error instanceof LockError ? error : error.code === 'EEXIST' ? new LockError('Another writer acquired the file. Retry.') : storageError();

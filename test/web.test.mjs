@@ -190,6 +190,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom, document = window.document;
+  const storageDialog = document.getElementById('storage-dialog');
+  storageDialog.showModal = () => { storageDialog.open = true; };
+  storageDialog.close = () => { storageDialog.open = false; };
   const scriptErrors = []; window.addEventListener('error', event => scriptErrors.push(event.error));
   const briefDialog = document.getElementById('brief-dialog');
   briefDialog.showModal = () => { briefDialog.open = true; };
@@ -287,6 +290,46 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
+
+test('storage preview-confirm uses real HTTP, keeps draft editors and returns keyboard focus', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    for (let i = 0; i < 8; i++) await e.command('guidance', { revision: e.doc.revision, objective: `Version ${i}`, successCriteria: '' });
+  } });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Unsaved exact draft 🌿'); const editor = $('answer'); editor.focus(); editor.setSelectionRange(3, 8);
+  $('navigation-open').click(); $('storage-open').click();
+  await until(() => $('storage-inventory').textContent.includes('apparent bytes') && !$('storage-preview').disabled, 'storage inventory');
+  assert.match($('storage-inventory').textContent, /Drafts and tombstones/);
+  assert.equal($('storage-confirm').hidden, true);
+  $('storage-keep').value = '5'; $('storage-keep').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  $('storage-save').click(); await until(() => $('storage-status').textContent.includes('preference saved'), 'save preview policy');
+  const before = await f.explorer.readHistory(f.explorer.doc.id);
+  $('storage-preview').click(); await until(() => !$('storage-confirm').hidden && !$('storage-confirm').disabled, 'explicit preview');
+  assert.equal(f.document.activeElement, $('storage-confirm'));
+  assert.equal((await f.explorer.readHistory(f.explorer.doc.id)).entries.length, before.entries.length);
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Unsaved exact draft 🌿'); assert.equal(editor.selectionStart, 3);
+  assert.ok($('storage-candidates').querySelectorAll('li').length > 0);
+  $('storage-confirm').click(); await until(() => $('storage-results').textContent.includes('Snapshot removed'), 'confirmed cleanup');
+  assert.equal(f.document.activeElement, $('storage-close'));
+  assert.equal((await f.explorer.readHistory(f.explorer.doc.id)).entries.length, 5);
+  assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.equal($('answer'), editor); assert.equal(editor.value, 'Unsaved exact draft 🌿');
+  $('storage-dialog').dispatchEvent(new f.window.Event('cancel', { cancelable: true }));
+  assert.equal($('storage-dialog').open, false); assert.equal(f.document.activeElement, $('storage-open'));
+  $('navigation-cancel').click();
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'draft retained after cleanup');
+  const saved = await f.explorer.readDrafts(f.explorer.doc.id);
+  assert.equal(saved.entries.find(row => row.nodeId === node.id).text, 'Unsaved exact draft 🌿');
+});
+
+test('local storage stays reachable before a damaged bound journey loads', async t => {
+  const f = await fixture(t, 340, undefined, true, { cold: true, before: async e => { await writeFile(e.file, '{damaged'); } });
+  const $ = id => f.document.getElementById(id);
+  assert.equal($('storage-home').hidden, false); $('storage-home').click();
+  await until(() => !$('storage-preview').disabled && $('storage-inventory').textContent.includes('apparent bytes'), 'cold storage inspection');
+  $('storage-preview').click(); await until(() => $('storage-status').textContent.includes('No eligible'), 'damaged journey preserved');
+  assert.match($('storage-candidates').textContent, /unreadable journey/);
+  $('storage-close').click(); assert.equal(f.document.activeElement, $('storage-home'));
+});
 
 test('research review preserves draft state, caret and composition, sends only the explicitly reviewed context', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {

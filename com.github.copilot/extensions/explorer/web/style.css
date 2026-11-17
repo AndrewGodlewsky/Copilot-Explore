@@ -105,6 +105,11 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #diagnostics-dialog { width: calc(100% - 32px); max-width: 580px; max-height: 85vh; overflow: auto; }
 #diagnostics-results > div { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; border-bottom: 1px solid var(--line); padding: 6px 0; }
 #diagnostics-results dd { margin: 0; overflow-wrap: anywhere; }
+#storage-dialog { width: calc(100% - 28px); max-width: 580px; max-height: 85vh; overflow: auto; box-sizing: border-box; }
+#storage-dialog p, #storage-dialog li, #storage-dialog dd { overflow-wrap: anywhere; }
+#storage-dialog dl > div { margin: 8px 0; }
+#storage-dialog dd { margin-left: 12px; }
+#storage-dialog select { display: block; width: 100%; margin-top: 6px; }
 /* Literal context remains readable inside a narrow review dialog. */
 #research-review-dialog { width: min(42rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); overflow: auto; }
 #research-review-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .82rem; }

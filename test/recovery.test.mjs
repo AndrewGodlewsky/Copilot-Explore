@@ -15,6 +15,8 @@ import { once } from 'node:events';
 import { recoveryHash } from '../com.github.copilot/extensions/explorer/recovery.mjs';
 import { lockOwner } from '../com.github.copilot/extensions/explorer/owned-lock.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
+import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-recovery-')), library = new Library(dir), binding = 'recovery-test';
@@ -144,6 +146,29 @@ test('live or reused PID alone cannot identify a still-active historical helper 
   const f = await fixture(t), id = randomUUID(), root = join(f.dir, 'usage', 'session-state', id); await mkdir(root, { recursive: true });
   await writeFile(join(root, 'operation.json'), JSON.stringify({ version: 1, id, operation: 'research', status: 'active', owner: lockOwner(), updatedAt: new Date().toISOString(), retention: 'preserve' }));
   assert.equal((await f.e.recoveryRequest({ action: 'list' })).operations.find(row => row.id === id).status, 'unknown');
+});
+
+test('protected ordinary save hides quarantine permission errors and retains document and stale ownership', async t => {
+  const f = await fixture(t), path = f.record.file + '.lock', before = await readFile(f.record.file, 'utf8');
+  const module = new URL('../com.github.copilot/extensions/explorer/owned-lock.mjs', import.meta.url).href;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', `import {acquireLock} from ${JSON.stringify(module)}; await acquireLock(process.argv[1]); process.stdout.write('ready'); setInterval(()=>{},1000);`, path], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => child.kill()); await once(child.stdout, 'data'); child.kill(); await once(child, 'exit');
+  const owner = await readFile(path, 'utf8'), server = await startServer(f.e, { close() {}, status: async () => ({}) }); t.after(() => server.close());
+  const rename = fs.rename; let injected = false;
+  fs.rename = async (...args) => {
+    if (args[0] === path) { injected = true; throw Object.assign(Error(`PRIVATE_OS_FAILURE ${path} -> ${path}.abandoned`), { code: 'EACCES' }); }
+    return rename(...args);
+  };
+  syncBuiltinESMExports();
+  let response, result;
+  try {
+    response = await fetch(server.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(server.url).origin }, body: JSON.stringify({ action: 'answer', revision: f.e.doc.revision, nodeId: f.e.doc.nodes[1].id, answer: 'Never committed' }) });
+    result = await response.json();
+  } finally { fs.rename = rename; syncBuiltinESMExports(); }
+  assert.equal(injected, true); assert.equal(response.status, 400);
+  assert.equal(await readFile(path, 'utf8'), owner); assert.equal(await readFile(f.record.file, 'utf8'), before);
+  assert.equal(result.error.includes(f.dir), false); assert.equal(result.error.includes('PRIVATE_OS_FAILURE'), false);
+  assert.match(result.error, /lock storage is unavailable/i);
 });
 test('unavailable helper evidence does not disable independent saved-version recovery', async t => {
   const f = await fixture(t); await writeFile(join(f.dir, 'usage'), 'unavailable directory');

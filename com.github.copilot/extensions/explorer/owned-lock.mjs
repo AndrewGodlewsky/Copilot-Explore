@@ -4,6 +4,9 @@ import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
+class LockError extends Error {}
+const storageError = () => new LockError('Writer lock storage is unavailable. Check local storage access and retry; files are preserved.');
+
 export const lockOwner = () => ({ version: 1, pid: process.pid, host: hostname(), token: randomUUID(), createdAt: new Date().toISOString(), retention: 'preserve' });
 export function validLockOwner(owner) {
   return owner?.version === 1 && Number.isSafeInteger(owner.pid) && owner.pid > 0 && typeof owner.host === 'string' && owner.host.length > 0 && owner.host.length <= 255 &&
@@ -36,22 +39,22 @@ async function create(path) {
   await handle.close();
   return { async release() {
     let current;
-    try { current = await record(path); } catch { throw new Error('Lock ownership could not be verified. Files are preserved.'); }
-    if (current.token !== owner.token) throw new Error('Lock ownership changed. Files are preserved.');
+    try { current = await record(path); } catch { throw new LockError('Lock ownership could not be verified. Files are preserved.'); }
+    if (current.token !== owner.token) throw new LockError('Lock ownership changed. Files are preserved.');
     // A living owner cannot be reclaimed; no cooperative writer can replace this path yet.
-    await unlink(path);
+    try { await unlink(path); } catch { throw storageError(); }
   } };
 }
 async function reclaim(path) {
   let claim;
   try { claim = await create(path + '.recover'); }
-  catch { throw new Error('Lock recovery is already claimed or unavailable. Retry; recovery files are preserved.'); }
+  catch { throw new LockError('Lock recovery is already claimed or unavailable. Retry; recovery files are preserved.'); }
   try {
     let owner;
     try { owner = await record(path); }
-    catch (error) { if (error.code === 'ENOENT') return; throw new Error('Lock owner is unknown. Files are preserved.'); }
-    if (ownerStatus(owner) !== 'exited') throw new Error('Another writer may still be active, or its owner is unknown. Retry after it exits; files are preserved.');
-    try { await lstat(path + '.abandoned'); throw new Error('Earlier lock recovery evidence is retained. Further recovery needs storage review.'); }
+    catch (error) { if (error.code === 'ENOENT') return; throw new LockError('Lock owner is unknown. Files are preserved.'); }
+    if (ownerStatus(owner) !== 'exited') throw new LockError('Another writer may still be active, or its owner is unknown. Retry after it exits; files are preserved.');
+    try { await lstat(path + '.abandoned'); throw new LockError('Earlier lock recovery evidence is retained. Further recovery needs storage review.'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     // The claim serializes all reclaimers. A dead owner cannot release; the shared
     // path cannot change until this rename. Never unlink that shared path afterward.
@@ -61,10 +64,10 @@ async function reclaim(path) {
 export async function acquireLock(path, { attempts = 1 } = {}) {
   for (let attempt = 0; attempt < attempts; attempt++) {
     try { return await create(path); }
-    catch (error) { if (error.code !== 'EEXIST') throw new Error('Writer lock storage is unavailable. Check local storage access and retry; files are preserved.'); }
+    catch (error) { if (error.code !== 'EEXIST') throw storageError(); }
     try { await reclaim(path); return await create(path); }
     catch (error) {
-      if (attempt + 1 === attempts) throw new Error(error.code === 'EEXIST' ? 'Another writer acquired the file. Retry.' : error.message);
+      if (attempt + 1 === attempts) throw error instanceof LockError ? error : error.code === 'EEXIST' ? new LockError('Another writer acquired the file. Retry.') : storageError();
       await delay(20);
     }
   }

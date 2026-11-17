@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import * as locks from '../com.github.copilot/extensions/explorer/owned-lock.mjs';
 
 async function fixture(t) {
@@ -81,4 +83,39 @@ test('metadata-write failure removes only its own exclusive attempt and permits 
   finally { prototype.writeFile = write; }
   await assert.rejects(access(path), { code: 'ENOENT' });
   const next = await locks.acquireLock(path); await next.release();
+});
+
+test('filesystem failures during claim, quarantine, reacquisition and release expose no private paths or OS text', async t => {
+  const source = await fixture(t), child = await childOwner(t, source), dead = await readFile(source, 'utf8');
+  child.kill(); await once(child, 'exit');
+  for (const stage of ['claim', 'stat', 'rename', 'reacquire', 'claim-release', 'release']) {
+    const path = await fixture(t);
+    let held;
+    if (stage === 'release') held = await locks.acquireLock(path);
+    else await writeFile(path, dead);
+    const retained = await readFile(path, 'utf8');
+    const method = stage === 'stat' ? 'lstat' : stage === 'rename' ? 'rename' : stage.includes('release') ? 'unlink' : 'open';
+    const original = fs[method]; let acquisitions = 0, injected = false;
+    fs[method] = async (...args) => {
+      const target = args[0];
+      const fail = stage === 'claim' ? target === path + '.recover' : stage === 'stat' ? target === path + '.abandoned' :
+        stage === 'rename' || stage === 'release' ? target === path : stage === 'claim-release' ? target === path + '.recover' :
+        target === path && args[1] === 'wx' && ++acquisitions === 2;
+      if (fail) { injected = true; throw Object.assign(Error(`PRIVATE_OS_FAILURE ${path} -> ${path}.abandoned`), { code: stage === 'rename' ? 'EACCES' : 'EIO' }); }
+      return original(...args);
+    };
+    syncBuiltinESMExports();
+    let failure;
+    try { await (held ? held.release() : locks.acquireLock(path)); }
+    catch (error) { failure = error; }
+    finally { fs[method] = original; syncBuiltinESMExports(); }
+    assert.equal(injected, true, stage);
+    const evidence = ['reacquire', 'claim-release'].includes(stage) ? path + '.abandoned' : path;
+    assert.equal(await readFile(evidence, 'utf8'), retained, stage);
+    assert.ok(failure, stage);
+    assert.equal(failure.message.includes(path), false, stage);
+    assert.equal(failure.message.includes('PRIVATE_OS_FAILURE'), false, stage);
+    assert.match(failure.message, /storage|unavailable/i, stage);
+    if (stage === 'claim-release') await access(path + '.recover');
+  }
 });

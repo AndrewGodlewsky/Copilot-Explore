@@ -42,6 +42,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const guidanceDialog = document.getElementById('guidance-dialog');
   guidanceDialog.showModal = () => { guidanceDialog.open = true; };
   guidanceDialog.close = () => { guidanceDialog.open = false; };
+  const historyDialog = document.getElementById('history-dialog');
+  historyDialog.showModal = () => { historyDialog.open = true; };
+  historyDialog.close = () => { historyDialog.open = false; };
   const requests = new Set();
   t.after(async () => {
     window.dispatchEvent(new window.Event('pagehide'));
@@ -57,7 +60,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     offsetWidth: { get() { return parseFloat(this.style.width) || (this.id === 'map' ? width : 220); } },
     offsetHeight: { get() { return this.id === 'node-workspace' ? Math.min(540, parseFloat(this.style.maxHeight) || 540) : 110; } },
   });
-  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null;
+  let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null, holdHistory = null;
   const captured = new Set(), observers = new Map();
   map.setPointerCapture = id => { captures++; captured.add(id); };
   map.hasPointerCapture = id => captured.has(id);
@@ -76,6 +79,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
       const body = await response.arrayBuffer();
       if (holdState && path === 'api/state') await holdState();
       if (holdDraftRead && path.startsWith('api/drafts?')) await holdDraftRead();
+      if (holdHistory && path.startsWith('api/history?')) await holdHistory();
       return new Response(body, { status: response.status, headers: response.headers });
     })();
     requests.add(request); request.then(() => requests.delete(request), () => requests.delete(request));
@@ -99,7 +103,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
   return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
-    pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; } };
+    pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; } };
 }
 
 function chooseState(f, value) {
@@ -1182,4 +1186,99 @@ test('voice bar distinguishes loading, measured audio, silence, transcription an
   await until(() => [...bar.querySelectorAll('.voice-level')].every(b => b.style.height === '2px'), 'silence is flat');
   key(f, 'keyup'); await until(() => bar.dataset.phase === 'transcribing', 'transcription');
   key(f, 'keydown', { key: 'Escape', code: 'Escape', ctrlKey: false }); assert.equal(bar.hidden, true);
+});
+test('history dialog previews undo, preserves stale drafts and names checkpoints without revisions', async t => {
+  const f = await fixture(t, 340), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  f.type('answer', 'Committed'); f.document.getElementById('save-answer').click();
+  await until(() => f.explorer.doc.nodes[1].answer === 'Committed' && !f.document.getElementById('discard-draft'), 'answer saved');
+  f.type('answer', 'Local draft'); chooseState(f, 'needs-evidence');
+  const undo = f.document.getElementById('undo-change'); assert.ok(undo, 'Undo access'); undo.click();
+  await until(() => !f.document.getElementById('history-restore').disabled, 'undo preview');
+  assert.match(f.document.getElementById('history-preview').textContent, /changed|restore/i);
+  f.document.getElementById('history-restore').click();
+  await until(() => f.explorer.doc.nodes[1].answer === '' && !f.document.getElementById('history-dialog').open, 'undo committed');
+  assert.equal(f.document.getElementById('answer').value, 'Local draft');
+  assert.match(f.document.getElementById('draft-recovery').textContent, /changed|recovered/i);
+  const saved = await f.explorer.readDrafts(f.explorer.doc.id); assert.equal(saved.entries.find(r => r.nodeId === node.id).answerState, 'needs-evidence');
+  assert.equal(saved.entries.find(r => r.nodeId === node.id).stale, true);
+  f.document.getElementById('history-open').click();
+  await until(() => f.document.getElementById('history-list').children.length, 'history rows');
+  const revision = f.explorer.doc.revision; f.document.getElementById('checkpoint-name').value = 'Before next choice';
+  f.document.getElementById('checkpoint-save').click();
+  await until(() => f.document.getElementById('history-list').textContent.includes('Before next choice'), 'checkpoint persisted');
+  assert.equal(f.explorer.doc.revision, revision);
+  f.document.getElementById('history-dialog').dispatchEvent(new f.window.Event('cancel', { cancelable: true }));
+  assert.equal(f.document.getElementById('history-dialog').open, false); assert.equal(f.document.activeElement.id, 'history-open');
+});
+test('history restore preserves removed-node state-only drafts with a visible saved state label', async t => {
+  const f = await fixture(t, 340), baseline = f.explorer.doc.revision;
+  await f.explorer.command('add', { revision: baseline, nodeId: f.explorer.doc.rootId, question: 'Temporary question?', category: 'Scope' });
+  await until(() => f.document.querySelectorAll('#nodes .node').length === 4, 'new question polling');
+  const node = f.explorer.doc.nodes.at(-1); f.open(node.id); chooseState(f, 'not-relevant');
+  f.document.getElementById('history-open').click();
+  await until(() => f.document.querySelector(`[data-history-revision="${baseline}"]`), 'baseline history');
+  f.document.querySelector(`[data-history-revision="${baseline}"]`).click();
+  await until(() => !f.document.getElementById('history-restore').disabled, 'restore preview');
+  f.document.getElementById('history-restore').click();
+  await until(() => f.document.getElementById('orphan-drafts').textContent.includes('Not relevant'), 'visible orphan state');
+  const records = await f.explorer.readDrafts(f.explorer.doc.id), orphan = records.entries.find(r => r.nodeId === node.id);
+  assert.equal(orphan.text, ''); assert.equal(orphan.answerState, 'not-relevant'); assert.equal(orphan.orphaned, true);
+  assert.ok(!f.explorer.doc.nodes.some(n => n.id === node.id));
+});
+test('history rejects stale preview and undo after refresh targets the latest unrelated committed edit', async t => {
+  const f = await fixture(t, 340), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Keep this answer'); f.document.getElementById('save-answer').click();
+  await until(() => f.explorer.doc.nodes[1].answer === 'Keep this answer' && !f.document.getElementById('discard-draft'), 'saved answer');
+  f.document.getElementById('undo-change').click(); await until(() => !f.document.getElementById('history-restore').disabled, 'undo preview');
+  const other = await new Explorer({ file: f.explorer.file }).load();
+  await other.command('guidance', { revision: other.doc.revision, objective: 'Other change', successCriteria: '' });
+  f.document.getElementById('history-restore').click();
+  await until(() => /canvas|changed/i.test(f.document.getElementById('history-status').textContent), 'stale restore rejection');
+  assert.equal(other.doc.nodes[1].answer, 'Keep this answer');
+  f.document.getElementById('history-refresh').click();
+  await until(() => f.explorer.doc.objective === 'Other change' && f.document.getElementById('history-list').children.length, 'refresh newer history');
+  f.document.getElementById('history-close').click(); f.document.getElementById('undo-change').click();
+  await until(() => !f.document.getElementById('history-restore').disabled, 'latest undo preview');
+  f.document.getElementById('history-restore').click();
+  await until(() => f.explorer.doc.objective === '' && !f.document.getElementById('history-dialog').open, 'latest unrelated edit undone');
+  assert.equal(f.explorer.doc.nodes[1].answer, 'Keep this answer');
+});
+test('late history reads never populate a different journey dialog', async t => {
+  const f = await fixture(t, 340, undefined, true), first = f.explorer.activeKey;
+  const copy = await f.explorer.library.import(createDocument('Another journey'));
+  let release, started = false; f.pauseHistory(() => { started = true; return new Promise(resolve => { release = resolve; }); });
+  f.document.getElementById('history-open').click(); await until(() => started, 'held history read');
+  f.document.getElementById('history-close').click(); f.document.getElementById('library-toggle').click();
+  await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'library');
+  [...f.document.querySelectorAll('.library-entry')].find(row => row.textContent.includes('Another journey')).querySelector('[data-action="open"]').click();
+  await until(() => f.explorer.activeKey === copy.key, 'journey switched');
+  f.pauseHistory(null); release(); await delay(30);
+  assert.notEqual(f.explorer.activeKey, first); assert.equal(f.document.getElementById('history-dialog').open, false);
+  f.document.getElementById('history-open').click(); await until(() => f.document.getElementById('history-status').textContent.includes('No earlier'), 'new journey history empty');
+  assert.equal(f.document.getElementById('history-list').children.length, 0);
+});
+test('history restores block failed draft persistence and pending work, and surface missing snapshots', async t => {
+  const f = await fixture(t, 340), node = f.explorer.doc.nodes[1]; f.open(node.id); f.type('answer', 'Preserve me');
+  const write = f.explorer.draftStore.write.bind(f.explorer.draftStore); f.explorer.draftStore.write = async () => { throw new Error('Disk full'); };
+  const revision = f.explorer.doc.revision; f.document.getElementById('undo-change').click();
+  await until(() => !f.document.getElementById('history-restore').disabled, 'undo preview'); f.document.getElementById('history-restore').click();
+  await until(() => /Drafts could not be preserved/.test(f.document.getElementById('history-status').textContent), 'draft failure blocks restore');
+  assert.equal(f.explorer.doc.revision, revision); assert.equal(f.document.getElementById('answer').value, 'Preserve me');
+  f.explorer.draftStore.write = write; f.document.getElementById('history-close').click();
+  await f.explorer.command('questions', { revision, nodeId: f.explorer.doc.rootId });
+  f.document.getElementById('undo-change').click(); await until(() => /Cancel the current/.test(f.document.getElementById('history-status').textContent), 'pending request blocks restore');
+  assert.equal(f.document.getElementById('history-restore').disabled, true);
+  await f.explorer.command('cancel'); f.document.getElementById('history-close').click();
+  const history = await f.explorer.history(f.explorer.doc.id), list = await f.explorer.readHistory(f.explorer.doc.id);
+  await rm(join(await history.root(), `${list.entries[0].hash}.json`));
+  f.document.getElementById('history-open').click(); await until(() => /History recovery required/.test(f.document.getElementById('history-status').textContent), 'missing snapshot error');
+  assert.equal(f.document.getElementById('history-restore').disabled, true);
+});
+test('history checkpoint errors remain readable inside the open dialog', async t => {
+  const f = await fixture(t, 340), revision = f.explorer.doc.revision;
+  for (let i = 0; i < 10; i++) await f.explorer.command('checkpoint', { journey: f.explorer.doc.id, revision, snapshotRevision: revision, name: `Name ${i}` });
+  f.document.getElementById('history-open').click(); await until(() => !f.document.getElementById('checkpoint-save').disabled, 'checkpoint form ready');
+  f.document.getElementById('checkpoint-name').value = 'Eleventh'; f.document.getElementById('checkpoint-save').click();
+  await until(() => /10 named checkpoints/.test(f.document.getElementById('history-status').textContent), 'dialog limit error');
+  assert.equal(f.document.getElementById('history-dialog').open, true); assert.equal(f.explorer.doc.revision, revision);
 });

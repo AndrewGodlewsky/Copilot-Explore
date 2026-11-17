@@ -49,6 +49,14 @@ export class DraftClient {
     return result;
   }
   updateNodes(nodes) {
+    const ids = new Set(nodes.map(node => node.id));
+    for (const [id, entry] of this.entries) {
+      entry.orphaned = !ids.has(id);
+      if (entry.orphaned && this.drafts.has(id)) {
+        entry.conflict ??= { nodeId: id, text: this.drafts.get(id), answerState: entry.answerState, stateSelected: entry.deliberate, revision: entry.revision, stale: true, orphaned: true };
+        entry.status = 'Review recovered draft';
+      }
+    }
     for (const node of nodes) {
       const entry = this.entries.get(node.id);
       if (!entry) this.entries.set(node.id, { base: baseOf(node), answerState: effectiveAnswerState(node), deliberate: false, generation: 0, edits: 0, revision: 0, dirty: false, status: '', conflict: null });

@@ -3,9 +3,11 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createDocument, validateDocument, findNode, addQuestions, answerNode, contextFor, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
+import { History } from './history.mjs';
 import { Drafts, draftBase, draftHash, matchesDraftBase } from './drafts.mjs';
 import { ANSWER_CONTEXT_GUIDANCE, effectiveAnswerState } from './web/answer-state.mjs';
 export { atomicWrite } from './storage.mjs';
+const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
 export class Explorer {
   constructor({ file, library, binding, send, target, researcher, timeoutMs = 240000 }) {
@@ -68,7 +70,7 @@ export class Explorer {
     }
     return saved.document;
   }
-  async save(next) {
+  async withDocumentLock(work) {
     await mkdir(dirname(this.file), { recursive: true });
     let lock;
     try { lock = await open(`${this.file}.lock`, 'wx'); }
@@ -76,20 +78,50 @@ export class Explorer {
       if (error.code === 'EEXIST') throw new Error('Another writer holds this map. Close duplicate canvases and reopen. If a crash left a .lock file, remove it only after Copilot has fully exited.');
       throw error;
     }
-    try {
-      if (this.library) {
-        const record = await this.library.resolve(this.activeKey);
-        if (record.file !== this.file || record.document.id !== this.doc.id) throw new Error('This journey changed on disk. Reopen it from the library.');
+    try { return await work(); }
+    finally { await lock.close(); await unlink(`${this.file}.lock`); }
+  }
+  async history(journey) {
+    const key = await this.draftIdentity(journey);
+    if (this.historyStore?.key !== key) this.historyStore = new History(this.library?.directory ?? dirname(this.file), key, this.doc.id);
+    return this.historyStore;
+  }
+  async fresh() {
+    const current = await this.readCurrent();
+    if (current.revision !== this.doc.revision) throw new Error('Another canvas updated this file. Refresh the saved journey before retrying.');
+    return current;
+  }
+  readHistory(journey, requested) {
+    return this.transact(() => this.withDocumentLock(async () => {
+      const history = await this.history(journey), current = await this.fresh();
+      const result = await history.list(current, requested);
+      if (result.document) {
+        const old = new Map(current.nodes.map(node => [node.id, node])), restored = new Map(result.document.nodes.map(node => [node.id, node]));
+        result.preview = { matchesCurrent: JSON.stringify(restoreCandidate(result.document, current)) === JSON.stringify(current), removed: current.nodes.filter(node => !restored.has(node.id)).length, added: result.document.nodes.filter(node => !old.has(node.id)).length,
+          changed: result.document.nodes.filter(node => old.has(node.id) && JSON.stringify(node) !== JSON.stringify(old.get(node.id))).length,
+          guidanceChanged: current.objective !== result.document.objective || current.successCriteria !== result.document.successCriteria };
       }
-      let saved = null;
-      try { saved = JSON.parse(await readFile(this.file, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if ((saved?.revision ?? 0) !== (this.doc?.revision ?? 0) || (this.doc && saved?.id !== this.doc.id)) throw new Error('Another canvas updated this file. Reopen Explorer to load the saved version.');
-      next.revision = (this.doc?.revision ?? 0) + 1;
-      next.updatedAt = new Date().toISOString();
-      validateDocument(next);
-      await atomicWrite(this.file, JSON.stringify(next, null, 2));
-      this.doc = next;
-    } finally { await lock.close(); await unlink(`${this.file}.lock`); }
+      return { ...result, journey, pending: !!this.pending, revision: current.revision, ...(requested !== undefined ? { snapshotRevision: requested } : {}) };
+    }));
+  }
+  async save(next, label = 'Map updated') { return this.withDocumentLock(() => this.saveLocked(next, label)); }
+  async saveLocked(next, label) {
+    let saved = null;
+    try { saved = this.doc ? await this.fresh() : validateDocument(JSON.parse(await readFile(this.file, 'utf8'))); }
+    catch (error) { if (error.code !== 'ENOENT' || this.doc) throw error; }
+    if (saved && !this.doc) throw new Error('Another canvas created this map. Reopen it.');
+    next = validateDocument(next);
+    if (saved && JSON.stringify(saved) === JSON.stringify(next)) {
+      await (await this.history(this.activeKey ?? this.doc.id)).reconcile(saved); return false;
+    }
+    next.revision = (this.doc?.revision ?? 0) + 1;
+    if (!Number.isSafeInteger(next.revision)) throw new Error('Map revision limit reached.');
+    next.updatedAt = new Date(Math.max(Date.now(), Date.parse(this.doc?.updatedAt ?? 0) + 1)).toISOString();
+    validateDocument(next);
+    const replace = async () => { await atomicWrite(this.file, JSON.stringify(next, null, 2)); this.doc = next; };
+    if (saved && saved.id === next.id) await (await this.history(this.activeKey ?? this.doc.id)).commit(saved, next, label, replace);
+    else await replace(); // New direct-file identity has independent history, like imported library copies.
+    return true;
   }
   clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; }
   request(kind, nodeId) {
@@ -112,7 +144,7 @@ export class Explorer {
       }).then(result => this.transact(async () => {
         if (this.pending?.id !== id || controller.signal.aborted) return;
         const next = structuredClone(this.doc); findNode(next, nodeId).research = research(result);
-        await this.save(next); this.clearPending(); this.error = '';
+        await this.save(next, 'Research replaced'); this.clearPending(); this.error = '';
       })).catch(error => this.transact(() => {
         if (this.pending?.id === id) { this.clearPending(); this.error = error.message; }
       }));
@@ -153,7 +185,7 @@ export class Explorer {
             if (record.conflict) return { ...this.snapshot(), importConflict: { entries: record.conflict } };
             await this.attach(record.key); break;
           }
-          await this.save(validateDocument(input.document));
+          await this.save(validateDocument(input.document), 'Imported saved map');
           break;
         case 'open':
           if (!this.library) throw new Error('The library is unavailable in this preview.');
@@ -166,7 +198,7 @@ export class Explorer {
           }
           const changedAnswer = answerNode(next, input.nodeId, input.answer, input.answerState);
           if (input.expand === true && effectiveAnswerState(findNode(next, input.nodeId)) === 'unanswered') throw new Error('Choose a state or write an answer before exploring deeper.');
-          if (changedAnswer) { next.finishedAt = null; await this.save(next); }
+          if (changedAnswer) { next.finishedAt = null; await this.save(next, 'Answer or state changed'); }
           else if ((await this.readCurrent()).revision !== next.revision) throw new Error('Another canvas updated this file. Refresh the saved journey before retrying.');
           if (input.draftRevision !== undefined) {
             try {
@@ -184,7 +216,7 @@ export class Explorer {
           break;
         case 'add':
           addQuestions(next, input.nodeId, [{ question: input.question, category: input.category }]); next.finishedAt = null;
-          await this.save(next);
+          await this.save(next, 'Question added');
           break;
         case 'guidance': {
           if (!next) throw new Error('Start an exploration first.');
@@ -195,9 +227,25 @@ export class Explorer {
             break;
           }
           next.objective = objective; next.successCriteria = successCriteria; next.finishedAt = null;
-          await this.save(next);
+          await this.save(next, 'Guidance changed');
           break;
         }
+        case 'checkpoint':
+        case 'remove-checkpoint':
+          await this.withDocumentLock(async () => {
+            const history = await this.history(input.journey), current = await this.fresh();
+            await history.checkpoint(current, input.snapshotRevision, input.name, action === 'remove-checkpoint');
+          });
+          break;
+        case 'restore':
+          await this.withDocumentLock(async () => {
+            const history = await this.history(input.journey), current = await this.fresh();
+            const selected = await history.list(current, input.snapshotRevision);
+            if (!selected.document) throw new Error('Select a history revision to restore.');
+            const restored = restoreCandidate(selected.document, current);
+            if (!await this.saveLocked(restored, `Restored revision ${input.snapshotRevision}`)) this.error = 'The selected version already matches the saved journey. No change was made.';
+          });
+          break;
         case 'refresh-answer':
         case 'refresh-guidance':
           if (!next) throw new Error('Start an exploration first.');
@@ -206,7 +254,7 @@ export class Explorer {
         case 'finish':
           if (!next) throw new Error('Start an exploration first.');
           next.finishedAt = new Date().toISOString();
-          await this.save(next);
+          await this.save(next, 'Exploration finished');
           await atomicWrite(this.file.replace(/\.explore\.json$/, '.md'), toMarkdown(this.doc));
           break;
         default: throw new Error('Unknown Explorer action.');
@@ -223,7 +271,7 @@ export class Explorer {
       if (pending.kind !== kind) throw new Error('The response type does not match this request.');
       const next = structuredClone(this.doc);
       if (kind === 'questions') addQuestions(next, pending.nodeId, input.questions);
-      await this.save(next);
+      await this.save(next, 'Questions generated');
       this.clearPending(); this.error = '';
       return { saved: true, nodeCount: next.nodes.length };
     });

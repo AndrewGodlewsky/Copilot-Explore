@@ -57,6 +57,11 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         return json(200, voice[input.action](input.id));
       }
       if (req.method === 'GET' && route === 'api/state') return json(200, explorer.snapshot());
+      if (req.method === 'GET' && route === 'api/history') {
+        const selected = url.searchParams.get('snapshotRevision');
+        if (selected !== null && !/^(0|[1-9][0-9]*)$/.test(selected)) throw new Error('Invalid history revision.');
+        return json(200, await explorer.readHistory(url.searchParams.get('journey'), selected === null ? undefined : Number(selected)));
+      }
       if (req.method === 'GET' && route === 'api/drafts') return json(200, await explorer.readDrafts(url.searchParams.get('journey')));
       if (req.method === 'POST' && route === 'api/drafts') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
@@ -69,6 +74,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req);
+        if (['restore', 'checkpoint', 'remove-checkpoint'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
       if (req.method === 'GET' && ['export.json', 'export.md'].includes(route)) {

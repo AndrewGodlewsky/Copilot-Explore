@@ -39,3 +39,17 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #guidance-latest{white-space:pre-wrap;max-height:180px;overflow:auto}#guidance-conflict{border-top:1px solid var(--line);margin-top:14px;padding-top:10px}#refresh-guidance{margin-top:8px}
 
 .answer-state-field{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px}.answer-state-field label{margin:0;font-size:12px}.answer-state-field select{width:auto;max-width:100%;min-width:0;flex:1}#answer-state-help{overflow-wrap:anywhere}
+
+.history-access { display: flex; gap: 4px; flex-wrap: wrap; }
+#history-dialog { width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; box-sizing: border-box; }
+#history-list { max-height: 220px; overflow: auto; margin-block: 12px; }
+.history-entry { padding-block: 6px; border-bottom: 1px solid var(--line); }
+.history-entry button { text-align: left; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+#checkpoint-form { display: flex; flex-wrap: wrap; gap: 6px; margin-block: 12px; }
+#checkpoint-form label { width: 100%; }
+#checkpoint-name { min-width: 0; flex: 1; }
+#history-preview textarea { width: 100%; box-sizing: border-box; }
+
+.map-heading { flex-wrap: wrap; }
+.map-heading > div:first-child { flex: 1 1 180px; min-width: 0; }
+#history-dialog p { overflow-wrap: anywhere; }

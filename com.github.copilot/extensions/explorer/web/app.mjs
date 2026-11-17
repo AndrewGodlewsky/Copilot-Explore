@@ -12,6 +12,7 @@ let suppressClick = false, restoringFocus = false, composing = null, workspaceDi
 let actionEpoch = 0, closed = false, pollTimer;
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
 let collapsed = new Set(), branches = null;
+let historyEpoch = 0, historyReturn = null, historySelection = null, historyRevision = null;
 let guidanceReturn = null, guidanceBase = null, guidanceNeedsChoice = false, guidanceNeedsRefresh = false;
 const drafts = new Map(), nodeUi = new Map();
 const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
@@ -74,6 +75,7 @@ function apply(next, reset = false) {
     drafts.clear(); nodeUi.clear(); positions.clear(); collapsed.clear(); branches = null; $('node-workspace').replaceChildren();
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
     $('start-objective').value = ''; $('start-criteria').value = ''; $('start-guidance').open = false;
+    if ($('history-dialog').open) closeHistory();
     if ($('guidance-dialog').open) $('guidance-dialog').close();
   }
   signature = stamp; state = next;
@@ -82,7 +84,7 @@ function apply(next, reset = false) {
   if (state.library && !state.document) void refreshLibrary();
   const doc = state.document;
   if (doc && !doc.nodes.some(n => n.id === selected)) { selected = doc.rootId; expanded = false; }
-  if (doc) branches = branchView(doc.nodes, doc.rootId, collapsed);
+  if (doc) { const ids = new Set(doc.nodes.map(node => node.id)); collapsed = new Set([...collapsed].filter(id => ids.has(id))); branches = branchView(doc.nodes, doc.rootId, collapsed); }
   showView();
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('edit-guidance').disabled = !!state.pending;
@@ -364,6 +366,7 @@ function renderDraftSummary() {
   for (const [id, orphan] of draftClient.entries) {
     if (!orphan.orphaned || orphan.conflict?.text == null) continue;
     const text = el('textarea', { readonly: '', rows: '3', 'aria-label': 'Draft for a removed question' }); text.value = orphan.conflict.text;
+    area.append(el('p', {}, `Saved draft state: ${ANSWER_STATES[effectiveAnswerState({ answer: orphan.conflict.text, answerState: orphan.conflict.answerState })]}`));
     area.append(el('p', {}, 'Draft for a removed question. Copy the text to keep it elsewhere.'), text,
       button('Discard removed-question draft', () => { void draftClient.choose(id, 'discard').catch(error => notice(error.message)); }));
   }
@@ -517,6 +520,83 @@ function renderOutline() {
   if (focused) [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
   if (focusedBranch) [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === focusedBranch)?.focus({ preventScroll: true });
 }
+function historyJourney() { return state.activeKey ?? state.document?.id; }
+function closeHistory() {
+  historyEpoch++; historySelection = null; $('history-dialog').close();
+  if (historyReturn?.isConnected) historyReturn.focus({ preventScroll: true });
+}
+async function historyRead(snapshotRevision, epoch, journey) {
+  const query = new URLSearchParams({ journey });
+  if (snapshotRevision !== undefined) query.set('snapshotRevision', snapshotRevision);
+  const response = await fetch(`api/history?${query}`), result = await response.json();
+  if (closed || epoch !== historyEpoch || journey !== historyJourney() || !$('history-dialog').open) return null;
+  if (!response.ok) throw new Error(result.error);
+  return result;
+}
+async function previewHistory(revision) {
+  const epoch = ++historyEpoch, journey = historyJourney(); historySelection = null;
+  $('history-restore').disabled = true; $('history-preview').replaceChildren(); $('history-status').textContent = 'Loading saved version...';
+  try {
+    const result = await historyRead(revision, epoch, journey); if (!result) return;
+    historyRevision = result.revision; historySelection = result.preview.matchesCurrent ? null : revision;
+    const preview = result.preview;
+    const content = el('textarea', { readonly: '', rows: '8', 'aria-label': 'Saved snapshot content' }); content.value = JSON.stringify(result.document, null, 2);
+    $('history-preview').replaceChildren(el('h3', {}, `Restore revision ${revision}`), el('p', {}, `${result.label} | ${new Date(result.time).toLocaleString()}`),
+      el('p', {}, `Compared with current revision ${result.revision} (${result.current.label}): ${preview.changed} changed, ${preview.added} restored and ${preview.removed} removed nodes. ${preview.guidanceChanged ? 'Guidance will change.' : 'Guidance is unchanged.'} Answers, answer states and research will come from this version. Local drafts will be preserved for review.`),
+      el('details', {}, el('summary', {}, 'Inspect saved content'), content));
+    $('history-status').textContent = result.pending ? 'Cancel the current Copilot request before restoring.' : result.preview.matchesCurrent ? 'This version already matches the saved journey. No restore is needed.' : 'Review the preview, then explicitly restore this version.';
+    $('history-restore').disabled = historySelection === null || result.pending;
+  } catch (error) { if (epoch === historyEpoch) $('history-status').textContent = error.message; }
+}
+async function loadHistory(undo = false) {
+  const epoch = ++historyEpoch, journey = historyJourney(); historySelection = null;
+  $('history-list').replaceChildren(); $('history-preview').replaceChildren(); $('history-restore').disabled = true;
+  $('checkpoint-save').disabled = true; $('history-status').textContent = 'Loading history...';
+  try {
+    const result = await historyRead(undefined, epoch, journey); if (!result) return;
+    historyRevision = result.revision; $('checkpoint-save').disabled = result.pending;
+    $('history-status').textContent = result.entries.length ? `Current revision ${result.revision} | ${result.current.label} | ${new Date(result.current.time).toLocaleString()}. Select a saved version to preview.` : 'No earlier committed versions yet. The first change preserves the current saved version.';
+    $('history-retention').textContent = `Up to 50 snapshots / 128 MiB and 10 named checkpoints. Oldest available: ${result.oldestRevision === null ? 'none yet' : `revision ${result.oldestRevision}`}. Unnamed older versions are pruned first.`;
+    for (const row of result.entries) $('history-list').append(el('article', { class: 'history-entry' },
+      button(`Revision ${row.revision} | ${row.label} | ${new Date(row.time).toLocaleString()}${row.checkpoints.length ? ` | ${row.checkpoints.join(', ')}` : ''}`, () => previewHistory(row.revision), { 'data-history-revision': row.revision }),
+      ...row.checkpoints.map(name => button(`Remove checkpoint "${name}"`, async () => {
+        if (await api('remove-checkpoint', { journey, revision: historyRevision, snapshotRevision: row.revision, name })) await loadHistory();
+        else $('history-status').textContent = $('notice').textContent;
+      }))));
+    if (undo && result.undoRevision !== null) await previewHistory(result.undoRevision);
+    else if (undo) $('history-status').textContent = 'There is no retained committed change to undo.';
+  } catch (error) { if (epoch === historyEpoch) $('history-status').textContent = error.message; }
+}
+function openHistory(undo) {
+  if (busy || !state.document) return;
+  historyReturn = undo ? $('undo-change') : $('history-open'); voice.cancel();
+  $('history-dialog').showModal(); $('history-close').focus(); void loadHistory(undo);
+}
+$('history-open').addEventListener('click', () => openHistory(false));
+$('undo-change').addEventListener('click', () => openHistory(true));
+$('history-close').addEventListener('click', closeHistory);
+$('history-dialog').addEventListener('cancel', event => { event.preventDefault(); closeHistory(); });
+$('history-refresh').addEventListener('click', async () => { if (await api('refresh-answer')) await loadHistory(); else $('history-status').textContent = $('notice').textContent; });
+$('checkpoint-form').addEventListener('submit', async event => {
+  event.preventDefault(); const epoch = historyEpoch, journey = historyJourney();
+  if (await api('checkpoint', { journey, revision: historyRevision, snapshotRevision: historyRevision, name: $('checkpoint-name').value })) {
+    if (epoch === historyEpoch && journey === historyJourney()) { $('checkpoint-name').value = ''; await loadHistory(); }
+  } else if (epoch === historyEpoch && journey === historyJourney()) $('history-status').textContent = $('notice').textContent;
+});
+$('history-restore').addEventListener('click', async () => {
+  if (historySelection === null || busy) return;
+  if (!switchAllowed()) { $('history-status').textContent = $('notice').textContent; return; }
+  const epoch = historyEpoch, journey = historyJourney(), revision = historyRevision, snapshotRevision = historySelection;
+  voice.cancel(); $('history-restore').disabled = true; $('workspace').inert = true;
+  try {
+    await draftClient.flush();
+    if (epoch !== historyEpoch || journey !== historyJourney()) return;
+    if (await api('restore', { journey, revision, snapshotRevision })) closeHistory();
+    else $('history-status').textContent = $('notice').textContent;
+  } catch (error) { $('history-status').textContent = `Drafts could not be preserved. ${error.message}`; }
+  finally { $('workspace').inert = false; if (epoch === historyEpoch) $('history-restore').disabled = false; }
+});
+
 function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) || draftClient.entries.get(n.id)?.conflict) ?? []; }
 $('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value, objective: $('start-objective').value, successCriteria: $('start-criteria').value }); });
 function closeGuidance() {

@@ -250,6 +250,43 @@ Likely web/app.mjs, web/layout.mjs or a focused branch helper, web/style.css, re
 
 No nested agents or browser/desktop automation. Controller reviews and publishes. Raise concrete conflicts while continuing independent work. Upcoming focus/minimap/semantic-zoom tasks should be able to reuse the visible-node contract.
 
+Published task 6: **v0.1.18**, `6ade380`, 166 tests, check and package passed; review approved and remote main verified. Minor hidden-outline work assigned to task 24.
+
+## Task 7: Undo, revision history and named checkpoints (#9 / selection 10)
+
+Read .superpowers/sdd/2026-11-17-selected-roadmap/issue-10.md, task-7-design-notes.md, AGENTS.md, docs/library.md and docs/drafts.md. Read the final task-5-report.md and task-6-report.md in that same directory. Answer state and draft recovery include stateSelected; branch folding is independent in-memory presentation state. BASE is 6ade38089dbdd3937664de48717fa5e80a02025b; ship **0.1.19**.
+
+### Scope and storage
+
+- Make committed answer/state changes, question additions, research replacements, guidance and other supported document changes recoverable. Provide Undo latest change, history preview/restore and named checkpoints. Do not implement deferred scenario forks or general manual editing.
+- Key history by stable library entry identity, preserving the isolation of divergent same-ID files and direct-file fixtures. Imported copies get independent history; an ordinary reopen does not fabricate a change or historical usage.
+- Add a focused history service; integrate at the existing serialized, locked document-save boundary. Reuse atomic-write utilities. Do not claim multiple file renames are atomic together: define a crash-recoverable protocol whose committed-document outcome and history outcome reconcile deterministically. A failure before replacing the document must leave the previous document recoverable, and a stored preimage alone must not be displayed as proof of a completed mutation.
+- Store immutable validated committed snapshots with honest revision/time and action labels. Retain research sources and exact user content; no drafts, microphone/audio data, full chat logs or view-only pan/zoom/fold changes in history. No events for a true no-op.
+- Bound history to at most 50 retained snapshot revisions and 128 MiB of snapshot content per journey; allow at most 10 named checkpoints with names of 1?120 characters. Named checkpoints reference protected immutable revisions and count against the same storage limits. Exclude the live document itself from this separate history budget. Provide documented retention, a visible oldest available point, and explicit failure when protected named checkpoints prevent safe pruning. Do not silently remove named checkpoints. Test the exact count/byte/name limits and report them; keep ordinary edits practical for maps near the existing file cap. A directory and manifest design is allowed, with no new runtime dependency.
+- Treat corrupted history entries conservatively: preserve them and surface a readable recovery error. They must not silently overwrite the active journey. Validate all IDs, paths, byte limits, imported shapes and snapshot identity; no symlink/junction escape.
+- Restore validates the chosen snapshot against the current schema, preserves the active stable identity, and creates a fresh monotonic revision/time through current writer checks. It never mutates the source snapshot or rewinds a revision. Make restore undoable as another committed change. Reconcile schema defaults while preserving compatible old text/research.
+- Undo means the latest relevant committed transition shown to the user, not an arbitrary older local edit. Preview scope and require the displayed current revision; another canvas's intervening edit must reject safely. A stale no-op still checks disk freshness. Pending generation/research must be explicitly canceled or block restore; old callbacks cannot overwrite the restored map.
+
+Task 7 clarification: a content-changing history restore creates a fresh monotonic revision. An identical-content restore checks on-disk freshness, reports that the selected version already matches, and adds no revision or history event. Direct-file imports with a changed document ID use a new path-plus-ID history identity; old history is retained separately.
+
+### UI and drafts
+
+- Add compact History access and Undo without adding a question side panel. Show meaningful time/action/revision labels, checkpoint names and a preview describing what will be restored; require an explicit restore action. Naming a checkpoint does not edit the document or imply a new usage session.
+- Keep dialog keyboard access, cancel/Escape/focus return, narrow-pane layout and readable loading/error/empty/retention states. Async history responses must be bound to the journey that requested them.
+- Restore must not silently discard local drafts. Flush/preserve them under their original base; normal stale-base recovery offers explicit choices for changed answers. Removed-node draft text and state stay recoverable. Resolve task-5-review.md Minor: orphan recovery must visibly label the saved state, including no-text drafts; cover this with a real-editor regression. Retain view state where IDs survive; repair selection/folding safely when they do not. Task 6 provides branchView(nodes,rootId,collapsed) -> {nodes,edges,descendants} and revealPath(nodes,collapsed,id); use these existing contracts. isResolvedQuestion is the shared resolved-state predicate.
+- Return summaries for the history list and fetch only a requested snapshot/preview; do not add all history to normal state polling. Do not include history snapshots implicitly in main-chat/research context. The active committed document remains the only ordinary context source.
+
+### Verification and release
+
+- [ ] Test-first coverage for initial legacy baseline, every supported mutation class, true no-op, checkpoint persistence, exact count/byte limits and protected retention, restoring twice, restored provenance, identity isolation, schema validation and near-limit maps.
+- [ ] Inject failures around snapshot/manifest/active-document writes and simulate interrupted recovery. Verify the active document remains valid, history does not invent successful commits, original files remain recoverable, and retry is safe.
+- [ ] Real two-controller/HTTP/jsdom checks for stale restore, undo after unrelated edits, draft preservation/stale choice, pending work, late response after journey switch, keyboard dialog actions and missing/corrupt history.
+- [ ] Run npm test, npm run check and npm run package; applicable installed local SDK fixture only if host wiring changes. Never paid providers or existing sessions; no UI automation.
+- [ ] Bump to **0.1.19**, synchronize metadata/README/release notes, document recovery/retention/API contracts, include controller roadmap edit, self-review and commit. No merge/push/issue close.
+- [ ] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-7-report.md with the atomicity/recovery protocol, exact APIs/limits/migration, test RED/GREEN and final command outputs, commit and remaining manual checks.
+
+No nested agents. Raise a concrete storage-protocol ambiguity to the controller while progressing independently. Controller reviews and publishes.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

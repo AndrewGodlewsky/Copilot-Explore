@@ -42,7 +42,7 @@ test('research is isolated, abortable, rejects chat callbacks and preserves answ
   resolveRun(findings); await delay(10); assert.equal(explorer.doc.nodes[1].research, null);
   await begin(); await delay(0); rejectRun(new Error('Research unavailable')); await delay(10);
   assert.equal(explorer.pending, null); assert.match(explorer.error, /Research unavailable/); assert.equal(explorer.doc.nodes[1].answer, 'My decision');
-  await begin(); await delay(0); resolveRun(findings); await delay(20);
+  await begin(); await delay(0); resolveRun(findings); await Promise.all([...explorer.researchTasks]);
   assert.equal(explorer.pending, null); assert.deepEqual(explorer.doc.nodes[1].research, findings);
   assert.equal(messages.length, 1);
 });

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.19",
+    "summary": "Undo committed changes, preview and restore saved revisions, and keep named checkpoints. History preserves answers, states and research with bounded retention and interrupted-save recovery. Restores check competing writers and preserve local drafts, including state-only drafts for removed questions."
+  },
+  {
     "version": "0.1.18",
     "summary": "Collapse any branch to hide its descendants while keeping hidden-question and unresolved counts visible. Expand from the map or full outline; selecting a hidden question reveals its path. Folding preserves answers, drafts, research, exports and saved revisions."
   },

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createBriefHelper, prepareBrief } from '../com.github.copilot/extensions/explorer/decision-brief.mjs';
+import { prepareHandoff } from '../com.github.copilot/extensions/explorer/implementation-handoff.mjs';
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
 
 const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_PATH;
@@ -17,7 +18,14 @@ let hold = false, onHeld, initialized = 0;
 const document = createDocument('Explore Unicode 🌱', { objective: 'Understand a technical question' });
 const [selected] = addQuestions(document, document.rootId, [{ question: 'What does λ mean for Élodie?', category: 'Technical' }]);
 document.pins = [{ id: 'constraint-00000000000000', text: 'Use familiar vocabulary' }];
-const prepared = prepareBrief(document);
+const handoff = process.argv.includes('--handoff');
+if (handoff) {
+  const [privateNode] = addQuestions(document, document.rootId, [{ question: 'UNSELECTED_CANARY', category: 'Private' }]);
+  privateNode.answer = 'UNSELECTED_ANSWER_CANARY';
+  selected.research = { basis: 'sources', sources: [{ id: 's1', title: 'Recorded source', url: 'https://example.com/source', retrievedAt: '2026-11-17T00:00:00.000Z', provenance: 'imported' }], claims: [{ id: 'c1', text: 'Recorded AI interpretation', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Recorded support' }], limitations: 'Not verified' }], summary: 'SUMMARY_CANARY' };
+  document.brief = { text: 'BRIEF_CANARY' }; document.projectCapture = { excerpt: 'PROJECT_CANARY' };
+}
+const prepared = handoff ? prepareHandoff(document, { nodeIds: [selected.id], format: 'tasks', includeEvidence: true }) : prepareBrief(document);
 const output = { goal: [{ id: 'g', text: 'Explore the saved goal; reasons are unknown.', certainty: 'user-statement', sources: [{ kind: 'guidance', field: 'topic' }] }], decisions: [], constraints: [], assumptions: [], unresolved: [{ id: 'u', text: 'The question remains unanswered.', certainty: 'uncertain', sources: [{ kind: 'node', id: selected.id }] }], nextSteps: [] };
 const fixture = createServer(async (req, res) => {
   let body = ''; for await (const chunk of req) body += chunk;
@@ -68,6 +76,8 @@ try {
     assert.equal(prompt.tools?.length ?? 0, 0);
     assert.ok(prompt.messages.some(m => m.role === 'user' && m.content.includes(selected.question)));
     assert.ok(!JSON.stringify(prompt).includes('unsaved answer'));
+    assert.ok(!JSON.stringify(prompt).includes('CANARY'));
+    if (handoff) assert.ok(JSON.stringify(prompt).includes('Recorded support'));
     assert.ok(prompt.messages.some(m => m.role === 'user' && m.content.includes('Use familiar vocabulary')));
   }
   const ids = await readdir(join(temporary, 'usage', 'session-state'));
@@ -75,16 +85,16 @@ try {
   const labels = [];
   for (const id of ids) {
     const journal = await readFile(join(temporary, 'usage', 'session-state', id, 'events.jsonl'), 'utf8');
-    labels.push(['Explorer Decision Brief'].find(label => journal.includes(label)));
+    labels.push([handoff ? 'Explorer Implementation Handoff' : 'Explorer Decision Brief'].find(label => journal.includes(label)));
     assert.match(journal, /session.usage_record/); assert.ok(!journal.includes('Élodie'));
   }
-  assert.deepEqual(labels.sort(), ['Explorer Decision Brief'].sort());
+  assert.deepEqual(labels.sort(), [handoff ? 'Explorer Implementation Handoff' : 'Explorer Decision Brief'].sort());
   hold = true; const abort = new AbortController(), held = new Promise(resolve => { onHeld = resolve; });
   const cancelled = assert.rejects(helper.run(prepared, { signal: abort.signal }), /cancelled/);
   await held; abort.abort(); await cancelled; assert.equal(initialized, 2);
   assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 2);
   for (const workspace of workspaces) await assert.rejects(stat(workspace), { code: 'ENOENT' });
-  console.log('PASS isolated decision brief: exact captured SDK strings/byte budget, zero initialized tools, root-anchored context, bounded structured output, attributed receipts, cancellation and release. No paid inference or existing session.');
+  console.log(`PASS isolated ${handoff ? 'implementation handoff: explicit selected records/evidence and omitted source canaries' : 'decision brief: root-anchored context'}; exact captured SDK strings/byte budget, zero initialized tools, bounded structured output, attributed receipts, cancellation and actual release. No paid inference or existing session.`);
 } finally {
   clearTimeout(timer); await helper.close(); await Promise.allSettled([...owned].map(client => client.forceStop()));
   fixture.closeAllConnections(); await new Promise(resolve => fixture.close(resolve));

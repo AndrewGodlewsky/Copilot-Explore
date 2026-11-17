@@ -29,9 +29,9 @@ const sameAccount = (a, b) => a?.isAuthenticated === true && b?.isAuthenticated 
 
 // Only fixtures inject a runtime. Production resolves the pair supplied by the desktop bootstrap.
 export function createOwnedHelper(parent, operation, prepare, { usageDirectory, runtime = desktopRuntime, usageRecorder = createUsageRecorder, stopTimeoutMs = 10000, clock = { now: () => performance.now(), setTimeout, clearTimeout } } = {}) {
-  if (!['research', 'research-follow-up', 'decision-brief', 'answer-check', 'challenge-review', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
+  if (!['research', 'research-follow-up', 'decision-brief', 'implementation-handoff', 'answer-check', 'challenge-review', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
   const webResearch = operation === 'research' || operation === 'research-follow-up';
-  const label = { 'decision-brief': 'Decision brief', 'answer-check': 'Answer check', 'challenge-review': 'Challenge review', research: 'Research', 'research-follow-up': 'Research follow-up', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
+  const label = { 'decision-brief': 'Decision brief', 'implementation-handoff': 'Implementation handoff', 'answer-check': 'Answer check', 'challenge-review': 'Challenge review', research: 'Research', 'research-follow-up': 'Research follow-up', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
   const fail = message => new HelperError(message.replaceAll('Research', label).replaceAll('research', label.toLowerCase()));
   const cancelled = () => fail('Research was cancelled or timed out. Your answers are saved.');
   const active = new Map();

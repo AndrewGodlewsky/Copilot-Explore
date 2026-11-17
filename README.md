@@ -1,8 +1,14 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.48.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.49.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
+
+## Reviewed implementation handoff
+
+Choose **Implementation handoff**, explicitly select saved decisions or open questions, and choose **Brief**, **Specification**, **Plan**, **Prompt** or **Tasks**. Optionally include recorded research sources and structured claims; these remain unverified AI interpretation with their original provenance and limitations. Preview the exact input before generating, then edit and explicitly accept the proposal before copying or exporting its Markdown. Your map and answer drafts stay intact.
+
+Global guidance and all user constraints remain included. Unselected nodes, implicit ancestors, project-file excerpts/references/snapshots, drafts, private references and earlier briefs/handoffs/checks are excluded. Research summaries, recommendations, proposed answers and follow-up prose are also excluded. The handoff never executes code, creates external tasks or sends to another chat. See [handoff contracts and limits](docs/implementation-handoff.md).
 
 ## Recovery
 
@@ -258,7 +264,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.48, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.48**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.49, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.49**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

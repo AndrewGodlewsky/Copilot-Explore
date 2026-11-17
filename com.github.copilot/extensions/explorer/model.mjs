@@ -1,3 +1,4 @@
+import { validateHandoff, handoffMarkdown } from './implementation-handoff.mjs';
 import { validateBrief, briefMarkdown } from './decision-brief.mjs';
 import { randomUUID } from 'node:crypto';
 import { researchSettings, researchSettingsText } from './web/research-policy.mjs';
@@ -154,6 +155,7 @@ export function research(value) {
 export function importedDocument(value) {
   const doc = validateDocument(value);
   for (const node of doc.nodes) for (const source of node.research?.claims ? node.research.sources : []) source.provenance = 'imported';
+  for (const item of doc.handoff?.evidence ?? []) for (const source of item.claims ? item.sources : []) source.provenance = 'imported';
   return doc;
 }
 export function createDocument(topic, { objective = '', successCriteria = '', mode = 'understand' } = {}) {
@@ -216,6 +218,7 @@ export function validateDocument(value) {
     ...(Object.hasOwn(value, 'pins') ? { pins: pinnedConstraints(value.pins) } : {}),
     rootId: root.id, createdAt: date(value.createdAt, 'creation date'), updatedAt: date(value.updatedAt, 'update date'),
     ...(Object.hasOwn(value, 'brief') ? { brief: validateBrief(value.brief) } : {}),
+    ...(Object.hasOwn(value, 'handoff') ? { handoff: validateHandoff(value.handoff) } : {}),
     finishedAt: value.finishedAt === null ? null : date(value.finishedAt, 'finish date'), nodes };
   if (Buffer.byteLength(JSON.stringify(document, null, 2)) > MAX_DOCUMENT_BYTES) throw new Error('This map has reached the 9 MiB saved-data limit. Export it and continue in a new exploration.');
   return document;
@@ -340,6 +343,7 @@ export function toMarkdown(doc) {
     }
   }
   // Only a fixed heading may precede the appendix, including when the topic is multiline.
+  if (doc.handoff) lines.splice(2, 0, handoffMarkdown(doc.handoff, doc), '');
   if (doc.brief) {
     lines[0] = '# Exploration';
     lines.splice(2, 0, briefMarkdown(doc.brief, doc), '', '## Topic', '', md(doc.topic), '');

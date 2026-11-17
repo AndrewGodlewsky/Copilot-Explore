@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { JSDOM } from 'jsdom';
 import { fixtureSpecs, makeFixture } from '../scripts/perf-fixtures.mjs';
 import { parseBrief } from '../com.github.copilot/extensions/explorer/decision-brief.mjs';
+import { parseHandoff } from '../com.github.copilot/extensions/explorer/implementation-handoff.mjs';
 import { parseAnswerCheck } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
@@ -3347,4 +3348,35 @@ test('cold damaged binding reaches recovery controls with no active map and open
   assert.equal(f.explorer.doc, null); $('recovery-copy').click();
   await until(() => f.explorer.doc && !$('recovery-dialog').open, 'cold copy opened');
   assert.equal(await readFile(originalFile, 'utf8'), '{truncated private'); assert.notEqual(f.explorer.file, originalFile);
+});
+
+
+test('implementation handoff HTTP UI requires exact selection review, preserves drafts and edits, and copies accepted portable text', async t => {
+  let prepared, copied;
+  const f = await fixture(t, 340, undefined, false, { briefHelper: { async run(value) {
+    prepared = value;
+    return parseHandoff(JSON.stringify({ goal: [], decisions: [{ id: 'd', text: 'Choice remains unresolved', certainty: 'user-decision', sources: [{ kind: 'node', id: value.dependencies.records[0].id }] }], constraints: [], assumptions: [], unresolved: [], nextSteps: [{ id: 't', text: 'Consider next step', certainty: 'suggestion', sources: [] }] }), value);
+  }, close() {} } });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'PRIVATE DRAFT \u03bb');
+  Object.defineProperty(f.window.navigator, 'clipboard', { value: { async writeText(value) { copied = value; } }, configurable: true });
+  $('implementation-handoff').click(); await until(() => $('brief-dialog').open && !$('review-handoff').disabled, 'handoff dialog');
+  assert.equal($('handoff-evidence').checked, false); assert.equal($('generate-brief').disabled, true);
+  assert.equal($('handoff-sources').querySelectorAll('input:checked').length, 0);
+  assert.match($('brief-description').textContent, /project excerpts\/file references\/snapshots/);
+  $('handoff-sources').querySelector(`[data-handoff-node="${node.id}"]`).click();
+  $('handoff-format').value = 'tasks'; $('handoff-format').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  $('review-handoff').click(); await until(() => !$('handoff-preview').hidden && !$('generate-brief').disabled, 'exact preview');
+  const text = $('handoff-preview-text').textContent; assert.ok(text.includes(node.id)); assert.ok(!text.includes('PRIVATE DRAFT'));
+  $('handoff-evidence').click(); assert.equal($('generate-brief').disabled, true);
+  $('review-handoff').click(); await until(() => !$('generate-brief').disabled, 'changed exact preview');
+  $('generate-brief').click(); await until(() => !$('accept-brief').hidden && !$('accept-brief').disabled, 'handoff proposal');
+  assert.equal(prepared.context.format, 'tasks'); assert.deepEqual(prepared.dependencies.records.map(r => r.id), [node.id]);
+  assert.equal($('answer').value, 'PRIVATE DRAFT \u03bb'); assert.match($('brief-content').textContent, /uncertain/);
+  const editor = $('brief-content').querySelector('[data-brief-statement="t"]'); editor.value = 'Exact user \u03bb <img>\nTask'; editor.dispatchEvent(new f.window.Event('input', { bubbles: true })); editor.focus(); editor.setSelectionRange(2, 5);
+  await delay(1300); assert.equal($('brief-content').querySelector('[data-brief-statement="t"]'), editor); assert.equal(editor.selectionStart, 2);
+  $('accept-brief').click(); await until(() => f.explorer.doc.handoff, 'accepted handoff'); await until(() => !$('copy-handoff').hidden, 'copy available');
+  assert.equal(f.explorer.doc.handoff.sections.nextSteps[0].text, editor.value); assert.equal($('answer').value, 'PRIVATE DRAFT \u03bb');
+  $('copy-handoff').click(); await until(() => copied, 'copied handoff'); assert.match(copied, /Reviewed implementation tasks/); assert.ok(!copied.includes('<img>')); assert.ok(!copied.includes('PRIVATE DRAFT'));
+  assert.equal(f.actions.some(action => ['research', 'research-follow-up'].includes(action.action)), false);
 });

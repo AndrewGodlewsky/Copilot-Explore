@@ -164,6 +164,7 @@ function apply(next, reset = false) {
   updateFocusStatus();
   showView();
   $('decision-brief').hidden = !doc;
+  $('implementation-handoff').hidden = !doc;
   $('check-answers').hidden = !doc; $('challenge-decisions').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('edit-guidance').disabled = !!state.pending;
@@ -1553,14 +1554,18 @@ $('file').addEventListener('change', async () => {
   try { const document = JSON.parse(await file.text()); await switchJourney('import', { document }); }
   catch (error) { notice(`Could not open that file: ${error.message}`); }
 });
+let briefOperation = 'brief';
+const handoffReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: renderHandoffPreview });
 let briefView = null, briefId = null, briefJourney = null, briefEpoch = 0, briefBusy = false, briefAbort = null, briefStamp = '', briefEdits = new Map();
 function closeBrief() {
-  briefEpoch++; briefAbort?.abort(); briefAbort = null;
-  if (briefId && briefJourney) void fetch('api/brief', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'discard', id: briefId, journey: briefJourney }) }).catch(() => {});
+  briefEpoch++; briefAbort?.abort(); briefAbort = null; handoffReview.close();
+  if (briefId && briefJourney) void fetch(`api/${briefOperation}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'discard', id: briefId, journey: briefJourney }) }).catch(() => {});
   briefId = null; briefJourney = null; briefView = null; briefStamp = ''; briefEdits.clear(); briefBusy = false;
   if ($('brief-dialog').open) $('brief-dialog').close();
+  briefOperation = 'brief';
 }
 async function requestBrief(action) {
+  if (briefOperation === 'handoff' && action === 'start' && (!handoffReview.value || Date.now() >= handoffReview.value.expiresAt)) { $('handoff-preview-status').textContent = 'Preview the current selection again before starting.'; return; }
   if (!briefId || briefBusy || closed || suspended || action === 'accept' && busy) return;
   const writesMap = action === 'accept';
   if (writesMap) { busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); }
@@ -1570,36 +1575,38 @@ async function requestBrief(action) {
   briefBusy = true;
   for (const name of ['generate-brief', 'accept-brief', 'discard-brief']) $(name).disabled = true;
   try {
-    const response = await fetch('api/brief', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
-      body: JSON.stringify({ action, id, journey, ...(action === 'accept' ? { revision: state.document.revision, edits: [...briefEdits].map(([id, text]) => ({ id, text })) } : {}) }) });
+    const response = await fetch(`api/${briefOperation}`, { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
+      body: JSON.stringify({ action, id, journey, ...(briefOperation === 'handoff' && action === 'start' ? { token: handoffReview.value.token } : {}), ...(action === 'accept' ? { revision: state.document.revision, edits: [...briefEdits].map(([id, text]) => ({ id, text })) } : {}) }) });
     const result = await response.json();
     if (epoch !== briefEpoch || id !== briefId || closed || writesMap && mapEpoch !== actionEpoch) return;
     if (!response.ok) throw new Error(result.error);
     if (result.id !== id) throw new Error('Decision brief response did not match this request.');
     if (result.snapshot) apply(result.snapshot);
     briefView = result;
+    if (briefOperation === 'handoff' && action === 'start') { handoffReview.close(); renderHandoffPreview(); }
     if (action === 'discard') { briefStamp = ''; briefEdits.clear(); }
     renderBrief();
   } catch (error) {
     if (epoch === briefEpoch && !closed) { $('brief-status').textContent = `${error.message} Brief freshness is unknown until the saved journey can be checked.`; $('accept-brief').hidden = true; }
-  } finally { clearTimeout(timer); if (writesMap && mapEpoch === actionEpoch) busy = false; if (epoch === briefEpoch) { briefBusy = false; $('generate-brief').disabled = briefView?.status === 'pending'; $('accept-brief').disabled = false; $('discard-brief').disabled = false; } }
+  } finally { clearTimeout(timer); if (writesMap && mapEpoch === actionEpoch) busy = false; if (epoch === briefEpoch) { briefBusy = false; $('generate-brief').disabled = briefView?.status === 'pending' || briefOperation === 'handoff' && !handoffReview.value; $('accept-brief').disabled = false; $('discard-brief').disabled = false; } }
 }
 function renderBrief() {
   const value = briefView, proposal = value?.status === 'proposal' ? value.proposal : null, brief = proposal ?? value?.accepted;
   $('discard-brief').hidden = !['pending', 'proposal', 'stale', 'error'].includes(value?.status);
   $('accept-brief').hidden = !proposal;
-  $('generate-brief').disabled = value?.status === 'pending';
+  $('generate-brief').disabled = value?.status === 'pending' || briefOperation === 'handoff' && !handoffReview.value;
   $('export-brief').hidden = !value?.accepted;
+  $('copy-handoff').hidden = briefOperation !== 'handoff' || !value?.accepted;
   const coverage = brief?.coverage ?? value?.coverage;
   $('brief-status').textContent = [value?.error, value?.status === 'pending' ? `${value.progress}… Cancel this before using cleanup or question help.` : proposal ? 'Proposal only — review and edit, then explicitly accept.' : value?.accepted ? `Accepted brief — ${value.freshness}.` : 'No accepted brief yet.',
-    coverage ? `Journey summary: ${coverage.included} records included${coverage.omitted !== undefined ? `; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes` : ''}.` : '',
+    coverage ? `${briefOperation === 'handoff' ? 'Selected handoff scope' : 'Journey summary'}: ${coverage.included} records included${coverage.omitted !== undefined ? `; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes` : ''}.` : '',
     'User constraints are statements, not verified facts. User edits keep original source links; edited wording is not automatically reverified.'].filter(Boolean).join(' ');
   const unavailable = proposal ? [] : value?.unavailableSources ?? [];
   const stamp = JSON.stringify([proposal ? briefId : 'accepted', brief, unavailable, brief?.dependencies.records.filter(source => !state.document.nodes.some(node => node.id === source.id)).map(source => source.id)]);
   if (stamp === briefStamp) return;
   briefStamp = stamp; briefEdits.clear(); $('brief-content').replaceChildren();
   if (!brief) return;
-  const titles = { goal: 'Goal', decisions: 'Decisions and rationale', constraints: 'Constraints', assumptions: 'Assumptions', unresolved: 'Unresolved questions', nextSteps: 'Next steps' };
+  const titles = { goal: brief.format === 'prompt' ? 'Instructions to the implementer' : 'Goal', decisions: brief.format === 'specification' ? 'Selected requirements' : 'Decisions and rationale', constraints: 'Constraints', assumptions: 'Assumptions', unresolved: 'Unresolved questions and conflicts', nextSteps: brief.format === 'tasks' ? 'Proposed tasks (in order)' : brief.format === 'plan' ? 'Proposed sequence' : brief.format === 'specification' ? 'Suggested validation' : 'Next steps' };
   for (const [key, statements] of Object.entries(brief.sections)) {
     const area = el('section', {}, el('h3', {}, titles[key]));
     if (!statements.length) area.append(el('p', { class: 'quiet' }, 'Unspecified in this brief.'));
@@ -1612,7 +1619,10 @@ function renderBrief() {
       } else area.append(label, el('p', { class: 'brief-text' }, statement.text));
       for (const ref of statement.sources) {
         if (ref.kind === 'guidance') area.append(el('p', { class: 'quiet' }, `Source: global user guidance (${ref.field})`));
-        else {
+        else if (ref.kind === 'evidence') {
+          const source = brief.evidence.find(item => item.nodeId === ref.nodeId)?.sources.find(item => item.id === ref.sourceId);
+          area.append(el('p', { class: 'quiet' }, `Recorded research: ${ref.nodeId} / ${ref.sourceId}: ${source?.title}. ${source?.provenance}; retrieved ${source?.retrievedAt ?? 'unknown'}. Consultation alone does not establish support.`));
+        } else {
           const source = brief.dependencies.records.find(source => source.id === ref.id), available = !unavailable.includes(ref.id) && state.document.nodes.some(node => node.id === ref.id);
           area.append(el('p', { class: 'quiet' }, `Source state: ${source.state}${source.review ? '; needs review' : ''}`), available ? button(`Reveal: ${source.question}`, () => { $('brief-dialog').close(); select(ref.id); }, { class: 'brief-source' }) : el('p', { class: 'quiet' }, `Historical source unavailable: ${source.question} (${ref.id})`));
         }
@@ -1620,9 +1630,15 @@ function renderBrief() {
     }
     $('brief-content').append(area);
   }
+  if (briefOperation === 'handoff') {
+    const appendix = el('details', {}, el('summary', {}, 'Captured guidance, constraints and recorded research'));
+    appendix.append(el('pre', { class: 'handoff-appendix' }, JSON.stringify({ guidance: brief.guidance, includeEvidence: brief.includeEvidence, evidence: brief.evidence }, null, 2))); $('brief-content').append(appendix);
+  }
 }
 $('decision-brief').addEventListener('click', () => {
   voice.cancel();
+  if (briefOperation !== 'brief') closeBrief();
+  briefOperation = 'brief'; configureBriefDialog();
   if (!briefId) { briefId = crypto.randomUUID(); briefJourney = state.activeKey ?? state.document.id; briefEpoch++; }
   $('brief-dialog').showModal(); void requestBrief('view');
 });
@@ -1630,7 +1646,60 @@ $('generate-brief').addEventListener('click', () => { voice.cancel(); void reque
 $('discard-brief').addEventListener('click', () => void requestBrief('discard'));
 $('accept-brief').addEventListener('click', () => void requestBrief('accept'));
 $('refresh-brief').addEventListener('click', async () => { if (await api('refresh-answer')) await requestBrief('poll'); });
-$('close-brief').addEventListener('click', () => { $('brief-dialog').close(); $('decision-brief').focus(); });
+$('close-brief').addEventListener('click', () => { $('brief-dialog').close(); $(briefOperation === 'handoff' ? 'implementation-handoff' : 'decision-brief').focus(); });
+function configureBriefDialog() {
+  const handoff = briefOperation === 'handoff';
+  $('brief-title').textContent = handoff ? 'Reviewed implementation handoff' : 'Reviewed decision brief';
+  $('brief-description').textContent = handoff ? 'Choose only the saved decisions, tentative answers or open questions to include. Topic, guidance and all user constraints are mandatory. Excluded: unselected nodes, implicit ancestors/root records, drafts, private references, project excerpts/file references/snapshots, previous briefs/handoffs/checks, research summaries/recommendations/proposed answers and follow-up prose. Only explicitly included recorded sources and structured claims are an exception. Review exact input before generation. No code, tasks or chat messages are sent or executed.' : 'Generate a bounded journey summary from saved answers, open questions, directions and guidance. Drafts, private references, research and previous briefs are excluded. Review uncertainty and source coverage before accepting.';
+  $('handoff-selection').hidden = !handoff;
+  $('generate-brief').textContent = handoff ? 'Generate from reviewed input' : 'Generate decision brief';
+  $('accept-brief').textContent = handoff ? 'Accept reviewed handoff' : 'Accept reviewed brief';
+  $('export-brief').textContent = handoff ? 'Export accepted handoff' : 'Export reviewed brief';
+  $('export-brief').href = handoff ? 'handoff.md' : 'brief.md';
+  $('copy-handoff').hidden = true;
+}
+function renderHandoffPreview() {
+  const value = handoffReview.value;
+  $('handoff-preview').hidden = !value;
+  $('handoff-preview-text').textContent = value ? `${value.prepared.instructions}\n\n${value.prepared.prompt}` : '';
+  $('handoff-preview-status').textContent = handoffReview.error || (handoffReview.loading ? 'Preparing exact input preview…' : value ? `${value.prepared.context.records.length} explicit records, ${value.prepared.context.includeEvidence ? 'recorded research included' : 'research evidence omitted'}; ${value.prepared.bytes}/${value.prepared.limit} UTF-8 bytes. Review the exact instructions and input below before generating.` : 'Choose sources and preview exact input. Changing selection requires another preview.');
+  if (briefOperation === 'handoff') $('generate-brief').disabled = !value || briefView?.status === 'pending';
+}
+function invalidateHandoffPreview() { handoffReview.close(); renderHandoffPreview(); }
+$('implementation-handoff').addEventListener('click', () => {
+  voice.cancel();
+  if (briefOperation !== 'handoff') {
+    closeBrief(); briefOperation = 'handoff';
+    $('handoff-format').value = 'brief'; $('handoff-evidence').checked = false;
+    $('handoff-sources').replaceChildren();
+    for (const node of state.document.nodes.filter(node => isQuestion(node) || node.kind === 'direction')) {
+      const input = el('input', { type: 'checkbox', 'data-handoff-node': node.id });
+      input.addEventListener('change', invalidateHandoffPreview);
+      $('handoff-sources').append(el('label', {}, input, `${node.question} · ${node.kind === 'direction' ? 'user direction' : effectiveAnswerState(node)}${node.review ? '; needs review' : ''}`));
+    }
+  }
+  configureBriefDialog(); renderHandoffPreview();
+  if (!briefId) { briefId = crypto.randomUUID(); briefJourney = state.activeKey ?? state.document.id; briefEpoch++; }
+  $('brief-dialog').showModal(); void requestBrief('view');
+});
+$('handoff-format').addEventListener('change', invalidateHandoffPreview);
+$('handoff-evidence').addEventListener('change', invalidateHandoffPreview);
+$('review-handoff').addEventListener('click', () => {
+  handoffReview.open({ journey: briefJourney, nodeId: state.document.rootId, purpose: 'implementation-handoff', selection: {
+    nodeIds: [...$('handoff-sources').querySelectorAll('input:checked')].map(input => input.dataset.handoffNode), format: $('handoff-format').value, includeEvidence: $('handoff-evidence').checked,
+  } });
+});
+$('copy-handoff').addEventListener('click', async () => {
+  const epoch = briefEpoch;
+  try {
+    const response = await fetch('handoff.md');
+    if (!response.ok) throw Error('Could not read the accepted handoff.');
+    const text = await response.text();
+    if (epoch !== briefEpoch || briefOperation !== 'handoff' || closed) return;
+    await navigator.clipboard.writeText(text);
+    if (epoch === briefEpoch) $('brief-status').textContent = 'Accepted handoff copied with freshness, source references and review labels.';
+  } catch { if (epoch === briefEpoch) $('brief-status').textContent = 'Copy unavailable. Use Export accepted handoff to save the same portable text.'; }
+});
 let checkView = null, checkId = null, checkJourney = null, checkEpoch = 0, checkBusy = false, checkAbort = null;
 function closeCheck() {
   checkEpoch++; checkAbort?.abort(); checkAbort = null;
@@ -1673,7 +1742,7 @@ function renderCheck() {
   $('check-status').textContent = [result?.error, result?.status === 'pending' ? `${result.progress}… Cancel this before using another helper.` :
     result?.status === 'stale' ? 'These findings are stale because a sent source changed. Run the check again.' :
     active ? result.findings.length ? `${result.findings.length} possible finding${result.findings.length === 1 ? '' : 's'} for review.` : challenge ? 'No useful hypotheses returned for these selected inputs; this is not proof that the choices are sound.' : 'No possible issues found in the reviewed context; the whole map is not proven consistent.' : 'Run an explicit check to review saved inputs.',
-    coverage ? `Journey summary: ${coverage.included} records included; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes.` : ''].filter(Boolean).join(' ');
+    coverage ? `${briefOperation === 'handoff' ? 'Selected handoff scope' : 'Journey summary'}: ${coverage.included} records included; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes.` : ''].filter(Boolean).join(' ');
   $('check-content').replaceChildren();
   if (!active) return;
   const dismissed = new Set(result.dismissed);

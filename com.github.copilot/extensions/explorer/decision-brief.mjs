@@ -3,6 +3,7 @@ import { prepareResearch, identity, framing, record } from './research-context.m
 import { createOwnedHelper } from './owned-helper.mjs';
 import { toolFreeConfig, validateNoTools } from './tool-free.mjs';
 import { ANSWER_STATES } from './web/answer-state.mjs';
+import { parseHandoff } from './implementation-handoff.mjs';
 
 export const BRIEF_SECTIONS = ['goal', 'decisions', 'constraints', 'assumptions', 'unresolved', 'nextSteps'];
 export const BRIEF_OUTPUT_LIMIT = 256 * 1024;
@@ -35,7 +36,7 @@ export function briefFreshness(brief, doc) {
   const byId = new Map(doc.nodes.map(node => [node.id, node]));
   return dep.records.every(source => byId.has(source.id) && source.hash === hash(record(byId.get(source.id)))) ? 'current' : 'stale';
 }
-function sections(value, sources, saved = false) {
+export function briefSections(value, sources, saved = false, evidence = []) {
   if (!keys(value, BRIEF_SECTIONS.join(','))) invalid();
   const ids = new Set(), byId = new Map(sources.map(source => [source.id, source]));
   return Object.fromEntries(BRIEF_SECTIONS.map(section => {
@@ -43,12 +44,15 @@ function sections(value, sources, saved = false) {
     return [section, value[section].map(statement => {
       if (!keys(statement, saved ? 'id,text,certainty,sources,edited' : 'id,text,certainty,sources') || !string(statement.id, 80) || !/^[a-zA-Z0-9_-]+$/.test(statement.id) || ids.has(statement.id) || !certainty.includes(statement.certainty) || !Array.isArray(statement.sources) || statement.sources.length > 8) invalid();
       ids.add(statement.id); briefText(statement.text);
-      if (statement.sources.some(ref => !validRef(ref) || (ref.kind === 'node' && !byId.has(ref.id))) || new Set(statement.sources.map(refKey)).size !== statement.sources.length || (saved && typeof statement.edited !== 'boolean')) invalid();
+      const evidenceRef = ref => keys(ref, 'kind,nodeId,sourceId') && ref.kind === 'evidence' && evidence.some(item => item.nodeId === ref.nodeId && item.sources.some(source => source.id && source.id === ref.sourceId));
+      const key = ref => ref.kind === 'evidence' ? `evidence:${ref.nodeId}:${ref.sourceId}` : refKey(ref);
+      if (statement.sources.some(ref => !(evidenceRef(ref) || validRef(ref)) || (ref.kind === 'node' && !byId.has(ref.id))) || new Set(statement.sources.map(key)).size !== statement.sources.length || (saved && typeof statement.edited !== 'boolean')) invalid();
       const nodes = statement.sources.filter(ref => ref.kind === 'node').map(ref => byId.get(ref.id));
       let label = statement.certainty;
       if (label === 'user-decision' && (!nodes.length || statement.sources.some(ref => ref.kind !== 'node') || nodes.some(source => source.state !== 'decided' || source.review))) label = 'uncertain';
+      if (label === 'user-statement' && statement.sources.some(ref => ref.kind === 'evidence')) label = 'uncertain';
       if (section === 'nextSteps') label = 'suggestion';
-      if (section === 'constraints') label = statement.sources.length ? 'user-statement' : 'suggestion';
+      if (section === 'constraints') label = statement.sources.length && statement.sources.every(ref => ref.kind !== 'evidence') ? 'user-statement' : 'suggestion';
       if (section === 'assumptions') label = 'assumption';
       if (section === 'unresolved') label = 'uncertain';
       return { id: statement.id, text: statement.text, certainty: label, sources: structuredClone(statement.sources), edited: saved ? statement.edited : false };
@@ -59,7 +63,7 @@ export function parseBrief(content, prepared) {
   if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > BRIEF_OUTPUT_LIMIT) invalid();
   let value; try { value = JSON.parse(content); } catch { invalid(); }
   const dependencies = captureBrief(prepared);
-  return { sections: sections(value, dependencies.records), dependencies,
+  return { sections: briefSections(value, dependencies.records), dependencies,
     coverage: { scope: 'journey-summary', bytes: prepared.bytes, limit: prepared.limit, included: dependencies.records.length,
       omitted: Object.values(prepared.context.omitted).reduce((sum, n) => sum + n, 0) } };
 }
@@ -69,7 +73,7 @@ export function validateBrief(value) {
   if (!keys(dep, 'projection,identity,guidance,records') || !Number.isSafeInteger(dep.projection) || dep.projection < 1 || !digest(dep.identity) || !digest(dep.guidance) || !Array.isArray(dep.records) || dep.records.length > 5000) invalid();
   if (new Set(dep.records.map(source => source?.id)).size !== dep.records.length || dep.records.some(source => !keys(source, 'id,hash,question,state,review') || !string(source.id, 100) || !digest(source.hash) || !string(source.question, 4000) || ![...Object.keys(ANSWER_STATES), 'idea', 'direction'].includes(source.state) || typeof source.review !== 'boolean')) invalid();
   if (!keys(coverage, 'scope,bytes,limit,included,omitted') || coverage.scope !== 'journey-summary' || coverage.limit !== 131072 || !['bytes', 'included', 'omitted'].every(key => Number.isSafeInteger(coverage[key]) && coverage[key] >= 0) || coverage.bytes > coverage.limit || coverage.included !== dep.records.length || coverage.included + coverage.omitted > 5000) invalid();
-  const result = { version: 1, acceptedAt: value.acceptedAt, sections: sections(value.sections, dep.records, true), dependencies: structuredClone(dep), coverage: structuredClone(coverage) };
+  const result = { version: 1, acceptedAt: value.acceptedAt, sections: briefSections(value.sections, dep.records, true), dependencies: structuredClone(dep), coverage: structuredClone(coverage) };
   if (Buffer.byteLength(JSON.stringify({ brief: result }, null, 2)) > BRIEF_ARTIFACT_LIMIT) throw new Error('The accepted brief exceeds the 512 KiB saved-artifact limit.');
   return result;
 }
@@ -83,10 +87,11 @@ export function acceptBrief(proposal, edits) {
   return validateBrief({ ...result, version: 1, acceptedAt: new Date().toISOString() });
 }
 export function createBriefHelper(parent, options) {
-  return createOwnedHelper(parent, 'decision-brief', (prepared, { fail }) => ({ instructions: prepared.instructions, prompt: prepared.prompt,
-    config: toolFreeConfig, validateTools: value => validateNoTools(value, fail), stage: 'Drafting decision brief',
-    parse: content => { try { return parseBrief(content, prepared); } catch (error) { throw fail(error.message); } },
-  }), options);
+  const helpers = Object.fromEntries(['decision-brief', 'implementation-handoff'].map(operation => [operation, createOwnedHelper(parent, operation, (prepared, { fail }) => ({ instructions: prepared.instructions, prompt: prepared.prompt,
+    config: toolFreeConfig, validateTools: value => validateNoTools(value, fail), stage: operation === 'implementation-handoff' ? 'Drafting implementation handoff' : 'Drafting decision brief',
+    parse: content => { try { return operation === 'implementation-handoff' ? parseHandoff(content, prepared) : parseBrief(content, prepared); } catch (error) { throw fail(error.message); } },
+  }), options)]));
+  return { run: (prepared, options) => helpers[prepared.operation === 'implementation-handoff' ? 'implementation-handoff' : 'decision-brief'].run(prepared, options), close: () => Promise.all(Object.values(helpers).map(helper => helper.close())) };
 }
 // Escape Markdown control characters, including punctuation used by autolinks and HTML entities.
 const md = value => String(value).replace(/[\\`*_{}[\]<>#+!|()&.:=~-]/g, '\\$&');

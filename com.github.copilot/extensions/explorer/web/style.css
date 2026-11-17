@@ -130,3 +130,7 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .comparison-scroll table { border-collapse: collapse; width: 100%; table-layout: fixed; min-width: 36rem; }
 .comparison-scroll th, .comparison-scroll td { border: 1px solid var(--line); padding: 10px; vertical-align: top; text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }
 .comparison-scroll caption { text-align: left; font-weight: 600; margin-block: 8px; }
+
+.handoff-sources { max-height: 18rem; overflow-y: auto; }
+.handoff-sources label { display: flex; gap: .5rem; align-items: baseline; margin-block: .5rem; overflow-wrap: anywhere; }
+#handoff-preview-text, .handoff-appendix { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; }

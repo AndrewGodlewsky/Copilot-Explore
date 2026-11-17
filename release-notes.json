@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.49",
+    "summary": "Create a reviewed implementation brief, specification, plan, prompt or task list from explicitly selected saved decisions. Preview exact input with optional recorded research evidence, preserve uncertainty and constraints, edit and accept before copying or exporting. Project files and earlier AI artifacts stay excluded; selected-source changes require regeneration."
+  },
+  {
     "version": "0.1.48",
     "summary": "Ground an explicit Challenge Review in up to five selected project text files. Preview bounded Unicode excerpts, relative source names and hashes before sending; refresh changed files explicitly. Keep files out of web research, other helpers, saved journeys and exports. Reveal original quoted project sources in transient findings; native helper logs may retain model input."
   },

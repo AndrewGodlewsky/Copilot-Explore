@@ -1165,6 +1165,21 @@ Read issue-63.md, task-38-design-notes.md, AGENTS.md and the published context-p
 - Synchronize patch metadata/README/release note, document limits/retention/privacy, self-review and commit; no nested agents, publication or issue closure.
 - Write task-38-report.md with inspected SDK evidence, file-source schema/freshness contract, exact limits and inclusion rules, tests, SHA and owner-only checks. Controller independently reviews and publishes.
 
+Published task 38: **v0.1.48**, `381dec6`, required checks recorded in the task report; independent review approved and remote main verified.
+
+## Task 39: Create a reviewed implementation handoff (#46 / original64)
+
+Read issue-64.md, task-39-design-notes.md, AGENTS.md and the published brief/context/source contracts. BASE is `381dec6d02618101b3b869bd18a9fbef180d6975`; ship version **0.1.49**. Reconcile the published interfaces against the current implementation before editing. Propose concrete bounds, ownership, freshness and verification seams before broad edits; record the accepted contract in this task and its brief.
+
+- Let users explicitly select committed source decisions and an output format: brief, specification, plan, prompt or tasks. Show the exact included context before starting an isolated, tool-free SDK helper. No hidden inference, main-chat pollution or automatic project modifications.
+- Produce a bounded proposed artifact that distinguishes user decisions from assumptions, tentative answers, evidence and open questions. Preserve selected constraints and source references; do not manufacture missing requirements or recursively promote earlier AI artifacts into user decisions.
+- Reuse the existing owned-helper queue, actual-release cancellation, usage receipts, source validation and reviewed-proposal contracts. Declare concrete output bounds and validated formats/IDs before implementation. Enforce current source freshness at start, completion, polling and acceptance; unrelated changes should not discard a still-fresh proposal.
+- Provide preview, editable text, explicit accept/discard and portable export/copy. Exact user edits remain authoritative and marked as such; source references are not automatically reverified after an edit. Keep complete journey data and answer drafts unchanged.
+- This issue does not authorize automatic execution, external issue creation, sending to another chat/session or changing models. The deliverable is the reviewed artifact. Do not add optional attached-chat sending simply because the SDK supports it.
+- Selected project excerpts and research evidence must retain their inclusion/privacy rules and actual provenance. Avoid absolute local paths or excluded private content in the artifact. Validate/escape export text without losing Unicode, uncertainty or meaningful whitespace.
+- Test format/subset selection, source canaries, tentative/contradictory inputs, strict outputs, stale and unrelated edits, cancellation/actual release, exact proposal edits and safe export references. Use actual HTTP/jsdom and installed local helper fixtures, npm test/check/package; no paid provider, existing sessions or native UI automation.
+- Synchronize patch metadata/README/release note, self-review and commit; no nested agents, publishing or issue closure. Write task-39-report.md with artifact schema, lifecycle/source contracts, tests, SHA and manual native checks. Controller reviews and publishes.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.
@@ -1226,3 +1241,13 @@ Deferred, do not implement:
 
 - Selection 61: [#44: Deferred: scenario forks and comparison of alternative paths](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/44)
 - Selection 68: [#49: Deferred: asynchronous human review and comments](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/49)
+
+## Accepted Task39 implementation contract
+
+Controller accepted before broad implementation: reuse briefWork/briefRequest and owned helper queue with explicit brief/handoff operation dispatch; a separate validated doc.handoff persists only on explicit revision-checked acceptance. Reuse ResearchReview client sequence, purpose-bound one-use token and ten-minute expiry. Select 1-100 explicit saved question/direction IDs (root and implicit ancestors excluded), five formats brief/specification/plan/prompt/tasks, mandatory complete topic/objective/successCriteria/mode/pins. No selected record or opted-in evidence is silently dropped; exact system instructions plus prompt must fit 128 KiB.
+
+Evidence is unchecked by default. Opt-in includes only selected nodes' validated sources and structured claims: <=15 sources (title300/URL2000), <=12 claims (text1000/limitations1000), <=3 evidence relations per claim (sourceId/paraphrase1000), preserving IDs, retrieval and recorded-read/imported provenance. Legacy bibliography retains unknown retrieval/no invented IDs and cannot be referenced as an identified source. Recorded AI interpretation is not independently verified evidence or a user decision. All project excerpts/references/snapshots, previous briefs/handoffs/checks, research summaries/recommendations/proposed answers and follow-up prose remain excluded, visibly.
+
+Output uses six section arrays, <=5 statements each, <=1000 UTF-16 units per statement, <=8 validated node/guidance/evidence refs, unique short IDs; raw JSON <=256 KiB, saved artifact <=512 KiB and full map <=9 MiB. Format-specific instructions/export labels distinguish specification requirements, ordered plans/tasks and copyable implementation prompts. Capture full user guidance and evidence appendix, preserve uncertainty/conflicts and exact user edits with original refs explicitly not reverified. Atomic acceptance/history/native export preserve journey data and drafts. Portable escaped Markdown/copy only; no code execution, external tasks, chat sending or model changes.
+
+Freshness covers exact transmitted saved-record/guidance/evidence projections with frozen reviewed format at token consumption, queued dispatch after release, completion, polling and acceptance. Unselected/untransmitted changes do not stale proposals. Cancellation invalidates output and waits actual owned release; usage receipts gain Implementation Handoff operation. Installed local SDK fixture, focused model/HTTP/jsdom tests, full npm test once stable, check/package and dynamic all-shipped-byte comparison required. M1 reload-disposal wording is corrected minimally; #41/#42 remain blocked with original guarantees unchanged.

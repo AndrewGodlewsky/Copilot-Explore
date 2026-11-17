@@ -1,3 +1,4 @@
+import { handoffMarkdown } from './implementation-handoff.mjs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -121,9 +122,9 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.helpRequest(await body(req, 2048)));
       }
-      if (req.method === 'POST' && route === 'api/brief') {
+      if (req.method === 'POST' && ['api/brief', 'api/handoff'].includes(route)) {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
-        return json(200, await explorer.briefRequest(await body(req, 256 * 1024)));
+        return json(200, await explorer.briefRequest(await body(req, 256 * 1024), route === 'api/handoff' ? 'handoff' : 'brief'));
       }
       if (req.method === 'POST' && route === 'api/check-answers') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
@@ -159,7 +160,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (['research', 'research-follow-up', 'restore', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
-      if (req.method === 'GET' && ['export.json', 'export.md', 'brief.md'].includes(route)) {
+      if (req.method === 'GET' && ['export.json', 'export.md', 'brief.md', 'handoff.md'].includes(route)) {
         const id = randomUUID();
         const observe = status => { if (explorer.exportObservation?.id === id) explorer.exportObservation = { id, route, status, downloadSaved: 'unknown' }; };
         explorer.exportObservation = { id, route, status: 'active', downloadSaved: 'unknown' };
@@ -169,8 +170,9 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
           if (!explorer.doc) throw new Error('Missing journey');
           const doc = await explorer.readCurrent();
           if (route === 'brief.md' && !doc.brief) throw new Error('Missing accepted brief');
-          const content = route === 'brief.md' ? briefMarkdown(doc.brief, doc) : route.endsWith('.md') ? toMarkdown(doc) : JSON.stringify(doc, null, 2);
-          const filename = `${route === 'brief.md' ? 'decision-brief' : 'exploration'}-${doc.id.slice(0, 8)}${route.endsWith('.md') ? '.md' : '.explore.json'}`;
+          if (route === 'handoff.md' && !doc.handoff) throw new Error('Missing accepted handoff');
+          const content = route === 'handoff.md' ? handoffMarkdown(doc.handoff, doc) : route === 'brief.md' ? briefMarkdown(doc.brief, doc) : route.endsWith('.md') ? toMarkdown(doc) : JSON.stringify(doc, null, 2);
+          const filename = `${route === 'handoff.md' ? 'implementation-handoff' : route === 'brief.md' ? 'decision-brief' : 'exploration'}-${doc.id.slice(0, 8)}${route.endsWith('.md') ? '.md' : '.explore.json'}`;
           res.writeHead(200, { 'Content-Type': route.endsWith('.md') ? 'text/markdown; charset=utf-8' : 'application/json', 'Content-Disposition': `attachment; filename="${filename}"` });
           return res.end(content);
         } catch {

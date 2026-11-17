@@ -139,14 +139,51 @@ The preceding task adds `Library(directory)`, `list({search,archived})`, `resolv
 
 ## Test-first steps
 
-- [ ] Add failing store/controller tests for reload/restart, exact Unicode/whitespace, multiple nodes, source answer change, identical IDs in divergent files, overlapping writers, malformed storage, failed writes, and stale write after clear.
-- [ ] Add real HTTP/jsdom regressions for typing during recovery, debounced save, dictation/recommendation persistence, save while typing, switch with pending/failed write, discard/reopen, and no draft content in exports or AI context.
-- [ ] Run focused RED tests, implement the smallest complete design, and run focused GREEN tests.
-- [ ] Run `npm test`, `npm run check`, and `npm run package`. Run local installed-SDK fixture if canvas/host wiring changes; no paid inference or existing user sessions.
-- [ ] Update README limitations/usage and release metadata/notes with the current documented procedure, self-review, and commit on the current isolated branch. Include the controller's roadmap update. Do not merge, push, or close the issue.
-- [ ] Write the full report to `.superpowers/sdd/2026-11-17-selected-roadmap/task-3-report.md`: RED/GREEN, commands/results, commit, APIs, and remaining manual native checks. Return a concise status/commit/test summary.
+- [x] Add failing store/controller tests for reload/restart, exact Unicode/whitespace, multiple nodes, source answer change, identical IDs in divergent files, overlapping writers, malformed storage, failed writes, and stale write after clear.
+- [x] Add real HTTP/jsdom regressions for typing during recovery, debounced save, dictation/recommendation persistence, save while typing, switch with pending/failed write, discard/reopen, and no draft content in exports or AI context.
+- [x] Run focused RED tests, implement the smallest complete design, and run focused GREEN tests.
+- [x] Run `npm test`, `npm run check`, and `npm run package`. Run local installed-SDK fixture if canvas/host wiring changes; no paid inference or existing user sessions.
+- [x] Update README limitations/usage and release metadata/notes with the current documented procedure, self-review, and commit on the current isolated branch. Include the controller's roadmap update. Do not merge, push, or close the issue.
+- [x] Write the full report to `.superpowers/sdd/2026-11-17-selected-roadmap/task-3-report.md`: RED/GREEN, commands/results, commit, APIs, and remaining manual native checks. Return a concise status/commit/test summary.
 
 No subagents or browser/desktop automation. The controller performs independent review and publishes after approval. Raise concrete conflicts to the controller while continuing independent work.
+
+Published task 3: **v0.1.15**, `516653e`, 132 tests, check and package passed; independent review and remote main verified.
+
+## Task 4: Optional exploration objective and success criteria (#3 / selection 4)
+
+Draft recovery now supplies DraftClient and a separate drafts.json store; read docs/drafts.md and preserve its exact-text/race guarantees. Guidance does not change a node's question or committed answer, so avoid unnecessarily invalidating unrelated draft bases.
+
+Read the accepted issue at .superpowers/sdd/2026-11-17-selected-roadmap/issue-4.md, AGENTS.md, and task-3-report.md before editing. Draft recovery is published at 516653e924ff4c8ec218df0287e9df0db90a30a0. Ship **0.1.16**. Work only on optional objectives and criteria.
+
+### Goal and model
+
+Let a user say what they want to understand or decide, and what would make the exploration useful enough to finish. Keep free exploration available when these fields are omitted. Treat criteria as guidance, never an automatic completion verdict.
+
+- Add top-level objective and successCriteria strings to the existing version-1 document. Absent legacy values normalize to empty; explicit invalid types are rejected. Objective max 2,000 characters and successCriteria max 4,000. Keep Unicode and safe text rendering, and document the fields/limits.
+- Extend creation and later edits through the controller's existing serialized revision-checked save. Preserve the topic, nodes, stable identity, drafts, history compatibility, and archived/library metadata. Reset finishedAt on meaningful changed guidance; a no-op must not manufacture a document edit.
+- Native JSON and Markdown include committed guidance with clear labels; validation/import/export round-trip both fields. Do not create an incompatible format or conflate criteria with answered questions.
+- contextFor must include committed guidance in question generation. boundedContext must retain it in isolated research within the existing total budget. Treat these fields as exploration data under the current injection/isolation instructions. Do not send draft settings or answer drafts.
+- Retain current pending-operation policy; metadata edits while a generation/research task runs should be blocked clearly rather than allow stale guidance to commit. Independent work policy is a later issue.
+
+### UI
+
+- Creation: compact optional disclosure containing Objective and Success criteria fields; both optional. Avoid burdening a quick topic-only start.
+- Existing journey: lightweight header entry to revise guidance in a dialog/disclosure. No permanent question side panel. Use labels, keyboard focus/escape behavior, length limits, saving/error feedback, and narrow-pane wrapping.
+- Preserve the active expanded node, unsaved answer drafts, selection/caret, and view when guidance is saved. Failed/stale saves retain the settings input for retry. Switching journeys must not carry unsaved guidance into another journey.
+- Documentation explains what guidance affects and that finishing remains the user's decision.
+
+### Files and verification
+
+Likely model.mjs, controller.mjs, research.mjs, web/app.mjs, web/index.html/style.css as needed; corresponding model/controller/research/web tests. Add a focused UI module only if responsibility requires it; no runtime dependency or broad refactor.
+
+- [ ] Add focused failing regressions for absent legacy fields; invalid types/lengths; Unicode/native and Markdown round trips; create/edit/no-op/stale writer; main-question and isolated research inclusion/budget; uncommitted exclusion.
+- [ ] Add real HTTP/jsdom checks for optional creation, edit/cancel/error, preserving a draft and focus while saving, and no settings leakage across journeys.
+- [ ] Implement and pass focused tests. Run npm test, npm run check, npm run package. Run the installed local research fixture because its payload changes; no paid providers or existing user sessions. Use the installed SDK, not an npm replacement.
+- [ ] Bump to **0.1.16** and synchronize required metadata/README/release notes using the established procedure. Include controller's roadmap update, self-review, commit on this isolated branch. No merge/push/issue closure.
+- [ ] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-4-report.md with exact fields/APIs, RED/GREEN/full commands and results, commit, and manual native visual limits. Return concise status.
+
+No subagents or browser/desktop UI automation. Controller performs independent review and publication. Raise concrete conflicts without stopping independent work.
 
 ## Issue index
 

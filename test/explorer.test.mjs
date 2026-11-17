@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { request } from 'node:http';
-import { createDocument, validateDocument, addQuestions, answerNode, research, toMarkdown } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { createDocument, validateDocument, addQuestions, answerNode, research, toMarkdown, contextFor } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { explorerCanvas } from '../com.github.copilot/extensions/explorer/canvas.mjs';
@@ -28,6 +28,63 @@ async function started(t, options) {
   await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [question] });
   return f;
 }
+test('legacy guidance defaults to empty and invalid explicit guidance is rejected', () => {
+  const legacy = createDocument('Garden'); delete legacy.objective; delete legacy.successCriteria;
+  assert.equal(validateDocument(legacy).objective, '');
+  assert.equal(validateDocument(legacy).successCriteria, '');
+  for (const [field, value] of [['objective', null], ['objective', 'x'.repeat(2001)], ['successCriteria', []], ['successCriteria', 'x'.repeat(4001)]]) {
+    assert.throws(() => validateDocument({ ...legacy, [field]: value }), /text/);
+  }
+});
+test('committed Unicode guidance survives JSON and Markdown and enters question context', () => {
+  const doc = createDocument('Garden', { objective: 'Decide for neighbors 🌿', successCriteria: 'Accessible to all; cost ≤ $50' });
+  const imported = validateDocument(JSON.parse(JSON.stringify(doc)));
+  assert.equal(imported.objective, 'Decide for neighbors 🌿');
+  assert.equal(imported.successCriteria, 'Accessible to all; cost ≤ $50');
+  assert.match(toMarkdown(imported), /Objective[\s\S]*Decide for neighbors 🌿/);
+  assert.match(toMarkdown(imported), /Success criteria[\s\S]*Accessible to all; cost ≤ \$50/);
+  assert.equal(contextFor(imported, imported.rootId).objective, imported.objective);
+  assert.equal(contextFor(imported, imported.rootId).successCriteria, imported.successCriteria);
+});
+test('guidance retains user whitespace and Unicode through create and edit', async t => {
+  const { explorer } = await fixture(t);
+  await explorer.command('start', { topic: 'Garden', objective: '  Decide 🌿\n', successCriteria: '\nEnough detail  ' });
+  assert.equal(explorer.doc.objective, '  Decide 🌿\n');
+  await explorer.command('cancel');
+  await explorer.command('guidance', { revision: explorer.doc.revision, objective: '  Decide 🌿\n', successCriteria: '  Compare costs\n' });
+  assert.equal(explorer.doc.successCriteria, '  Compare costs\n');
+  assert.equal(validateDocument(JSON.parse(await readFile(explorer.file, 'utf8'))).objective, '  Decide 🌿\n');
+});
+test('guidance edits are revision checked, no-op safe, and clear finished state without changing nodes', async t => {
+  const { explorer, messages } = await started(t);
+  await explorer.command('finish', { revision: explorer.doc.revision });
+  const before = structuredClone(explorer.doc);
+  await explorer.command('guidance', { revision: before.revision, objective: '', successCriteria: '' });
+  assert.equal(explorer.doc.revision, before.revision);
+  await explorer.command('guidance', { revision: before.revision, objective: 'Find a practical plan', successCriteria: 'Fits one weekend' });
+  assert.equal(explorer.doc.revision, before.revision + 1);
+  assert.equal(explorer.doc.finishedAt, null);
+  assert.deepEqual(explorer.doc.nodes, before.nodes);
+  await assert.rejects(explorer.command('guidance', { revision: before.revision, objective: 'stale', successCriteria: '' }), /changed/);
+  assert.equal(messages.length, 1);
+  const saved = JSON.parse(await readFile(explorer.file, 'utf8'));
+  assert.equal(saved.objective, 'Find a practical plan');
+});
+test('guidance reaches queued questions and native HTTP exports without draft text', async t => {
+  const { explorer, messages } = await started(t);
+  await explorer.command('guidance', { revision: explorer.doc.revision, objective: 'Choose a garden 🌿', successCriteria: 'One practical location' });
+  await explorer.command('questions', { revision: explorer.doc.revision, nodeId: explorer.doc.rootId });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(messages.at(-1).prompt, /Choose a garden 🌿/);
+  assert.match(messages.at(-1).prompt, /One practical location/);
+  const server = await startServer(explorer); t.after(() => server.close());
+  const native = await (await fetch(server.url + 'export.json')).json();
+  assert.equal(native.objective, 'Choose a garden 🌿');
+  assert.equal(native.successCriteria, 'One practical location');
+  const markdown = await (await fetch(server.url + 'export.md')).text();
+  assert.match(markdown, /Choose a garden 🌿/);
+  assert.match(markdown, /One practical location/);
+});
 test('answers grow arbitrarily deep branches; changing an ancestor flags descendants without deleting them', () => {
   const doc = createDocument('A garden'); let parent = doc.rootId;
   for (let i = 0; i < 150; i++) { const [child] = addQuestions(doc, parent, [{ question: `Question ${i}`, category: 'Depth' }]); answerNode(doc, child.id, `Answer ${i}`); parent = child.id; }

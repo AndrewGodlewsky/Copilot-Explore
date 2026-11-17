@@ -3,6 +3,12 @@ import { randomUUID } from 'node:crypto';
 export const FORMAT = 'copilot-explorer';
 export const MAX_NODES = 5000;
 export const MAX_DOCUMENT_BYTES = 9 * 1024 * 1024;
+export const MAX_OBJECTIVE = 2000;
+export const MAX_SUCCESS_CRITERIA = 4000;
+export function guidanceText(value, name, max) {
+  if (typeof value !== 'string' || value.length > max) throw new Error(`${name} must be text of at most ${max} characters.`);
+  return value;
+}
 export function text(value, name, max = 20000, empty = false) {
   if (typeof value !== 'string' || value.length > max || (!empty && !value.trim())) {
     throw new Error(`${name} must be ${empty ? '' : 'nonempty '}text of at most ${max} characters.`);
@@ -43,10 +49,11 @@ export function research(value) {
     ...(value.proposedAnswer !== undefined ? { proposedAnswer: text(value.proposedAnswer, 'Proposed answer', 5000) } : {}),
     uncertainty: text(value.uncertainty, 'Uncertainty', 3000), sources };
 }
-export function createDocument(topic) {
+export function createDocument(topic, { objective = '', successCriteria = '' } = {}) {
   const now = new Date().toISOString();
   const id = randomUUID();
   return { format: FORMAT, version: 1, id: randomUUID(), revision: 0, topic: text(topic, 'Idea', 4000),
+    objective: guidanceText(objective, 'Objective', MAX_OBJECTIVE), successCriteria: guidanceText(successCriteria, 'Success criteria', MAX_SUCCESS_CRITERIA),
     createdAt: now, updatedAt: now, finishedAt: null, rootId: id,
     nodes: [{ id, parentId: null, question: topic.trim(), category: 'Your idea', answer: '', research: null, review: false }] };
 }
@@ -84,7 +91,9 @@ export function validateDocument(value) {
   if (root.question !== topic) throw new Error('The root must match the idea.');
   const document = { format: FORMAT, version: 1, id: text(value.id, 'Exploration ID', 100),
     revision: Number.isSafeInteger(value.revision) && value.revision >= 0 ? value.revision : 0,
-    topic, rootId: root.id, createdAt: date(value.createdAt, 'creation date'), updatedAt: date(value.updatedAt, 'update date'),
+    topic, objective: guidanceText(Object.hasOwn(value, 'objective') ? value.objective : '', 'Objective', MAX_OBJECTIVE),
+    successCriteria: guidanceText(Object.hasOwn(value, 'successCriteria') ? value.successCriteria : '', 'Success criteria', MAX_SUCCESS_CRITERIA),
+    rootId: root.id, createdAt: date(value.createdAt, 'creation date'), updatedAt: date(value.updatedAt, 'update date'),
     finishedAt: value.finishedAt === null ? null : date(value.finishedAt, 'finish date'), nodes };
   if (Buffer.byteLength(JSON.stringify(document, null, 2)) > MAX_DOCUMENT_BYTES) throw new Error('This map has reached the 9 MiB saved-data limit. Export it and continue in a new exploration.');
   return document;
@@ -130,7 +139,7 @@ export function contextFor(doc, nodeId) {
   for (let node = findNode(doc, nodeId); node; node = byId.get(node.parentId)) {
     path.push({ id: node.id, question: node.question, answer: node.answer, review: node.review });
   }
-  return { topic: doc.topic, path: path.reverse(),
+  return { topic: doc.topic, objective: doc.objective ?? '', successCriteria: doc.successCriteria ?? '', path: path.reverse(),
     existingQuestions: doc.nodes.filter(n => n.parentId === nodeId).map(n => n.question),
     decisionsElsewhere: doc.nodes.filter(n => n.answer && !path.some(p => p.id === n.id)).map(n => ({ question: n.question, answer: n.answer, review: n.review })) };
 }
@@ -140,7 +149,10 @@ export function toMarkdown(doc) {
   const answered = doc.nodes.filter(n => n.answer).length;
   const lines = ['# Exploration: ' + md(doc.topic), '', `Saved: ${doc.updatedAt}`, '',
     `${answered} answered questions; ${doc.nodes.length - 1 - answered} open questions.`, '',
-    'This record preserves user answers separately from AI research. Open questions are unresolved, not decisions.', '', '## Map', '',
+    'This record preserves user answers separately from AI research. Open questions are unresolved, not decisions.', '',
+    '## Guidance', '', '**Objective:**', '', doc.objective ? md(doc.objective) : '_Not set._', '',
+    '**Success criteria:**', '', doc.successCriteria ? md(doc.successCriteria) : '_Not set._', '',
+    'Criteria guide exploration; the user decides when to finish.', '', '## Map', '',
     '| ID | Parent | Category | Question | Status |', '| --- | --- | --- | --- | --- |'];
   const ids = new Map(doc.nodes.map((n, i) => [n.id, `N${i}`]));
   for (const n of doc.nodes) lines.push(`| ${ids.get(n.id)} | ${ids.get(n.parentId) ?? '—'} | ${md(n.category).replace(/\n/g, ' ')} | ${md(n.question).replace(/\n/g, ' ')} | ${n.id === doc.rootId ? 'Idea' : n.answer ? 'Answered' : 'Open'}${n.review ? '; needs review' : ''} |`);

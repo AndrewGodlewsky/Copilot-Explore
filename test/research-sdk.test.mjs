@@ -5,6 +5,17 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { createResearcher, publicUrl, boundedContext, hostRuntime } from '../com.github.copilot/extensions/explorer/research.mjs';
 
+test('bounded research context retains committed guidance inside its total budget', () => {
+  const compact = boundedContext({ topic: 'A plan', objective: 'Decide for neighbors 🌿', successCriteria: 'Accessible to all', path: [{ question: 'Current question', answer: '' }], decisionsElsewhere: [] });
+  assert.equal(compact.objective, 'Decide for neighbors 🌿');
+  assert.equal(compact.successCriteria, 'Accessible to all');
+  const large = boundedContext({ topic: 'A plan', objective: 'x'.repeat(2000), successCriteria: 'y'.repeat(4000), path: Array.from({ length: 200 }, (_, i) => ({ question: `Question ${i}`, answer: 'a'.repeat(1000) })), decisionsElsewhere: [] });
+  assert.equal(large.objective.length, 2000);
+  assert.equal(large.successCriteria.length, 4000);
+  assert.ok(JSON.stringify(large).length <= 75000);
+  assert.equal(large.truncated, true);
+});
+
 const result = { basis: 'reasoning', summary: 'Comparison', options: [
   { title: 'Small', description: 'Pilot', pros: ['Simple'], cons: ['Limited'] },
   { title: 'Large', description: 'Launch', pros: ['Reach'], cons: ['Cost'] },

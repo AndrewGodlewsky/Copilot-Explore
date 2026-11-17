@@ -1,7 +1,7 @@
 import { mkdir, readFile, open, unlink, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createDocument, validateDocument, findNode, addQuestions, answerNode, contextFor, research, text, toMarkdown } from './model.mjs';
+import { createDocument, validateDocument, findNode, addQuestions, answerNode, contextFor, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
 import { Drafts, draftBase, draftHash } from './drafts.mjs';
 export { atomicWrite } from './storage.mjs';
@@ -129,12 +129,12 @@ export class Explorer {
       switch (action) {
         case 'start':
           if (this.library) {
-            const doc = createDocument(input.topic); doc.revision = 1;
+            const doc = createDocument(input.topic, input); doc.revision = 1;
             const record = await this.library.import(doc); await this.attach(record.key);
             this.request('questions', this.doc.rootId); break;
           }
           if (this.doc) throw new Error('Open a new canvas for a new exploration, or import a saved map.');
-          await this.save(createDocument(input.topic));
+          await this.save(createDocument(input.topic, input));
           this.request('questions', this.doc.rootId);
           break;
         case 'import':
@@ -174,6 +174,15 @@ export class Explorer {
           addQuestions(next, input.nodeId, [{ question: input.question, category: input.category }]); next.finishedAt = null;
           await this.save(next);
           break;
+        case 'guidance': {
+          if (!next) throw new Error('Start an exploration first.');
+          const objective = guidanceText(input.objective, 'Objective', MAX_OBJECTIVE);
+          const successCriteria = guidanceText(input.successCriteria, 'Success criteria', MAX_SUCCESS_CRITERIA);
+          if (next.objective === objective && next.successCriteria === successCriteria) break;
+          next.objective = objective; next.successCriteria = successCriteria; next.finishedAt = null;
+          await this.save(next);
+          break;
+        }
         case 'finish':
           if (!next) throw new Error('Start an exploration first.');
           next.finishedAt = new Date().toISOString();

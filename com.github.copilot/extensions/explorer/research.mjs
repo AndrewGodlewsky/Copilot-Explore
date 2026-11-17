@@ -55,10 +55,10 @@ export async function publicUrl(value, resolve = host => lookup(host, { all: tru
 const sourceKey = value => { const url = new URL(value); url.hash = ''; return url.href; };
 
 export function boundedContext(context) {
-  const result = { topic: context.topic, path: [], decisionsElsewhere: [], truncated: false };
+  const result = { topic: context.topic, objective: context.objective ?? '', successCriteria: context.successCriteria ?? '', path: [], decisionsElsewhere: [], truncated: false };
   let budget = 75000 - JSON.stringify(result).length;
   const add = (array, item, front = false) => {
-    const size = JSON.stringify(item).length;
+    const size = JSON.stringify(item).length + (array.length ? 1 : 0);
     if (size > budget) { result.truncated = true; return false; }
     budget -= size; front ? array.unshift(item) : array.push(item); return true;
   };

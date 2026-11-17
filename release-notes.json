@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.16",
+    "summary": "Journeys can now include an optional objective and success criteria. Both guide future questions and isolated research, appear in JSON and Markdown exports, and can be revised without losing answer drafts. Finishing remains your decision; older journeys open with empty guidance."
+  },
+  {
     "version": "0.1.15",
     "summary": "Answer drafts now save locally as you type or dictate and recover across reopening and restart. Changed answers and conflicting canvases offer explicit recovery choices. Journey switches flush drafts, failures keep editor text, and saved answers remain separate from drafts, exports, and AI context."
   },

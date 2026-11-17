@@ -37,6 +37,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom, document = window.document;
+  const guidanceDialog = document.getElementById('guidance-dialog');
+  guidanceDialog.showModal = () => { guidanceDialog.open = true; };
+  guidanceDialog.close = () => { guidanceDialog.open = false; };
   const requests = new Set();
   t.after(async () => {
     window.dispatchEvent(new window.Event('pagehide'));
@@ -730,6 +733,55 @@ test('failed writes permit explicit loss of unsaved editor text before a switch'
   f.document.getElementById('library-toggle').click(); await until(() => f.document.querySelectorAll('.library-entry').length === 2, 'entries');
   [...f.document.querySelectorAll('.library-entry')].find(e => e.textContent.includes('After discard')).querySelector('[data-action="open"]').click();
   await until(() => f.explorer.activeKey !== first, 'switch after explicit discard');
+});
+test('optional creation guidance is saved without carrying settings into another journey', async t => {
+  const f = await fixture(t, 340, undefined, true);
+  f.document.getElementById('library-toggle').click();
+  const details = f.document.getElementById('start-guidance');
+  assert.equal(details.open, false);
+  details.open = true;
+  f.type('topic', 'A shared orchard');
+  f.type('start-objective', 'Decide where to plant 🌳');
+  f.type('start-criteria', 'Neighbors can reach it');
+  f.document.getElementById('start-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => f.explorer.doc?.topic === 'A shared orchard', 'guided journey created');
+  assert.equal(f.explorer.doc.objective, 'Decide where to plant 🌳');
+  assert.equal(f.explorer.doc.successCriteria, 'Neighbors can reach it');
+  await f.explorer.command('cancel');
+  f.document.getElementById('library-toggle').click();
+  await until(() => !f.document.getElementById('welcome').hidden, 'library visible');
+  assert.equal(f.document.getElementById('start-objective').value, '');
+  assert.equal(f.document.getElementById('start-criteria').value, '');
+});
+test('guidance edit, cancel, and stale retry preserve the expanded answer draft and caret', async t => {
+  const f = await fixture(t, 340), node = f.explorer.doc.nodes[1];
+  f.open(node.id);
+  f.type('answer', 'A local draft 🌿');
+  const answer = f.document.getElementById('answer'); answer.focus(); answer.setSelectionRange(4, 4);
+  f.document.getElementById('edit-guidance').click();
+  assert.equal(f.document.activeElement.id, 'edit-objective');
+  f.type('edit-objective', 'Discard me');
+  f.document.getElementById('cancel-guidance').click();
+  assert.equal(f.explorer.doc.objective, '');
+  assert.equal(f.document.activeElement.id, 'edit-guidance');
+  assert.equal(f.document.getElementById('answer').selectionStart, 4);
+  f.document.getElementById('edit-guidance').click();
+  f.type('edit-objective', 'Understand the neighbors');
+  f.type('edit-criteria', 'A usable plan');
+  f.document.getElementById('guidance-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => f.explorer.doc.objective === 'Understand the neighbors' && !f.document.getElementById('guidance-dialog').open, 'guidance saved');
+  assert.equal(f.document.getElementById('answer').value, 'A local draft 🌿');
+  assert.equal(f.document.getElementById('answer').selectionStart, 4);
+  assert.equal(f.document.activeElement.id, 'edit-guidance');
+  assert.equal(f.document.getElementById('node-workspace').hidden, false);
+  f.document.getElementById('edit-guidance').click();
+  f.type('edit-objective', 'Keep this on failure');
+  const second = await new Explorer({ file: f.explorer.file }).load();
+  await second.command('guidance', { revision: second.doc.revision, objective: 'Another canvas', successCriteria: 'A usable plan' });
+  f.document.getElementById('guidance-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => /Another canvas/.test(f.document.getElementById('guidance-error').textContent), 'stale edit rejected');
+  assert.equal(f.document.getElementById('edit-objective').value, 'Keep this on failure');
+  assert.equal(f.document.getElementById('guidance-dialog').open, true);
 });
 
 test('one conflicting node does not prevent other nodes from saving drafts', async t => {

@@ -10,6 +10,7 @@ let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame, viewportSize;
 let suppressClick = false, restoringFocus = false, composing = null, workspaceDirty = false;
 let actionEpoch = 0, closed = false, pollTimer;
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
+let guidanceReturn = null;
 const drafts = new Map(), nodeUi = new Map();
 const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
   changed: () => { const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); } },
@@ -70,6 +71,8 @@ function apply(next, reset = false) {
     voice.cancel();
     drafts.clear(); nodeUi.clear(); positions.clear(); $('node-workspace').replaceChildren();
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
+    $('start-objective').value = ''; $('start-criteria').value = ''; $('start-guidance').open = false;
+    if ($('guidance-dialog').open) $('guidance-dialog').close();
   }
   signature = stamp; state = next;
   if (changedDocument) draftClient.reset(state.activeKey ?? state.document?.id, state.document?.nodes ?? []);
@@ -79,6 +82,7 @@ function apply(next, reset = false) {
   if (doc && !doc.nodes.some(n => n.id === selected)) { selected = doc.rootId; expanded = false; }
   showView();
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
+  $('edit-guidance').disabled = !!state.pending;
   notice(state.error);
   if (!doc) return;
   if (firstQuestions && selected === doc.rootId) expanded = false;
@@ -448,7 +452,36 @@ function renderOutline() {
   if (focused) [...$('outline-list').children].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
 }
 function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) || draftClient.entries.get(n.id)?.conflict) ?? []; }
-$('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value }); });
+$('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value, objective: $('start-objective').value, successCriteria: $('start-criteria').value }); });
+function closeGuidance() {
+  $('guidance-dialog').close(); $('guidance-error').hidden = true; $('guidance-error').textContent = '';
+  if (guidanceReturn?.nodeId === selected && $('answer')) {
+    $('answer').setSelectionRange(guidanceReturn.start, guidanceReturn.end, guidanceReturn.direction);
+  }
+  $('edit-guidance').focus({ preventScroll: true });
+  guidanceReturn = null;
+}
+$('edit-guidance').addEventListener('click', () => {
+  if (!state.document || state.pending) return notice('Wait for Copilot or cancel the current request before editing guidance.');
+  const answer = expanded && $('answer');
+  guidanceReturn = answer ? { nodeId: selected, start: answer.selectionStart, end: answer.selectionEnd, direction: answer.selectionDirection } : null;
+  $('edit-objective').value = state.document.objective ?? '';
+  $('edit-criteria').value = state.document.successCriteria ?? '';
+  $('guidance-error').hidden = true; $('guidance-error').textContent = '';
+  $('guidance-dialog').showModal(); $('edit-objective').focus();
+});
+$('cancel-guidance').addEventListener('click', closeGuidance);
+$('guidance-dialog').addEventListener('cancel', event => { event.preventDefault(); closeGuidance(); });
+$('guidance-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (busy) return;
+  $('save-guidance').disabled = true;
+  try {
+    const result = await api('guidance', { objective: $('edit-objective').value, successCriteria: $('edit-criteria').value });
+    if (!result) { $('guidance-error').textContent = $('notice').textContent || 'Could not save guidance. Try again.'; $('guidance-error').hidden = false; return; }
+    closeGuidance();
+  } finally { $('save-guidance').disabled = false; }
+});
 $('library-toggle').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); void refreshLibrary(); $('library-search').focus(); });
 $('library-return').addEventListener('click', () => { libraryView = false; showView(); refreshScene(); $('map').focus({ preventScroll: true }); });
 $('library-search').addEventListener('input', refreshLibrary);

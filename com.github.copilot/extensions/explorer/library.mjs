@@ -1,8 +1,8 @@
+import { acquireLock } from './owned-lock.mjs';
 import { questionCounts } from './web/answer-state.mjs';
-import { mkdir, readdir, lstat, realpath, readFile, open, unlink } from 'node:fs/promises';
+import { mkdir, readdir, lstat, realpath, readFile } from 'node:fs/promises';
 import { join, resolve, dirname, basename } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import { validateDocument, MAX_DOCUMENT_BYTES } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
 
@@ -93,13 +93,8 @@ export class Library {
     } catch { throw new Error('This library entry is missing, changed, or unreadable. Refresh the library; its original file has not been replaced.'); }
   }
   async locked(fn) {
-    const root = await this.root(), path = join(root, 'library.json.lock'); let lock;
-    for (let attempt = 0; attempt < 50; attempt++) {
-      try { lock = await open(path, 'wx'); break; }
-      catch (error) { if (error.code !== 'EEXIST') throw new Error('Library storage is unavailable. Check the data directory permissions.'); await delay(20); }
-    }
-    if (!lock) throw new Error('Another library writer is active. Try again. Remove a stale library.json.lock only after Copilot has fully exited.');
-    try { return await fn(); } finally { await lock.close(); await unlink(path); }
+    const lock = await acquireLock(join(await this.root(), 'library.json.lock'), { attempts: 50 });
+    try { return await fn(); } finally { await lock.release(); }
   }
   async writeMetadata(metadata) {
     metadata.revision++;

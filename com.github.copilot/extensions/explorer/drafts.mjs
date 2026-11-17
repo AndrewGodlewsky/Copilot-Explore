@@ -1,7 +1,7 @@
-import { mkdir, lstat, realpath, readFile, open, unlink } from 'node:fs/promises';
+import { acquireLock } from './owned-lock.mjs';
+import { mkdir, lstat, realpath, readFile } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import { atomicWrite } from './storage.mjs';
 import { ANSWER_STATES, effectiveAnswerState } from './web/answer-state.mjs';
 
@@ -59,12 +59,7 @@ export class Drafts {
     if (!input || !key(input.key) || !nodeId(input.nodeId) || !key(input.base) || !revision(input.revision) || !(input.text === null || typeof input.text === 'string' && input.text.length <= 20000)) throw new Error('Invalid draft.');
     if (Object.hasOwn(input, 'answerState') && (typeof input.answerState !== 'string' || !Object.hasOwn(ANSWER_STATES, input.answerState))) throw new Error('Invalid draft state.');
     if (Object.hasOwn(input, 'stateSelected') && typeof input.stateSelected !== 'boolean') throw new Error('Invalid draft state selection.');
-    const root = await this.root(), path = join(root, 'drafts.json.lock'); let lock;
-    for (let attempt = 0; attempt < 50; attempt++) {
-      try { lock = await open(path, 'wx'); break; }
-      catch (error) { if (error.code !== 'EEXIST') throw error; await delay(20); }
-    }
-    if (!lock) throw new Error('Another draft writer is active. Retry; remove a stale drafts.json.lock only after Copilot has fully exited.');
+    const lock = await acquireLock(join(await this.root(), 'drafts.json.lock'), { attempts: 50 });
     try {
       const value = await this.read(), index = value.entries.findIndex(e => e.key === input.key && e.nodeId === input.nodeId), old = value.entries[index];
       if ((old?.revision ?? 0) !== input.revision || (matchingText !== undefined && old?.text !== matchingText) || (matchingState !== undefined && effectiveAnswerState({ answer: old?.text, answerState: old?.answerState }) !== matchingState)) {
@@ -75,6 +70,6 @@ export class Drafts {
       const entry = { key: input.key, nodeId: input.nodeId, base: input.base, text: input.text, answerState: effectiveAnswerState({ answer: input.text, answerState: input.answerState }), stateSelected: input.stateSelected ?? Object.hasOwn(input, 'answerState'), revision: ++value.revision, updatedAt: new Date().toISOString() };
       if (index < 0) value.entries.push(entry); else value.entries[index] = entry;
       await this.write(value); return entry;
-    } finally { await lock.close(); await unlink(path); }
+    } finally { await lock.release(); }
   }
 }

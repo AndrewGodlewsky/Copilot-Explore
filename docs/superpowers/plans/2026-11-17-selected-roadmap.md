@@ -847,6 +847,35 @@ Read issue-45.md, task-26-design-notes.md, AGENTS.md and published context/concu
 - Compare identical task23 benchmark cases and retain machine-readable before/after artifacts; no tight wall-clock assertions in npm test. No browser/desktop automation, real mic, paid inference or existing session.
 - Run npm test/check/package and applicable installed fixtures for changed snapshot/host contracts. Synchronize confirmed patch metadata/README/release note, include controller plan update, self-review and commit; no nested agents or publication. Write task-26-report.md with cursor/invalidation/fallback semantics, measured bytes/work, checks, SHA and native/manual limits.
 
+Published task 26: **v0.1.38**, `557da5d`, required checks and protocol evidence retained; independent review approved and remote main verified.
+
+## Task 27: Understandable interruption and recovery flows (#37 / original47)
+
+Read issue-47.md, task-27-design-notes.md, AGENTS.md and current history/draft/owned-helper reports. BASE is `557da5d1213829b4a81bfc34108e3a334f9ea77a`; ship version **0.1.39**. Preserve the published conditional snapshot protocol and transient-state invalidation from task26; read its final report. The document atomic replacement remains the commit point, history intent may need later finalization, and draft tombstones and unreconciled usage journals protect recovery. The design notes inventory the current cooperative lock paths; reconcile against source before choosing a shared lock seam.
+
+### Recovery behavior
+
+- Build on the published document commit point, history intent reconciliation, local draft recovery and owned-helper usage journals. Distinguish a failed precommit save from a document saved successfully with incomplete history finalization. Do not report committed newer text as lost or overwrite it with the old in-memory snapshot.
+- Offer useful explicit actions: retry a safe read/save/reconciliation, inspect/open a validated recoverable version, or dismiss a known interrupted operation. Explain which data each action affects. Retry inference only after a fresh explicit user request, with normal context/model/account checks and retained receipts; do not automatically replay a crashed research operation.
+- A recoverable snapshot must pass normal schema, size and identity checks. Preserve the active file, its original malformed bytes where applicable, history and drafts before recovery. For a broken active file, importing a validated snapshot as a separate recoverable copy can be safer than overwriting it. This is recovery, not deferred scenario forks or a new backup/sync product.
+- Use actual recorded operation/recovery evidence. Distinguish interrupted, failed, still active and unknown. Missing historical records are unknown, not invented interruptions. Bounded discovery must not read arbitrary paths from tampered journal pointers or recursively scan the user's computer.
+- Treat exports honestly: an HTTP response does not prove the browser saved a file. Detect only observable generation/response failures or interruption evidence that is actually recorded, offer an explicit retry, and state the visibility limit. Do not claim durable download completion or infer that an old partial file is safe to replace.
+- Preserve draft text/state/caret and existing current-journey content during recovery inspection or errors. A recoverable version preview must not silently become the active journey. Surface safe actionable errors without gratuitous private paths, source text or raw stack traces.
+
+### Lock ownership
+
+- Inspect all current cooperative lock acquisition/release paths. Introduce validated owner metadata and a narrowly scoped recovery protocol only where needed. Never use age alone as proof of abandonment, and treat unknown legacy/malformed ownership conservatively.
+- Prove a prior owner has exited before reclaiming a known owned lock. A live/reused PID, inaccessible process check or permission failure is not proof of death. A timeout only means the caller stopped waiting.
+- Prevent the two-recoverer/new-writer race described in task-27-design-notes.md. Read/stat followed by unlink of a shared lock path is insufficient. Use an exclusive recovery claim respected by all recovery paths, or a demonstrated OS-supported equivalent; reread and verify the dead-owner record while holding that claim, then atomically quarantine only that stale lock. Never subsequently unlink the shared lock path after a new owner could have acquired it.
+- An abandoned recovery claim itself must fail conservatively rather than recurse into unsafe claim deletion. Keep any quarantine/repair artifacts bounded and recoverable, with explicit retention metadata for the later storage-management task; do not implement broad cleanup here.
+
+### Verification and release
+
+- Use disposable child-process/filesystem fixtures for killed writers, live owners, PID reuse/unknown ownership, two recoverers and a newly acquiring writer. Test interrupted before/after atomic replacement, malformed/truncated active files, corrupt history/intent/journal pointers, partial temp files, unavailable storage, failed recovery/export/retry, and preserved newer answers/draft tombstones.
+- Exercise actual protected HTTP and jsdom recovery controls, stale revisions and journey changes. Avoid a test that merely reimplements the lock algorithm. No real user file repair, browser/desktop automation, real microphone, paid provider or existing session tests.
+- Run npm test/check/package and applicable installed local runtime fixtures. Synchronize confirmed patch/release metadata/README and controller roadmap change, self-review and commit; no nested agents/push/merge/issue closure.
+- Write task-27-report.md with lock proof/limitations, exact commit/recovery semantics, observed-versus-unknown operation states, evidence/SHA and owner-only checks. Root reviews and publishes.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

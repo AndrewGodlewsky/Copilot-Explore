@@ -11,7 +11,7 @@ const digest = doc => hash(encode(doc));
 const validHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const revision = value => Number.isSafeInteger(value) && value >= 0;
 const nameValid = value => typeof value === 'string' && value.trim().length > 0 && value.length <= HISTORY_LIMITS.name;
-const recoveryError = error => new Error(`History recovery required. Files are preserved; restore the history backup before editing this journey. ${error.message}`);
+const recoveryError = () => new Error('History recovery required. Files are preserved. Open Recovery to inspect saved versions or retry reconciliation before editing this journey.');
 
 // Every method is called under the active document's writer lock. The active
 // document rename is the commit point; intent recovery never replaces it.
@@ -130,7 +130,7 @@ export class History {
     await this.write(join(await this.root(), 'intent.json'), JSON.stringify({ version: 1, before: row.hash, after: next.head.hash, manifest: next }));
     await replace();
     try { await this.reconcile(after); }
-    catch (error) { throw new Error(`Map saved, but history finalization failed. Reopen History to recover before another edit. ${error.message}`); }
+    catch { throw new Error('Map saved, but history finalization failed. Open Recovery to retry history reconciliation before another edit. Newer saved content is retained.'); }
   }
   async list(current, requested) {
     const value = await this.reconcile(current);
@@ -143,7 +143,7 @@ export class History {
     return { entries: [...value.entries].reverse(), current: value.head, undoRevision: value.undoRevision, oldestRevision: value.entries[0]?.revision ?? null, bytes: value.entries.reduce((sum, row) => sum + row.bytes, 0), limits: HISTORY_LIMITS };
   }
   async checkpoint(current, selected, name, remove = false) {
-    if (!revision(selected) || !nameValid(name)) throw new Error('Checkpoint names must contain 1–120 characters.');
+    if (!revision(selected) || !nameValid(name)) throw new Error('Checkpoint names must contain 1â€“120 characters.');
     const value = await this.reconcile(current);
     // A persisted baseline distinguishes an interrupted checkpoint from lost history.
     await this.write(join(await this.root(), 'manifest.json'), JSON.stringify(value));

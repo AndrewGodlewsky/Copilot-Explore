@@ -128,6 +128,7 @@ function apply(next, reset = false) {
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
     $('start-objective').value = ''; $('start-criteria').value = ''; $('start-mode').value = 'understand'; showModeDescription('start-mode'); $('start-guidance').open = false;
     if ($('history-dialog').open) closeHistory();
+    if ($('recovery-dialog').open) closeRecovery();
     if ($('guidance-dialog').open) $('guidance-dialog').close();
     acceptedIds.clear(); acceptedParentId = null;
   }
@@ -156,7 +157,7 @@ function apply(next, reset = false) {
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('edit-guidance').disabled = !!state.pending;
   if (state.contextCoverage && JSON.stringify(state.contextCoverage) !== lastCoverage) { lastCoverage = JSON.stringify(state.contextCoverage); showCoverage(state.contextCoverage, 'Prepared'); }
-  notice(state.error);
+  notice(state.error || state.recoveryNotice?.message || (['failed', 'interrupted'].includes(state.exportObservation?.status) ? 'Export did not finish. Open Recovery to explicitly retry. Browser file saving is unknown.' : ''));
   if (!doc) return;
   if (firstQuestions && selected === doc.rootId) expanded = false;
   $('map-title').textContent = doc.topic;
@@ -949,6 +950,80 @@ function renderOutline() {
   $('outline-list').scrollTop = scroll;
   if (focusedBranch) [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === focusedBranch)?.focus({ preventScroll: true });
 }
+let recoveryEpoch = 0, recoverySelection = null, recoveryContext = null, recoveryReturn = null;
+function closeRecovery() {
+  recoveryEpoch++; $('recovery-dialog').close();
+  if (recoveryReturn?.isConnected) recoveryReturn.focus({ preventScroll: true });
+}
+async function readRecovery(input, epoch) {
+  const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 5000), page = pageEpoch;
+  try {
+    const response = await fetch('api/recovery', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+    const value = await response.json();
+    if (closed || suspended || page !== pageEpoch || epoch !== recoveryEpoch || !$('recovery-dialog').open) return null;
+    if (!response.ok) throw new Error(value.error); return value;
+  } finally { clearTimeout(timer); }
+}
+async function loadRecovery() {
+  const epoch = ++recoveryEpoch; recoverySelection = null; recoveryContext = null;
+  $('recovery-copy').disabled = true; $('recovery-retry').disabled = true;
+  $('recovery-list').replaceChildren(); $('recovery-preview').replaceChildren(); $('recovery-operations').replaceChildren();
+  $('recovery-status').textContent = 'Inspecting local recovery evidence...';
+  try {
+    const value = await readRecovery({ action: 'list' }, epoch); if (!value) return;
+    recoveryContext = { journey: value.journey, revision: value.revision }; $('recovery-retry').disabled = false;
+    $('recovery-status').textContent = [value.notice?.message, value.entries.length ? 'Choose a validated saved version to inspect.' : 'No validated recoverable versions found.', value.unavailable ? 'Some files could not be validated; they remain untouched.' : ''].filter(Boolean).join(' ');
+    for (const row of value.entries) $('recovery-list').append(button(`Inspect revision ${row.revision} | ${new Date(row.time).toLocaleString()}`, async () => {
+      const selectedEpoch = ++recoveryEpoch; recoverySelection = null; $('recovery-copy').disabled = true;
+      try {
+        const preview = await readRecovery({ action: 'inspect', ...recoveryContext, candidate: row.hash }, selectedEpoch); if (!preview) return;
+        recoverySelection = row.hash;
+        $('recovery-preview').replaceChildren(el('h3', {}, preview.document.topic), el('p', {}, 'Preview only. The active journey has not changed.'),
+          ...preview.document.nodes.slice(0, 100).map(node => el('p', {}, `${node.question}\n${node.answer ?? ''}`)),
+          ...(preview.document.nodes.length > 100 ? [el('p', {}, 'Preview shows the first 100 nodes. The recovery copy contains the complete validated version.')] : []));
+        $('recovery-copy').disabled = false;
+      } catch { if (selectedEpoch === recoveryEpoch) $('recovery-status').textContent = 'This version could not be inspected. Refresh recovery; originals are preserved.'; }
+    }));
+    renderRecoveryOperations(value);
+  } catch { if (epoch === recoveryEpoch) $('recovery-status').textContent = 'Recovery inspection could not complete. Refresh and retry when storage is available; originals are preserved.'; }
+}
+function renderRecoveryOperations(value) {
+  if (value.operationsUnavailable) $('recovery-operations').append(el('p', {}, 'Helper evidence could not be inspected. Its operation state is unknown; saved-version recovery remains available.'));
+  $('recovery-operations').append(el('p', {}, value.operation.status === 'active' ? `${value.operation.kind}: still active in this canvas.` : 'No active operation is recorded in this canvas. Earlier unrecorded work is unknown.'));
+  for (const operation of value.operations ?? []) {
+    const row = el('p', {}, `${operation.kind}: ${operation.status}. Receipts and recovery files are retained.`);
+    if (['interrupted', 'failed'].includes(operation.status)) row.append(button('Dismiss this notice', async () => {
+      try { await readRecovery({ action: 'dismiss', operation: operation.id }, recoveryEpoch); await loadRecovery(); }
+      catch { $('recovery-status').textContent = 'Could not dismiss this notice. Recovery evidence is preserved.'; }
+    }));
+    $('recovery-operations').append(row);
+  }
+  if (value.export) $('recovery-operations').append(el('p', {}, `Export: ${value.export.status}. Browser file saving is unknown.`),
+    el('a', { href: value.export.route, download: '' }, 'Retry export'));
+}
+$('recovery-open').addEventListener('click', () => {
+  recoveryReturn = document.activeElement; voice.cancel(); $('recovery-dialog').showModal(); $('recovery-close').focus(); void loadRecovery();
+});
+$('recovery-close').addEventListener('click', closeRecovery);
+$('recovery-dialog').addEventListener('cancel', event => { event.preventDefault(); closeRecovery(); });
+$('recovery-refresh').addEventListener('click', loadRecovery);
+$('recovery-retry').addEventListener('click', async () => {
+  if (!recoveryContext || busy) return; const epoch = recoveryEpoch;
+  const result = await api('recovery-retry', recoveryContext);
+  if (epoch !== recoveryEpoch) return;
+  if (result) await loadRecovery(); else $('recovery-status').textContent = $('notice').textContent;
+});
+$('recovery-copy').addEventListener('click', async () => {
+  if (!recoverySelection || !recoveryContext || busy || !switchAllowed()) return;
+  const epoch = recoveryEpoch, input = { ...recoveryContext, candidate: recoverySelection };
+  $('workspace').inert = true;
+  try {
+    await draftClient.flush(); if (epoch !== recoveryEpoch) return;
+    if (await api('recover-copy', input)) { closeRecovery(); $('map').focus({ preventScroll: true }); } else $('recovery-status').textContent = $('notice').textContent;
+  } catch { $('recovery-status').textContent = 'Drafts could not be preserved. Retry saving the draft before opening a recovery copy.'; }
+  finally { $('workspace').inert = false; }
+});
+
 function historyJourney() { return state.activeKey ?? state.document?.id; }
 function closeHistory() {
   historyEpoch++; historySelection = null; $('history-dialog').close();

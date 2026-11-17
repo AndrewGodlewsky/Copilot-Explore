@@ -1,8 +1,18 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.38.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.39.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
+
+## Recovery
+
+Open **Recovery** to retry a saved read and incomplete history finalization, inspect a validated saved version, or open it as a separate recovery copy. Inspection does not change the active journey. Copies preserve the original file, history and original-journey drafts, including malformed bytes and draft tombstones. A damaged bound journey can reach Recovery before any map loads. The preview shows up to 100 nodes; the copy contains the whole validated version.
+
+A failed save before atomic replacement keeps the earlier committed map. If replacement succeeded but history finalization failed, the newer saved content remains authoritative. Retry reads that disk state; it never replays model inference. After a safe read, retry an answer save through the ordinary editor. Research requires a fresh explicit Research action with the usual account, model and context checks.
+
+Recovery shows only recorded helper lifecycle evidence. An exited recorded owner proves interrupted coordination, not that an orphan helper stopped. A live or reused PID alone is unknown; only a currently tracked operation in this process is shown as active. Dismiss hides a known interrupted/failed notice for this canvas and retains all receipts and journals. Legacy journal pointers are never followed. Export observations are limited to this canvas: generation failure, response interruption or response finish. None confirms that the browser saved a file; **Retry export** is explicit.
+
+All six cooperative writer locks use validated owner records. Only a known local PID proven absent may be quarantined. Legacy, malformed, foreign-host, live/reused-PID, inaccessible-owner or abandoned-recovery-claim locks stay untouched. A timeout is not proof of death. Each lock retains at most one `.abandoned` record; another abandoned writer stays blocked pending storage review. No broad cleanup is performed. See [recovery contracts](docs/recovery.md) for bounded discovery, evidence retention and remaining manual checks.
 
 ## Install from GitHub
 
@@ -242,7 +252,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.38, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.38**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.39, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.39**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

@@ -257,9 +257,9 @@ test('corrupt persistence is preserved; disk revision and lock protect competing
   await explorer.command('answer', { revision: explorer.doc.revision, nodeId: explorer.doc.nodes[1].id, answer: 'A' });
   await assert.rejects(second.command('answer', { revision: second.doc.revision, nodeId: second.doc.nodes[1].id, answer: 'B' }), /Another canvas/);
   await writeFile(explorer.file + '.lock', 'fixture');
-  await assert.rejects(explorer.command('finish', { revision: explorer.doc.revision }), /Another writer/);
+  await assert.rejects(explorer.command('finish', { revision: explorer.doc.revision }), /owner is unknown/);
   const broken = join(dir, 'broken.explore.json'); await writeFile(broken, '{broken');
-  await assert.rejects(new Explorer({ file: broken }).load(), /preserved/); assert.equal(await readFile(broken, 'utf8'), '{broken');
+  const damaged = await new Explorer({ file: broken }).load(); assert.equal(damaged.doc, null); assert.match(damaged.error, /preserved/); assert.equal(await readFile(broken, 'utf8'), '{broken');
 });
 test('HTTP serves real assets and exports; protects token, origin, host and static paths', async t => {
   const { explorer } = await started(t); const server = await startServer(explorer); t.after(() => server.close());

@@ -44,7 +44,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
     return task;
   }
   async function execute(context, controller, progress) {
-    let client, directory, usage, stop, stopAttempt, phase = 'preparing the SDK';
+    let client, directory, usage, stop, stopAttempt, phase = 'preparing the SDK', outcome = 'failed';
     const sessionId = randomUUID();
     let terminalFailure;
     const stopWith = message => { terminalFailure ??= fail(message); controller.abort(); };
@@ -106,10 +106,10 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       stage(work.stage);
       const response = await session.sendAndWait({ prompt: work.prompt }, 180000);
       check(); stage('Checking result');
-      return work.parse(response?.data?.content);
+      const result = work.parse(response?.data?.content); outcome = 'completed'; return result;
     } catch (error) {
       if (terminalFailure) throw terminalFailure;
-      if (controller.signal.aborted) throw cancelled();
+      if (controller.signal.aborted) { outcome = 'cancelled'; throw cancelled(); }
       if (error instanceof HelperError) throw fail(error.message);
       // SDK errors may contain prompts or credentials; only our stage labels reach the UI.
       throw fail(`Research could not finish: ${phase}. Your answers are saved; try again after checking Copilot.`);
@@ -122,11 +122,13 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
           await usage.flush();
         }
         if (stopped === false) throw new Error('Helper did not stop');
+        await usage?.finish?.(outcome);
       } catch {
         // Retain the original journal and a discoverable recovery pointer; never retry inference.
         if (directory && usageDirectory) {
           await mkdir(usageDirectory, { recursive: true }).then(() => writeFile(join(usageDirectory, `recovery-${sessionId}.json`), JSON.stringify({ sessionId, directory }), { mode: 0o600 })).catch(() => {});
         }
+        await usage?.finish?.('failed').catch(() => {});
         const error = fail('Helper cleanup or usage accounting failed. Recovery files were retained locally; no additional model call was made.');
         if (stopped === false) error.releaseConfirmed = stopAttempt;
         throw error;

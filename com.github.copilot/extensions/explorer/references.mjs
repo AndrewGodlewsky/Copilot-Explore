@@ -1,4 +1,5 @@
-import { mkdir, lstat, realpath, open, unlink } from 'node:fs/promises';
+import { acquireLock } from './owned-lock.mjs';
+import { mkdir, lstat, realpath, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { atomicWrite } from './storage.mjs';
@@ -55,12 +56,7 @@ export class References {
     validateReferenceIds(nodeIds);
     if (!validRevision(revision) || revision === Number.MAX_SAFE_INTEGER) throw new Error('Invalid reference revision.');
     const root = await this.root(), file = join(root, `${key}.json`), lockPath = `${file}.lock`;
-    let lock;
-    try { lock = await open(lockPath, 'wx', 0o600); }
-    catch (error) {
-      if (error.code === 'EEXIST') throw new Error('References are being updated. Refresh and retry.');
-      throw error;
-    }
+    const lock = await acquireLock(lockPath);
     try {
       const old = await this.read(key);
       if (old.revision !== revision) throw new Error('References changed in another canvas. Refresh references and retry your choice.');
@@ -70,6 +66,6 @@ export class References {
       if (Buffer.byteLength(data) > MAX_BYTES) throw new Error('Reference storage limit reached.');
       await this.write(file, data);
       return next;
-    } finally { await lock.close(); await unlink(lockPath); }
+    } finally { await lock.release(); }
   }
 }

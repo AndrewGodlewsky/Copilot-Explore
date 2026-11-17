@@ -1,4 +1,5 @@
-import { mkdir, readFile, open, unlink } from 'node:fs/promises';
+import { acquireLock } from './owned-lock.mjs';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { atomicWrite } from './controller.mjs';
 
@@ -24,14 +25,12 @@ export class VoicePreferences {
     validatePreferences(selection);
     if (!this.file) throw new Error('Voice settings storage is unavailable.');
     await mkdir(dirname(this.file), { recursive: true });
-    let lock;
-    try { lock = await open(this.file + '.lock', 'wx'); }
-    catch (error) { if (error.code === 'EEXIST') throw new Error('Voice settings are being updated. Refresh and try again.'); throw error; }
+    const lock = await acquireLock(this.file + '.lock');
     try {
       const saved = await this.read();
       if (saved.revision !== revision) throw new Error('Voice settings changed in another canvas. Refresh before saving.');
       const next = { version: 1, revision: revision + 1, microphone: selection.microphone, model: selection.model };
       await atomicWrite(this.file, JSON.stringify(next, null, 2)); return next;
-    } finally { await lock.close(); await unlink(this.file + '.lock'); }
+    } finally { await lock.release(); }
   }
 }

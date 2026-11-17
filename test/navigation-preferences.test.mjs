@@ -51,7 +51,7 @@ test('navigation settings lock and failed writes leave last revision recoverable
   const file = await fixture(t), store = new NavigationPreferences(file);
   const saved = await store.save({ wheelMode: 'zoom', sensitivity: 1, motion: 'system' }, 0);
   await writeFile(file + '.lock', 'held');
-  await assert.rejects(store.save({ wheelMode: 'pan', sensitivity: 2, motion: 'full' }, 1), /being updated/i);
+  await assert.rejects(store.save({ wheelMode: 'pan', sensitivity: 2, motion: 'full' }, 1), /owner is unknown/i);
   assert.deepEqual(await store.read(), saved);
   await rm(file + '.lock');
   const failing = new NavigationPreferences(file, async () => { throw new Error('disk full'); });

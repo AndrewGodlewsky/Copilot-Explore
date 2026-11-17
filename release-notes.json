@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.39",
+    "summary": "Add Recovery to inspect validated saved versions, reopen damaged bound journeys as separate copies, retry saved reads and history, and dismiss recorded interruptions without replaying AI. Preserve drafts and receipts, report export visibility honestly, and safely quarantine only proven-dead writer locks."
+  },
+  {
     "version": "0.1.38",
     "summary": "Skip unchanged map transfers with conditional polling. Reconnect with bounded retries while preserving drafts and rejecting late responses. Keep private explanation freshness checks active, protect newer help results from older failed checks, and prevent old polls from overwriting accepted briefs."
   },

@@ -1,6 +1,10 @@
+import { acquireLock } from './owned-lock.mjs';
+import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
+import { Library } from './library.mjs';
+import { operationEvidence } from './operation-recovery.mjs';
 import { prepareBrief, captureBrief, briefFreshness, acceptBrief, validateBrief } from './decision-brief.mjs';
 import { prepareAnswerCheck, captureCheck, checkFreshness, validateCheck } from './answer-check.mjs';
-import { mkdir, readFile, open, unlink, realpath } from 'node:fs/promises';
+import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createDocument, validateDocument, findNode, addQuestions, addDirection, candidateQuestions, acceptQuestions, answerNode, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA, pinnedConstraints } from './model.mjs';
@@ -33,7 +37,7 @@ export class Explorer {
       return this;
     }
     try { this.doc = validateDocument(JSON.parse(await readFile(this.file, 'utf8'))); }
-    catch (error) { if (error.code !== 'ENOENT') throw new Error(`Could not load the saved map. The file has been preserved: ${error.message}`); }
+    catch (error) { if (error.code !== 'ENOENT') this.error = 'Could not load the saved map. The file is preserved. Open Recovery to retry reading.'; }
     return this;
   }
   snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
@@ -307,7 +311,7 @@ export class Explorer {
     // The only in-place public mutations are pending.progress and preview.stale.
     const stamp = [this.doc, this.activeKey, !!this.library, this.error,
       JSON.stringify(this.pending), this.preview, this.preview?.stale,
-      this.questionSource, this.contextCoverage];
+      this.questionSource, this.contextCoverage, this.recoveryNotice, this.exportObservation];
     if (!this.pollStamp || stamp.some((value, index) => value !== this.pollStamp[index])) {
       this.pollStamp = stamp; this.pollCursor = randomUUID();
     }
@@ -320,7 +324,7 @@ export class Explorer {
       catch { stale = true; } // Another canvas can remove the parent before an explicit refresh.
     }
     const preview = this.preview ? { ...this.preview, stale } : null;
-    return { ...this.snapshot(), preview: structuredClone(preview), contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
+    return { ...this.snapshot(), preview: structuredClone(preview), recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
   }
   async checkQuestionSource(nodeId) {
     try {
@@ -334,6 +338,7 @@ export class Explorer {
   async attach(key) {
     const record = await this.library.opened(key, this.binding);
     this.file = record.file; this.doc = record.document; this.activeKey = key;
+    this.recoveryNotice = null; this.exportObservation = null;
     this.reconcileCleanup();
   }
   async draftIdentity(journey) {
@@ -390,8 +395,10 @@ export class Explorer {
     return work;
   }
   async readCurrent() {
-    const saved = this.library ? await this.library.resolve(this.activeKey) :
-      { file: this.file, document: validateDocument(JSON.parse(await readFile(this.file, 'utf8'))) };
+    let saved;
+    try { saved = this.library ? await this.library.resolve(this.activeKey) :
+      { file: this.file, document: validateDocument(JSON.parse(await readFile(this.file, 'utf8'))) }; }
+    catch { throw new Error('The saved journey could not be read. Open Recovery to retry or inspect validated saved versions. Original files are preserved.'); }
     if (saved.file !== this.file || saved.document.id !== this.doc.id || saved.document.rootId !== this.doc.rootId || saved.document.createdAt !== this.doc.createdAt || saved.document.revision < this.doc.revision ||
       (saved.document.revision === this.doc.revision && JSON.stringify(saved.document) !== JSON.stringify(validateDocument(this.doc)))) {
       throw new Error('This journey changed on disk. Reopen it from the library.');
@@ -399,15 +406,67 @@ export class Explorer {
     return saved.document;
   }
   async withDocumentLock(work) {
-    await mkdir(dirname(this.file), { recursive: true });
-    let lock;
-    try { lock = await open(`${this.file}.lock`, 'wx'); }
-    catch (error) {
-      if (error.code === 'EEXIST') throw new Error('Another writer holds this map. Close duplicate canvases and reopen. If a crash left a .lock file, remove it only after Copilot has fully exited.');
-      throw error;
+    try { await mkdir(dirname(this.file), { recursive: true }); }
+    catch { throw new Error('Journey storage is unavailable. Check local storage access and retry; files are preserved.'); }
+    const lock = await acquireLock(`${this.file}.lock`);
+    try { return await work(); } finally { await lock.release(); }
+  }
+  async recoveryContext() {
+    if (this.doc) {
+      const journey = this.activeKey ?? this.doc.id, key = await this.draftIdentity(journey);
+      return { journey, key, revision: this.doc.revision, acceptsId: id => id === this.doc.id };
     }
-    try { return await work(); }
-    finally { await lock.close(); await unlink(`${this.file}.lock`); }
+    if (!this.library) return { journey: null, revision: null };
+    const metadata = await this.library.metadata(), key = metadata.bindings[recoveryHash(this.binding ?? '')];
+    if (!key) return { journey: null, revision: null };
+    const names = (await boundedNames(await this.library.root(), 2000)).filter(name => name.endsWith('.explore.json'));
+    return { journey: key, key, revision: null, acceptsId: id => names.some(name => recoveryHash(`${name}\0${id}`) === key) };
+  }
+  async recoveryView(input) {
+    if (!input || Object.keys(input).some(k => !['action', 'journey', 'revision', 'candidate', 'operation'].includes(k)) || !['list', 'inspect', 'dismiss'].includes(input.action)) throw new Error('Invalid recovery request.');
+    if (input.action === 'inspect' && !validRecoveryKey(input.candidate)) throw new Error('Invalid recovery selection.');
+    let operations = [], operationsUnavailable = false;
+    try { operations = await operationEvidence(this.library?.directory ?? dirname(this.file)); }
+    catch { operationsUnavailable = true; }
+    if (input.action === 'dismiss') {
+      if (!operations.some(row => row.id === input.operation && ['interrupted', 'failed'].includes(row.status))) throw new Error('Active or unknown operations cannot be dismissed as interrupted.');
+      this.dismissedRecovery ??= new Set(); this.dismissedRecovery.add(input.operation);
+      return { dismissed: true };
+    }
+    const context = await this.recoveryContext();
+    if (input.action !== 'list' && (input.journey !== context.journey || input.revision !== context.revision)) throw new Error('The recovery journey changed. Refresh recovery.');
+    let versions = { entries: [], unavailable: 0 };
+    try { if (context.key) versions = await discoverVersions(this.library?.directory ?? dirname(this.file), context.key, context.acceptsId, input.action === 'inspect' ? input.candidate : undefined); }
+    catch (error) { if (input.action === 'inspect') throw error; versions.unavailable = 1; }
+    return { journey: context.journey, revision: context.revision, ...versions, operationsUnavailable, operations: operations.filter(row => !this.dismissedRecovery?.has(row.id)), export: this.exportObservation ?? null, notice: this.recoveryNotice ?? null, operation: this.pending ? { kind: this.pending.kind, status: 'active' } : { status: 'unknown' } };
+  }
+  recoveryRequest(input) { return this.transact(() => this.recoveryView(input)); }
+  async recover(action, input) {
+    const context = await this.recoveryContext();
+    if (input.journey !== context.journey || input.revision !== context.revision) throw new Error('The recovery journey changed. Refresh recovery.');
+    if (this.pending || this.preview) throw new Error('Cancel the active request or dismiss its preview before recovery.');
+    if (action === 'recover-copy') {
+      const selected = await this.recoveryView({ action: 'inspect', journey: input.journey, revision: input.revision, candidate: input.candidate });
+      const library = this.library ?? new Library(dirname(this.file)), record = await library.import(selected.document, { asCopy: true });
+      if (this.library) await this.attach(record.key);
+      else { this.file = record.file; this.doc = record.document; this.exportObservation = null; }
+      this.error = 'Recovered version opened as a separate copy. Original journey, history and drafts are preserved.';
+    } else {
+      if (!this.doc) {
+        if (this.library) { const record = await this.library.bound(this.binding); if (record) await this.attach(record.key); else throw new Error('No bound journey is available.'); }
+        else { this.doc = validateDocument(JSON.parse(await readFile(this.file, 'utf8'))); }
+      }
+      if (this.doc) {
+        await this.withDocumentLock(async () => {
+          const current = await this.readCurrent();
+          await (await this.history(this.activeKey ?? this.doc.id)).reconcile(current);
+          this.doc = current; this.reconcileCleanup(); this.reconcileResearch();
+        });
+      }
+      this.error = 'Saved journey read successfully. Any incomplete history was reconciled. No model request was replayed.';
+    }
+    this.recoveryNotice = null;
+    return this.uiSnapshot();
   }
   async history(journey) {
     const key = await this.draftIdentity(journey);
@@ -432,7 +491,14 @@ export class Explorer {
       return { ...result, journey, pending: !!this.pending, revision: current.revision, ...(requested !== undefined ? { snapshotRevision: requested } : {}) };
     }));
   }
-  async save(next, label = 'Map updated') { return this.withDocumentLock(() => this.saveLocked(next, label)); }
+  async save(next, label = 'Map updated') {
+    const before = this.doc;
+    try { return await this.withDocumentLock(() => this.saveLocked(next, label)); }
+    catch (error) {
+      this.recoveryNotice = { kind: 'save', status: this.doc !== before ? 'committed' : 'failed', message: this.doc !== before ? 'Map saved. History finalization needs a retry; the newer saved content is retained.' : 'Save did not commit. Your previous saved journey and local drafts are retained. Retry reading before saving again.' };
+      throw error.code ? new Error('Save storage is unavailable. Open Recovery to retry the saved read; previous content and drafts are preserved.') : error;
+    }
+  }
   async saveLocked(next, label) {
     let saved = null;
     try { saved = this.doc ? await this.fresh() : validateDocument(JSON.parse(await readFile(this.file, 'utf8'))); }
@@ -451,8 +517,14 @@ export class Explorer {
     next.updatedAt = new Date(Math.max(Date.now(), Date.parse(saved?.updatedAt ?? 0) + 1)).toISOString();
     validateDocument(next);
     const replace = async () => { accept(); await atomicWrite(this.file, JSON.stringify(next, null, 2)); this.doc = next; this.reconcileCleanup(); this.reconcileResearch(); };
-    if (saved && saved.id === next.id) await (await this.history(this.activeKey ?? this.doc.id)).commit(saved, next, label, replace);
-    else await replace(); // New direct-file identity has independent history, like imported library copies.
+    try {
+      if (saved && saved.id === next.id) await (await this.history(this.activeKey ?? this.doc.id)).commit(saved, next, label, replace);
+      else await replace(); // New direct-file identity has independent history, like imported library copies.
+      this.recoveryNotice = null;
+    } catch (error) {
+      this.recoveryNotice = { kind: 'save', status: this.doc === next ? 'committed' : 'failed', message: this.doc === next ? 'Map saved. History finalization needs a retry; newer saved content is retained.' : 'Save did not commit. Previous saved content and drafts are retained. Retry reading before saving again.' };
+      throw error;
+    }
     return true;
   }
   reconcileResearch() {
@@ -531,6 +603,10 @@ export class Explorer {
   }
   command(action, input = {}) {
     return this.transact(async () => {
+      if (['recover-copy', 'recovery-retry'].includes(action)) {
+        try { return await this.recover(action, input); }
+        catch (error) { throw new Error(error.message === 'The recovery journey changed. Refresh recovery.' ? error.message : 'Recovery could not complete. Refresh recovery and retry when storage is available; originals, drafts and receipts are preserved.'); }
+      }
       if (action === 'context-coverage') {
         if (!['questions', 'research'].includes(input.kind)) throw new Error('Invalid request kind.');
         const prepared = this.prepareRequest(input.kind, input.nodeId, undefined, contextScope(input.scope));

@@ -3,8 +3,12 @@ import { createReadStream } from 'node:fs';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { lockOwner } from './owned-lock.mjs';
+import { atomicWrite } from './storage.mjs';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const identifier = /^[a-z0-9][a-z0-9._:+\/-]*$/i;
+const activeOwners = new Set();
+export const activeUsageOwner = owner => owner?.pid === process.pid && activeOwners.has(owner.token);
 const numericFields = [
     'inputTokens',
     'outputTokens',
@@ -162,10 +166,18 @@ export async function createUsageRecorder(sessionId, root, operation = 'research
         }
     }) + '\n';
     await replace(file, lines);
+    const lifecycle = { version: 1, id: sessionId, operation, owner: lockOwner(), status: 'active', updatedAt: started, retention: 'preserve' };
+    await atomicWrite(join(directory, 'operation.json'), JSON.stringify(lifecycle));
+    activeOwners.add(lifecycle.owner.token);
     const seen = new Set();
     let pending = Promise.resolve();
     let failure = false;
     return {
+        async finish(status) {
+            if (!['completed', 'failed', 'cancelled'].includes(status)) throw new Error('Invalid helper outcome.');
+            activeOwners.delete(lifecycle.owner.token);
+            await atomicWrite(join(directory, 'operation.json'), JSON.stringify({ ...lifecycle, status, updatedAt: new Date().toISOString() }));
+        },
         record (event) {
             if (failure) return;
             let receipt;

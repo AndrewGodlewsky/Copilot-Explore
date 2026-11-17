@@ -36,7 +36,7 @@ async function until(read, label) {
 async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
-  const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
+  let explorer = await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
     cleaner: options.cleaner, briefHelper: options.briefHelper, checkHelper: options.checkHelper,
     questionHelper: options.questionHelper,
     researcher: { run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
@@ -47,6 +47,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   ] });
   if (!options.preview) await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: explorer.preview.questions.map((q, index) => ({ index, question: q.question })) });
   await options.before?.(explorer);
+  if (options.cold) { await explorer.close(); explorer = await new Explorer({ library: new Library(dir), binding: 'dom' }).load(); }
   const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom, document = window.document;
@@ -63,6 +64,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const historyDialog = document.getElementById('history-dialog');
   historyDialog.showModal = () => { historyDialog.open = true; };
   historyDialog.close = () => { historyDialog.open = false; };
+  const recoveryDialog = document.getElementById('recovery-dialog');
+  if (recoveryDialog) { recoveryDialog.showModal = () => { recoveryDialog.open = true; }; recoveryDialog.close = () => { recoveryDialog.open = false; }; }
   const navigationDialog = document.getElementById('navigation-dialog');
   navigationDialog.showModal = () => { navigationDialog.open = true; };
   navigationDialog.close = () => { navigationDialog.open = false; };
@@ -127,7 +130,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, scene: () => ({ positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; transform(); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
   window.eval(script.replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
-  await until(() => width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
+  await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
     const button = [...document.querySelectorAll('#nodes button')].find(b => b.title === question);
@@ -2898,4 +2901,50 @@ test('brief acceptance rejects a pre-action poll snapshot and closes its pending
   await until(() => f.explorer.doc.brief && !$('accept-brief').disabled, 'accepted snapshot'); held(); await old;
   assert.equal($('notice').textContent, '', 'pre-acceptance state must not replace accepted snapshot');
   await f.poll(); f.window.dispatchEvent(new f.window.Event('pagehide')); assert.equal(briefRead?.aborted, true);
+});
+
+
+test('recovery inspection and failed retry preserve connected draft text, state and caret over HTTP', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', '  Unsaved recovery text \u{1f33f}  ');
+  $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'local draft');
+  const answer = $('answer'); answer.focus(); answer.setSelectionRange(3, 9);
+  assert.ok($('recovery-open')); $('recovery-open').click();
+  await until(() => $('recovery-list').querySelector('button'), 'recoverable version');
+  $('recovery-list').querySelector('button').click();
+  await until(() => !$('recovery-copy').disabled, 'preview ready');
+  assert.equal($('answer'), answer); assert.equal(answer.value, '  Unsaved recovery text \u{1f33f}  '); assert.equal(answer.selectionStart, 3); assert.equal($('answer-state').value, 'assumption');
+  const original = JSON.stringify(f.explorer.doc);
+  await writeFile(f.explorer.file, '{private malformed active');
+  $('recovery-retry').click();
+  await until(() => $('recovery-status').textContent.includes('could not complete'), 'failed retry');
+  assert.equal(JSON.stringify(f.explorer.doc), original); assert.equal($('answer'), answer); assert.equal(answer.selectionStart, 3);
+  assert.doesNotMatch($('recovery-status').textContent, /private malformed/);
+  $('recovery-close').click(); assert.equal(f.document.activeElement, answer); assert.equal(answer.selectionEnd, 9);
+});
+
+
+test('recovery copy opens only after explicit choice and keeps original saved draft', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), originalKey = f.explorer.activeKey, originalFile = f.explorer.file;
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Preserved original draft');
+  $('recovery-open').click(); await until(() => $('recovery-list').querySelector('button'), 'versions');
+  $('recovery-list').querySelector('button').click(); await until(() => !$('recovery-copy').disabled, 'preview');
+  assert.equal(f.explorer.activeKey, originalKey); const bytes = await readFile(originalFile, 'utf8');
+  $('recovery-copy').click(); await until(() => f.explorer.activeKey !== originalKey && !$('recovery-dialog').open, 'new recovery copy');
+  assert.equal(await readFile(originalFile, 'utf8'), bytes);
+  const saved = JSON.parse(await readFile(join(dirname(originalFile), 'drafts.json'), 'utf8'));
+  assert.ok(saved.entries.some(entry => entry.key === originalKey && entry.text === 'Preserved original draft'));
+});
+
+
+test('cold damaged binding reaches recovery controls with no active map and opens a validated separate copy', async t => {
+  let originalFile;
+  const f = await fixture(t, 340, undefined, true, { cold: true, before: async e => { originalFile = e.file; await writeFile(e.file, '{truncated private'); } }), $ = id => f.document.getElementById(id);
+  assert.equal(f.explorer.doc, null); $('recovery-open').click();
+  await until(() => $('recovery-list').querySelector('button'), 'cold recovery list');
+  $('recovery-list').querySelector('button').click(); await until(() => !$('recovery-copy').disabled, 'cold inspected version');
+  assert.equal(f.explorer.doc, null); $('recovery-copy').click();
+  await until(() => f.explorer.doc && !$('recovery-dialog').open, 'cold copy opened');
+  assert.equal(await readFile(originalFile, 'utf8'), '{truncated private'); assert.notEqual(f.explorer.file, originalFile);
 });

@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -102,6 +102,11 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (selected !== null && !/^(0|[1-9][0-9]*)$/.test(selected)) throw new Error('Invalid history revision.');
         return json(200, await explorer.readHistory(url.searchParams.get('journey'), selected === null ? undefined : Number(selected)));
       }
+      if (req.method === 'POST' && route === 'api/recovery') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        try { return json(200, await explorer.recoveryRequest(await body(req, 2048))); }
+        catch { return json(400, { error: 'Recovery inspection could not complete. Refresh and retry; original files are preserved.' }); }
+      }
       if (req.method === 'GET' && route === 'api/drafts') return json(200, await explorer.readDrafts(url.searchParams.get('journey')));
       if (req.method === 'GET' && route === 'api/references') return json(200, await explorer.readReferences(url.searchParams.get('journey')));
       if (req.method === 'POST' && route === 'api/references') {
@@ -119,16 +124,26 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req);
-        if (['restore', 'checkpoint', 'remove-checkpoint'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        if (['restore', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
       if (req.method === 'GET' && ['export.json', 'export.md', 'brief.md'].includes(route)) {
-        if (!explorer.snapshot().document) return json(400, { error: 'Start an exploration first.' });
-        const doc = await explorer.readCurrent();
-        if (route === 'brief.md' && !doc.brief) throw new Error('Accept a reviewed decision brief before exporting.');
-        const filename = `${route === 'brief.md' ? 'decision-brief' : 'exploration'}-${doc.id.slice(0, 8)}${route.endsWith('.md') ? '.md' : '.explore.json'}`;
-        res.writeHead(200, { 'Content-Type': route.endsWith('.md') ? 'text/markdown; charset=utf-8' : 'application/json', 'Content-Disposition': `attachment; filename="${filename}"` });
-        return res.end(route === 'brief.md' ? briefMarkdown(doc.brief, doc) : route.endsWith('.md') ? toMarkdown(doc) : JSON.stringify(doc, null, 2));
+        const id = randomUUID();
+        const observe = status => { if (explorer.exportObservation?.id === id) explorer.exportObservation = { id, route, status, downloadSaved: 'unknown' }; };
+        explorer.exportObservation = { id, route, status: 'active', downloadSaved: 'unknown' };
+        res.once('finish', () => { if (res.statusCode === 200) observe('response-finished'); });
+        res.once('close', () => { if (!res.writableFinished) observe('interrupted'); });
+        try {
+          if (!explorer.doc) throw new Error('Missing journey');
+          const doc = await explorer.readCurrent();
+          if (route === 'brief.md' && !doc.brief) throw new Error('Missing accepted brief');
+          const content = route === 'brief.md' ? briefMarkdown(doc.brief, doc) : route.endsWith('.md') ? toMarkdown(doc) : JSON.stringify(doc, null, 2);
+          const filename = `${route === 'brief.md' ? 'decision-brief' : 'exploration'}-${doc.id.slice(0, 8)}${route.endsWith('.md') ? '.md' : '.explore.json'}`;
+          res.writeHead(200, { 'Content-Type': route.endsWith('.md') ? 'text/markdown; charset=utf-8' : 'application/json', 'Content-Disposition': `attachment; filename="${filename}"` });
+          return res.end(content);
+        } catch {
+          observe('failed'); return json(400, { error: 'Export generation failed. Retry the saved read in Recovery, then explicitly retry this export. Browser file saving cannot be confirmed.' });
+        }
       }
       if (req.method === 'GET' && assets.has(route)) {
         const [name, type] = assets.get(route);

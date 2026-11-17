@@ -1,0 +1,47 @@
+# Recovery contracts (0.1.39)
+
+The document's atomic replacement is the save commit point. History intent reconciliation always compares against that authoritative document; it never replaces it with an older in-memory copy. A precommit failure and a saved document with incomplete history finalization have different recovery notices. Retry reads the current file, reconciles history under its document lock, and adopts the validated current document. It does not replay an answer write or inference.
+
+`POST api/recovery` accepts `list`, `inspect` (journey, revision, content hash), or `dismiss` (operation UUID). It requires the instance-token URL, valid Host, exact Origin and `X-Explorer-Client: 1`, with a 2 KiB body cap. `recover-copy` and `recovery-retry` are ordinary serialized actions with exact Origin and expected journey/revision checks. Copy inspection is repeated on acceptance; a copy gets a fresh identity and opens only after explicit choice. Original file/history/drafts are untouched, and browser drafts must flush before switching. Errors and preview never submit answers. A copy save followed by an open failure can leave an additional preserved library entry; refresh the library before repeating the copy action.
+
+## Bounded saved-version discovery
+
+Discovery visits only the known data root, `history`, and `history/<known journey key>`. Root/history listings allow 2,000 entries each; the selected history folder allows 128. Only 64-character lowercase SHA-256 `.json` filenames are read. At most 50 validated versions and 128 MiB total candidate file sizes are considered, each within the normal 10 MiB document cap. Every snapshot must match its content hash, normal document schema, raw/validated ID, revision and timestamp, and known journey identity. Linked/nonregular/hardlinked/oversized files are refused. Manifest/intent pointers and partial temporary files are never followed or deleted during discovery.
+
+With a loaded journey the identity is its existing ID and library key (or realpath-plus-ID direct-file key). With a damaged bound library journey, the metadata binding supplies the key. A snapshot ID is accepted only if an existing library filename hashes with that ID to exactly that key. A new cold direct-file controller cannot infer an unknown original ID: it offers a read retry but no guessed history. Damaged metadata or discovery limits may prevent identifying a cold bound journey. All evidence remains for later storage review.
+
+Inspection returns a separate preview, never active state. Opening as a copy preserves malformed active bytes, prior history, draft text/state and tombstones. The UI displays at most 100 nodes of the preview and labels that limit; the stored copy contains the complete validated document. There is no backup, fork, sync or cleanup framework.
+
+## Cooperative writer ownership
+
+The document, `library.json`, `drafts.json`, `references/<key>.json`, `navigation-settings.json`, and `voice-settings.json` all use `owned-lock.mjs`. Each exclusive `<file>.lock` contains:
+
+```json
+{"version":1,"pid":123,"host":"local-host","token":"fresh-v4-uuid","createdAt":"ISO timestamp","retention":"preserve"}
+```
+
+Records are bounded to 4,096 bytes. Each successful acquisition owns one nonce. Release reopens and verifies that nonce; it refuses to unlink a replacement owner's record. Failed metadata publication removes only the exclusive attempt it just created. No other cooperative writer/reclaimer can replace that incomplete lock, because it has no valid provably dead owner.
+
+An existing lock is examined only under an exclusively created `<file>.lock.recover` claim, using the same owner schema. Only a validated local-host owner and `process.kill(pid, 0)` returning `ESRCH` prove that process is gone. A live/reused PID, foreign host, invalid/legacy record, denied or inaccessible process check is insufficient. Creation timestamps are never abandonment evidence. Library/draft acquisition retries at most 50 attempts separated by 20 ms; the other writers make one attempt. Exhaustion means only that waiting stopped.
+
+While holding the recovery claim, the reclaimer reads the current exact owner record and probes it. A proven-dead owner cannot concurrently release; another writer cannot exclusively create the still-existing path. The reclaimer refuses an existing `<file>.lock.abandoned`, then atomically renames the stale shared path to that fixed quarantine path. It never unlinks the shared path afterward. A new writer may acquire immediately after the rename. The exclusive claim prevents a second reclaimer from reaching a rename; after release, a later reclaimer sees and rejects the new live owner. Tests pause the actual production rename at that boundary and verify the new nonce survives.
+
+The recovery claim itself is never recursively reclaimed. An abandoned claim remains a conservative blocker. One quarantine per lock is the bound: a subsequent dead owner cannot be recovered until a separate storage-management action deals with the retained evidence. The preserved owner's `retention: "preserve"` applies to quarantine and claim files. No broad cleanup is authorized here. This is a cooperating local-filesystem protocol; it is not protection against a hostile process modifying the same directory or a distributed lock on network storage.
+
+## Operation evidence and readiness
+
+`usage/session-state/<UUID>/operation.json` is written beside the existing projected receipts, once the usage recorder is established and before sending inference. Schema: `{version:1,id,operation,owner,status,updatedAt,retention:"preserve"}`. `owner` uses the schema above. `operation` is one of research, decision-brief, answer-check, cleanup, question-help-rephrase, question-help-example, question-help-terms. Status is active/completed/failed/cancelled. Terminal status is written after helper stop and accounting, before temporary-directory cleanup. Stop/accounting failure records failed where possible and preserves the original journal/pointer. Failure to record a terminal outcome leaves unknown/interrupted evidence; it never permits deletion or inference replay.
+
+Discovery bounds: 2,000 data-root entries, 1,024 usage-root entries, 512 session entries, 16 entries per selected session folder, 4,096 bytes per lifecycle record. Only fixed `operation.json` files under UUID session directories are read. A recorded active owner proven exited means interrupted coordination; helper subprocess release is still unknown. A matching currently tracked recorder nonce in this process establishes active work. Other live/reused PIDs, missing/invalid/legacy lifecycle records are unknown. Recorded failed status establishes failure. Completed/cancelled operations are omitted from recovery notices. Legacy `usage/recovery-<UUID>.json` names establish unknown retained evidence only: pointer contents and arbitrary targets are never read. Unavailable helper discovery does not block independent saved-version discovery.
+
+Dismiss hides only a currently verified failed/interrupted record for this canvas. It persists neither deletion nor a terminal model result, and leaves every receipt/journal/pointer/lifecycle record intact. These files are not a diagnostic assertion that the provider billed nothing, that orphan workers stopped, or that a result reached a journey. Fresh inference requires the normal explicit user action and existing model/account/context checks. Old unrecorded operations remain unknown.
+
+Export evidence is canvas-local, immutable `{id,route,status,downloadSaved:"unknown"}`. Fixed routes are export.json/export.md/brief.md. Status is active, failed (generation/read failure), interrupted (response closed before finish), or response-finished. Later completions cannot overwrite a newer export observation. Journey attachment clears the earlier observation. No HTTP response proves a durable browser download, and restart creates no invented export-interruption record. Retry downloads the current saved journey explicitly and never replaces an assumed partial file.
+
+`recoveryNotice` and `exportObservation` are explicit public transient references in the conditional polling stamp. They are replaced on changes. Unchanged polling still avoids map traversal/cloning/serialization; native `snapshot()` stays complete with its previous shape. Operation discovery remains a private explicit recovery read.
+
+## Verification limits
+
+Disposable filesystem/child-process fixtures cover killed writers and save boundaries, claim/new-writer races, metadata publication failure, malformed and linked evidence, drafts/tombstones, protected HTTP actions, export interruption, and actual shipped jsdom controls. Installed local canvas, research and cleanup fixtures exercise the shared helper lifecycle with no paid providers, existing sessions, browser automation or real microphone.
+
+The owner still needs to check the native narrow pane, modal keyboard/focus and real IME/caret behavior, plus live provider research quality. Automated checks do not prove native rendering, durable browser downloads, process identity beyond the conservative checks above, or recovery of unknown legacy evidence.

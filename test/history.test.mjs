@@ -231,7 +231,7 @@ test('history refuses linked directories without writing outside the journey roo
   const f = await service(t), outside = await mkdtemp(join(tmpdir(), 'explorer-history-outside-'));
   t.after(() => rm(outside, { recursive: true, force: true }));
   await symlink(outside, join(f.dir, 'history'), 'junction');
-  await assert.rejects(f.history.list(f.current()), /Unsafe history directory/);
+  await assert.rejects(f.history.list(f.current()), /History recovery required/);
   assert.deepEqual(await readdir(outside), []);
 });
 test('history validates compatible legacy snapshots at preview and restore with current defaults', async t => {
@@ -249,7 +249,7 @@ test('history cleanup debt blocks further commits until obsolete snapshots can b
   await assert.rejects(f.commit(), /Map saved.*history finalization/); assert.equal(f.current().revision, 51);
   const snapshots = async () => (await readdir(await f.history.root())).filter(file => /^[a-f0-9]{64}\.json$/.test(file));
   assert.equal((await snapshots()).length, 51);
-  for (let i = 0; i < 3; i++) await assert.rejects(f.commit(), /History recovery required.*cleanup failure/);
+  for (let i = 0; i < 3; i++) await assert.rejects(f.commit(), /History recovery required/);
   assert.equal(f.current().revision, 51); assert.equal((await snapshots()).length, 51);
   f.history.cleanup = cleanup; assert.equal((await f.history.list(f.current())).entries.length, 50); assert.equal((await snapshots()).length, 50);
   await f.commit(); assert.equal((await snapshots()).length, 50);

@@ -1,4 +1,5 @@
-import { mkdir, lstat, open, unlink } from 'node:fs/promises';
+import { acquireLock } from './owned-lock.mjs';
+import { mkdir, lstat, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname } from 'node:path';
 import { atomicWrite } from './storage.mjs';
@@ -47,18 +48,13 @@ export class NavigationPreferences {
     if (!Number.isSafeInteger(revision) || revision < 0 || revision === Number.MAX_SAFE_INTEGER) throw new Error('Invalid navigation settings revision.');
     if (!this.file) throw new Error('Navigation settings storage is unavailable.');
     await mkdir(dirname(this.file), { recursive: true });
-    let lock;
-    try { lock = await open(this.file + '.lock', 'wx', 0o600); }
-    catch (error) {
-      if (error.code === 'EEXIST') throw new Error('Navigation settings are being updated. Refresh and try again.');
-      throw error;
-    }
+    const lock = await acquireLock(this.file + '.lock');
     try {
       const saved = await this.read();
       if (saved.revision !== revision) throw new Error('Navigation settings changed in another canvas. Refresh before saving.');
       const next = { version: 1, revision: revision + 1, wheelMode: choice.wheelMode, sensitivity: choice.sensitivity, motion: choice.motion };
       await this.write(this.file, JSON.stringify(next, null, 2));
       return next;
-    } finally { await lock.close(); await unlink(this.file + '.lock'); }
+    } finally { await lock.release(); }
   }
 }

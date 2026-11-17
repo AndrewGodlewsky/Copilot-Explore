@@ -177,13 +177,50 @@ Let a user say what they want to understand or decide, and what would make the e
 
 Likely model.mjs, controller.mjs, research.mjs, web/app.mjs, web/index.html/style.css as needed; corresponding model/controller/research/web tests. Add a focused UI module only if responsibility requires it; no runtime dependency or broad refactor.
 
-- [ ] Add focused failing regressions for absent legacy fields; invalid types/lengths; Unicode/native and Markdown round trips; create/edit/no-op/stale writer; main-question and isolated research inclusion/budget; uncommitted exclusion.
-- [ ] Add real HTTP/jsdom checks for optional creation, edit/cancel/error, preserving a draft and focus while saving, and no settings leakage across journeys.
-- [ ] Implement and pass focused tests. Run npm test, npm run check, npm run package. Run the installed local research fixture because its payload changes; no paid providers or existing user sessions. Use the installed SDK, not an npm replacement.
-- [ ] Bump to **0.1.16** and synchronize required metadata/README/release notes using the established procedure. Include controller's roadmap update, self-review, commit on this isolated branch. No merge/push/issue closure.
-- [ ] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-4-report.md with exact fields/APIs, RED/GREEN/full commands and results, commit, and manual native visual limits. Return concise status.
+- [x] Add focused failing regressions for absent legacy fields; invalid types/lengths; Unicode/native and Markdown round trips; create/edit/no-op/stale writer; main-question and isolated research inclusion/budget; uncommitted exclusion.
+- [x] Add real HTTP/jsdom checks for optional creation, edit/cancel/error, preserving a draft and focus while saving, and no settings leakage across journeys.
+- [x] Implement and pass focused tests. Run npm test, npm run check, npm run package. Run the installed local research fixture because its payload changes; no paid providers or existing user sessions. Use the installed SDK, not an npm replacement.
+- [x] Bump to **0.1.16** and synchronize required metadata/README/release notes using the established procedure. Include controller's roadmap update, self-review, commit on this isolated branch. No merge/push/issue closure.
+- [x] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-4-report.md with exact fields/APIs, RED/GREEN/full commands and results, commit, and manual native visual limits. Return concise status.
 
 No subagents or browser/desktop UI automation. Controller performs independent review and publication. Raise concrete conflicts without stopping independent work.
+
+Published task 4: **v0.1.16**, `f557d94`, 144 tests, check, package and installed local research fixture passed; independent review clean and remote main verified.
+
+## Task 5: Answer states (#4 / selection 5)
+
+Read .superpowers/sdd/2026-11-17-selected-roadmap/issue-5.md, AGENTS.md, docs/drafts.md,  .superpowers/sdd/2026-11-17-selected-roadmap/task-3-report.md, and .superpowers/sdd/2026-11-17-selected-roadmap/task-4-report.md. BASE is f557d94a5ffd4e08d70381cac9d3a60df7798c7a; ship **0.1.17**. This adds the meaning of a committed answer; it is not question importance or AI confidence.
+
+### Model and semantics
+
+- Add answerState with stable values unanswered, decided, tentative, assumption, needs-evidence, not-relevant, revisit-later. Display labels Unanswered, Decided, Tentative, Assumption, Need evidence, Not relevant, Revisit later.
+- Missing legacy state becomes Tentative for nonempty answers and Unanswered for empty ones. Reject explicit invalid state values. Keep the existing version-1 import format additive and preserve text/research. The root remains the idea and is excluded from question counts/state controls.
+- Decided, Tentative and Assumption require nonempty answer text. Need evidence, Not relevant and Revisit later may have an optional note or no text. Unanswered cannot silently discard nonempty text: require the user to clear the text explicitly. These rules apply in validation, UI and commands.
+- Preserve near-limit legacy maps when adding state defaults; avoid materializing redundant default fields across thousands of nodes if that would make a previously valid file exceed its size cap. A shared effective-state helper can provide documented legacy defaults while keeping persisted defaults sparse. Test this migration boundary; do not silently drop user content or widen all storage limits without a concrete reason.
+- A new nonempty answer defaults conservatively to Tentative until the user selects otherwise; edits retain an explicitly chosen state unless they make it invalid. Persist state and answer together on the existing explicit save action. AI research, dictation and draft recovery cannot commit a state or answer by themselves.
+- A meaningful change to committed state or text marks descendants for review, consistent with existing ancestor-change behavior. No-op save must not manufacture a change and must still validate on-disk revision freshness. Task 4 added a read-only refresh-guidance command and explicit guidance conflict choices; follow the same freshness discipline for answer-state saves. Keep request correlation, library identity, atomic revision/conflict rules and objective fields intact.
+- Provide a shared question-count helper. Total excludes root; answered means nonempty committed text; resolved means Decided or Not relevant with no needs-review flag; deferred means Revisit later; unresolved means total minus resolved. These categories overlap; never derive unresolved by subtracting answered. Document these definitions for future dashboard/filter tasks.
+- Preserve/display state in map, outline, native JSON, Markdown, contextFor and isolated research. Include state-only choices in contextual information even when no answer note exists. Prompts explicitly distinguish decisions, assumptions, tentative statements, deferred/unresolved issues and review flags without treating any state as external verification.
+
+### Editor and draft integration
+
+- Use one compact labeled selector inside the expanding answer node. Avoid a new side panel or editing-heavy workflow. Show saved state on compact nodes and in outline with text, not color alone. Keep keyboard focus and narrow-pane wrapping.
+- State selection is a draft until Save answer or Save & explore deeper. Preserve it with automatic draft recovery; a state-only edit must be recoverable and counted as uncommitted. A text-only insertion from voice/research/undo must preserve a deliberate state selection.
+- Extend the focused draftBase/store/client/save contracts centrally to include committed/draft state. Old persisted text-only drafts remain recoverable; changed hashing must not silently drop them. Newer committed states require the same explicit stale-draft choice as newer text.
+- Save captures both text and state at click time. Later changes to either remain a draft. Conditional clear matches expected revision and submitted content; do not clear another canvas's later state. Keep drafts excluded from context/exports/counters.
+- Explain invalid combinations without discarding input. Do not automatically mark an AI proposal Decided when a user applies it. Finishing and any deepening control should handle no-text states honestly; do not fabricate an answer solely to satisfy old guards.
+
+### Verification and release
+
+Likely model/controller/research prompt, browser rendering and draft modules, corresponding tests and docs. No new runtime dependencies or broad unrelated restructuring.
+
+- [ ] Focused RED/GREEN tests for every state and empty-text rule, conservative legacy import, malformed values, root exclusion, shared counts/review flags, state-only and no-op saves, descendants, native/Markdown/context round trips.
+- [ ] Real HTTP/jsdom tests for choose/save, text-only draft insertion preserving choice, state-only reload, legacy draft recovery, stale state conflicts, click-time state capture/later edits, failure preservation and exported/context draft exclusion.
+- [ ] Verify existing question generation/research remains attached/isolated as before. Run npm test, npm run check, npm run package and local research fixture for changed context/prompt. Use installed runtime and disposable/local provider only; no paid calls or existing sessions.
+- [ ] Bump to **0.1.17**, synchronize metadata/README/release notes, document semantics and draft migration, include controller roadmap update, self-review and commit on the current isolated branch. No push/merge/issue close.
+- [ ] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-5-report.md with exact APIs/migration, RED/GREEN/commands/results, commit and native manual limits. Return concise status.
+
+No nested agents or browser/desktop automation. Raise concrete conflicts to controller while continuing independent work. Controller reviews and publishes.
 
 ## Issue index
 

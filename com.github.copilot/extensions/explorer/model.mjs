@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './web/answer-state.mjs';
+export { effectiveAnswerState, questionCounts } from './web/answer-state.mjs';
 
 export const FORMAT = 'copilot-explorer';
 export const MAX_NODES = 5000;
@@ -66,10 +68,15 @@ export function validateDocument(value) {
   const nodes = list(value.nodes, 'nodes', MAX_NODES, n => ({
     id: text(n?.id, 'Node ID', 100), parentId: n.parentId === null ? null : text(n.parentId, 'Parent ID', 100),
     question: text(n.question, 'Question', n.id === value.rootId ? 4000 : 600),
-    category: text(n.category, 'Category', 60), answer: text(n.answer, 'Answer', 20000, true),
+    category: text(n.category, 'Category', 60), answer: guidanceText(n.answer, 'Answer', 20000),
+    ...(Object.hasOwn(n, 'answerState') ? { answerState: n.answerState } : {}),
     research: n.research === null ? null : research(n.research), review: n.review === true,
   }));
   const byId = new Map(nodes.map(n => [n.id, n]));
+  for (const node of nodes) {
+    const error = answerStateError(node.answer, Object.hasOwn(node, 'answerState') ? node.answerState : effectiveAnswerState(node));
+    if (error) throw new Error(error);
+  }
   if (!nodes.length || byId.size !== nodes.length) throw new Error('Node IDs must be unique.');
   const root = byId.get(value.rootId);
   if (!root || root.parentId !== null || nodes.filter(n => n.parentId === null).length !== 1) throw new Error('The map must have one root.');
@@ -118,11 +125,16 @@ export function addQuestions(doc, parentId, values) {
   doc.nodes.push(...nodes);
   return nodes;
 }
-export function answerNode(doc, id, answer) {
+export function answerNode(doc, id, answer, answerState) {
   const node = findNode(doc, id);
   if (id === doc.rootId) throw new Error('Answer a question rather than the central idea.');
-  const next = text(answer, 'Answer');
-  if (node.answer && node.answer !== next) {
+  const next = guidanceText(answer, 'Answer', 20000);
+  const previousState = effectiveAnswerState(node);
+  const state = answerState === undefined ? (answerStateError(next, previousState) ? (next.trim() ? 'tentative' : 'unanswered') : previousState) : answerState;
+  const error = answerStateError(next, state); if (error) throw new Error(error);
+  const changed = node.answer !== next || previousState !== state;
+  if (!changed && !node.review) return false;
+  if (changed) {
     const children = new Map(doc.nodes.map(n => [n.id, []]));
     for (const n of doc.nodes) if (n.parentId) children.get(n.parentId).push(n);
     const queue = [id];
@@ -131,36 +143,38 @@ export function answerNode(doc, id, answer) {
     }
   }
   node.answer = next;
+  node.answerState = state;
   node.review = false;
+  return true;
 }
 export function contextFor(doc, nodeId) {
   const byId = new Map(doc.nodes.map(n => [n.id, n]));
   const path = [];
   for (let node = findNode(doc, nodeId); node; node = byId.get(node.parentId)) {
-    path.push({ id: node.id, question: node.question, answer: node.answer, review: node.review });
+    path.push({ id: node.id, question: node.question, answer: node.answer, ...(node.id !== doc.rootId ? { answerState: effectiveAnswerState(node) } : {}), review: node.review });
   }
   return { topic: doc.topic, objective: doc.objective ?? '', successCriteria: doc.successCriteria ?? '', path: path.reverse(),
     existingQuestions: doc.nodes.filter(n => n.parentId === nodeId).map(n => n.question),
-    decisionsElsewhere: doc.nodes.filter(n => n.answer && !path.some(p => p.id === n.id)).map(n => ({ question: n.question, answer: n.answer, review: n.review })) };
+    decisionsElsewhere: doc.nodes.filter(n => n.id !== doc.rootId && (n.answer.trim() || effectiveAnswerState(n) !== 'unanswered') && !path.some(p => p.id === n.id)).map(n => ({ question: n.question, answer: n.answer, answerState: effectiveAnswerState(n), review: n.review })) };
 }
 const md = value => String(value).replace(/[\\`*_{}[\]<>#+!|]/g, '\\$&');
 export function toMarkdown(doc) {
   validateDocument(doc);
-  const answered = doc.nodes.filter(n => n.answer).length;
+  const { answered, resolved, deferred, unresolved } = questionCounts(doc);
   const lines = ['# Exploration: ' + md(doc.topic), '', `Saved: ${doc.updatedAt}`, '',
-    `${answered} answered questions; ${doc.nodes.length - 1 - answered} open questions.`, '',
+    `${answered} answered; ${resolved} resolved; ${deferred} deferred; ${unresolved} unresolved questions.`, '',
     'This record preserves user answers separately from AI research. Open questions are unresolved, not decisions.', '',
     '## Guidance', '', '**Objective:**', '', doc.objective ? md(doc.objective) : '_Not set._', '',
     '**Success criteria:**', '', doc.successCriteria ? md(doc.successCriteria) : '_Not set._', '',
     'Criteria guide exploration; the user decides when to finish.', '', '## Map', '',
     '| ID | Parent | Category | Question | Status |', '| --- | --- | --- | --- | --- |'];
   const ids = new Map(doc.nodes.map((n, i) => [n.id, `N${i}`]));
-  for (const n of doc.nodes) lines.push(`| ${ids.get(n.id)} | ${ids.get(n.parentId) ?? '—'} | ${md(n.category).replace(/\n/g, ' ')} | ${md(n.question).replace(/\n/g, ' ')} | ${n.id === doc.rootId ? 'Idea' : n.answer ? 'Answered' : 'Open'}${n.review ? '; needs review' : ''} |`);
+  for (const n of doc.nodes) lines.push(`| ${ids.get(n.id)} | ${ids.get(n.parentId) ?? '—'} | ${md(n.category).replace(/\n/g, ' ')} | ${md(n.question).replace(/\n/g, ' ')} | ${n.id === doc.rootId ? 'Idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''} |`);
   for (const n of doc.nodes) {
     if (n.id === doc.rootId) continue;
     lines.push('', `## ${ids.get(n.id)}: ${md(n.question)}`, '', `Category: ${md(n.category)}. Parent: ${ids.get(n.parentId)}.`, '');
     if (n.review) lines.push('**Needs review:** an ancestor answer changed after this branch was created.', '');
-    lines.push('### User answer', '', n.answer ? md(n.answer) : '_Not answered._', '');
+    lines.push('### User answer', '', `State: ${ANSWER_STATES[effectiveAnswerState(n)]}.`, '', n.answer ? md(n.answer) : '_No answer text._', '');
     if (n.research) {
       const r = n.research;
       lines.push('### AI research', '', `Basis: ${r.basis === 'sources' ? 'Consulted sources' : 'Model reasoning; not externally verified'}.`, '', md(r.summary), '');

@@ -11,6 +11,7 @@ const assets = new Map([
   ['app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
   ['layout.mjs', ['layout.mjs', 'text/javascript; charset=utf-8']],
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
+  ['answer-state.mjs', ['answer-state.mjs', 'text/javascript; charset=utf-8']],
   ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
   ['style.css', ['style.css', 'text/css; charset=utf-8']],
 ]);

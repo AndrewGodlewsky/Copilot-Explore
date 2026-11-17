@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.17",
+    "summary": "Answers now distinguish Decided, Tentative, Assumption, Need evidence, Not relevant and Revisit later. Text and state save together only when you choose Save, with local draft recovery and conflict choices. Maps, outlines, exports and AI context preserve states; counts separate answered, resolved, deferred and unresolved questions."
+  },
+  {
     "version": "0.1.16",
     "summary": "Journeys can now include an optional objective and success criteria. Both guide future questions and isolated research, appear in JSON and Markdown exports, and can be revised without losing answer drafts. Finishing remains your decision; older journeys open with empty guidance."
   },

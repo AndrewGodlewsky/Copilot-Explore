@@ -1,6 +1,7 @@
 import { layout } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
+import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';
 
 const $ = id => document.getElementById(id);
 const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'];
@@ -14,7 +15,7 @@ let guidanceReturn = null, guidanceBase = null, guidanceNeedsChoice = false, gui
 const drafts = new Map(), nodeUi = new Map();
 const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
   changed: () => { const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); } },
-  restored: (id, value) => { if (id === selected && $('answer') && !composing) $('answer').value = value; } });
+  restored: (id, value) => { if (id === selected && $('answer') && !composing) { $('answer').value = value; if ($('answer-state')) $('answer-state').value = draftClient.state(id); } } });
 const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args),
   context: () => `${state.document?.id}/${selected}/${expanded}`,
   insert: (value, caret) => {
@@ -87,8 +88,8 @@ function apply(next, reset = false) {
   if (!doc) return;
   if (firstQuestions && selected === doc.rootId) expanded = false;
   $('map-title').textContent = doc.topic;
-  const answered = doc.nodes.filter(n => n.answer).length;
-  $('progress').textContent = `${answered} answered · ${doc.nodes.length - 1 - answered} open · Saved locally`;
+  const { answered, resolved, deferred, unresolved } = questionCounts(doc);
+  $('progress').textContent = `${answered} answered · ${resolved} resolved · ${deferred} deferred · ${unresolved} unresolved · Saved locally`;
   $('request-status').hidden = !state.pending;
   if (state.pending) {
     const work = doc.nodes.find(n => n.id === state.pending.nodeId);
@@ -207,12 +208,12 @@ function renderMap() {
     const p = positions.get(n.id), root = n.id === doc.rootId;
     if (!expanded || n.id !== selected) {
       const node = button('', () => select(n.id), { class: `node ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''}`,
-        title: n.question, 'data-node-id': n.id, 'aria-expanded': 'false', 'aria-label': `${n.category}: ${n.question}. ${n.answer ? 'Answered' : root ? 'Central idea' : 'Open'}` });
+        title: n.question, 'data-node-id': n.id, 'aria-expanded': 'false', 'aria-label': `${n.category}: ${n.question}. ${root ? 'Central idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}` });
       node.style.left = `${p.x}px`; node.style.top = `${p.y}px`; node.style.width = `${p.width}px`; node.style.height = `${p.height}px`; node.style.setProperty('--branch', colors[p.branch % colors.length]);
       node.addEventListener('focus', () => { if (!restoringFocus) revealNode(n.id); });
       node.append(el('span', { class: 'category' }, n.category), el('span', { class: 'question' }, n.question));
       if (n.answer) node.append(el('span', { class: 'answer-preview' }, n.answer));
-      node.append(el('span', { class: 'status' }, root ? `${doc.nodes.length - 1} questions` : n.review ? 'Needs review' : n.answer ? 'Answered' : 'Open question'));
+      node.append(el('span', { class: 'status' }, root ? `${doc.nodes.length - 1} questions` : `${ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}`));
       fragment.append(node);
     }
     if (!root) {
@@ -282,7 +283,8 @@ function revealNode(id) {
 }
 function answerStatus(node) {
   const entry = draftClient.entries.get(node.id);
-  if ($('answer-status')) $('answer-status').textContent = draftClient.loadError ? 'Draft could not be saved' : entry?.status || (node.answer ? 'Answer saved' : 'No answer yet');
+  if ($('answer-state')) $('answer-state').value = draftClient.state(node.id);
+  if ($('answer-status')) $('answer-status').textContent = draftClient.loadError ? 'Draft could not be saved' : entry?.status || (node.answer ? 'Answer saved' : effectiveAnswerState(node) !== 'unanswered' ? 'State saved' : 'No answer yet');
   const undo = $('undo-addition'), addition = uiFor(node.id).addition;
   if (undo) { undo.hidden = !addition; undo.disabled = !addition || (drafts.get(node.id) ?? node.answer) !== addition.after; }
 }
@@ -291,14 +293,19 @@ function renderDraftRecovery(node) {
   const entry = draftClient.entries.get(node.id), conflict = entry?.conflict;
   const choose = choice => { voice.cancel(); void draftClient.choose(node.id, choice, node).catch(error => notice(error.message)); };
   area.replaceChildren();
+  if (uiFor(node.id).refreshAnswer) area.append(button('Refresh saved journey', async () => {
+    voice.cancel();
+    if (await api('refresh-answer')) { uiFor(node.id).refreshAnswer = false; renderDraftRecovery(state.document.nodes.find(n => n.id === node.id)); }
+  }, { id: 'refresh-answer' }));
   if (draftClient.loadError || entry?.error) area.append(el('p', { class: 'notice' }, draftClient.loadError || entry.error));
   if (conflict) {
+    area.append(el('p', {}, `Saved state: ${ANSWER_STATES[effectiveAnswerState(node)]}. Saved answer: ${node.answer || '(no text)'}`));
     area.append(el('p', {}, conflict.text === null ? 'Another canvas cleared this draft. Your editor text is still here.' : 'A saved draft needs review. Your committed answer and editor text have been kept.'));
     if (conflict.text !== null) {
       const recovered = el('textarea', { readonly: '', rows: '4', 'aria-label': 'Recovered draft' }); recovered.value = conflict.text;
-      area.append(recovered, button('Use recovered draft', () => choose('recover'), { id: 'recover-draft' }));
+      area.append(el('p', {}, `Recovered state: ${ANSWER_STATES[effectiveAnswerState({ answer: conflict.text, answerState: conflict.answerState })]}`), recovered, button('Use recovered draft', () => choose('recover'), { id: 'recover-draft' }));
     }
-    area.append(button('Keep editor text', () => choose('keep'), { id: 'keep-draft' }));
+    area.append(button('Keep editor draft', () => choose('keep'), { id: 'keep-draft' }));
   }
   if ((entry?.dirty || draftClient.loadError) && !conflict) area.append(button('Retry saving draft', () => { void draftClient.retry().catch(error => notice(error.message)); }, { id: 'retry-draft' }));
   if (entry?.dirty && (entry.error || draftClient.loadError)) area.append(button('Discard unsaved editor text', () => {
@@ -349,15 +356,26 @@ function renderWorkspace() {
   } else {
     const form = el('form', { class: 'answer-form' }), answer = el('textarea', { id: 'answer', rows: '4', maxlength: '20000', placeholder: 'A decision, a hunch, or what you know so far…' });
     answer.value = drafts.get(node.id) ?? node.answer;
+    const answerState = el('select', { id: 'answer-state', 'aria-describedby': 'answer-state-help' }, Object.entries(ANSWER_STATES).map(([value, label]) => el('option', { value }, label)));
+    answerState.value = draftClient.state(node.id);
+    answerState.addEventListener('focus', () => draftClient.touch(node.id));
+    answerState.addEventListener('change', () => { draftClient.selectState(node.id, answerState.value, answer.value); answerStatus(node); });
     answer.addEventListener('input', () => { draftClient.edit(node.id, answer.value); answerStatus(node); });
     answer.addEventListener('focus', () => draftClient.touch(node.id));
     answer.addEventListener('compositionstart', () => draftClient.touch(node.id));
     const save = async deepen => {
       voice.cancel();
-      if (!answer.value.trim()) return notice('Write an answer before saving.');
+      const error = answerStateError(answer.value, draftClient.state(node.id));
+      if (error) return notice(error);
+      if (deepen && draftClient.state(node.id) === 'unanswered') return notice('Choose a state or write an answer before exploring deeper.');
+      if (ui.refreshAnswer) return notice('Refresh the saved journey before retrying.');
       try {
         if (!drafts.has(node.id)) draftClient.edit(node.id, answer.value);
-        if (await draftClient.save(node.id, (value, draftRevision, draftJourney) => api('answer', { nodeId: node.id, answer: value, expand: deepen, draftRevision, draftJourney }), () => state.document.nodes.find(n => n.id === node.id))) {
+        if (await draftClient.save(node.id, async (value, draftRevision, draftJourney, answerState) => {
+          const result = await api('answer', { nodeId: node.id, answer: value, answerState, expand: deepen, draftRevision, draftJourney });
+          if (!result && /Another canvas|map changed/.test($('notice').textContent)) { ui.refreshAnswer = true; renderDraftRecovery(node); }
+          return result;
+        }, () => state.document.nodes.find(n => n.id === node.id))) {
           renderWorkspace(); refreshScene();
           if (deepen) notice('Answer saved. Copilot will add follow-up questions to this branch.');
         }
@@ -368,7 +386,9 @@ function renderWorkspace() {
     const voiceStatus = el('div', { class: 'voice-controls' });
     answer.setAttribute('aria-describedby', 'voice-status');
     voice.bind(answer, voiceStatus);
-    form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), el('span', { id: 'answer-status', class: 'quiet' })), answer, voiceStatus, el('div', { class: 'actions' }, button('Save answer', () => { voice.cancel(); void save(false); }, { id: 'save-answer', disabled: pending }), el('button', { type: 'submit', id: 'save-deeper', class: 'primary', disabled: pending }, 'Save & explore deeper')));
+    form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), el('span', { id: 'answer-status', class: 'quiet' })), answer, voiceStatus,
+      el('div', { class: 'answer-state-field' }, el('label', { for: 'answer-state' }, 'Answer state'), answerState), el('p', { id: 'answer-state-help', class: 'quiet' }, 'Text and state stay a draft until you save. Decided, Tentative and Assumption need text; other states can have no note.'),
+      el('div', { class: 'actions' }, button('Save answer', () => { voice.cancel(); void save(false); }, { id: 'save-answer', disabled: pending }), el('button', { type: 'submit', id: 'save-deeper', class: 'primary', disabled: pending }, 'Save & explore deeper')));
     form.append(button('Undo addition', () => {
       const addition = ui.addition;
       if (!addition || (drafts.get(node.id) ?? node.answer) !== addition.after) return;
@@ -379,7 +399,7 @@ function renderWorkspace() {
     content.append(form); answerStatus(node); renderDraftRecovery(node);
     const research = el('details', { class: 'research-disclosure' }, el('summary', { id: 'research-summary' }, 'Explore options')); research.open = ui.researchOpen;
     research.addEventListener('toggle', () => { if (research.isConnected) { ui.researchOpen = research.open; scheduleLayout(); } });
-    research.append(el('p', { class: 'quiet' }, 'A separate researcher compares possibilities using your saved decisions. Suggestions stay separate from your answer; normal Copilot usage applies.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; void api('research', { nodeId: node.id }); }, { id: 'research-request', disabled: pending }));
+    research.append(el('p', { class: 'quiet' }, 'A separate researcher compares possibilities using your saved answers and states. Suggestions stay separate from your answer; normal Copilot usage applies.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; void api('research', { nodeId: node.id }); }, { id: 'research-request', disabled: pending }));
     if (node.research) research.append(renderResearch(node));
     content.append(research);
   }
@@ -448,7 +468,7 @@ function renderOutline() {
   const focused = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
   const query = $('search').value.toLowerCase();
   const nodes = state.document.nodes.filter(n => `${n.question} ${n.answer} ${n.category}`.toLowerCase().includes(query));
-  $('outline-list').replaceChildren(...nodes.map(n => button([n.question, el('small', {}, `${n.category} · ${n.answer ? 'Answered' : 'Open'}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id })));
+  $('outline-list').replaceChildren(...nodes.map(n => button([n.question, el('small', {}, `${n.category} · ${n.id === state.document.rootId ? 'Idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id })));
   if (focused) [...$('outline-list').children].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
 }
 function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) || draftClient.entries.get(n.id)?.conflict) ?? []; }
@@ -539,7 +559,7 @@ $('finish').addEventListener('click', async () => {
   if (draftClient.uncommitted()) { if (dirty.length) select(dirty[0].id); return notice('Save your draft answer before finishing. Recover or discard drafts for removed questions.'); }
   if (await api('finish')) $('export-dialog').showModal();
 });
-$('save-file').addEventListener('click', () => { notice('This download contains saved decisions only. Local answer drafts are not included.'); });
+$('save-file').addEventListener('click', () => { notice('This download contains saved answers and states only. Local answer drafts are not included.'); });
 $('close-export').addEventListener('click', () => $('export-dialog').close());
 $('outline-toggle').addEventListener('click', () => { $('outline').hidden = !$('outline').hidden; $('outline-toggle').setAttribute('aria-expanded', String(!$('outline').hidden)); if (!$('outline').hidden) $('search').focus(); });
 $('outline').addEventListener('keydown', event => {

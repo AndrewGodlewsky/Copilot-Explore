@@ -25,6 +25,15 @@ const model = { id: 'fixture-model', provider: { kind: 'copilot' }, policy: { st
 const expectedTools = [{ name: 'web_fetch' }, { name: 'web_search', namespacedName: 'github-mcp-server/web_search', mcpServerName: 'github-mcp-server', mcpToolName: 'web_search' }];
 const context = { topic: 'Pilot', path: [{ question: 'Who first?', answer: 'My decision' }], decisionsElsewhere: [] };
 
+test('research distinguishes provisional states and carries no-text choices and review flags', async t => {
+  const { researcher, calls } = await fixture(t);
+  await researcher.run({ ...context, path: [{ question: 'Who first?', answer: 'Neighbors', answerState: 'assumption', review: true }], decisionsElsewhere: [{ question: 'When?', answer: '', answerState: 'revisit-later', review: false }, { question: 'What?', answer: '', answerState: 'needs-evidence', review: false }] });
+  const supplied = JSON.parse(calls.prompt.split('EXPLORATION DATA\n')[1]);
+  assert.equal(supplied.path[0].answerState, 'assumption'); assert.equal(supplied.path[0].review, true);
+  assert.equal(supplied.decisionsElsewhere[0].answerState, 'revisit-later'); assert.equal(supplied.decisionsElsewhere[0].answer, '');
+  assert.match(calls.prompt, /never external verification/); assert.match(calls.prompt, /Tentative is provisional/); assert.match(calls.prompt, /needs-review/);
+});
+
 async function fixture(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-sdk-test-'));
   const calls = { sends: 0, stops: 0 };

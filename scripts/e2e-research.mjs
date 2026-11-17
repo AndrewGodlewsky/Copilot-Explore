@@ -77,7 +77,7 @@ const researcher = createResearcher(parent, { runtime, usageDirectory: join(temp
 const deadline = setTimeout(() => { for (const client of owned) void client.forceStop(); }, 55000);
 try {
   const progress = [];
-  const context = { topic: 'Synthetic garden', objective: 'Choose a shared garden 🌿', successCriteria: 'Neighbors agree on one place', path: [{ question: 'Who should join?', answer: 'Neighbors only' }], decisionsElsewhere: [] };
+  const context = { topic: 'Synthetic garden', objective: 'Choose a shared garden 🌿', successCriteria: 'Neighbors agree on one place', path: [{ question: 'Who should join?', answer: 'Neighbors only', answerState: 'assumption', review: true }], decisionsElsewhere: [{ question: 'When?', answer: '', answerState: 'revisit-later', review: false }] };
   assert.deepEqual(await researcher.run(context, { onProgress: value => progress.push(value) }), findings);
   assert.ok(calls.includes('initialize')); assert.equal(toolCalls.length, 1);
   assert.equal(toolCalls[0].name, 'web_search');
@@ -86,6 +86,9 @@ try {
   assert.ok(JSON.stringify(prompts).includes('Neighbors only'));
   assert.ok(JSON.stringify(prompts).includes('Choose a shared garden 🌿'));
   assert.ok(JSON.stringify(prompts).includes('Neighbors agree on one place'));
+  assert.ok(JSON.stringify(prompts).includes('revisit-later'));
+  assert.ok(JSON.stringify(prompts).includes('assumption'));
+  assert.ok(JSON.stringify(prompts).includes('never external verification'));
   for (const prompt of prompts) {
     assert.equal(prompt.tools.length, 2); assert.ok(!JSON.stringify(prompt.tools).includes('unwanted_tool'));
   }

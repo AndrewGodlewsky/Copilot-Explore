@@ -5,6 +5,40 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
+import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
+
+test('state-only drafts recover without committing and become stale when committed state changes', async t => {
+  const { explorer: e, input } = await fixture(t), node = e.doc.nodes[1];
+  const record = await e.writeDraft({ ...input(node, ''), answerState: 'revisit-later' });
+  assert.equal(record.answerState, 'revisit-later'); assert.equal(node.answerState, undefined);
+  await e.command('answer', { revision: e.doc.revision, nodeId: node.id, answer: '', answerState: 'not-relevant' });
+  assert.equal((await e.readDrafts(input().journey)).entries[0].stale, true);
+  assert.equal((await e.readDrafts(input().journey)).entries[0].answerState, 'revisit-later');
+  await assert.rejects(e.writeDraft({ ...input(node, ''), answerState: 'invalid', revision: record.revision }), /draft|state/i);
+  await assert.rejects(e.writeDraft({ ...input(node, ''), answerState: ['not-relevant'], revision: record.revision }), /draft|state/i);
+});
+
+test('legacy text-only draft fingerprints recover conservatively after the state migration', async t => {
+  const { explorer: e, input, dir } = await fixture(t), node = e.doc.nodes[1];
+  await e.writeDraft(input(node, 'Old typed draft'));
+  const file = join(dir, 'drafts.json'), store = JSON.parse(await readFile(file, 'utf8'));
+  delete store.entries[0].answerState; store.entries[0].base = draftHash(JSON.stringify([node.question, node.answer]));
+  await writeFile(file, JSON.stringify(store));
+  const entry = (await e.readDrafts(input().journey)).entries[0];
+  assert.equal(entry.stale, false); assert.equal(entry.answerState, 'tentative');
+  await e.command('answer', { revision: e.doc.revision, nodeId: node.id, answer: '', answerState: 'needs-evidence' });
+  assert.equal((await e.readDrafts(input().journey)).entries[0].stale, true);
+});
+
+test('answer draft conditional clear matches submitted state as well as text and revision', async t => {
+  const { explorer: e, input } = await fixture(t), node = e.doc.nodes[1];
+  const record = await e.writeDraft({ ...input(node, ''), answerState: 'revisit-later' });
+  await e.command('answer', { revision: e.doc.revision, nodeId: node.id, answer: '', answerState: 'not-relevant', draftRevision: record.revision, draftJourney: input().journey });
+  assert.equal((await e.readDrafts(input().journey)).entries[0].answerState, 'revisit-later');
+  assert.equal((await e.readDrafts(input().journey)).entries[0].text, '');
+  await e.command('answer', { revision: e.doc.revision, nodeId: node.id, answer: '', answerState: 'revisit-later', draftRevision: record.revision, draftJourney: input().journey });
+  assert.equal((await e.readDrafts(input().journey)).entries[0].text, null);
+});
 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-drafts-')), messages = [];

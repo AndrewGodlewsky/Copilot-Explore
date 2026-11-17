@@ -12,6 +12,8 @@ import { startServer } from '../com.github.copilot/extensions/explorer/server.mj
 import { layout } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
+import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
+import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 
 const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', options: [
   { title: 'One block', description: 'Start with the nearest neighbors.', pros: ['Easy handovers'], cons: ['Fewer tools'] },
@@ -82,8 +84,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.layout = layout;
   window.attachVoice = attachVoice;
   window.DraftClient = DraftClient;
+  Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts });
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
-  window.eval(script.replace("import { layout } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", ''));
+  window.eval(script.replace("import { layout } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';", ''));
   await until(() => width ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -96,6 +99,131 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; } };
 }
+
+function chooseState(f, value) {
+  const select = f.document.getElementById('answer-state'); assert.ok(select, 'labeled answer-state selector');
+  select.value = value; select.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+}
+
+test('answer state selection saves only on explicit commit and displays in map outline and exports', async t => {
+  const f = await fixture(t, 340), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  chooseState(f, 'not-relevant');
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'state draft persisted');
+  assert.equal(f.explorer.doc.nodes[1].answerState, undefined); assert.match(f.document.getElementById('progress').textContent, /0 resolved/);
+  f.document.getElementById('save-answer').click();
+  await until(() => f.explorer.doc.nodes[1].answerState === 'not-relevant' && !f.document.getElementById('discard-draft'), 'state committed and draft cleared');
+  assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.match(f.document.getElementById('progress').textContent, /0 answered.*1 resolved.*1 unresolved/);
+  assert.match(f.document.getElementById('answer-status').textContent, /saved/i);
+  f.document.getElementById('collapse-node').click();
+  assert.match(f.document.querySelector(`[data-node-id="${node.id}"].node`).textContent, /Not relevant/);
+  f.document.getElementById('outline-toggle').click(); assert.match(f.document.getElementById('outline-list').textContent, /Not relevant/);
+  const native = await (await f.window.fetch('export.json')).json(); assert.equal(native.nodes[1].answerState, 'not-relevant');
+  assert.match(await (await f.window.fetch('export.md')).text(), /Not relevant/);
+  f.open(f.explorer.doc.rootId); assert.equal(f.document.getElementById('answer-state'), null);
+});
+
+test('answer state draft reload and text-only research insertion preserve a deliberate choice', async t => {
+  const f = await fixture(t, 340, undefined, true, { before: async e => {
+    const node = e.doc.nodes[1];
+    await e.writeDraft({ journey: e.activeKey, nodeId: node.id, base: node, text: '', answerState: 'needs-evidence', revision: 0 });
+  } });
+  const node = f.explorer.doc.nodes[1]; f.open(node.id);
+  await until(() => f.document.getElementById('answer-state')?.value === 'needs-evidence', 'state-only draft reload');
+  f.document.getElementById('finish').click(); await until(() => /draft/i.test(f.document.getElementById('notice').textContent), 'finish blocked by state draft');
+  f.type('answer', 'A draft note'); assert.equal(f.document.getElementById('answer-state').value, 'needs-evidence');
+  f.document.getElementById('research-request').click();
+  await until(() => f.explorer.pending?.kind === 'research', 'research started');
+  f.resolveResearch({ ...findings, proposedAnswer: 'AI proposal' });
+  await until(() => f.document.getElementById('use-recommendation'), 'research rendered');
+  f.document.getElementById('use-recommendation').click(); assert.equal(f.document.getElementById('answer-state').value, 'needs-evidence');
+  f.document.getElementById('undo-addition').click(); assert.equal(f.document.getElementById('answer-state').value, 'needs-evidence');
+  assert.equal(f.explorer.doc.nodes[1].answer, '');
+  assert.ok(!(await (await f.window.fetch('export.json')).text()).includes('A draft note'));
+});
+
+test('answer state validates without losing input and defaults new text to tentative', async t => {
+  const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  f.type('answer', 'New answer'); assert.equal(f.document.getElementById('answer-state')?.value, 'tentative');
+  chooseState(f, 'unanswered'); f.document.getElementById('save-answer').click();
+  assert.match(f.document.getElementById('notice').textContent, /clear.*text/i); assert.equal(f.document.getElementById('answer').value, 'New answer');
+  f.type('answer', ''); chooseState(f, 'decided'); f.document.getElementById('save-answer').click();
+  assert.match(f.document.getElementById('notice').textContent, /requires answer text/i);
+  chooseState(f, 'revisit-later'); f.document.getElementById('save-deeper').click();
+  await until(() => f.explorer.doc.nodes[1].answerState === 'revisit-later' && f.explorer.pending, 'deepen without fabricated text');
+  assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
+
+test('answer save captures click-time state and retains later selector edits', async t => {
+  const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  let release, waiting = false;
+  f.pauseDraftWrite(() => { waiting = true; return new Promise(resolve => { release = resolve; }); });
+  chooseState(f, 'not-relevant'); f.document.getElementById('save-answer').click();
+  await until(() => waiting, 'save waits on draft'); chooseState(f, 'revisit-later'); f.pauseDraftWrite(null); release();
+  await until(() => f.explorer.doc.nodes[1].answerState === 'not-relevant' && f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'saved click-time state and later draft');
+  assert.equal(f.document.getElementById('answer-state').value, 'revisit-later');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].answerState, 'revisit-later');
+});
+
+test('stale answer state save refreshes and requires explicit choice before replacing newer state', async t => {
+  const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id); chooseState(f, 'not-relevant');
+  const other = await new Explorer({ file: f.explorer.file }).load();
+  await other.command('answer', { revision: other.doc.revision, nodeId: node.id, answer: '', answerState: 'revisit-later' });
+  f.document.getElementById('save-answer').click();
+  await until(() => f.document.getElementById('refresh-answer'), 'stale answer refresh offered');
+  assert.equal(f.document.getElementById('answer-state').value, 'not-relevant');
+  f.document.getElementById('refresh-answer').click();
+  await until(() => f.document.getElementById('keep-draft'), 'explicit choice');
+  assert.equal(f.explorer.doc.nodes[1].answerState, 'revisit-later');
+  assert.match(f.document.getElementById('draft-recovery').textContent, /Revisit later/);
+  f.document.getElementById('save-answer').click(); await delay(20); assert.equal(f.explorer.doc.nodes[1].answerState, 'revisit-later');
+  f.document.getElementById('keep-draft').click(); await until(() => !f.document.getElementById('keep-draft'), 'choice recorded');
+  f.document.getElementById('save-answer').click(); await until(() => f.explorer.doc.nodes[1].answerState === 'not-relevant', 'explicit retry');
+});
+
+test('legacy text-only draft restores text and conservative state through the real HTTP editor', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const node = e.doc.nodes[1]; await e.writeDraft(draftInput(e, node, 'Old draft 🌿'));
+    const file = join(dirname(e.file), 'drafts.json'), data = JSON.parse(await readFile(file, 'utf8'));
+    delete data.entries[0].answerState; data.entries[0].base = draftHash(JSON.stringify([node.question, node.answer]));
+    await writeFile(file, JSON.stringify(data));
+  } });
+  await until(() => f.document.getElementById('draft-summary').textContent.includes('Local drafts'), 'old draft read');
+  f.open(f.explorer.doc.nodes[1].id);
+  assert.equal(f.document.getElementById('answer').value, 'Old draft 🌿');
+  assert.equal(f.document.getElementById('answer-state').value, 'tentative');
+  assert.equal(f.document.getElementById('recover-draft'), null);
+});
+
+test('recovered automatic empty state defaults new text while explicit Unanswered remains a choice', async t => {
+  for (const stateSelected of [false, true]) {
+    const f = await fixture(t, 340, undefined, false, { before: async e => {
+      await e.writeDraft({ ...draftInput(e, e.doc.nodes[1], ''), answerState: 'unanswered' });
+      const file = join(dirname(e.file), 'drafts.json'), data = JSON.parse(await readFile(file, 'utf8'));
+      data.entries[0].stateSelected = stateSelected; await writeFile(file, JSON.stringify(data));
+    } });
+    await until(() => f.document.getElementById('draft-summary').textContent.includes('Local drafts'), 'draft read');
+    f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'New text');
+    assert.equal(f.document.getElementById('answer-state').value, stateSelected ? 'unanswered' : 'tentative');
+  }
+});
+
+test('failed state draft or answer writes retain both fields for retry', async t => {
+  const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  await f.explorer.readDrafts(f.explorer.doc.id);
+  const write = f.explorer.draftStore.write; f.explorer.draftStore.write = async () => { throw new Error('Disk full'); };
+  chooseState(f, 'revisit-later'); f.document.getElementById('save-answer').click();
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft could not be saved', 'draft failure');
+  assert.equal(f.document.getElementById('answer-state').value, 'revisit-later'); assert.equal(f.explorer.doc.nodes[1].answerState, undefined);
+  f.explorer.draftStore.write = write; f.document.getElementById('retry-draft').click();
+  await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'draft retry');
+  const save = f.explorer.save; f.explorer.save = async () => { throw new Error('Map disk full'); };
+  f.type('answer', 'Optional note'); f.document.getElementById('save-answer').click();
+  await until(() => /Map disk full/.test(f.document.getElementById('notice').textContent), 'answer failure');
+  assert.equal(f.document.getElementById('answer').value, 'Optional note'); assert.equal(f.document.getElementById('answer-state').value, 'revisit-later');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].answerState, 'revisit-later');
+  f.explorer.save = save; f.document.getElementById('save-answer').click();
+  await until(() => f.explorer.doc.nodes[1].answerState === 'revisit-later', 'answer retry');
+});
 
 test('library opens, searches, pins and archives journeys at narrow pane width', async t => {
   const f = await fixture(t, 340, undefined, true);
@@ -849,7 +977,7 @@ test('discarding failed editor changes keeps the previous persisted draft visibl
 });
 
 test('dictated text and recommendation undo persist without committing an answer', async t => {
-  const f = await fixture(t, 340, voiceFixture()), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  const f = await fixture(t, 340, voiceFixture()), node = f.explorer.doc.nodes[1]; f.open(node.id); chooseState(f, 'needs-evidence');
   await until(() => f.document.getElementById('voice-status').textContent.includes('Hold Ctrl'), 'voice ready');
   f.document.getElementById('answer').focus(); key(f, 'keydown');
   await until(() => /^Listening/.test(f.document.getElementById('voice-status').textContent), 'listening'); key(f, 'keyup');
@@ -864,6 +992,8 @@ test('dictated text and recommendation undo persist without committing an answer
   await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'undo persisted');
   assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, 'our neighbors');
   assert.equal(f.explorer.doc.nodes[1].answer, '');
+  assert.equal(f.document.getElementById('answer-state').value, 'needs-evidence');
+  assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].answerState, 'needs-evidence');
 });
 
 test('Ctrl+Space dictates only into a focused answer, at the selection, without saving', async t => {

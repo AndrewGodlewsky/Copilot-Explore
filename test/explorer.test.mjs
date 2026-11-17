@@ -9,6 +9,77 @@ import { Explorer } from '../com.github.copilot/extensions/explorer/controller.m
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { explorerCanvas } from '../com.github.copilot/extensions/explorer/canvas.mjs';
 import { layout } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
+import * as model from '../com.github.copilot/extensions/explorer/model.mjs';
+
+test('answer states validate all text combinations and preserve explicit choices', () => {
+  for (const state of ['unanswered', 'decided', 'tentative', 'assumption', 'needs-evidence', 'not-relevant', 'revisit-later']) {
+    for (const answer of ['', '  A note 🌿\n']) {
+      const doc = createDocument('Topic'), [node] = addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Scope' }]);
+      const invalid = !answer && ['decided', 'tentative', 'assumption'].includes(state) || answer && state === 'unanswered';
+      if (invalid) {
+        assert.throws(() => answerNode(doc, node.id, answer, state), /text|clear/i);
+        Object.assign(node, { answer, answerState: state }); assert.throws(() => validateDocument(doc), /text|clear/i); continue;
+      }
+      answerNode(doc, node.id, answer, state);
+      assert.equal(model.effectiveAnswerState(node), state);
+      const imported = validateDocument(JSON.parse(JSON.stringify(doc)));
+      assert.equal(model.effectiveAnswerState(imported.nodes[1]), state); assert.equal(imported.nodes[1].answer, answer);
+      if (answer) { answerNode(doc, node.id, 'Changed note'); assert.equal(model.effectiveAnswerState(node), state); }
+    }
+  }
+  const doc = createDocument('Topic'), [node] = addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Scope' }]);
+  for (const value of [null, '', 'confident', 3, ['unanswered']]) { node.answerState = value; assert.throws(() => validateDocument(doc), /state/i); }
+  delete node.answerState; answerNode(doc, node.id, 'New text'); assert.equal(model.effectiveAnswerState(node), 'tentative');
+  assert.throws(() => answerNode(doc, doc.rootId, '', 'not-relevant'), /central idea/);
+});
+
+test('legacy answer state defaults remain sparse at the saved-data boundary', () => {
+  const doc = createDocument('Topic');
+  for (let i = 0; i < 4800; i++) doc.nodes.push({ id: `q${i}`, parentId: doc.rootId, question: 'Question?', category: 'Scope', answer: 'x'.repeat(1750), research: null, review: false });
+  let remaining = model.MAX_DOCUMENT_BYTES - Buffer.byteLength(JSON.stringify(doc, null, 2)) - 20;
+  for (const node of doc.nodes.slice(1)) { const add = Math.min(remaining, 20000 - node.answer.length); node.answer += 'x'.repeat(add); remaining -= add; if (!remaining) break; }
+  const imported = validateDocument(doc);
+  assert.equal(model.effectiveAnswerState(imported.nodes[1]), 'tentative');
+  assert.equal(model.effectiveAnswerState(imported.nodes[0]), 'unanswered');
+  assert.ok(!Object.hasOwn(imported.nodes[1], 'answerState'));
+  assert.ok(Buffer.byteLength(JSON.stringify(imported, null, 2)) <= model.MAX_DOCUMENT_BYTES);
+});
+
+test('answer counts exclude root and distinguish resolved, answered, deferred and review', () => {
+  const doc = createDocument('Topic'); doc.nodes[0].answer = 'Legacy root text';
+  const rows = [['decided', 'Choice', false], ['decided', 'Old choice', true], ['not-relevant', '', false], ['tentative', 'Maybe', false], ['revisit-later', '', false], ['unanswered', '', false], ['assumption', 'Guess', false], ['needs-evidence', '', false]];
+  rows.forEach(([answerState, answer, review], i) => doc.nodes.push({ id: `q${i}`, parentId: doc.rootId, question: `Question ${i}`, category: 'Scope', answerState, answer, review, research: null }));
+  assert.deepEqual(model.questionCounts(doc), { total: 8, answered: 4, resolved: 2, deferred: 1, unresolved: 6 });
+  const context = contextFor(doc, 'q3');
+  assert.ok(context.decisionsElsewhere.some(n => n.answerState === 'not-relevant' && n.answer === ''));
+  assert.ok(context.decisionsElsewhere.some(n => n.answerState === 'revisit-later'));
+  assert.equal(context.path.at(-1).answerState, 'tentative'); assert.ok(!Object.hasOwn(context.path[0], 'answerState'));
+  const markdown = toMarkdown(doc);
+  for (const label of ['Decided', 'Tentative', 'Assumption', 'Need evidence', 'Not relevant', 'Revisit later', 'Unanswered']) assert.ok(markdown.includes(label));
+  assert.match(markdown, /4 answered.*2 resolved.*1 deferred.*6 unresolved/);
+});
+
+test('state-only answer saves mark descendants, no-ops preserve finish and check disk freshness', async t => {
+  const { explorer: e, messages } = await started(t), id = e.doc.nodes[1].id;
+  await e.command('add', { revision: e.doc.revision, nodeId: id, question: 'Next?', category: 'Scope' });
+  await e.command('answer', { revision: e.doc.revision, nodeId: id, answer: '', answerState: 'needs-evidence', expand: true });
+  assert.equal(e.doc.nodes[1].answerState, 'needs-evidence'); assert.equal(e.doc.nodes[2].review, true);
+  assert.equal(messages.at(-1).mode, 'enqueue'); assert.match(messages.at(-1).prompt, /needs-evidence/);
+  await e.command('cancel'); await e.command('finish', { revision: e.doc.revision });
+  const before = structuredClone(e.doc);
+  await e.command('answer', { revision: e.doc.revision, nodeId: id, answer: '', answerState: 'needs-evidence' });
+  assert.deepEqual(e.doc, before);
+  const other = await new Explorer({ file: e.file }).load();
+  await other.command('answer', { revision: other.doc.revision, nodeId: id, answer: '', answerState: 'not-relevant' });
+  await assert.rejects(e.command('answer', { revision: e.doc.revision, nodeId: id, answer: '', answerState: 'needs-evidence' }), /updated|changed/);
+  await e.command('refresh-answer', { revision: e.doc.revision }); assert.equal(e.doc.nodes[1].answerState, 'not-relevant');
+});
+
+test('unanswered save-and-deepen is rejected before saving or starting questions', async t => {
+  const { explorer: e } = await started(t), before = structuredClone(e.doc);
+  await assert.rejects(e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, answer: '', answerState: 'unanswered', expand: true }), /state|answer/i);
+  assert.deepEqual(e.doc, before); assert.equal(e.pending, null);
+});
 
 const question = { question: 'Who will use it first?', category: 'People' };
 const findings = { basis: 'reasoning', summary: 'Compare two possible audiences.', options: [
@@ -121,7 +192,7 @@ test('JSON round trip and Markdown preserve all questions, answers, research, un
   const imported = validateDocument(JSON.parse(JSON.stringify(doc)));
   assert.deepEqual(imported, doc);
   const md = toMarkdown(doc);
-  for (const value of ['Neighbors 🌿', 'shared plots.', 'What space is available?', 'No external sources', 'Individuals', 'Not answered', '| N2 | N1 |']) assert.ok(md.includes(value), value);
+  for (const value of ['Neighbors 🌿', 'shared plots.', 'What space is available?', 'No external sources', 'Individuals', 'No answer text', '| N2 | N1 |']) assert.ok(md.includes(value), value);
   assert.ok(md.includes('Garden \\<plan\\>'));
 });
 test('imports reject unknown versions, duplicates, dangling parents and disconnected cycles', () => {

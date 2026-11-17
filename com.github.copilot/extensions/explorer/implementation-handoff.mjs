@@ -95,7 +95,7 @@ export function handoffMarkdown(value, doc) {
     if (!statements.length) lines.push('Unspecified.', '');
     statements.forEach((statement, i) => lines.push(`${key === 'nextSteps' && ['plan', 'tasks'].includes(h.format) ? `${i + 1}.` : '-'} **${statement.certainty}; ${statement.edited ? 'user edited' : 'AI synthesis'}:** ${md(statement.text)} ${statement.sources.map(ref => `[Source ${refs.get(refKey(ref)).number}](#handoff-source-${refs.get(refKey(ref)).number})`).join(' ')}`, ''));
   }
-  lines.push('## Captured user guidance', '', `Topic: ${md(h.guidance.topic)}`, '', `Objective: ${md(h.guidance.objective)}`, '', `Success criteria: ${md(h.guidance.successCriteria)}`, '');
+  lines.push('## Captured user guidance', '', `Topic: ${md(h.guidance.topic)}`, '', `Mode: ${md(h.guidance.mode)}`, '', `Objective: ${md(h.guidance.objective)}`, '', `Success criteria: ${md(h.guidance.successCriteria)}`, '');
   for (const pin of h.guidance.pins) lines.push(`- Constraint ${md(pin.id)}: ${md(pin.text)}`, '');
   lines.push('## Source reference appendix', '');
   for (const { ref, number } of refs.values()) {

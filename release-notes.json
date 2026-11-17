@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.50",
+    "summary": "Export whole journeys or selected branches as Mermaid, JSON Canvas, standalone SVG or a printable HTML map with a manual Save as PDF path. Preserve saved roles, answers, states and relationships regardless of folds or focus, with explicit size limits and private-data exclusions. Complete native and Markdown exports remain available; handoff guidance and source links are corrected."
+  },
+  {
     "version": "0.1.49",
     "summary": "Create a reviewed implementation brief, specification, plan, prompt or task list from explicitly selected saved decisions. Preview exact input with optional recorded research evidence, preserve uncertainty and constraints, edit and accept before copying or exporting. Project files and earlier AI artifacts stay excluded; selected-source changes require regeneration."
   },

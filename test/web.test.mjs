@@ -41,6 +41,35 @@ async function startReviewedResearch(f) {
   f.document.getElementById('research-review-start').click();
 }
 
+test('visual export UI explicitly captures full or selected scope despite folding/focus and excludes answer drafts', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, category: 'People', question: 'Folded child?' });
+  } }), $ = id => f.document.getElementById(id);
+  const node = f.explorer.doc.nodes[1]; f.open(node.id); f.type('answer', 'VISUAL_DRAFT_CANARY');
+  $('focus-branch').click();
+  f.document.querySelector(`[data-branch-id="${node.id}"]`).click();
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${f.explorer.doc.nodes[3].id}"]`), null);
+  let downloaded;
+  f.window.URL.createObjectURL = blob => { downloaded = blob; return 'blob:export-fixture'; };
+  f.window.URL.revokeObjectURL = () => {};
+  f.window.HTMLAnchorElement.prototype.click = function () {};
+  assert.ok($('visual-export-open'), 'map exports are available before finishing');
+  $('visual-export-open').click(); assert.equal($('export-dialog').open, true);
+  assert.equal($('visual-export-scope').value, 'whole');
+  $('visual-export-format').value = 'canvas'; $('visual-export-download').click();
+  await until(() => downloaded, 'whole map download');
+  let value = JSON.parse(await downloaded.text()); assert.equal(value.nodes.length, 4); assert.ok(!JSON.stringify(value).includes('VISUAL_DRAFT_CANARY'));
+  downloaded = null; $('visual-export-scope').value = 'branch'; $('visual-export-download').click();
+  await until(() => downloaded, 'branch download'); value = JSON.parse(await downloaded.text()); assert.equal(value.nodes.length, 2); assert.match(value.nodes[0].text, /Who should borrow first\\\?/); assert.match(value.nodes[1].text, /Folded child/);
+  assert.ok(!$('export-dialog').textContent.includes('download saved'));
+  $('close-export').click(); assert.equal($('answer').value, 'VISUAL_DRAFT_CANARY');
+  $('visual-export-open').click();
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Changed saved revision' });
+  downloaded = null; $('visual-export-download').click();
+  await until(() => /changed|Reopen/.test($('visual-export-status').textContent), 'stale captured revision'); assert.equal(downloaded, null);
+  assert.deepEqual(f.actions.filter(a => a.action === 'finish'), []);
+});
+
 test('option comparison preserves exact duplicate values, unknowns, subjective priorities and draft-only actions', async t => {
   const r = structuredClone(findings);
   r.options[0].details = [{ label: 'Cost', value: 'Lower <script>🌿</script>' }, { label: 'Cost', value: 'Setup extra' }, { label: 'Speed', value: 'Slower' }];
@@ -191,6 +220,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom, document = window.document;
+  const exportDialog = document.getElementById('export-dialog');
+  exportDialog.showModal = () => { exportDialog.open = true; };
+  exportDialog.close = () => { exportDialog.open = false; };
   const storageDialog = document.getElementById('storage-dialog');
   storageDialog.showModal = () => { storageDialog.open = true; };
   storageDialog.close = () => { storageDialog.open = false; };
@@ -2917,8 +2949,12 @@ test('answer check HTTP UI keeps drafts, renders plain text, dismisses locally a
   await until(() => $('answer-status').textContent === 'Draft saved locally', 'check draft saved');
   const first = f.explorer.doc.nodes[1].id, second = f.explorer.doc.nodes[2].id;
   $('focus-branch').click(); assert.match($('focus-status').textContent, /Focusing branch/);
+  $('implementation-handoff').click(); await until(() => $('brief-dialog').open, 'handoff opened before check');
+  $('close-brief').click();
   $('check-answers').click(); await until(() => $('check-dialog').open && !$('run-check').disabled, 'check dialog ready');
   $('run-check').click(); await until(() => $('check-content').textContent.includes('Possible <script> conflict'), 'check result');
+  assert.match($('check-status').textContent, /Journey summary:/);
+  assert.ok(!$('check-status').textContent.includes('handoff scope'));
   assert.ok(captured); assert.ok(!captured.prompt.includes('Unsaved answer draft')); assert.equal(captured.context.targetId, f.explorer.doc.rootId);
   assert.equal($('check-content').querySelector('script'), null); assert.equal(f.explorer.doc.nodes.find(node => node.id === first).answer, '');
   $('check-content').querySelector('button:last-child').click(); await until(() => $('check-content').textContent.includes('Dismissed in this canvas.'), 'dismissal');

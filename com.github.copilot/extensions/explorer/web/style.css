@@ -132,5 +132,9 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .comparison-scroll caption { text-align: left; font-weight: 600; margin-block: 8px; }
 
 .handoff-sources { max-height: 18rem; overflow-y: auto; }
+#export-dialog { max-height: calc(100dvh - 32px); overflow: auto; box-sizing: border-box; }
+#export-dialog p { overflow-wrap: anywhere; }
+#export-dialog label { display: block; margin-top: 12px; }
+#export-dialog select { width: 100%; max-width: 100%; }
 .handoff-sources label { display: flex; gap: .5rem; align-items: baseline; margin-block: .5rem; overflow-wrap: anywhere; }
 #handoff-preview-text, .handoff-appendix { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; }

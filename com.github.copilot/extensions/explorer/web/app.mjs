@@ -167,6 +167,7 @@ function apply(next, reset = false) {
   $('implementation-handoff').hidden = !doc;
   $('check-answers').hidden = !doc; $('challenge-decisions').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
+  $('visual-export-open').hidden = !doc;
   $('edit-guidance').disabled = !!state.pending;
   if (state.contextCoverage && JSON.stringify(state.contextCoverage) !== lastCoverage) { lastCoverage = JSON.stringify(state.contextCoverage); showCoverage(state.contextCoverage, 'Prepared'); }
   notice(state.error || state.recoveryNotice?.message || (['failed', 'interrupted'].includes(state.exportObservation?.status) ? 'Export did not finish. Open Recovery to explicitly retry. Browser file saving is unknown.' : ''));
@@ -1742,7 +1743,7 @@ function renderCheck() {
   $('check-status').textContent = [result?.error, result?.status === 'pending' ? `${result.progress}… Cancel this before using another helper.` :
     result?.status === 'stale' ? 'These findings are stale because a sent source changed. Run the check again.' :
     active ? result.findings.length ? `${result.findings.length} possible finding${result.findings.length === 1 ? '' : 's'} for review.` : challenge ? 'No useful hypotheses returned for these selected inputs; this is not proof that the choices are sound.' : 'No possible issues found in the reviewed context; the whole map is not proven consistent.' : 'Run an explicit check to review saved inputs.',
-    coverage ? `${briefOperation === 'handoff' ? 'Selected handoff scope' : 'Journey summary'}: ${coverage.included} records included; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes.` : ''].filter(Boolean).join(' ');
+    coverage ? `Journey summary: ${coverage.included} records included; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes.` : ''].filter(Boolean).join(' ');
   $('check-content').replaceChildren();
   if (!active) return;
   const dismissed = new Set(result.dismissed);
@@ -1773,15 +1774,48 @@ $('challenge-decisions').addEventListener('click', () => openResearchReview(stat
 $('cancel-check').addEventListener('click', () => void requestCheck('cancel'));
 $('refresh-check').addEventListener('click', async () => { if (await api('refresh-answer')) await requestCheck('poll'); });
 $('close-check').addEventListener('click', () => { $('check-dialog').close(); $('check-answers').focus(); });
+let visualExportTarget = null, visualExportEpoch = 0;
+function openVisualExport() {
+  if (!state.document) return;
+  visualExportEpoch++;
+  visualExportTarget = { journey: state.activeKey ?? state.document.id, revision: state.document.revision, nodeId: selected };
+  $('visual-export-scope').value = 'whole';
+  $('visual-export-target').textContent = `Selected branch: ${state.document.nodes.find(n => n.id === selected)?.question ?? 'Unavailable'}`;
+  $('visual-export-status').textContent = 'Exports contain saved answers only; local drafts are unchanged.';
+  $('visual-export-download').disabled = false;
+  $('export-dialog').showModal();
+}
+$('visual-export-open').addEventListener('click', openVisualExport);
+$('visual-export-download').addEventListener('click', async () => {
+  if (!visualExportTarget) return;
+  const epoch = ++visualExportEpoch, target = { ...visualExportTarget };
+  const current = () => !closed && epoch === visualExportEpoch && $('export-dialog').open;
+  $('visual-export-download').disabled = true; $('visual-export-status').textContent = 'Preparing saved map…';
+  try {
+    const scope = $('visual-export-scope').value;
+    const response = await fetch('api/visual-export', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ ...target, scope, nodeId: scope === 'whole' ? null : target.nodeId, format: $('visual-export-format').value }) });
+    if (!response.ok) throw new Error((await response.json()).error || 'Export failed. Reopen Export maps to retry.');
+    const blob = await response.blob();
+    if (!current()) return;
+    if (target.journey !== (state.activeKey ?? state.document?.id) || target.revision !== state.document?.revision) throw new Error('The journey changed. Reopen Export maps to select the scope again.');
+    const filename = response.headers.get('Content-Disposition')?.match(/filename="(exploration-(?:whole|branch)\.(?:mmd|canvas|svg|html))"/)?.[1];
+    if (!filename) throw new Error('Export response was invalid. Reopen Export maps to retry.');
+    const url = URL.createObjectURL(blob), link = el('a', { href: url, download: filename });
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+    $('visual-export-status').textContent = 'Download requested. Browser file saving is unknown. For PDF, open the downloaded HTML in Brave and use Print → Save as PDF.';
+  } catch (error) { if (current()) $('visual-export-status').textContent = error.message || 'Export failed. Reopen Export maps to retry.'; }
+  finally { if (current()) $('visual-export-download').disabled = false; }
+});
 $('finish').addEventListener('click', async () => {
   await draftClient.ready;
   if (draftClient.loadError) return notice('Draft recovery is unavailable. Retry recovery before finishing.');
   const dirty = dirtyNodes();
   if (draftClient.uncommitted()) { if (dirty.length) select(dirty[0].id); return notice('Save your draft answer before finishing. Recover or discard drafts for removed questions.'); }
-  if (await api('finish')) $('export-dialog').showModal();
+  if (await api('finish')) openVisualExport();
 });
 $('save-file').addEventListener('click', () => { notice('This download contains saved answers and states only. Local answer drafts are not included.'); });
-$('close-export').addEventListener('click', () => $('export-dialog').close());
+$('close-export').addEventListener('click', () => { visualExportEpoch++; $('export-dialog').close(); $('visual-export-open').focus(); });
+$('export-dialog').addEventListener('cancel', () => { visualExportEpoch++; });
 $('outline-toggle').addEventListener('click', () => { $('outline').hidden = !$('outline').hidden; $('outline-toggle').setAttribute('aria-expanded', String(!$('outline').hidden)); if (!$('outline').hidden) { renderOutline(); $('search').focus(); } });
 $('outline').addEventListener('keydown', event => {
   if (event.key !== 'Escape' || event.isComposing) return;

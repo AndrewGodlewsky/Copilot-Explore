@@ -1,0 +1,22 @@
+# Portable map exports
+
+Choose **Export maps** at any point, or **Finish exploration** when ready. Complete Markdown and `.explore.json` downloads always contain the full saved journey, research and accepted artifacts. Local answer drafts and private project excerpts are excluded. Use the native file to continue editing in Explorer.
+
+Portable maps offer **Whole journey** or **Selected branch and all descendants**. The branch is the node selected when the dialog opens, with all of its descendants, including folded or offscreen nodes. Focus and viewport never choose the scope. A branch omits its ancestors, sibling branches, overall topic and guidance; selecting the idea itself includes the entire tree. Reopen the dialog after changing the selected node or saved journey. Stale journey/revision requests are rejected.
+
+The four portable formats contain node relationships, original roles (idea, question, user direction), categories, question/direction text, saved user answers, answer states and needs-review flags. States express user intent, not verification. A direction remains user-supplied context, not an answer. Current files have no persisted importance rank, and exports do not infer one from a question's rationale.
+
+They omit global guidance/constraints, research and source evidence, generation provenance/rationale, accepted briefs/handoffs, historical versions, unsaved drafts, private references, project excerpts, helper state and live endpoints/tokens. Original document/node IDs are replaced by local `n0`, `n1`, … IDs; filenames contain only format and scope. User text explicitly saved inside included nodes remains included; this is a field allowlist, not content redaction.
+
+| Format | Usage and fidelity |
+| --- | --- |
+| Mermaid `.mmd` | Paste into a Mermaid-capable editor. Quoted labels use Mermaid decimal entities; no user-supplied IDs, directives, links or click actions. The consuming Mermaid version controls layout, line handling, fonts and limits. Syntax is checked with Mermaid 12.3.0 without rendering. |
+| JSON Canvas `.canvas` | Open in a JSON Canvas 1.0 compatible application. Text nodes, integer geometry and parent edges are provided. Markdown punctuation is escaped as literal text. Application fonts, Markdown layout and wrapping may differ or require resizing cards. |
+| SVG `.svg` | Standalone XML shapes, paths and wrapped text; no script, foreignObject, external fonts/assets or links. Contains the entire exported scope rather than a clipped screen capture. Fixed text lengths keep fallback fonts inside cards; typography and emoji glyphs may differ from Explorer. |
+| Print / PDF `.html` | Download a self-contained, script-free print document. Open it manually in Brave, choose **Print → Save as PDF**, and check scale, paper size and page preview. A fit-to-page map overview is followed by full readable cards with generated parent references. Each card starts a new page; long cards can span pages. This is not a directly generated PDF or a promise that the desktop host supports printing. |
+
+Portable maps reject more than **500 nodes**, **1 MiB of projected UTF-8 data**, or **4 MiB of formatted output**. Positioned formats also reject dimensions beyond **100,000 pixels on either axis**. A very wide/deep map, long answers, entity expansion or many short lines may reach a limit sooner. Nothing is silently shortened: choose a smaller branch or use the complete native/Markdown record. An overview of a large map can be too small to read on one page; use the printable card pages or smaller scopes.
+
+Text remains Unicode. CR/CRLF line endings normalize to LF; XML-invalid controls, U+FFFE/U+FFFF and lone surrogates become visible replacement characters consistently across portable formats. SVG wraps by Unicode code point (not grapheme cluster), so a combining/emoji sequence may split across lines. Native export retains the original validated saved text. Downloads, fonts, native host handling and actual printed pagination still need manual checks; a successful response cannot prove a file was saved.
+
+Implementation follows the [JSON Canvas 1.0 specification](https://jsoncanvas.org/spec/1.0/), [Mermaid flowchart quoted/entity labels](https://mermaid.js.org/syntax/flowchart.html) and [Mermaid parse API](https://mermaid.js.org/config/usage.html). The installed Copilot SDK canvas declarations expose rendering support but no print/PDF API; Explorer adds no SDK/runtime dependency or host integration change for these downloads.

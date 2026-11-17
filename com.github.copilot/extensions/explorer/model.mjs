@@ -343,10 +343,9 @@ export function toMarkdown(doc) {
     }
   }
   // Only a fixed heading may precede the appendix, including when the topic is multiline.
-  if (doc.handoff) lines.splice(2, 0, handoffMarkdown(doc.handoff, doc), '');
-  if (doc.brief) {
+  if (doc.brief || doc.handoff) {
     lines[0] = '# Exploration';
-    lines.splice(2, 0, briefMarkdown(doc.brief, doc), '', '## Topic', '', md(doc.topic), '');
+    lines.splice(2, 0, ...(doc.brief ? [briefMarkdown(doc.brief, doc), ''] : []), ...(doc.handoff ? [handoffMarkdown(doc.handoff, doc), ''] : []), '## Topic', '', md(doc.topic), '');
   }
   return lines.join('\n') + '\n';
 }

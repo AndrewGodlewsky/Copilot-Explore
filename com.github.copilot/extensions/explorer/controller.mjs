@@ -23,6 +23,7 @@ import { effectiveMode, validMode, modePolicy } from './web/modes.mjs';
 import { researchFraming } from './research.mjs';
 import { contextScope, prepareResearch, sameResearchSources, sameResearchDestination } from './research-context.mjs';
 import { ResearchReview } from './research-review.mjs';
+import { visualExport } from './visual-export.mjs';
 export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
@@ -422,6 +423,18 @@ export class Explorer {
       throw new Error('This journey changed on disk. Reopen it from the library.');
     }
     return saved.document;
+  }
+  exportVisual(input) {
+    return this.transact(async () => {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'format,journey,nodeId,revision,scope' ||
+        typeof input.journey !== 'string' || !Number.isSafeInteger(input.revision) || input.revision < 0) throw new Error('Invalid visual export request.');
+      const matches = () => this.doc && input.journey === (this.activeKey ?? this.doc.id) && input.revision === this.doc.revision;
+      if (!matches()) throw new Error('The journey changed. Reopen Export maps and select the scope again.');
+      const identity = [this.file, this.activeKey, this.doc.id, this.doc.rootId, this.doc.createdAt];
+      const doc = await this.readCurrent();
+      if (!matches() || JSON.stringify(identity) !== JSON.stringify([this.file, this.activeKey, this.doc.id, this.doc.rootId, this.doc.createdAt]) || doc.revision !== input.revision) throw new Error('The journey changed. Reopen Export maps and select the scope again.');
+      return visualExport(doc, input);
+    });
   }
   async withDocumentLock(work) {
     try { await mkdir(dirname(this.file), { recursive: true }); }

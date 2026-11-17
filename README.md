@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.49.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.50.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Reviewed implementation handoff
@@ -264,7 +264,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.49, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.49**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.50, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.50**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
@@ -312,3 +312,5 @@ Open **Map settings > Diagnostics** for read-only host, speech and owned-helper 
 ### Selected project files
 
 In **Challenge decisions**, enter up to five relative text/source paths and choose **Read / refresh selected files**. Review exact Unicode excerpts, source hashes and included/total bytes before starting. Changed or missing sources require explicit refresh. Files only ground this tool-free challenge; questions, web research/follow-ups, other helpers and exports omit them. Selection/results are transient, but native SDK helper journals may retain input. [Limits, freshness and retention](docs/project-context.md).
+
+Portable map exports: use **Export maps** for Mermaid, JSON Canvas, SVG or a downloadable print document with a manual Brave Save as PDF path. Choose the whole saved journey or the selected branch and all descendants, independently of folds and focus. See [portable export scope, limits and fidelity](docs/portable-exports.md). Complete native and Markdown archives remain available.

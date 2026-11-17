@@ -20,6 +20,18 @@ function fixture() {
 }
 const output = doc => ({ goal: [], decisions: [{ id: 'decision', text: 'Tentative choice remains open', certainty: 'user-decision', sources: [{ kind: 'node', id: doc.nodes[1].id }] }], constraints: [], assumptions: [], unresolved: [], nextSteps: [{ id: 'step', text: 'Consider reviewing the choice', certainty: 'suggestion', sources: [] }] });
 
+test('handoff full Markdown protects source anchors from multiline setext topic and preserves captured mode', () => {
+  const doc = fixture(); delete doc.brief; delete doc.handoff; delete doc.projectCapture;
+  doc.nodes[1].research = null;
+  doc.topic = doc.nodes[0].question = 'Topic\n\nHandoff source 1\n---'; doc.mode = 'decide';
+  const prepared = prepareHandoff(doc, { nodeIds: [doc.nodes[1].id], format: 'tasks', includeEvidence: false });
+  doc.handoff = acceptHandoff(parseHandoff(JSON.stringify(output(doc)), prepared), []);
+  const full = toMarkdown(doc);
+  assert.match(handoffMarkdown(doc.handoff, doc), /Mode: decide/);
+  assert.equal(full.split('\n')[0], '# Exploration');
+  assert.ok(full.indexOf('### Handoff source 1') < full.indexOf('Handoff source 1\n---'));
+});
+
 test('handoff exact explicit subset and five formats omit private/previous artifacts; selected evidence is opt-in', () => {
   const doc = fixture(), nodeIds = [doc.nodes[1].id];
   for (const format of ['brief', 'specification', 'plan', 'prompt', 'tasks']) {

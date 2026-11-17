@@ -160,6 +160,12 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (['research', 'research-follow-up', 'restore', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
+      if (req.method === 'POST' && route === 'api/visual-export') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        const result = await explorer.exportVisual(await body(req, 2048));
+        res.writeHead(200, { 'Content-Type': result.type, 'Content-Disposition': `attachment; filename="${result.filename}"` });
+        return res.end(result.content);
+      }
       if (req.method === 'GET' && ['export.json', 'export.md', 'brief.md', 'handoff.md'].includes(route)) {
         const id = randomUUID();
         const observe = status => { if (explorer.exportObservation?.id === id) explorer.exportObservation = { id, route, status, downloadSaved: 'unknown' }; };

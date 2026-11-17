@@ -69,11 +69,11 @@ async function api(action, input = {}) {
   if (busy || closed) return null;
   busy = true; actionEpoch++;
   try {
-    const response = await fetch('api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, revision: state.document?.revision, ...input }) });
+    const response = await fetch('api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, revision: state.document?.revision, scope: action === 'start' ? $('start-scope').value : $('context-scope').value, ...input }) });
     const result = await response.json();
     if (closed) return null;
     if (!response.ok) throw new Error(result.error);
-    if (!result.importConflict) apply(result, ['start', 'open', 'import'].includes(action)); return result;
+    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'import'].includes(action)); return result;
   } catch (error) { if (!closed) notice(error.message); return null; }
   finally { busy = false; }
 }
@@ -101,6 +101,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    lastCoverage = ''; $('context-coverage').textContent = 'Check the selected node or start a request to see coverage.';
     cleanup.cancel();
     questionHelp.sync();
     voice.cancel();
@@ -133,6 +134,7 @@ function apply(next, reset = false) {
   showView();
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('edit-guidance').disabled = !!state.pending;
+  if (state.contextCoverage && JSON.stringify(state.contextCoverage) !== lastCoverage) { lastCoverage = JSON.stringify(state.contextCoverage); showCoverage(state.contextCoverage, 'Prepared'); }
   notice(state.error);
   if (!doc) return;
   if (firstQuestions && selected === doc.rootId) expanded = false;
@@ -898,6 +900,26 @@ function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id
 $('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value, objective: $('start-objective').value, successCriteria: $('start-criteria').value, mode: $('start-mode').value }); });
 $('start-mode').addEventListener('change', () => showModeDescription('start-mode'));
 $('edit-mode').addEventListener('change', () => showModeDescription('edit-mode'));
+let lastCoverage = '';
+function showCoverage(value, label) {
+  $('context-coverage').textContent = `${label} ${value.kind} context: ${value.bytes.toLocaleString()} / ${value.limit.toLocaleString()} UTF-8 bytes. Included ${value.included.pins} user constraints, ${value.included.path} path records and ${value.included.decisionsElsewhere} additional decisions and ${value.included.generationContext ?? 0} generation cues. Omitted ${value.omitted.path} ancestors and ${value.omitted.decisionsElsewhere} additional decisions and ${value.omitted.generationContext ?? 0} generation cues (${value.omitted.budget} for size; ${value.omitted.scope} by scope). No text was truncated.`;
+}
+$('context-scope').addEventListener('change', () => { $('context-coverage').textContent = 'Scope changed for the next request. Check context or continue your current action; no inference has started.'; });
+for (const kind of ['questions', 'research']) $(`check-${kind === 'questions' ? 'question' : kind}-context`).addEventListener('click', async () => {
+  if (!state.document || !selected) return;
+  const result = await api('context-coverage', { kind, nodeId: selected });
+  if (result) showCoverage(result.contextCoverage, 'Preview of saved');
+});
+function readPins() { return [...$('constraint-list').children].map(row => ({ id: row.dataset.pinId, text: row.querySelector('textarea').value === row.originalPinText.replace(/\r\n?/g, '\n') ? row.originalPinText : row.querySelector('textarea').value })); }
+function addPinRow(pin) {
+  const row = el('div', { 'data-pin-id': pin.id }); row.originalPinText = pin.text;
+  const input = el('textarea', { id: `constraint-${pin.id}`, maxlength: '1000', rows: '2', required: '' }); input.value = pin.text;
+  row.append(el('label', { for: input.id }, 'Constraint (user supplied)'), input, button('Remove constraint', () => { row.remove(); $('add-constraint').disabled = false; $('add-constraint').focus(); }));
+  $('constraint-list').append(row); $('add-constraint').disabled = $('constraint-list').children.length >= 10;
+  return input;
+}
+function renderPins(pins) { $('constraint-list').replaceChildren(); $('add-constraint').disabled = false; for (const pin of pins) addPinRow(pin); }
+$('add-constraint').addEventListener('click', () => { if ($('constraint-list').children.length < 10) addPinRow({ id: crypto.randomUUID(), text: '' }).focus(); });
 function closeGuidance() {
   $('guidance-dialog').close(); $('guidance-error').hidden = true; $('guidance-error').textContent = '';
   if (guidanceReturn?.nodeId === selected && $('answer')) {
@@ -910,8 +932,9 @@ $('edit-guidance').addEventListener('click', () => {
   if (!state.document || state.pending) return notice('Wait for Copilot or cancel the current request before editing guidance.');
   const answer = expanded && $('answer');
   guidanceReturn = answer ? { nodeId: selected, start: answer.selectionStart, end: answer.selectionEnd, direction: answer.selectionDirection } : null;
-  guidanceBase = { objective: state.document.objective ?? '', successCriteria: state.document.successCriteria ?? '', mode: effectiveMode(state.document) };
+  guidanceBase = { objective: state.document.objective ?? '', successCriteria: state.document.successCriteria ?? '', mode: effectiveMode(state.document), pins: (state.document.pins ?? []).map(pin => ({ ...pin })) };
   guidanceNeedsChoice = false; guidanceNeedsRefresh = false;
+  renderPins(state.document.pins ?? []);
   $('edit-objective').value = state.document.objective ?? '';
   $('edit-criteria').value = state.document.successCriteria ?? '';
   $('edit-mode').value = effectiveMode(state.document);
@@ -926,18 +949,18 @@ $('refresh-guidance').addEventListener('click', async () => {
   if (busy || !guidanceNeedsRefresh) return;
   const result = await api('refresh-guidance');
   if (!result) { $('guidance-error').textContent = $('notice').textContent || 'Could not refresh the saved journey.'; $('guidance-error').hidden = false; return; }
-  const latest = { objective: result.document.objective, successCriteria: result.document.successCriteria, mode: effectiveMode(result.document) };
-  guidanceNeedsChoice = latest.objective !== guidanceBase.objective || latest.successCriteria !== guidanceBase.successCriteria || latest.mode !== guidanceBase.mode;
+  const latest = { objective: result.document.objective, successCriteria: result.document.successCriteria, mode: effectiveMode(result.document), pins: (result.document.pins ?? []).map(pin => ({ ...pin })) };
+  guidanceNeedsChoice = latest.objective !== guidanceBase.objective || latest.successCriteria !== guidanceBase.successCriteria || latest.mode !== guidanceBase.mode || JSON.stringify(latest.pins) !== JSON.stringify(guidanceBase.pins);
   guidanceBase = latest; guidanceNeedsRefresh = false; $('refresh-guidance').hidden = true;
   $('guidance-conflict').hidden = !guidanceNeedsChoice;
   $('save-guidance').disabled = guidanceNeedsChoice;
-  $('guidance-latest').textContent = `Saved mode: ${MODES[latest.mode].label}\nSaved objective: ${latest.objective || '(empty)'}\nSaved success criteria: ${latest.successCriteria || '(empty)'}`;
+  $('guidance-latest').textContent = `Saved mode: ${MODES[latest.mode].label}\nSaved objective: ${latest.objective || '(empty)'}\nSaved success criteria: ${latest.successCriteria || '(empty)'}\nSaved constraints: ${latest.pins.map(pin => pin.text).join(' / ') || '(none)'}`;
   $('guidance-error').textContent = guidanceNeedsChoice ? 'The saved guidance changed. Choose a version below.' : 'Saved journey refreshed. Review and save your guidance.';
   $('guidance-error').hidden = false;
 });
 function chooseGuidance(choice) {
   if (!guidanceNeedsChoice) return;
-  if (choice === 'latest') { $('edit-objective').value = guidanceBase.objective; $('edit-criteria').value = guidanceBase.successCriteria; $('edit-mode').value = guidanceBase.mode; showModeDescription('edit-mode'); }
+  if (choice === 'latest') { renderPins(guidanceBase.pins); $('edit-objective').value = guidanceBase.objective; $('edit-criteria').value = guidanceBase.successCriteria; $('edit-mode').value = guidanceBase.mode; showModeDescription('edit-mode'); }
   guidanceNeedsChoice = false; $('guidance-conflict').hidden = true; $('save-guidance').disabled = false;
   $('guidance-error').hidden = true; $('guidance-error').textContent = '';
   $('edit-objective').focus();
@@ -951,7 +974,7 @@ $('guidance-form').addEventListener('submit', async event => {
   try {
     const modeChanged = $('edit-mode').value !== effectiveMode(state.document);
     const hadHelp = questionHelp.work?.status === 'pending' || questionHelp.results.size > 0;
-    const result = await api('guidance', { objective: $('edit-objective').value, successCriteria: $('edit-criteria').value, mode: $('edit-mode').value });
+    const result = await api('guidance', { objective: $('edit-objective').value, successCriteria: $('edit-criteria').value, mode: $('edit-mode').value, pins: readPins() });
     if (!result) {
       const message = $('notice').textContent || 'Could not save guidance. Try again.';
       guidanceNeedsRefresh = /Another canvas|map changed/.test(message);

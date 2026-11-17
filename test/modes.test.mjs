@@ -127,7 +127,7 @@ test('each strategy reaches attached generation without changing its enqueue pol
     assert.equal(messages.at(-1).mode, 'enqueue');
     assert.match(messages.at(-1).prompt, strategy[mode]);
     assert.match(messages.at(-1).prompt, new RegExp(`"mode":"${mode}"`));
-    assert.match(e.questionSource, new RegExp(`"mode":"${mode}"`));
+    assert.equal(e.questionSource.dependencies.framing.mode, mode);
     await e.command('cancel');
   }
   const before = e.doc.revision;

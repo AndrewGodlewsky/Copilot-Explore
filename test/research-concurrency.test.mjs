@@ -33,6 +33,16 @@ test('research accepts a new unrelated answer and records both actual transition
   const history = await f.e.readHistory(f.e.doc.id, 1); assert.equal(history.document.nodes[2].answer, 'New independent answer'); assert.equal(history.document.nodes[1].research, null);
 });
 
+test('external pin edits discard research, while absent and empty pin defaults are equivalent', async t => {
+  const f = await fixture(t); await f.begin();
+  const same = JSON.parse(await readFile(f.file, 'utf8')); same.pins = []; same.revision++;
+  await writeFile(f.file, JSON.stringify(same)); await f.finish(); assert.deepEqual(f.e.doc.nodes[1].research, result);
+  await f.begin(); const changed = JSON.parse(await readFile(f.file, 'utf8'));
+  changed.pins = [{ id: 'pin-00000000000000000000', text: 'New user constraint' }]; changed.revision++;
+  await writeFile(f.file, JSON.stringify(changed)); await f.finish();
+  assert.match(f.e.error, /source context changed/); assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')).pins, changed.pins);
+});
+
 test('research source save keeps new user text and discards stale output only after commit', async t => {
   const f = await fixture(t); await f.begin();
   const save = f.e.save; f.e.save = async () => { throw Error('Injected precommit failure'); };
@@ -53,18 +63,18 @@ test('research merges another canvas latest revision and rejects destination con
   assert.equal(JSON.parse(await readFile(f.file, 'utf8')).nodes[1].research.summary, 'Newer research');
 });
 
-test('prepared research captures only actual transmitted IDs and whole records within 75000 UTF-16 units', () => {
+test('prepared research captures only actual transmitted IDs and whole records within 131072 UTF-8 bytes', () => {
   const doc = createDocument('Unicode 🌿'); addQuestions(doc, doc.rootId, [{ question: 'Target?', category: 'Target' }]);
   for (let i = 0; i < 8; i++) doc.nodes.push({ ...structuredClone(doc.nodes[1]), id: `source-${i}`, question: 'Duplicate?', answer: '🌿'.repeat(10000) });
   const prepared = prepareResearch(doc, doc.nodes[1].id);
-  assert.ok(JSON.stringify(prepared.context).length <= 75000); assert.ok(prepared.context.truncated);
+  assert.ok(prepared.bytes <= 131072); assert.ok(prepared.context.truncated);
   assert.ok(prepared.context.omitted.decisionsElsewhere > 0);
   assert.deepEqual(prepared.dependencies.records, [...prepared.context.path, ...prepared.context.decisionsElsewhere]);
   const included = prepared.context.decisionsElsewhere[0]; assert.equal(included.answer, '🌿'.repeat(10000));
   const omitted = doc.nodes.find(n => n.id.startsWith('source-') && !prepared.dependencies.records.some(r => r.id === n.id));
   omitted.answer = 'Changed omitted record'; assert.ok(sameResearchSources(prepared.dependencies, doc));
   doc.nodes.find(n => n.id === included.id).answer = 'Changed included duplicate'; assert.equal(sameResearchSources(prepared.dependencies, doc), false);
-  assert.throws(() => boundedContext({ topic: 'x', path: [{ question: 'Mandatory', answer: '\u0000'.repeat(20000) }] }), /target and guidance/);
+  assert.throws(() => boundedContext({ topic: 'x', path: [{ question: 'Mandatory', answer: '\u0000'.repeat(22000) }] }), /target and guidance/);
 });
 
 test('captured sources reject target, ancestry, state, guidance, effective mode and identity changes', () => {

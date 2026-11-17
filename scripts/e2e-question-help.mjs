@@ -16,6 +16,7 @@ const prompts = [], owned = new Set(), workspaces = [];
 let hold = false, onHeld, initialized = 0;
 const document = createDocument('Explore Unicode 🌱', { objective: 'Understand a technical question' });
 const [selected] = addQuestions(document, document.rootId, [{ question: 'What does λ mean for Élodie?', category: 'Technical' }]);
+document.pins = [{ id: 'constraint-00000000000000', text: 'Use familiar vocabulary' }];
 const context = helpContext(document, selected.id);
 const outputs = { rephrase: 'In other words, what does λ stand for?', example: 'Illustrative example: λ could label a rate.', terms: 'λ is the Greek letter lambda; meaning depends on context.' };
 const fixture = createServer(async (req, res) => {
@@ -68,6 +69,7 @@ try {
     assert.equal(prompt.tools?.length ?? 0, 0);
     assert.ok(prompt.messages.some(m => m.role === 'user' && m.content.includes(selected.question)));
     assert.ok(!JSON.stringify(prompt).includes('unsaved answer'));
+    assert.ok(prompt.messages.some(m => m.role === 'user' && m.content.includes('Use familiar vocabulary')));
   }
   const ids = await readdir(join(temporary, 'usage', 'session-state'));
   assert.equal(ids.length, 3);

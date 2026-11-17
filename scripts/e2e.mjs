@@ -98,6 +98,9 @@ try {
   assert.equal(snapshot.document.nodes.length, 2); assert.equal(snapshot.preview, null);
   assert.equal(snapshot.document.nodes[1].rationale, rationale);
   const nodeId = snapshot.document.nodes[1].id;
+  await action('guidance', { objective: '', successCriteria: '', pins: [{ id: 'constraint-00000000000000', text: 'Preserve the garden constraint' }] });
+  const coverage = await action('context-coverage', { kind: 'questions', nodeId, scope: 'path' });
+  assert.equal(coverage.contextCoverage.included.pins, 1); assert.ok(coverage.contextCoverage.bytes <= 131072);
   await action('answer', { nodeId, answer: 'Neighbors', expand: false });
   await action('research', { nodeId });
   snapshot = await until(state, value => !value.pending, 'research access check');
@@ -108,6 +111,7 @@ try {
   const exported = await (await fetch(opened.url + 'export.json')).json();
   assert.equal(exported.nodes[1].answer, 'Neighbors'); assert.equal(exported.nodes[1].research, null);
   assert.equal(exported.nodes[1].rationale, rationale);
+  assert.equal(exported.pins[0].text, 'Preserve the garden constraint');
   assert.match(await (await fetch(opened.url + 'export.md')).text(), /Neighbors/);
   const pendingLate = await action('questions', { nodeId });
   await action('cancel');

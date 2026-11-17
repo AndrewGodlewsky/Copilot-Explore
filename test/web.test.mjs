@@ -125,6 +125,41 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
 
+test('constraint editing and scope coverage preserve active drafts, caret, help and request intent over HTTP', async t => {
+  const f = await fixture(t, 340, undefined, false, { questionHelper: { run: async () => 'Helpful explanation', close() {} } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Unsaved draft 🌿');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'draft saved');
+  $('help-rephrase').click(); await until(() => $('question-help-results').textContent.includes('Helpful explanation'), 'help result');
+  const answer = $('answer'); answer.focus(); answer.setSelectionRange(2, 7);
+  $('context-scope').value = 'path'; $('context-scope').dispatchEvent(new f.window.Event('change'));
+  $('check-question-context').click(); await until(() => $('context-coverage').textContent.includes('Preview of saved'), 'coverage');
+  assert.equal(f.explorer.pending, null); assert.equal(answer.value, 'Unsaved draft 🌿'); assert.equal(answer.selectionStart, 2); assert.equal(f.document.activeElement, $('answer')); assert.match($('question-help-results').textContent, /Helpful explanation/);
+  assert.match($('context-controls').textContent, /full committed map/); assert.match($('context-coverage').textContent, /UTF-8 bytes/);
+  $('edit-guidance').click(); $('add-constraint').click();
+  const pinInput = $('constraint-list').querySelector('textarea'); pinInput.value = '  Keep this user statement 🌿\nexactly  ';
+  $('guidance-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => !f.document.getElementById('guidance-dialog').open, 'constraint saved');
+  assert.equal(f.explorer.doc.pins[0].text, pinInput.value); assert.equal($('answer').value, 'Unsaved draft 🌿'); assert.equal($('answer').selectionStart, 2);
+  $('check-research-context').click(); await until(() => $('context-coverage').textContent.includes('Preview of saved research'), 'research coverage');
+  assert.match($('context-coverage').textContent, /Included 1 user constraints/); assert.equal(f.explorer.pending, null);
+  $('research-request').click(); await until(() => f.explorer.pending?.kind === 'research', 'explicit research action');
+  assert.equal(f.explorer.contextCoverage.scope, 'path'); assert.equal($('answer').value, 'Unsaved draft 🌿');
+  f.resolveResearch(findings); await until(() => !f.explorer.pending, 'research completion');
+});
+
+test('constraint controls preserve untouched CRLF text and stable IDs, then edit and remove normally', async t => {
+  const pin = { id: 'constraint-00000000000000', text: '  Exact\r\nuser text 🌿  ' };
+  const f = await fixture(t, 340, undefined, false, { before: e => e.command('guidance', { revision: e.doc.revision, objective: '', successCriteria: '', pins: [pin] }) }), $ = id => f.document.getElementById(id);
+  const revision = f.explorer.doc.revision;
+  const submit = async () => { $('guidance-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true })); await until(() => !$('guidance-dialog').open, 'guidance closed'); };
+  $('edit-guidance').click(); await submit();
+  assert.equal(f.explorer.doc.revision, revision); assert.deepEqual(f.explorer.doc.pins, [pin]);
+  $('edit-guidance').click(); const input = $('constraint-list').querySelector('textarea'); input.value = 'Revised user statement'; await submit();
+  assert.equal(f.explorer.doc.pins[0].id, pin.id); assert.equal(f.explorer.doc.pins[0].text, 'Revised user statement');
+  $('edit-guidance').click(); $('constraint-list').querySelector('button').click(); await submit();
+  assert.equal(Object.hasOwn(f.explorer.doc, 'pins'), false); assert.equal(f.explorer.doc.revision, revision + 2);
+});
+
 test('research allows independent answer save through HTTP and preserves editor controls during completion', async t => {
   const f = await fixture(t, 340, undefined, false, { questions: [
     { question: 'Research target?', category: 'Target', rationale: 'Explain the target.' },

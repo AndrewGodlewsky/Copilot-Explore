@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, stat, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
-import { createResearcher, publicUrl, boundedContext, hostRuntime } from '../com.github.copilot/extensions/explorer/research.mjs';
+import { createResearcher, researchFraming, publicUrl, boundedContext, hostRuntime } from '../com.github.copilot/extensions/explorer/research.mjs';
 import { prepareResearch } from '../com.github.copilot/extensions/explorer/research-context.mjs';
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
 
@@ -11,10 +11,13 @@ test('research helper sends the exact prepared context without reselecting or cl
   const { researcher, calls } = await fixture(t), doc = createDocument('Unicode 🌿');
   addQuestions(doc, doc.rootId, [{ question: 'Target?', category: 'Target' }]);
   for (let i = 0; i < 8; i++) doc.nodes.push({ ...structuredClone(doc.nodes[1]), id: `source-${i}`, answer: '🌿'.repeat(10000) });
-  const prepared = prepareResearch(doc, doc.nodes[1].id);
-  await researcher.run(prepared.context);
+  const prepared = prepareResearch(doc, doc.nodes[1].id, researchFraming(doc));
+  await researcher.run(prepared.context, { prepared });
+  assert.equal(calls.prompt, prepared.prompt);
+  assert.equal(calls.config.systemMessage.content, prepared.instructions);
+  assert.equal(Buffer.byteLength(calls.prompt) + Buffer.byteLength(calls.config.systemMessage.content), prepared.bytes);
   assert.equal(calls.prompt.split('EXPLORATION DATA\n')[1], JSON.stringify(prepared.context));
-  assert.ok(prepared.context.truncated); assert.ok(JSON.stringify(prepared.context).length <= 75000);
+  assert.ok(prepared.context.truncated); assert.ok(prepared.bytes <= 131072);
 });
 
 test('bounded research context retains committed guidance inside its total budget', () => {
@@ -24,7 +27,7 @@ test('bounded research context retains committed guidance inside its total budge
   const large = boundedContext({ topic: 'A plan', objective: 'x'.repeat(2000), successCriteria: 'y'.repeat(4000), path: Array.from({ length: 200 }, (_, i) => ({ question: `Question ${i}`, answer: 'a'.repeat(1000) })), decisionsElsewhere: [] });
   assert.equal(large.objective.length, 2000);
   assert.equal(large.successCriteria.length, 4000);
-  assert.ok(JSON.stringify(large).length <= 75000);
+  assert.ok(Buffer.byteLength(JSON.stringify(large)) <= 131072);
   assert.equal(large.truncated, true);
 });
 
@@ -164,7 +167,7 @@ test('public URL guard rejects local addresses, credentials, unusual ports and D
 test('bounded context prioritizes the current question and marks omissions; runtime rejects ordinary node', () => {
   const large = { ...context, path: Array.from({ length: 200 }, (_, i) => ({ question: `Question ${i}`, answer: 'x'.repeat(20000) })), decisionsElsewhere: [] };
   const compact = boundedContext(large);
-  assert.ok(JSON.stringify(compact).length < 90000); assert.equal(compact.path.at(-1).question, 'Question 199'); assert.equal(compact.truncated, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(compact)) <= 131072); assert.equal(compact.path.at(-1).question, 'Question 199'); assert.equal(compact.truncated, true);
   assert.throws(() => hostRuntime(process.execPath, ['node', 'script.mjs'], process.ppid, {}));
 });
 

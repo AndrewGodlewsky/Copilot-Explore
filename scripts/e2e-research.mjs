@@ -5,13 +5,14 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createResearcher } from '../com.github.copilot/extensions/explorer/research.mjs';
+import { prepareContext } from '../com.github.copilot/extensions/explorer/research-context.mjs';
+import { createResearcher, researchFraming } from '../com.github.copilot/extensions/explorer/research.mjs';
 
 const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_PATH;
 assert.ok(sdkDirectory && cli, 'Set COPILOT_SDK_DIR and COPILOT_CLI_PATH to the installed desktop SDK/runtime.');
 const sdk = await import(pathToFileURL(join(sdkDirectory, 'index.js')).href);
 const temporary = await mkdtemp(join(tmpdir(), 'explorer-research-fixture-'));
-const calls = [], toolCalls = [], prompts = [];
+const calls = [], toolCalls = [], prompts = [], captured = [];
 const findings = { basis: 'reasoning', summary: 'Synthetic local comparison.', options: [
   { title: 'Pilot', description: 'Small first step.', pros: ['Learn'], cons: ['Limited'] , proposedAnswer: 'I will run a pilot.', details: [{ label: 'Size', value: 'Ten people' }] },
   { title: 'Launch', description: 'Broad first step.', pros: ['Reach'], cons: ['Cost'], proposedAnswer: 'I will launch broadly.', details: [] },
@@ -67,7 +68,7 @@ const runtime = async () => ({ path: cli, sdk: { RuntimeConnection: sdk.RuntimeC
     });
     // The local provider deliberately has no GitHub identity/catalog. Only these read-only checks
     // are substituted; session configuration, tools, inference, hooks and journals are real.
-    return { sessionId: session.sessionId, sendAndWait: (...args) => session.sendAndWait(...args), rpc: {
+    return { sessionId: session.sessionId, sendAndWait: (...args) => { captured.push({ instructions: config.systemMessage.content, prompt: args[0].prompt }); return session.sendAndWait(...args); }, rpc: {
       ...session.rpc, gitHubAuth: parent.rpc.gitHubAuth,
       model: { ...session.rpc.model, list: parent.rpc.model.list },
     } };
@@ -78,7 +79,15 @@ const deadline = setTimeout(() => { for (const client of owned) void client.forc
 try {
   const progress = [];
   const context = { topic: 'Synthetic garden', objective: 'Choose a shared garden 🌿', successCriteria: 'Neighbors agree on one place', path: [{ kind: 'direction', origin: 'user', question: '  Access for everyone  ', answer: '', review: false }, { question: 'Who should join?', answer: 'Neighbors only', answerState: 'assumption', review: true }], decisionsElsewhere: [{ question: 'When?', answer: '', answerState: 'revisit-later', review: false }] };
-  assert.deepEqual(await researcher.run(context, { onProgress: value => progress.push(value) }), findings);
+  context.pins = [{ id: 'constraint-00000000000000', text: 'Preserve the user constraint exactly' }];
+  const prepared = prepareContext(context, researchFraming(context));
+  assert.deepEqual(await researcher.run(prepared.context, { prepared, onProgress: value => progress.push(value) }), findings);
+  assert.ok(JSON.stringify(prompts).includes('Preserve the user constraint exactly'));
+  assert.deepEqual(captured[0], { instructions: prepared.instructions, prompt: prepared.prompt });
+  assert.ok(prompts[0].messages.some(m => m.role === 'user' && m.content.includes(prepared.prompt)));
+  assert.equal(Buffer.byteLength(captured[0].instructions) + Buffer.byteLength(captured[0].prompt), prepared.bytes);
+  assert.equal(prepared.bytes, Buffer.byteLength(prepared.instructions) + Buffer.byteLength(prepared.prompt));
+  assert.ok(prepared.bytes <= 131072);
   assert.ok(JSON.stringify(prompts).includes('Access for everyone'));
   assert.ok(JSON.stringify(prompts).includes('direction'));
   assert.ok(calls.includes('initialize')); assert.equal(toolCalls.length, 1);

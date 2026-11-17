@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.32",
+    "summary": "Pin up to 10 user constraints in journey guidance. Questions and research include complete mandatory context within a measured 128 KiB request budget, with whole-record omissions shown. Choose ancestor-only or additional-decision scope without starting AI. Pins stay in history and exports; stale results follow the sources actually sent."
+  },
+  {
     "version": "0.1.31",
     "summary": "Save answers while research runs. Independent changes survive completion, including saves from another canvas. Changing a source preserves your newer answer and discards stale research. Conflicting research is never silently replaced, and a new run waits for the prior helper to release."
   },

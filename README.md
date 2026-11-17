@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.31.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.32.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -236,7 +236,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.31, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.31**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.32, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.32**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
@@ -258,3 +258,13 @@ See [AGENTS.md](AGENTS.md) for development rules and [the assessed Copilot pract
 History retains up to 50 snapshots and 128 MiB per journey, with up to 10 protected named checkpoints. Older unnamed snapshots are pruned first. Restoring preserves local drafts for explicit recovery and creates a new revision when content changes. See [history storage and recovery](docs/history.md) for the commit protocol, limits and recovery instructions.
 
 Suggest a missing direction from a branch's **Missing a direction?** disclosure. **Add & explore** saves your original text and asks Copilot to develop questions underneath it. Seeds are labeled as user directions, stay separate from answers and question counts, and remain available for retry after generation fails or is cancelled. Accept proposed questions in the preview before they enter the map. [Schema and behavior](docs/question-preview.md#missing-directions).
+
+### Pinned constraints and AI request scope
+
+Edit guidance to add up to ten user-supplied constraints, each with up to 1,000 JavaScript characters. Text stays exact; these statements are not verified facts or answers. They are separate from private visual reference pins and remain in native files, history and complete Markdown. Empty legacy metadata stays absent. Guidance changes require cancelling an active generation/research request; staged questions and help are invalidated when their captured sources change.
+
+AI request context offers ancestor-path-only or additional-decision scope for the next request. Checking coverage or changing scope does not start inference. Topic, objective, success criteria, mode, all constraints and the active node are mandatory. Nearest ancestors are considered first, then other saved stateful questions by tree distance and stable ID. Optional records are omitted whole with counts and reasons; no answer or constraint is truncated. Mandatory overflow requires shortening the selected answer or guidance/pins.
+
+The 128 KiB (131,072 byte) ceiling measures UTF-8 bytes in the actual Explorer-authored SDK prompt and instruction strings, including serialized JSON escaping and the packaged research instructions. It is not a token estimate, provider limit or measure of existing attached-chat context. Native `get_exploration` still exposes the full current committed map to the attached chat. Payload exclusions do not erase information already in chat. Drafts, private visual references, library metadata, history and audio are excluded from these prepared payloads. Generation also uses bounded child question/direction cues and separately labeled historical model explanations to avoid repeats and preserve reasoning continuity. Path-only scope excludes child cues. These are never user decisions; research does not acquire those generation-only fields.
+
+Question help retains its smaller 16,000 serialized-character input bound, adding only explicit pinned guidance and matching freshness checks; it can fail if mandatory guidance cannot fit. It still excludes the selected answer and other branches. Clean My Answer remains answer-only. Visible native layout, microphone behavior and live model quality require manual checks.

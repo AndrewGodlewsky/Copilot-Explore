@@ -79,14 +79,14 @@ test('question preview model bounds, provenance and atomic node/file limits', ()
   assert.throws(() => acceptQuestions(full, full.rootId, batch, [{ index: 0, question: 'Who?' }]), /9 MiB/);
   assert.equal(JSON.stringify(full), original);
 });
-test('question preview deeper sources include ancestors, existing siblings, and stateful answers elsewhere but exclude presentation', async t => {
+test('question preview tracks captured ancestors and stateful answers, not newly answered omitted records or presentation', async t => {
   const { e, command, stage } = await fixture(t);
   let id = await stage(); await command('accept-questions', { batchId: id, selected: questions.map((q, index) => ({ index, question: q.question })) });
   const parent = e.doc.nodes[1], elsewhere = e.doc.nodes[2];
   await command('answer', { nodeId: parent.id, answer: 'Saved', answerState: 'decided', expand: true });
   await stage(); id = e.preview.id;
   await command('answer', { nodeId: elsewhere.id, answer: '', answerState: 'needs-evidence' });
-  await assert.rejects(command('accept-questions', { batchId: id, selected: [{ index: 0, question: 'Next?' }] }), /context changed/);
+  assert.equal(e.uiSnapshot().preview.stale, false);
   await command('dismiss-questions', { batchId: id });
   await command('questions', { nodeId: parent.id }); await stage(); id = e.preview.id;
   await command('checkpoint', { journey: e.doc.id, snapshotRevision: e.doc.revision, name: 'Presentation checkpoint' });

@@ -9,6 +9,15 @@ export const MAX_NODES = 5000;
 export const MAX_DOCUMENT_BYTES = 9 * 1024 * 1024;
 export const MAX_OBJECTIVE = 2000;
 export const MAX_SUCCESS_CRITERIA = 4000;
+export function pinnedConstraints(value) {
+  const seen = new Set();
+  return list(value, 'pinned constraints (at most 10)', 10, pin => {
+    if (!pin || typeof pin !== 'object' || Array.isArray(pin) || Object.keys(pin).sort().join(',') !== 'id,text' ||
+      typeof pin.id !== 'string' || !/^[a-zA-Z0-9_-]{20,80}$/.test(pin.id) || seen.has(pin.id) ||
+      typeof pin.text !== 'string' || !pin.text.trim() || pin.text.length > 1000) throw new Error('Each constraint needs a unique opaque ID and nonblank text of at most 1,000 characters.');
+    seen.add(pin.id); return { id: pin.id, text: pin.text };
+  });
+}
 export function guidanceText(value, name, max) {
   if (typeof value !== 'string' || value.length > max) throw new Error(`${name} must be text of at most ${max} characters.`);
   return value;
@@ -149,6 +158,7 @@ export function validateDocument(value) {
     topic, objective: guidanceText(Object.hasOwn(value, 'objective') ? value.objective : '', 'Objective', MAX_OBJECTIVE),
     successCriteria: guidanceText(Object.hasOwn(value, 'successCriteria') ? value.successCriteria : '', 'Success criteria', MAX_SUCCESS_CRITERIA),
     ...(Object.hasOwn(value, 'mode') ? { mode: validMode(value.mode) } : {}),
+    ...(Object.hasOwn(value, 'pins') ? { pins: pinnedConstraints(value.pins) } : {}),
     rootId: root.id, createdAt: date(value.createdAt, 'creation date'), updatedAt: date(value.updatedAt, 'update date'),
     finishedAt: value.finishedAt === null ? null : date(value.finishedAt, 'finish date'), nodes };
   if (Buffer.byteLength(JSON.stringify(document, null, 2)) > MAX_DOCUMENT_BYTES) throw new Error('This map has reached the 9 MiB saved-data limit. Export it and continue in a new exploration.');
@@ -231,7 +241,9 @@ export function toMarkdown(doc) {
     'This record preserves user answers separately from AI research. Open questions are unresolved, not decisions.', '',
     '## Guidance', '', `**Mode: ${MODES[effectiveMode(doc)].label}**`, '', '**Objective:**', '', doc.objective ? md(doc.objective) : '_Not set._', '',
     '**Success criteria:**', '', doc.successCriteria ? md(doc.successCriteria) : '_Not set._', '',
-    'Criteria guide exploration; the user decides when to finish.', '', '## Map', '',
+    'Criteria guide exploration; the user decides when to finish.', '',
+    ...(doc.pins?.length ? ['## User-supplied constraints', '', 'User statements, not verified facts, answered questions or AI explanations. Private visual references are separate.', '', ...doc.pins.flatMap(pin => [`### ${md(pin.id)}`, '', md(pin.text), ''])] : []),
+    '## Map', '',
     '| ID | Parent | Category | Question | Status |', '| --- | --- | --- | --- | --- |'];
   const ids = new Map(doc.nodes.map((n, i) => [n.id, `N${i}`]));
   for (const n of doc.nodes) lines.push(`| ${ids.get(n.id)} | ${ids.get(n.parentId) ?? '—'} | ${md(n.category).replace(/\n/g, ' ')} | ${md(n.question).replace(/\n/g, ' ')} | ${nodeStatus(n)}${n.review ? '; needs review' : ''} |`);

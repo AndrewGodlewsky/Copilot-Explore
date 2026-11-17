@@ -101,6 +101,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    closeBrief();
     lastCoverage = ''; $('context-coverage').textContent = 'Check the selected node or start a request to see coverage.';
     cleanup.cancel();
     questionHelp.sync();
@@ -132,6 +133,7 @@ function apply(next, reset = false) {
   }
   updateFocusStatus();
   showView();
+  $('decision-brief').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('edit-guidance').disabled = !!state.pending;
   if (state.contextCoverage && JSON.stringify(state.contextCoverage) !== lastCoverage) { lastCoverage = JSON.stringify(state.contextCoverage); showCoverage(state.contextCoverage, 'Prepared'); }
@@ -1005,6 +1007,80 @@ $('file').addEventListener('change', async () => {
   try { const document = JSON.parse(await file.text()); await switchJourney('import', { document }); }
   catch (error) { notice(`Could not open that file: ${error.message}`); }
 });
+let briefView = null, briefId = null, briefJourney = null, briefEpoch = 0, briefBusy = false, briefStamp = '', briefEdits = new Map();
+function closeBrief() {
+  briefEpoch++;
+  if (briefId && briefJourney) void fetch('api/brief', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'discard', id: briefId, journey: briefJourney }) }).catch(() => {});
+  briefId = null; briefJourney = null; briefView = null; briefStamp = ''; briefEdits.clear(); briefBusy = false;
+  if ($('brief-dialog').open) $('brief-dialog').close();
+}
+async function requestBrief(action) {
+  if (!briefId || briefBusy || closed) return;
+  const epoch = briefEpoch, id = briefId, journey = briefJourney, abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 5000);
+  briefBusy = true;
+  for (const name of ['generate-brief', 'accept-brief', 'discard-brief']) $(name).disabled = true;
+  try {
+    const response = await fetch('api/brief', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
+      body: JSON.stringify({ action, id, journey, ...(action === 'accept' ? { revision: state.document.revision, edits: [...briefEdits].map(([id, text]) => ({ id, text })) } : {}) }) });
+    const result = await response.json();
+    if (epoch !== briefEpoch || id !== briefId || closed) return;
+    if (!response.ok) throw new Error(result.error);
+    if (result.id !== id) throw new Error('Decision brief response did not match this request.');
+    if (result.snapshot) apply(result.snapshot);
+    briefView = result;
+    if (action === 'discard') { briefStamp = ''; briefEdits.clear(); }
+    renderBrief();
+  } catch (error) {
+    if (epoch === briefEpoch && !closed) { $('brief-status').textContent = `${error.message} Brief freshness is unknown until the saved journey can be checked.`; $('accept-brief').hidden = true; }
+  } finally { clearTimeout(timer); if (epoch === briefEpoch) { briefBusy = false; $('generate-brief').disabled = briefView?.status === 'pending'; $('accept-brief').disabled = false; $('discard-brief').disabled = false; } }
+}
+function renderBrief() {
+  const value = briefView, proposal = value?.status === 'proposal' ? value.proposal : null, brief = proposal ?? value?.accepted;
+  $('discard-brief').hidden = !['pending', 'proposal', 'stale', 'error'].includes(value?.status);
+  $('accept-brief').hidden = !proposal;
+  $('generate-brief').disabled = value?.status === 'pending';
+  $('export-brief').hidden = !value?.accepted;
+  const coverage = brief?.coverage ?? value?.coverage;
+  $('brief-status').textContent = [value?.error, value?.status === 'pending' ? `${value.progress}… Cancel this before using cleanup or question help.` : proposal ? 'Proposal only — review and edit, then explicitly accept.' : value?.accepted ? `Accepted brief — ${value.freshness}.` : 'No accepted brief yet.',
+    coverage ? `Journey summary: ${coverage.included} records included${coverage.omitted !== undefined ? `; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes` : ''}.` : '',
+    'User constraints are statements, not verified facts. User edits keep original source links; edited wording is not automatically reverified.'].filter(Boolean).join(' ');
+  const stamp = JSON.stringify([proposal ? briefId : 'accepted', brief, value?.unavailableSources, brief?.dependencies.records.filter(source => !state.document.nodes.some(node => node.id === source.id)).map(source => source.id)]);
+  if (stamp === briefStamp) return;
+  briefStamp = stamp; briefEdits.clear(); $('brief-content').replaceChildren();
+  if (!brief) return;
+  const titles = { goal: 'Goal', decisions: 'Decisions and rationale', constraints: 'Constraints', assumptions: 'Assumptions', unresolved: 'Unresolved questions', nextSteps: 'Next steps' };
+  for (const [key, statements] of Object.entries(brief.sections)) {
+    const area = el('section', {}, el('h3', {}, titles[key]));
+    if (!statements.length) area.append(el('p', { class: 'quiet' }, 'Unspecified in this brief.'));
+    for (const statement of statements) {
+      const label = el('p', { class: 'quiet' }, `${statement.certainty} · ${statement.edited ? 'User edited' : 'AI synthesis'}`);
+      if (proposal) {
+        const input = el('textarea', { rows: '3', 'aria-label': `${titles[key]} statement`, 'data-brief-statement': statement.id }); input.value = statement.text;
+        input.addEventListener('input', () => { briefEdits.set(statement.id, input.value); label.textContent = `${statement.certainty} · ${input.value === statement.text ? 'AI synthesis' : 'User edited; original source links not reverified'}`; });
+        area.append(label, input);
+      } else area.append(label, el('p', { class: 'brief-text' }, statement.text));
+      for (const ref of statement.sources) {
+        if (ref.kind === 'guidance') area.append(el('p', { class: 'quiet' }, `Source: global user guidance (${ref.field})`));
+        else {
+          const source = brief.dependencies.records.find(source => source.id === ref.id), available = !value?.unavailableSources?.includes(ref.id) && state.document.nodes.some(node => node.id === ref.id);
+          area.append(el('p', { class: 'quiet' }, `Source state: ${source.state}${source.review ? '; needs review' : ''}`), available ? button(`Reveal: ${source.question}`, () => { $('brief-dialog').close(); select(ref.id); }, { class: 'brief-source' }) : el('p', { class: 'quiet' }, `Historical source unavailable: ${source.question} (${ref.id})`));
+        }
+      }
+    }
+    $('brief-content').append(area);
+  }
+}
+$('decision-brief').addEventListener('click', () => {
+  voice.cancel();
+  if (!briefId) { briefId = crypto.randomUUID(); briefJourney = state.activeKey ?? state.document.id; briefEpoch++; }
+  $('brief-dialog').showModal(); void requestBrief('view');
+});
+$('generate-brief').addEventListener('click', () => { voice.cancel(); void requestBrief('start'); });
+$('discard-brief').addEventListener('click', () => void requestBrief('discard'));
+$('accept-brief').addEventListener('click', () => void requestBrief('accept'));
+$('refresh-brief').addEventListener('click', async () => { if (await api('refresh-answer')) await requestBrief('poll'); });
+$('close-brief').addEventListener('click', () => { $('brief-dialog').close(); $('decision-brief').focus(); });
 $('finish').addEventListener('click', async () => {
   await draftClient.ready;
   if (draftClient.loadError) return notice('Draft recovery is unavailable. Retry recovery before finishing.');
@@ -1102,6 +1178,7 @@ new ResizeObserver(() => {
 new ResizeObserver(() => { if (expanded) scheduleLayout(); }).observe($('node-workspace'));
 window.addEventListener('pagehide', event => {
   cleanup.cancel();
+  closeBrief();
   questionHelp.dispose();
   void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;
@@ -1114,7 +1191,7 @@ async function poll() {
     const response = await fetch('api/state');
     if (!response.ok) throw new Error('Canvas connection lost. Reopen Explorer in Copilot.');
     const next = await response.json();
-    if (!closed && !busy && epoch === actionEpoch) { apply(next); await questionHelp.checkRetained(); }
+    if (!closed && !busy && epoch === actionEpoch) { apply(next); await questionHelp.checkRetained(); if ($('brief-dialog').open) await requestBrief('poll'); }
   } catch (error) { if (!closed && !busy && epoch === actionEpoch) notice(error.message); }
   finally { if (!closed) pollTimer = setTimeout(poll, document.hidden ? 4000 : 1200); }
 }

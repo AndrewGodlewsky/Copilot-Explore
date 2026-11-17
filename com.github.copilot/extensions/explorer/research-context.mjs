@@ -3,9 +3,9 @@ import { effectiveMode } from './web/modes.mjs';
 import { effectiveAnswerState, isQuestion } from './web/answer-state.mjs';
 
 export const RESEARCH_CONTEXT_LIMIT = 131072;
-const identity = doc => ({ id: doc.id, rootId: doc.rootId, createdAt: doc.createdAt });
-const framing = doc => ({ topic: doc.topic, objective: doc.objective ?? '', successCriteria: doc.successCriteria ?? '', mode: effectiveMode(doc), pins: structuredClone(doc.pins ?? []) });
-const record = node => ({ id: node.id, parentId: node.parentId, question: node.question, answer: node.answer,
+export const identity = doc => ({ id: doc.id, rootId: doc.rootId, createdAt: doc.createdAt });
+export const framing = doc => ({ topic: doc.topic, objective: doc.objective ?? '', successCriteria: doc.successCriteria ?? '', mode: effectiveMode(doc), pins: structuredClone(doc.pins ?? []) });
+export const record = node => ({ id: node.id, parentId: node.parentId, question: node.question, answer: node.answer,
   ...(isQuestion(node) ? { answerState: effectiveAnswerState(node) } : node.kind === 'direction' ? { kind: 'direction', origin: 'user' } : {}), review: node.review });
 const generationRecord = (node, relation, includeRationale = true) => ({ id: node.id, parentId: node.parentId, question: node.question, relation,
   ...(node.kind === 'direction' ? { kind: 'direction', origin: 'user' } : {}),
@@ -60,6 +60,7 @@ export function prepareContext(source, { instructions = '', prefix = '', scope =
 export function boundedContext(context, options) { return prepareContext(context, options).context; }
 
 export function prepareResearch(doc, nodeId, options) {
+  if (options?.operation === 'brief' && nodeId !== doc.rootId) throw new Error('Journey summaries must be anchored at the root.');
   const byId = new Map(doc.nodes.map(node => [node.id, node])), target = findNode(doc, nodeId), path = [], seen = new Set();
   for (let node = target; node; node = byId.get(node.parentId)) {
     if (seen.has(node.id) || seen.size >= 5000) throw new Error('Invalid context ancestry.');
@@ -70,8 +71,9 @@ export function prepareResearch(doc, nodeId, options) {
   for (const node of doc.nodes) if (adjacent.has(node.parentId)) { adjacent.get(node.parentId).push(node.id); adjacent.get(node.id).push(node.parentId); }
   const distances = new Map([[nodeId, 0]]), queue = [nodeId];
   for (let i = 0; i < queue.length; i++) for (const id of adjacent.get(queue[i])) if (!distances.has(id)) { distances.set(id, distances.get(queue[i]) + 1); queue.push(id); }
-  const decisionsElsewhere = doc.nodes.filter(node => isQuestion(node) && (node.answer.trim() || effectiveAnswerState(node) !== 'unanswered') && !seen.has(node.id))
-    .sort((a, b) => distances.get(a.id) - distances.get(b.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map(record);
+  const stateful = node => isQuestion(node) && (node.answer.trim() || effectiveAnswerState(node) !== 'unanswered');
+  const decisionsElsewhere = doc.nodes.filter(node => (options?.operation === 'brief' || stateful(node)) && !seen.has(node.id))
+    .sort((a, b) => (options?.operation === 'brief' ? Number(!!stateful(b)) - Number(!!stateful(a)) : 0) || distances.get(a.id) - distances.get(b.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map(record);
   const generationContext = options?.operation === 'questions' ? [
     ...path.slice().reverse().map(item => byId.get(item.id)).filter(node => node.rationale && node.generation).map(node => generationRecord(node, 'path')),
     ...doc.nodes.filter(node => node.parentId === nodeId).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0).map(node => generationRecord(node, 'child')),

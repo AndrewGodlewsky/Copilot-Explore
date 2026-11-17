@@ -86,3 +86,9 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 :where(.cleanup-text) { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow-y: auto; }
 
 #context-controls{flex:none;margin:0 20px 10px;max-height:32vh;overflow:auto;padding:8px 0;border-top:1px solid var(--line)}#context-controls summary{cursor:pointer;margin-bottom:8px}#context-controls button{margin:4px 4px 4px 0;font-size:12px}#context-controls select{max-width:100%}#constraint-list>div{margin:12px 0}#constraint-list button{margin-top:6px}#guidance-form fieldset{min-width:0;margin:16px 0;border:1px solid var(--line);padding:12px}#start-scope{margin-bottom:8px}
+
+#brief-dialog { max-width: 580px; width: calc(100% - 32px); max-height: 85vh; overflow: auto; }
+#brief-dialog textarea { width: 100%; box-sizing: border-box; }
+#brief-dialog .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.brief-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.brief-source { max-width: 100%; overflow-wrap: anywhere; }

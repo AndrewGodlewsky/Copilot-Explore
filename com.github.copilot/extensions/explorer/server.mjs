@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { toMarkdown } from './model.mjs';
+import { briefMarkdown } from './decision-brief.mjs';
 import { VoiceService } from './voice.mjs';
 import { NavigationPreferences, defaultNavigationSettings } from './navigation-preferences.mjs';
 
@@ -82,6 +83,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.helpRequest(await body(req, 2048)));
       }
+      if (req.method === 'POST' && route === 'api/brief') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.briefRequest(await body(req, 256 * 1024)));
+      }
       if (req.method === 'GET' && route === 'api/history') {
         const selected = url.searchParams.get('snapshotRevision');
         if (selected !== null && !/^(0|[1-9][0-9]*)$/.test(selected)) throw new Error('Invalid history revision.');
@@ -107,12 +112,13 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (['restore', 'checkpoint', 'remove-checkpoint'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
-      if (req.method === 'GET' && ['export.json', 'export.md'].includes(route)) {
-        const doc = explorer.snapshot().document;
-        if (!doc) return json(400, { error: 'Start an exploration first.' });
-        const filename = `exploration-${doc.id.slice(0, 8)}${route.endsWith('.md') ? '.md' : '.explore.json'}`;
+      if (req.method === 'GET' && ['export.json', 'export.md', 'brief.md'].includes(route)) {
+        if (!explorer.snapshot().document) return json(400, { error: 'Start an exploration first.' });
+        const doc = await explorer.readCurrent();
+        if (route === 'brief.md' && !doc.brief) throw new Error('Accept a reviewed decision brief before exporting.');
+        const filename = `${route === 'brief.md' ? 'decision-brief' : 'exploration'}-${doc.id.slice(0, 8)}${route.endsWith('.md') ? '.md' : '.explore.json'}`;
         res.writeHead(200, { 'Content-Type': route.endsWith('.md') ? 'text/markdown; charset=utf-8' : 'application/json', 'Content-Disposition': `attachment; filename="${filename}"` });
-        return res.end(route.endsWith('.md') ? toMarkdown(doc) : JSON.stringify(doc, null, 2));
+        return res.end(route === 'brief.md' ? briefMarkdown(doc.brief, doc) : route.endsWith('.md') ? toMarkdown(doc) : JSON.stringify(doc, null, 2));
       }
       if (req.method === 'GET' && assets.has(route)) {
         const [name, type] = assets.get(route);

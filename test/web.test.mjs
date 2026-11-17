@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { JSDOM } from 'jsdom';
+import { parseBrief } from '../com.github.copilot/extensions/explorer/decision-brief.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
 import { createDocument, contextFor } from '../com.github.copilot/extensions/explorer/model.mjs';
@@ -34,7 +35,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
   const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
-    cleaner: options.cleaner,
+    cleaner: options.cleaner, briefHelper: options.briefHelper,
     questionHelper: options.questionHelper,
     researcher: { run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
   }).load();
@@ -47,6 +48,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom, document = window.document;
+  const briefDialog = document.getElementById('brief-dialog');
+  briefDialog.showModal = () => { briefDialog.open = true; };
+  briefDialog.close = () => { briefDialog.open = false; };
   const guidanceDialog = document.getElementById('guidance-dialog');
   guidanceDialog.showModal = () => { guidanceDialog.open = true; };
   guidanceDialog.close = () => { guidanceDialog.open = false; };
@@ -81,6 +85,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.matchMedia = () => motionMedia;
   window.HTMLElement.prototype.scrollIntoView = function () {};
   window.HTMLElement.prototype.animate = () => ({ cancel() {}, finished: Promise.resolve() });
+  window.AbortController = AbortController; // The fixture uses Node fetch, which requires its own AbortSignal brand.
   window.fetch = (path, options) => {
     const request = (async () => {
       if (holdAnswer && options?.body && JSON.parse(options.body).action === 'answer') await holdAnswer();
@@ -2459,4 +2464,19 @@ test('direction-only branches retain folding focus and exact question counts', a
   d.getElementById('cancel-request').click(); await until(() => !f.explorer.pending && !d.getElementById('cancel-request'), 'cancel second');
   f.open(seed.id); d.getElementById('focus-branch').click(); assert.equal(d.getElementById('show-whole-map').hidden, false);
   assert.equal(d.getElementById('answer'), null); assert.equal(d.getElementById('manual-question').maxLength, 600);
+});
+
+test('reviewed brief HTTP UI preserves draft/caret, edits, source navigation and stale accepted history', async t => {
+ let held, release;
+ const f = await fixture(t, 340, undefined, false, { briefHelper: { run(prepared) { return new Promise(resolve => { held = prepared; release = () => resolve(parseBrief(JSON.stringify({ goal: [{ id: 'g', text: '  AI goal <script> \u03bb\r\nExact  ', certainty: 'user-statement', sources: [{ kind: 'guidance', field: 'topic' }] }], decisions: [], constraints: [], assumptions: [], unresolved: [{ id: 'u', text: 'No answer yet.\r\nReason unknown.', certainty: 'uncertain', sources: [{ kind: 'node', id: prepared.dependencies.records[1].id }] }], nextSteps: [] }), prepared)); }); }, close() {} } }), $ = id => f.document.getElementById(id);
+ f.open(f.explorer.doc.nodes[1].id);f.type('answer','Unsaved raw draft \u{1f331}');await until(()=>$('answer-status').textContent==='Draft saved locally','draft saved');
+ const answer=$('answer');answer.focus();answer.setSelectionRange(3,7);
+ $('decision-brief').click();await until(()=>$('brief-dialog').open&&!$('generate-brief').disabled,'brief dialog');$('generate-brief').click();await until(()=>held||$('brief-status').textContent.includes('unknown until'),'brief started');assert.ok(held,$('brief-status').textContent);assert.ok(!held.prompt.includes('Unsaved raw draft'));assert.equal(held.context.targetId,f.explorer.doc.rootId);
+ assert.equal($('answer'),answer);assert.equal(answer.value,'Unsaved raw draft \u{1f331}');assert.equal(answer.selectionStart,3);
+ release();await until(()=>!$('accept-brief').hidden,'proposal displayed');const statement=$('brief-content').querySelector('[data-brief-statement="g"]');statement.value='User edited <img> \u{1f331}';statement.dispatchEvent(new f.window.Event('input',{bubbles:true}));statement.focus();statement.setSelectionRange(2,5);
+ await delay(1350);assert.equal($('brief-content').querySelector('[data-brief-statement="g"]'),statement);assert.equal(statement.selectionStart,2);assert.equal(statement.value,'User edited <img> \u{1f331}');assert.equal($('brief-content').querySelector('script'),null);
+ $('brief-content').querySelector('.brief-source').click();assert.equal($('brief-dialog').open,false);if ($('node-workspace').dataset.nodeId !== f.explorer.doc.nodes[1].id) f.open(f.explorer.doc.nodes[1].id);assert.equal($('answer').value,'Unsaved raw draft \u{1f331}');
+ $('decision-brief').click();await until(()=>!$('accept-brief').hidden&&!$('accept-brief').disabled,'review reopened');$('accept-brief').click();await until(()=>f.explorer.doc.brief,'accepted');assert.equal(f.explorer.doc.brief.sections.goal[0].text,'User edited <img> \u{1f331}');assert.equal(f.explorer.doc.brief.sections.unresolved[0].text,'No answer yet.\r\nReason unknown.');assert.equal(f.explorer.doc.brief.sections.unresolved[0].edited,false);assert.equal(f.explorer.doc.nodes[1].answer,'');assert.equal($('answer').value,'Unsaved raw draft \u{1f331}');
+ await until(()=>!$('export-brief').hidden,'separate export available');assert.match($('brief-status').textContent,/current/);
+ const disk=JSON.parse(await readFile(f.explorer.file,'utf8'));disk.nodes[2].answer='External uncited answer changed';disk.nodes[2].answerState='tentative';disk.revision++;await writeFile(f.explorer.file,JSON.stringify(disk));await until(()=>$('brief-status').textContent.includes('stale'),'accepted artifact stale from disk');
 });

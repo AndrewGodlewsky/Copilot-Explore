@@ -1,3 +1,4 @@
+import { validateBrief, briefMarkdown } from './decision-brief.mjs';
 import { randomUUID } from 'node:crypto';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './web/answer-state.mjs';
 import { effectiveMode, validMode, MODES } from './web/modes.mjs';
@@ -160,6 +161,7 @@ export function validateDocument(value) {
     ...(Object.hasOwn(value, 'mode') ? { mode: validMode(value.mode) } : {}),
     ...(Object.hasOwn(value, 'pins') ? { pins: pinnedConstraints(value.pins) } : {}),
     rootId: root.id, createdAt: date(value.createdAt, 'creation date'), updatedAt: date(value.updatedAt, 'update date'),
+    ...(Object.hasOwn(value, 'brief') ? { brief: validateBrief(value.brief) } : {}),
     finishedAt: value.finishedAt === null ? null : date(value.finishedAt, 'finish date'), nodes };
   if (Buffer.byteLength(JSON.stringify(document, null, 2)) > MAX_DOCUMENT_BYTES) throw new Error('This map has reached the 9 MiB saved-data limit. Export it and continue in a new exploration.');
   return document;
@@ -272,5 +274,6 @@ export function toMarkdown(doc) {
       for (const source of r.sources) lines.push(`- [${md(source.title)}](<${source.url.replace(/>/g, '%3E').replace(/</g, '%3C')}>)`);
     }
   }
+  if (doc.brief) lines.push('', briefMarkdown(doc.brief, doc));
   return lines.join('\n') + '\n';
 }

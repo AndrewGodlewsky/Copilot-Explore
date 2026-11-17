@@ -29,8 +29,8 @@ const sameAccount = (a, b) => a?.isAuthenticated === true && b?.isAuthenticated 
 
 // Only fixtures inject a runtime. Production resolves the pair supplied by the desktop bootstrap.
 export function createOwnedHelper(parent, operation, prepare, { usageDirectory, runtime = desktopRuntime, usageRecorder = createUsageRecorder, stopTimeoutMs = 10000 } = {}) {
-  if (!['research', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
-  const label = { research: 'Research', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
+  if (!['research', 'decision-brief', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
+  const label = { 'decision-brief': 'Decision brief', research: 'Research', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
   const fail = message => new HelperError(message.replaceAll('Research', label).replaceAll('research', label.toLowerCase()));
   const cancelled = () => fail('Research was cancelled or timed out. Your answers are saved.');
   const active = new Map();

@@ -1,3 +1,4 @@
+import { prepareBrief, captureBrief, briefFreshness, acceptBrief, validateBrief } from './decision-brief.mjs';
 import { mkdir, readFile, open, unlink, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -16,12 +17,12 @@ export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
 export class Explorer {
-  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, timeoutMs = 240000 }) {
+  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, briefHelper, timeoutMs = 240000 }) {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
     this.researcher = researcher; this.researchTasks = new Set(); this.researchTask = Promise.resolve(); this.unconfirmedResearchRelease = null; this.researchWork = null;
-    this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
+    this.briefHelper = briefHelper; this.briefWork = null; this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
     this.library = library; this.binding = binding; this.activeKey = null;
   }
   async load() {
@@ -36,6 +37,8 @@ export class Explorer {
   }
   snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
   reconcileCleanup() {
+    const brief = this.briefWork;
+    if (brief && (brief.journey !== (this.activeKey ?? this.doc?.id) || briefFreshness(brief.proposal ?? { dependencies: brief.dependencies }, this.doc) !== 'current')) { brief.abort.abort(); brief.status = 'stale'; brief.error = 'Saved brief inputs changed. Refresh the journey and regenerate.'; }
     const work = this.cleanup;
     if (work && (work.journey !== (this.activeKey ?? this.doc?.id) || !this.doc?.nodes.some(n => n.id === work.nodeId && isQuestion(n)))) {
       work.abort.abort(); this.cleanup = null;
@@ -54,7 +57,7 @@ export class Explorer {
     }).catch(() => {});
   }
   requireToolFreeRelease() {
-    if (this.unconfirmedToolFreeRelease) throw new Error('An earlier helper has not confirmed shutdown. Cleanup and question help are blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
+    if (this.unconfirmedToolFreeRelease) throw new Error('An earlier helper has not confirmed shutdown. Cleanup, question help and decision briefs are blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
   }
   cleanupRequest(input) {
     return this.transact(() => {
@@ -73,6 +76,7 @@ export class Explorer {
         this.requireToolFreeRelease();
         const text = cleanupText(input.text);
         if (!this.cleaner) throw new Error('Clean My Answer requires the installed Copilot desktop SDK.');
+        if (this.briefWork?.status === 'pending') throw new Error('Cancel the decision brief before cleaning your answer.');
         if (this.help?.status === 'pending') throw new Error('Cancel question help before cleaning your answer.');
         this.cleanup?.abort.abort();
         const work = { id: input.id, journey: input.journey, nodeId: input.nodeId, mutation: input.mutation, status: 'pending', progress: 'Preparing answer cleanup', abort: new AbortController() };
@@ -132,6 +136,7 @@ export class Explorer {
         this.requireToolFreeRelease();
         if (!this.questionHelper) throw new Error('Question help requires the installed Copilot desktop SDK.');
         if (this.cleanup?.status === 'pending') throw new Error('Cancel answer cleanup before starting question help.');
+        if (this.briefWork?.status === 'pending') throw new Error('Cancel the decision brief before starting question help.');
         if (!this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw new Error('The selected journey changed. Refresh it and try again.');
         for (const [id, result] of this.helpContexts) if (result.journey !== input.journey || result.nodeId !== input.nodeId) this.helpContexts.delete(id);
         const context = helpContext(this.doc, input.nodeId);
@@ -171,6 +176,68 @@ export class Explorer {
         ...(work.text !== undefined ? { text: work.text } : {}), ...(work.error ? { error: work.error } : {}) };
       if (Buffer.byteLength(JSON.stringify(response)) > 96 * 1024) throw new Error('Question help response exceeds its transport limit.');
       return response;
+    });
+  }
+  briefRequest(input) {
+    return this.transact(async () => {
+      const action = input?.action;
+      if (this.closed || !input || !['view', 'start', 'poll', 'discard', 'accept'].includes(action) ||
+        Object.keys(input).sort().join(',') !== (action === 'accept' ? 'action,edits,id,journey,revision' : 'action,id,journey') ||
+        typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || !this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw new Error('Invalid decision brief request.');
+      const matches = () => this.briefWork?.id === input.id && this.briefWork.journey === input.journey;
+      if (action === 'discard') {
+        if (matches()) { this.briefWork.abort.abort(); this.briefWork = null; }
+        return { id: input.id, status: 'discarded' };
+      }
+      const current = await this.readCurrent();
+      const check = work => work.journey === (this.activeKey ?? this.doc.id) && briefFreshness({ dependencies: work.dependencies }, current) === 'current' && briefFreshness({ dependencies: work.dependencies }, this.doc) === 'current';
+      if (action === 'start') {
+        this.requireToolFreeRelease();
+        if (!this.briefHelper) throw new Error('Decision briefs require the installed Copilot desktop SDK.');
+        if (this.cleanup?.status === 'pending' || this.help?.status === 'pending') throw new Error('Cancel answer cleanup or question help before generating a decision brief.');
+        const prepared = prepareBrief(this.doc), dependencies = captureBrief(prepared);
+        const work = { id: input.id, journey: input.journey, dependencies, coverage: { scope: 'journey-summary', bytes: prepared.bytes, limit: prepared.limit, included: dependencies.records.length, omitted: Object.values(prepared.context.omitted).reduce((a, b) => a + b, 0) }, status: 'pending', progress: 'Preparing decision brief', abort: new AbortController() };
+        if (!check(work)) throw new Error('Saved brief inputs changed. Refresh the journey before generating.');
+        this.briefWork?.abort.abort(); this.briefWork = work;
+        this.toolFreeTask = this.toolFreeTask.then(async () => {
+          if (this.briefWork !== work || work.abort.signal.aborted) return;
+          try {
+            this.requireToolFreeRelease();
+            const proposal = await this.briefHelper.run(prepared, { signal: work.abort.signal, onProgress: progress => { if (this.briefWork === work) work.progress = progress; } });
+            // Revalidate even injected helper results and retain only server-owned provenance.
+            const trusted = validateBrief({ ...proposal, dependencies, coverage: work.coverage, version: 1, acceptedAt: new Date().toISOString() });
+            delete trusted.version; delete trusted.acceptedAt;
+            await this.transact(async () => {
+              if (this.briefWork !== work || work.abort.signal.aborted) return;
+              const disk = await this.readCurrent();
+              if (briefFreshness({ dependencies }, disk) !== 'current' || briefFreshness({ dependencies }, this.doc) !== 'current') { work.status = 'stale'; work.error = 'Saved brief inputs changed. Refresh and regenerate.'; return; }
+              work.proposal = trusted; work.status = 'proposal';
+            });
+          } catch (error) {
+            this.trackToolFreeRelease(error);
+            if (this.briefWork === work && !work.abort.signal.aborted) { work.status = 'error'; work.error = error.message; }
+          }
+        });
+      }
+      if (action === 'accept') {
+        if (!matches() || this.briefWork.status !== 'proposal' || !check(this.briefWork)) throw new Error('This brief is stale or unavailable. Refresh and regenerate before accepting.');
+        const work = this.briefWork;
+        await this.withDocumentLock(async () => {
+          const disk = await this.readCurrent();
+          if (!Number.isSafeInteger(input.revision) || input.revision !== disk.revision) throw new Error('Another canvas updated this file. Refresh before accepting the brief.');
+          if (briefFreshness({ dependencies: work.dependencies }, disk) !== 'current') throw new Error('This brief is stale. Refresh and regenerate.');
+          const next = structuredClone(disk); next.brief = acceptBrief(work.proposal, input.edits);
+          await this.commitCurrentLocked(disk, next, 'Accepted reviewed decision brief');
+          this.briefWork = null;
+        });
+        return { id: input.id, status: 'accepted', snapshot: this.uiSnapshot() };
+      }
+      const work = matches() ? this.briefWork : null;
+      if (work && !check(work)) { work.abort.abort(); work.status = 'stale'; work.error = 'Saved brief inputs changed. Refresh the journey and regenerate.'; }
+      return structuredClone({ id: input.id, status: work?.status ?? 'idle', progress: work?.progress, error: work?.error,
+        ...(work?.status === 'proposal' ? { proposal: work.proposal } : {}),
+        ...(current.brief ? { accepted: current.brief, freshness: briefFreshness(current.brief, current), unavailableSources: current.brief.dependencies.records.filter(source => !current.nodes.some(node => node.id === source.id)).map(source => source.id) } : {}),
+        ...(work ? { coverage: work.coverage } : {}) });
     });
   }
   uiSnapshot() {
@@ -545,5 +612,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.closed = true; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
+  async close() { this.closed = true; this.briefWork?.abort.abort(); this.briefWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
 }

@@ -10,6 +10,7 @@ import { cleanupText } from './cleanup.mjs';
 import { HELP_OPERATIONS, helpContext, helpText, sameHelpContext } from './question-help.mjs';
 import { ANSWER_CONTEXT_GUIDANCE, effectiveAnswerState, isQuestion } from './web/answer-state.mjs';
 import { effectiveMode, validMode, modePolicy } from './web/modes.mjs';
+import { prepareResearch, sameResearchSources, sameResearchDestination } from './research-context.mjs';
 export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
@@ -18,7 +19,7 @@ export class Explorer {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
-    this.researcher = researcher; this.researchTasks = new Set();
+    this.researcher = researcher; this.researchTasks = new Set(); this.researchTask = Promise.resolve(); this.unconfirmedResearchRelease = null; this.researchWork = null;
     this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
     this.library = library; this.binding = binding; this.activeKey = null;
   }
@@ -251,7 +252,7 @@ export class Explorer {
   async readCurrent() {
     const saved = this.library ? await this.library.resolve(this.activeKey) :
       { file: this.file, document: validateDocument(JSON.parse(await readFile(this.file, 'utf8'))) };
-    if (saved.file !== this.file || saved.document.id !== this.doc.id || saved.document.revision < this.doc.revision ||
+    if (saved.file !== this.file || saved.document.id !== this.doc.id || saved.document.rootId !== this.doc.rootId || saved.document.createdAt !== this.doc.createdAt || saved.document.revision < this.doc.revision ||
       (saved.document.revision === this.doc.revision && JSON.stringify(saved.document) !== JSON.stringify(validateDocument(this.doc)))) {
       throw new Error('This journey changed on disk. Reopen it from the library.');
     }
@@ -297,21 +298,43 @@ export class Explorer {
     try { saved = this.doc ? await this.fresh() : validateDocument(JSON.parse(await readFile(this.file, 'utf8'))); }
     catch (error) { if (error.code !== 'ENOENT' || this.doc) throw error; }
     if (saved && !this.doc) throw new Error('Another canvas created this map. Reopen it.');
+    return this.commitCurrentLocked(saved, next, label);
+  }
+  async commitCurrentLocked(saved, next, label, accept = () => {}) {
     next = validateDocument(next);
     if (saved && JSON.stringify(saved) === JSON.stringify(next)) {
-      await (await this.history(this.activeKey ?? this.doc.id)).reconcile(saved); return false;
+      await (await this.history(this.activeKey ?? this.doc.id)).reconcile(saved);
+      accept(); this.doc = saved; this.reconcileCleanup(); this.reconcileResearch(); return false;
     }
-    next.revision = (this.doc?.revision ?? 0) + 1;
+    next.revision = (saved?.revision ?? 0) + 1;
     if (!Number.isSafeInteger(next.revision)) throw new Error('Map revision limit reached.');
-    next.updatedAt = new Date(Math.max(Date.now(), Date.parse(this.doc?.updatedAt ?? 0) + 1)).toISOString();
+    next.updatedAt = new Date(Math.max(Date.now(), Date.parse(saved?.updatedAt ?? 0) + 1)).toISOString();
     validateDocument(next);
-    const replace = async () => { await atomicWrite(this.file, JSON.stringify(next, null, 2)); this.doc = next; this.reconcileCleanup(); };
+    const replace = async () => { accept(); await atomicWrite(this.file, JSON.stringify(next, null, 2)); this.doc = next; this.reconcileCleanup(); this.reconcileResearch(); };
     if (saved && saved.id === next.id) await (await this.history(this.activeKey ?? this.doc.id)).commit(saved, next, label, replace);
     else await replace(); // New direct-file identity has independent history, like imported library copies.
     return true;
   }
-  clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; }
+  reconcileResearch() {
+    const work = this.researchWork;
+    if (work && !sameResearchSources(work.dependencies, this.doc)) {
+      this.clearPending(); this.error = 'Research discarded because its saved source context changed. Your newer answers are saved; research again when ready.';
+    }
+  }
+  requireResearchRelease() {
+    if (this.unconfirmedResearchRelease) throw new Error('Earlier research has not confirmed shutdown. Research is blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
+  }
+  trackResearchRelease(error) {
+    if (!error?.releaseConfirmed) return;
+    const marker = {}; this.unconfirmedResearchRelease = marker;
+    Promise.resolve(error.releaseConfirmed).then(confirmed => {
+      if (confirmed && this.unconfirmedResearchRelease === marker) this.unconfirmedResearchRelease = null;
+    }).catch(() => {});
+  }
+  clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; }
   request(kind, nodeId) {
+    const prepared = kind === 'research' ? prepareResearch(this.doc, nodeId) : null;
+    if (prepared) this.requireResearchRelease();
     const id = randomUUID();
     this.pending = { id, kind, nodeId, startedAt: new Date().toISOString() };
     this.error = '';
@@ -323,18 +346,33 @@ export class Explorer {
     if (kind === 'questions') this.questionSource = this.sourceContext(nodeId);
     if (kind === 'research') {
       const controller = new AbortController(); this.researchAbort = controller;
+      const work = { ...prepared, file: this.file, key: this.activeKey, abort: controller }; this.researchWork = work;
+      const active = () => !this.closed && this.pending?.id === id && this.researchWork === work && !controller.signal.aborted;
       this.pending.progress = 'Preparing research';
-      const task = Promise.resolve().then(() => {
+      const run = this.researchTask.then(() => {
+        if (!active()) return;
+        this.requireResearchRelease();
         if (!this.researcher) throw new Error('Research requires the installed Copilot desktop SDK.');
-        return this.researcher.run(context, { signal: controller.signal, onProgress: progress => {
-          if (this.pending?.id === id) this.pending.progress = progress;
+        return this.researcher.run(prepared.context, { signal: controller.signal, onProgress: progress => {
+          if (active()) this.pending.progress = progress;
         } });
-      }).then(result => this.transact(async () => {
-        if (this.pending?.id !== id || controller.signal.aborted) return;
-        const next = structuredClone(this.doc); findNode(next, nodeId).research = research(result);
-        await this.save(next, 'Research replaced'); this.clearPending(); this.error = '';
-      })).catch(error => this.transact(() => {
-        if (this.pending?.id === id) { this.clearPending(); this.error = error.message; }
+      });
+      // A bounded failure may precede actual shutdown; that marker blocks the next queued run.
+      this.researchTask = run.then(() => {}, error => { this.trackResearchRelease(error); });
+      const task = run.then(result => this.transact(() => this.withDocumentLock(async () => {
+        if (!active()) return;
+        if (this.file !== work.file || this.activeKey !== work.key) throw new Error('The research journey changed. The result was discarded.');
+        const current = await this.readCurrent();
+        if (!sameResearchSources(work.dependencies, current)) throw new Error('The saved research source context changed. The result was discarded; refresh the journey and research again.');
+        if (!sameResearchDestination(work.dependencies, current)) throw new Error('Saved research changed in another canvas. The conflicting result was discarded; refresh the journey.');
+        if (!active()) return;
+        const next = structuredClone(current); findNode(next, nodeId).research = research(result);
+        await this.commitCurrentLocked(current, next, 'Research replaced', () => {
+          if (!active()) throw new Error('Research was cancelled before saving.');
+        });
+        if (active()) { this.clearPending(); this.error = ''; }
+      }))).catch(error => this.transact(() => {
+        if (active()) { this.clearPending(); this.error = error.message; }
       }));
       this.researchTasks.add(task); void task.finally(() => this.researchTasks.delete(task));
       return;
@@ -356,7 +394,7 @@ export class Explorer {
       if (action === 'library-update' && this.library) {
         await this.library.update(input.key, input.patch, input.metadataRevision); return this.uiSnapshot();
       }
-      if (this.pending) throw new Error('Wait for Copilot or cancel the current request first.');
+      if (this.pending && !(this.pending.kind === 'research' && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
       if (this.preview && (['start', 'open', 'import', 'restore', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
       if (this.doc && input.revision !== this.doc.revision) throw new Error('The map changed. Refresh and try again; your draft is still here.');
       const next = structuredClone(this.doc);
@@ -418,7 +456,7 @@ export class Explorer {
           findNode(next, input.nodeId);
           if (action === 'research' && !isQuestion(findNode(next, input.nodeId))) throw new Error('Select a question to research.');
           if (action === 'questions' && isQuestion(findNode(next, input.nodeId)) && effectiveAnswerState(findNode(next, input.nodeId)) === 'unanswered') throw new Error('Save an answer before exploring deeper.');
-          if (action === 'questions') await this.fresh();
+          await this.fresh();
           this.request(action, input.nodeId);
           break;
         case 'add-direction': {

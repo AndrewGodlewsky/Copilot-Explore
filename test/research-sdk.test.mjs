@@ -4,6 +4,18 @@ import { mkdtemp, rm, stat, mkdir, writeFile, readFile, readdir } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { createResearcher, publicUrl, boundedContext, hostRuntime } from '../com.github.copilot/extensions/explorer/research.mjs';
+import { prepareResearch } from '../com.github.copilot/extensions/explorer/research-context.mjs';
+import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
+
+test('research helper sends the exact prepared context without reselecting or clipping sources', async t => {
+  const { researcher, calls } = await fixture(t), doc = createDocument('Unicode 🌿');
+  addQuestions(doc, doc.rootId, [{ question: 'Target?', category: 'Target' }]);
+  for (let i = 0; i < 8; i++) doc.nodes.push({ ...structuredClone(doc.nodes[1]), id: `source-${i}`, answer: '🌿'.repeat(10000) });
+  const prepared = prepareResearch(doc, doc.nodes[1].id);
+  await researcher.run(prepared.context);
+  assert.equal(calls.prompt.split('EXPLORATION DATA\n')[1], JSON.stringify(prepared.context));
+  assert.ok(prepared.context.truncated); assert.ok(JSON.stringify(prepared.context).length <= 75000);
+});
 
 test('bounded research context retains committed guidance inside its total budget', () => {
   const compact = boundedContext({ topic: 'A plan', objective: 'Decide for neighbors 🌿', successCriteria: 'Accessible to all', path: [{ question: 'Current question', answer: '' }], decisionsElsewhere: [] });

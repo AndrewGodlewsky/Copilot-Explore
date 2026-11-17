@@ -125,6 +125,34 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
 
+test('research allows independent answer save through HTTP and preserves editor controls during completion', async t => {
+  const f = await fixture(t, 340, undefined, false, { questions: [
+    { question: 'Research target?', category: 'Target', rationale: 'Explain the target.' },
+    { question: 'Independent branch?', category: 'Other', rationale: 'Explain the other branch.' },
+  ] });
+  const $ = id => f.document.getElementById(id), target = f.explorer.doc.nodes[1].id, other = f.explorer.doc.nodes[2].id;
+  f.open(target); $('research-request').click(); await until(() => f.explorer.pending?.kind === 'research', 'research running');
+  f.open(other); f.type('answer', 'Independent saved choice 🌿');
+  $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  $('references').open = true; $('question-rationale').open = true;
+  $('answer').focus(); $('answer').setSelectionRange(6, 10);
+  await until(() => $('save-deeper').disabled, 'research contention reflected');
+  assert.equal($('save-answer').disabled, false);
+  assert.match(f.document.querySelector('#node-workspace').textContent, /Wait or cancel research before Save & explore deeper/);
+  assert.equal($('answer').selectionStart, 6); assert.equal($('answer').selectionEnd, 10);
+  assert.equal(f.document.activeElement.id, 'answer');
+  assert.ok($('voice-status')); assert.ok($('help-rephrase')); assert.ok($('question-rationale'));
+  $('save-answer').click(); await until(() => f.explorer.doc.nodes[2].answer === 'Independent saved choice 🌿', 'independent answer committed during research');
+  assert.ok(f.explorer.pending); assert.equal(f.explorer.doc.nodes[2].answerState, 'assumption');
+  await until(() => !$('answer-status').textContent.includes('Saving'), 'save finished');
+  f.type('answer', 'A further unsaved draft'); $('answer').focus(); $('answer').setSelectionRange(3, 7);
+  f.resolveResearch(findings); await until(() => f.explorer.doc.nodes[1].research && !$('save-deeper').disabled, 'research merged and editor refreshed');
+  assert.equal(f.explorer.doc.nodes[2].answer, 'Independent saved choice 🌿');
+  assert.equal($('answer').value, 'A further unsaved draft'); assert.equal($('answer-state').value, 'assumption');
+  assert.equal($('answer').selectionStart, 3); assert.equal($('answer').selectionEnd, 7); assert.equal(f.document.activeElement.id, 'answer');
+  assert.equal($('references').open, true); assert.equal($('question-rationale').open, true); assert.ok($('voice-status')); assert.ok($('help-rephrase'));
+});
+
 test('historical question rationale is disclosed near expanded question without changing drafts or voice', async t => {
   const explanation = '<img src=x onerror=alert(1)> Unclear audience affects the pilot.';
   const f = await fixture(t, 340, undefined, false, { questions: [{ question: 'Who should borrow first?', category: 'People', rationale: explanation }] });

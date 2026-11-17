@@ -635,11 +635,42 @@ Read issue-33.md, task-18-design-notes.md and AGENTS.md. BASE is `38db1e2a3d3cb7
 
 ### Verification and release
 
-- [ ] RED/GREEN validation and round-trip tests for all modes, legacy missing/default, null/unknown values, sparse near-cap maps, guidance changes/no-op and stale writers, finish/history/restore and preserved old answer/research/provenance.
-- [ ] Assert each fixed strategy reaches its applicable request payload with current source identity; pending helper/generation and stale-preview behavior, no main-session model change and no automatic inference on selector render/poll.
-- [ ] Real HTTP/jsdom tests for creation/edit controls, explanatory text, narrow/keyboard structure, preserved drafts/state/voice/reference/rationale/help UI, conflicts and retry. No browser/desktop automation, live microphone, paid provider or existing session.
-- [ ] Inspect installed SDK declarations if changing callback contracts; run npm test, npm run check, npm run package and applicable local canvas/research/help fixtures with run-npm.mjs task-18 labels.
-- [ ] Synchronize confirmed patch metadata/README/release note, include controller plan update, self-review and commit. No nested agents/publishing. Write task-18-report.md with final enum/prompt/history/conflict contracts, tests, SHA and manual quality/appearance limits.
+- [x] RED/GREEN validation and round-trip tests for all modes, legacy missing/default, null/unknown values, sparse near-cap maps, guidance changes/no-op and stale writers, finish/history/restore and preserved old answer/research/provenance.
+- [x] Assert each fixed strategy reaches its applicable request payload with current source identity; pending helper/generation and stale-preview behavior, no main-session model change and no automatic inference on selector render/poll.
+- [x] Real HTTP/jsdom tests for creation/edit controls, explanatory text, narrow/keyboard structure, preserved drafts/state/voice/reference/rationale/help UI, conflicts and retry. No browser/desktop automation, live microphone, paid provider or existing session.
+- [x] Inspect installed SDK declarations if changing callback contracts; run npm test, npm run check, npm run package and applicable local canvas/research/help fixtures with run-npm.mjs task-18 labels.
+- [x] Synchronize confirmed patch metadata/README/release note, include controller plan update, self-review and commit. No nested agents/publishing. Write task-18-report.md with final enum/prompt/history/conflict contracts, tests, SHA and manual quality/appearance limits.
+
+Published task 18: **v0.1.30**, `5723b14`, required checks and applicable installed fixtures passed; independent review approved and remote main verified.
+
+## Task 19: Save independent work while research runs (#30 / original39)
+
+Read issue-39.md, task-19-design-notes.md, AGENTS.md and the final helper/mode reports. BASE is `5723b14a199e2533790bb8b5d54c3f8cf91c9c64`; ship version **0.1.31**. Read task-18-report.md for the published mode schema/policies and task-17-report.md for exact help freshness and actual-release ownership. This is one concurrency issue, not a new background agent pool.
+
+### Immutable input and ownership
+
+- Keep one active research request per instance, with existing request/session/instance identity, bounded cancellation, progress and retained usage. Never hold the document writer lock while waiting for inference, and do not expand network permissions or helper lifetime.
+- Cancellation invalidates a result before resource release finishes. Serialize replacement research behind actual owned-run release, not just pending=null. Reuse the published owned-helper releaseConfirmed failure signal: unresolved/failed shutdown blocks queued and new research until confirmed release, with bounded status/error delivery and explicit retry only. Keep cleanup/help's separate published resource slot unchanged; no generic agent scheduler.
+- Introduce one small pure research-preparation seam returning the exact bounded transmitted context plus its source dependencies. The helper must send that prepared context without clipping it again differently. Capture actual included node IDs and their sent fields, guidance/mode, target/journey identity and the destination research value. Do not identify sources by question/answer text, which can be duplicated.
+- Preserve the legacy research-context ceiling of 75,000 JavaScript UTF-16 code units in the final serialized context, including added identity and omission metadata. Fixed prompt/system instructions remain outside this legacy context cap; task20 introduces the complete byte-budget contract. Report omissions, retain complete included user records, and fail explicitly if mandatory target/guidance cannot fit. Do not implement pinned constraints or the full context inspector in this task.
+- Freshness compares the captured inputs and ownership, not document revision alone or a freshly selected whole-map context. An unrelated new answer that would now be selected is not retroactively part of the original request. Included-source changes, changed parent relationships, changed guidance/mode, target removal or journey replacement invalidate the result.
+- Published task18 uses web/modes.mjs effectiveMode/validMode/modePolicy and contextFor().mode. Compare effective mode as the source dependency, so missing legacy Understand and explicitly stored Understand are not falsely different policies. Preserve its fixed strategy in the exact outgoing prompt. Capture stable logical document identity (including its root/creation identity) as well as the owned file/library key; a replacement document must not be accepted just because it has a larger revision number.
+
+### Edits and completion
+
+- Allow ordinary Save answer on other branches while research is pending. Preserve ordinary draft/state validation, expected revisions, history and atomic writes. Saving the researched node or an included dependency also preserves the user's newer answer; a successful source edit cancels/discards stale research with a clear explanation. A failed write must not cancel still-valid work merely because an edit was attempted.
+- Save & explore deeper and other actions starting an attached question request may still require waiting or cancelling. Keep that distinction clear in UI. History restore, import/journey switch and generation previews retain their own guards. Do not remove all pending checks indiscriminately; do not loosen cleanup/help or staged-question freshness.
+- On research completion, enter the controller transaction and document writer lock, read/validate the latest committed document, match journey/file identity and captured input dependencies, then merge only the validated research result into that latest document. Preserve unrelated committed changes from this or another canvas. Use the existing history protocol with the actual current preimage and a monotonic revision.
+- Current saveLocked calls fresh() against this.doc and derives revision/time from it. Add a small explicit-current-base persistence seam if needed for the under-lock latest-document merge; do not temporarily replace this.doc merely to bypass stale checks. Failed precommit writes must preserve a coherent active snapshot and recovery history; the actual atomic commit remains the state-change boundary.
+- A different completed research value already on the destination is a write/write conflict, even if source answers match; do not overwrite it silently. Show a stale/conflict result and preserve the newer saved value. Missing/invalid/replaced documents and disk failures leave the last recoverable document intact.
+- Check active request/abort identity immediately before accepting work. Duplicate completion, late callback, cancellation and old error handlers cannot revive or clear a replacement request. Close and rapid retry retain bounded helper release/accounting behavior.
+
+### Verification and release
+
+- RED/GREEN tests for unrelated answer saves, a new unrelated answer, actually included versus omitted external decisions, duplicate question text with distinct IDs, ancestor/target/state/guidance/mode changes, source-save failure and both serial orders of save versus completion.
+- Cover two canvases with a shared file: unrelated latest revisions survive, destination research conflict is rejected, identity replacement/corrupt reads and before/after atomic failure preserve recovery/history. Exercise cancel/replacement/duplicate completion, journey switch/restart, pending generation/preview guards and retained failed/cancelled usage.
+- Real HTTP/jsdom tests must show Save answer remains usable on an unrelated branch while Save & explore deeper explains its contention, with drafts, caret/state, focus, reference/rationale/help and voice controls preserved. No browser/desktop automation, real mic, paid inference or existing user session.
+- Run npm test/check/package and applicable installed research/canvas/helper fixtures using run-npm.mjs with task-19 labels. Bump confirmed patch metadata/README/release note, include controller plan update, self-review and commit. No nested agents/publishing. Write task-19-report.md with exact preparation/dependency API, locking/conflict behavior, tests, SHA and native/live-model limitations.
 
 ## Issue index
 

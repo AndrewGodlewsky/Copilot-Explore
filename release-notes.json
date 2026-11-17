@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.31",
+    "summary": "Save answers while research runs. Independent changes survive completion, including saves from another canvas. Changing a source preserves your newer answer and discards stale research. Conflicting research is never silently replaced, and a new run waits for the prior helper to release."
+  },
+  {
     "version": "0.1.30",
     "summary": "Choose Understand, Decide, Design, Diagnose, or Challenge to guide future questions and research. A mode change is saved in guidance and history while earlier answers, research, and question explanations stay intact. The active mode appears above the map and in exports."
   },

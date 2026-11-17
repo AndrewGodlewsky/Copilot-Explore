@@ -1,5 +1,7 @@
 # Offline read-only journey viewer
 
+Review dates, manual revisit conditions and acknowledgment timestamps are omitted. Use complete native JSON or Markdown to retain [revisit reminders](revisit-reminders.md).
+
 Open **Export maps**, choose the exact saved nodes under **Offline read-only viewer**, and optionally select each node's saved answer and research. Everything starts unchecked. Choose **Preview included content**, review the complete structured text, then **Download previewed offline viewer**. Changing any selection clears the preview. Saved changes or journey switches require reopening the dialog and previewing again. Draft answers stay separate and are never included.
 
 The download is one `exploration-viewer.html` file. Open it in Brave to search and read without an account, Copilot, the plugin server or a network connection. Use the node list, parent/child links, Previous and Next buttons. Native controls support keyboard navigation; Escape clears the search. The list stacks above the detail on narrow screens. JavaScript must be enabled for navigation. The viewer cannot edit, run AI, refresh research or save changes back to Explorer. Explorer can report a requested download, but cannot confirm the browser saved it.

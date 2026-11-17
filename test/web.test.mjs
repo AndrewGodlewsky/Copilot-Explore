@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -40,6 +41,59 @@ async function startReviewedResearch(f) {
   await until(() => !f.document.getElementById('research-review-start').disabled, 'review ready');
   f.document.getElementById('research-review-start').click();
 }
+
+test('revisit UI saves independently, preserves answer and reminder drafts, and provides filtered archived source navigation', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'UNCOMMITTED ANSWER 🌱'); const answer = $('answer'); answer.focus(); answer.setSelectionRange(3, 7);
+  assert.ok($('revisit-date'), 'question offers a date-only reminder');
+  f.type('revisit-date', '2026-11-17'); f.type('revisit-condition', '  Manual <script>condition</script> 🌱\n');
+  $('revisit-condition').focus(); $('revisit-condition').setSelectionRange(2, 8);
+  await f.explorer.command('guidance', { revision: f.explorer.doc.revision, objective: 'Another saved change', successCriteria: '' }); await f.poll();
+  assert.equal($('revisit-condition').value, '  Manual <script>condition</script> 🌱\n'); assert.equal(f.document.activeElement, $('revisit-condition')); assert.equal($('revisit-condition').selectionStart, 2);
+  $('save-revisit').click(); await until(() => f.explorer.doc.nodes[1].revisit, 'saved reminder'); await until(() => $('revisit-status').textContent.includes('Manual condition'), 'rendered reminder');
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'UNCOMMITTED ANSWER 🌱'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  assert.equal($('node-workspace').querySelector('script'), null);
+  $('acknowledge-revisit').focus(); $('acknowledge-revisit').click(); await until(() => f.explorer.doc.nodes[1].revisit.acknowledgedAt, 'acknowledged');
+  await until(() => $('save-revisit').textContent.includes('reactivate'), 'reactivate label'); assert.equal(f.document.activeElement.id, 'acknowledge-revisit');
+  $('save-revisit').click(); await until(() => f.explorer.doc.nodes[1].revisit.acknowledgedAt === null && $('revisit-status').textContent.includes('Manual condition'), 'reactivated');
+  $('outline-toggle').click(); $('revisit-filter').value = 'manual-condition'; $('revisit-filter').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 1); $('outline-list').querySelector('[data-node-id]').click(); assert.equal($('node-workspace').dataset.nodeId, node.id);
+  $('library-toggle').click(); await until(() => f.document.querySelector('[data-action="revisit"]'), 'library reminder');
+  $('library-reminder').value = 'manual-condition'; $('library-reminder').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  await until(() => f.document.querySelector('.library-reminders').textContent.includes('1'), 'library counts');
+  f.document.querySelector('[data-action="archive"]').click(); await until(() => !f.document.querySelector('.library-entry'), 'archived');
+  $('library-archived').checked = true; $('library-archived').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  await until(() => f.document.querySelector('[data-action="revisit"]'), 'archived reminder access'); f.document.querySelector('[data-action="revisit"]').click();
+  await until(() => !$('node-workspace').hidden && $('node-workspace').dataset.nodeId === node.id && $('welcome').hidden, 'source opened');
+  assert.equal((await f.explorer.library.list({ archived: true })).entries.length, 1); assert.equal($('answer').value, 'UNCOMMITTED ANSWER 🌱');
+  $('clear-revisit').click(); await until(() => !f.explorer.doc.nodes[1].revisit && $('revisit-status').textContent === 'No reminder saved.', 'cleared'); assert.equal($('answer').value, 'UNCOMMITTED ANSWER 🌱');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'answer draft persisted');
+  assert.deepEqual(f.actions.filter(a => ['questions', 'research', 'answer'].includes(a.action)), []);
+});
+
+test('revisit UI refreshes local-day statuses on unchanged polls and retains conflicts without silent rebase', async t => {
+  const f = await fixture(t, 340, undefined, true, { before: e => e.command('set-revisit', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, date: '2026-11-17', condition: '' }) }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.window.localDate = () => '2026-11-17'; f.open(node.id); await f.poll(); assert.match($('revisit-status').textContent, /Due today/);
+  const revision = f.explorer.doc.revision; f.type('answer', 'Remain a draft'); $('answer').focus(); $('answer').setSelectionRange(2, 5);
+  f.window.localDate = () => '2026-11-18'; await f.poll(); assert.match($('revisit-status').textContent, /Overdue/); assert.equal(f.explorer.doc.revision, revision); assert.equal(f.document.activeElement.id, 'answer'); assert.equal($('answer').selectionStart, 2);
+  f.type('revisit-condition', 'MY REMINDER EDIT'); $('revisit-condition').focus(); $('revisit-condition').setSelectionRange(3, 6);
+  await f.explorer.command('set-revisit', { revision, nodeId: node.id, date: '2026-11-19', condition: 'OTHER SAVED CONDITION' }); await f.poll();
+  assert.equal($('revisit-condition').value, 'MY REMINDER EDIT'); assert.equal($('revisit-condition').selectionStart, 3); assert.match($('revisit-conflict').textContent, /changed/); assert.equal($('save-revisit').disabled, true);
+  $('keep-revisit').click(); $('save-revisit').click(); await until(() => f.explorer.doc.nodes[1].revisit.condition === 'MY REMINDER EDIT', 'explicit reminder overwrite');
+  assert.equal($('answer').value, 'Remain a draft'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'answer draft persisted');
+});
+
+test('revisit UI untouched save preserves imported CRLF condition bytes and creates no revision', async t => {
+  const condition = '  Exact 🌱\r\ncondition\r\n';
+  const f = await fixture(t, 340, undefined, false, { before: e => e.command('set-revisit', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, date: '2026-11-17', condition }) }), $ = id => f.document.getElementById(id);
+  const before = structuredClone(f.explorer.doc); f.open(before.nodes[1].id); $('save-revisit').click();
+  await until(() => $('notice').textContent.includes('Reminder saved'), 'unchanged save');
+  assert.deepEqual(f.explorer.doc, before);
+  f.type('revisit-date', '2026-11-18'); $('save-revisit').click();
+  await until(() => f.explorer.doc.nodes[1].revisit.date === '2026-11-18' && $('reset-revisit').hidden, 'date rescheduled');
+  assert.equal(f.explorer.doc.nodes[1].revisit.condition, condition);
+});
 
 test('visual export UI explicitly captures full or selected scope despite folding/focus and excludes answer drafts', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {
@@ -354,8 +408,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.researchSettingsText = researchSettingsText;
   window.attachNavigation = attachNavigation;
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
+  Object.assign(window, { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches });
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, scene: () => ({ positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; transform(); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;

@@ -1,5 +1,7 @@
 # Portable map exports
 
+Review dates, manual revisit conditions and acknowledgment timestamps are omitted from every portable visual format. Use complete native JSON or Markdown to retain [revisit reminders](revisit-reminders.md).
+
 Choose **Export maps** at any point, or **Finish exploration** when ready. Complete Markdown and `.explore.json` downloads always contain the full saved journey, research and accepted artifacts. Local answer drafts and private project excerpts are excluded. Use the native file to continue editing in Explorer.
 
 The same dialog also offers a separate [offline read-only viewer](offline-viewer.md) with exact per-node answer/research selection, a required included-content preview, and local search/navigation in one HTML file. Its inclusion and text-preservation rules differ from the four visual formats below.

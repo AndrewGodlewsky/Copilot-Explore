@@ -8,6 +8,7 @@ import { researchSettingsText } from './research-policy.mjs';
 import { effectiveMode, MODES } from './modes.mjs';
 import { attachNavigation } from './navigation.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
+import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';
 
 const $ = id => document.getElementById(id);
 let researchReviewReturn = null, reviewStarting = false;
@@ -29,6 +30,14 @@ function stopPolling() {
 }
 function connectionStatus(message = '') { $('connection-status').textContent = message; $('connection-status').hidden = !message; }
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
+let revisitDay = localDate();
+const revisitLabel = node => revisitStatuses(node.revisit, revisitDay).map(status => REVISIT_FILTERS[status]).join(' · ');
+function refreshRevisitDay() {
+  const today = localDate(); if (today === revisitDay) return;
+  revisitDay = today;
+  if (state.document) { renderWorkspace(); renderMap(); renderOutline(); }
+  if (libraryView) void refreshLibrary();
+}
 let collapsed = new Set(), branches = null, focusId = null, wholeView = null;
 let historyEpoch = 0, historyReturn = null, historySelection = null, historyRevision = null;
 let guidanceReturn = null, guidanceBase = null, guidanceNeedsChoice = false, guidanceNeedsRefresh = false;
@@ -79,6 +88,7 @@ function el(tag, attrs = {}, ...children) {
 }
 const button = (label, handler, attrs = {}) => el('button', { type: 'button', onclick: handler, ...attrs }, label);
 function notice(message) { $('notice').textContent = message; $('notice').hidden = !message; }
+for (const id of ['library-reminder', 'revisit-filter']) $(id).append(...Object.entries(REVISIT_FILTERS).map(([value, label]) => el('option', { value }, label)));
 async function api(action, input = {}) {
   if (busy || closed || suspended) return null;
   busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort();
@@ -289,7 +299,7 @@ function showView() {
 async function refreshLibrary() {
   const epoch = ++libraryEpoch;
   try {
-    const query = new URLSearchParams({ search: $('library-search').value, archived: String($('library-archived').checked) });
+    const query = new URLSearchParams({ search: $('library-search').value, archived: String($('library-archived').checked), reminder: $('library-reminder').value, today: localDate() });
     const response = await fetch(`api/library?${query}`), result = await response.json();
     if (epoch !== libraryEpoch || closed) return;
     if (!response.ok) throw new Error(result.error);
@@ -303,7 +313,7 @@ async function refreshLibrary() {
     result.entries.forEach((entry, index) => {
       let row = rows.get(entry.key); rows.delete(entry.key);
       if (!row) {
-        row = el('article', { class: 'library-entry', 'data-key': entry.key }, el('h2'), el('p', { class: 'quiet library-meta' }), el('p', { class: 'quiet library-ambiguous' }));
+        row = el('article', { class: 'library-entry', 'data-key': entry.key }, el('h2'), el('p', { class: 'quiet library-meta' }), el('p', { class: 'quiet library-reminders' }), el('p', { class: 'quiet library-ambiguous' }));
         const change = async field => {
           const value = !row.entry[field];
           if (await api('library-update', { key: row.entry.key, patch: { [field]: value }, metadataRevision: libraryRevision })) {
@@ -312,11 +322,23 @@ async function refreshLibrary() {
           }
         };
         row.append(el('div', { class: 'library-actions' }, button('Open', () => switchJourney('open', { key: row.entry.key }), { 'data-action': 'open' }),
+          button('Revisit', async () => {
+            const filter = $('library-reminder').value === 'all' ? 'any' : $('library-reminder').value;
+            if (await switchJourney('open', { key: row.entry.key })) {
+              $('revisit-filter').value = filter;
+              const source = state.document.nodes.find(n => revisitMatches(n.revisit, filter, localDate()));
+              if (source) select(source.id);
+              else notice('No reminder now matches this filter. Open the question list to choose another filter.');
+            }
+          }, { 'data-action': 'revisit' }),
           button('', () => change('pinned'), { 'data-action': 'pin' }), button('', () => change('archived'), { 'data-action': 'archive' })));
       }
       row.entry = entry;
       row.querySelector('h2').textContent = entry.topic;
       row.querySelector('.library-meta').textContent = `${entry.pinned ? 'Pinned · ' : ''}${entry.questionCount} questions · ${entry.lastOpenedAt ? 'Opened' : 'Edited'} ${new Date(entry.lastOpenedAt ?? entry.updatedAt).toLocaleString()}`;
+      const reminders = entry.revisit;
+      row.querySelector('.library-reminders').textContent = reminders?.counts.any ? `${reminders.counts.any} reminder(s); ${reminders.counts.attention} need attention${reminders.nextDate ? `; earliest active date ${reminders.nextDate}` : ''}. ${Object.entries(reminders.counts).filter(([key, count]) => !['any', 'attention'].includes(key) && count).map(([key, count]) => `${REVISIT_FILTERS[key]}: ${count}`).join('; ')}. Status counts can overlap.` : 'No revisit reminders.';
+      row.querySelector('[data-action="revisit"]').hidden = !reminders?.counts.any;
       row.querySelector('.library-ambiguous').hidden = !entry.ambiguous;
       row.querySelector('.library-ambiguous').textContent = entry.ambiguous ? `Multiple saved versions share this identity. Version ${entry.key.slice(0, 8)} is preserved separately.` : '';
       const pin = row.querySelector('[data-action="pin"]'); pin.textContent = entry.pinned ? 'Unpin' : 'Pin'; pin.setAttribute('aria-pressed', String(entry.pinned));
@@ -337,6 +359,7 @@ function switchAllowed() {
   if (state.pending) { notice('Cancel the current Copilot request before opening another journey.'); return false; }
   if (state.preview) { notice('Dismiss the unsaved question preview before switching journeys or restoring. Return to the map to review it.'); return false; }
   if ([...nodeUi.values()].some(ui => ui.question.length)) { notice('Add or clear your missing-direction drafts before opening another journey. Back to current map keeps your drafts.'); return false; }
+  if ([...nodeUi.values()].some(ui => ui.revisitDraft)) { notice('Save your reminder edits or choose Use saved reminder before opening another journey.'); return false; }
   return true;
 }
 async function switchJourney(action, input) {
@@ -507,9 +530,9 @@ function renderMap() {
       }
       card.className = `node ${acceptedIds.has(n.id) ? 'new-question' : ''} ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''} ${branches.parentIds.has(n.id) ? 'has-branch' : ''}`;
       card.title = n.question;
-      card.setAttribute('aria-label', `${n.category}: ${n.question}. ${nodeStatus(n)}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden}` : ''}`);
+      card.setAttribute('aria-label', `${n.category}: ${n.question}. ${nodeStatus(n)}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden}` : ''}${n.revisit ? `; reminder: ${revisitLabel(n)}` : ''}`);
       card.style.left = `${p.x}px`; card.style.top = `${p.y}px`; card.style.width = `${p.width}px`; card.style.height = `${p.height}px`; card.style.setProperty('--branch', colors[p.branch % colors.length]);
-      const status = hidden || (root ? `${total} questions` : `${nodeStatus(n)}${n.review ? '; needs review' : ''}`);
+      const status = (hidden || (root ? `${total} questions` : `${nodeStatus(n)}${n.review ? '; needs review' : ''}`)) + (n.revisit ? ` · ${revisitLabel(n)}` : '');
       const stamp = JSON.stringify([n.category, n.question, n.answer, status]);
       if (card.renderStamp !== stamp) {
         card.renderStamp = stamp;
@@ -735,6 +758,29 @@ function renderWorkspace() {
     }, { id: 'undo-addition', class: 'undo-addition' }));
     form.append(el('div', { id: 'draft-recovery', 'aria-live': 'polite' }));
     content.append(form); answerStatus(node); renderDraftRecovery(node); renderCleanup(); renderQuestionHelp();
+    const revisit = el('section', { class: 'revisit-editor', 'aria-labelledby': 'revisit-title' }, el('h3', { id: 'revisit-title' }, 'Revisit this question'),
+      el('p', { id: 'revisit-status', role: 'status' }), el('p', { class: 'quiet' }, 'Optional local-calendar date or condition you evaluate yourself. No monitoring or notifications. Acknowledging records a review; it does not change your answer, certainty or ancestor review flag.'));
+    const date = el('input', { id: 'revisit-date', type: 'date', min: '0001-01-01', max: '9999-12-31' }), condition = el('textarea', { id: 'revisit-condition', maxlength: '1000', rows: '2' });
+    const edit = event => {
+      ui.revisitDraft = { date: date.value, condition: event.target === condition ? condition.value : ui.revisitDraft?.condition ?? node.revisit?.condition ?? '', base: ui.revisitDraft?.base ?? JSON.stringify(node.revisit ?? null) };
+      workspace.update();
+    };
+    date.addEventListener('input', edit); condition.addEventListener('input', edit);
+    const saveReminder = async action => {
+      if (!current()) return;
+      if (ui.revisitDraft && ui.revisitDraft.base !== JSON.stringify(node.revisit ?? null)) return notice('This reminder changed elsewhere. Use saved reminder or explicitly keep your edits before saving.');
+      const draft = ui.revisitDraft;
+      const result = await api(action, { nodeId: node.id, ...(action === 'set-revisit' ? { date: draft ? draft.date || null : node.revisit?.date ?? null, condition: draft?.condition ?? node.revisit?.condition ?? '' } : {}) });
+      if (result && current()) { if (ui.revisitDraft === draft) delete ui.revisitDraft; workspace.update(); notice(action === 'acknowledge-revisit' ? 'Review acknowledged. Answer and certainty unchanged.' : action === 'clear-revisit' ? 'Reminder cleared. Earlier schedules remain in History.' : 'Reminder saved. Conditions are checked manually.'); }
+    };
+    revisit.append(el('label', { for: 'revisit-date' }, 'Review date (local calendar)'), date, el('label', { for: 'revisit-condition' }, 'Manual revisit condition'), condition,
+      el('p', { id: 'revisit-conflict', class: 'notice' }), el('div', { class: 'actions' },
+        button('Save reminder', () => void saveReminder('set-revisit'), { id: 'save-revisit' }),
+        button('Acknowledge review', () => void saveReminder('acknowledge-revisit'), { id: 'acknowledge-revisit' }),
+        button('Clear reminder', () => void saveReminder('clear-revisit'), { id: 'clear-revisit' }),
+        button('Use saved reminder', () => { delete ui.revisitDraft; workspace.update(); date.focus(); }, { id: 'reset-revisit' }),
+        button('Keep my reminder edits', () => { if (ui.revisitDraft) { ui.revisitDraft.base = JSON.stringify(node.revisit ?? null); workspace.update(); } }, { id: 'keep-revisit' })));
+    content.append(revisit);
   }
   region('research');
   region('followup');
@@ -795,6 +841,19 @@ function renderWorkspace() {
       }
     });
     update('review', [node.review, isQuestion(node)], () => node.review ? el('p', { class: 'note' }, isQuestion(node) ? 'An earlier answer changed. Review this question and save your answer again when it still fits.' : 'An earlier answer changed. Review this direction and generate fresh questions when needed.') : null);
+    if ($('revisit-date')) {
+      const draft = ui.revisitDraft, conflict = draft && draft.base !== JSON.stringify(node.revisit ?? null);
+      if (!draft) { $('revisit-date').value = node.revisit?.date ?? ''; $('revisit-condition').value = node.revisit?.condition ?? ''; }
+      else { if ($('revisit-date').value !== draft.date) $('revisit-date').value = draft.date; if ($('revisit-condition').value !== draft.condition) $('revisit-condition').value = draft.condition; }
+      $('revisit-status').textContent = node.revisit ? `${revisitLabel(node)}${node.revisit.date ? ` · ${node.revisit.date}` : ''}${node.revisit.acknowledgedAt ? ` · Reviewed ${new Date(node.revisit.acknowledgedAt).toLocaleString()}` : ''}` : 'No reminder saved.';
+      $('save-revisit').textContent = node.revisit?.acknowledgedAt ? 'Reschedule and reactivate' : 'Save reminder';
+      $('revisit-conflict').textContent = conflict ? 'The saved reminder changed. Your edits are retained; choose the saved version or explicitly keep your edits.' : '';
+      $('revisit-conflict').hidden = !conflict;
+      $('keep-revisit').hidden = !conflict; $('reset-revisit').hidden = !draft;
+      for (const id of ['save-revisit', 'acknowledge-revisit', 'clear-revisit']) $(id).disabled = pending || !!conflict;
+      $('acknowledge-revisit').disabled ||= !!draft; $('clear-revisit').disabled ||= !!draft;
+      $('acknowledge-revisit').hidden = !node.revisit; $('clear-revisit').hidden = !node.revisit;
+    }
     const preview = state.preview && (state.preview.nodeId === node.id || root && !byId.has(state.preview.nodeId)) ? state.preview : null;
     update('preview', preview?.id ?? null, () => preview ? renderQuestionPreview() : null);
     if (preview) {
@@ -1164,16 +1223,16 @@ function renderResearch(node) {
 }
 function renderOutline() {
   if (!state.document || $('outline').hidden) return;
-  const stamp = JSON.stringify([referenceJourney(), $('search').value, state.document.nodes.map(n => [n.id, n.parentId, n.question, n.answer, n.category, n.answerState, n.review, collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
+  const stamp = JSON.stringify([referenceJourney(), $('search').value, $('revisit-filter').value, revisitDay, state.document.nodes.map(n => [n.id, n.parentId, n.question, n.answer, n.category, n.answerState, n.review, n.revisit, collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
   if ($('outline-list').renderStamp === stamp) return;
   $('outline-list').renderStamp = stamp;
   const scroll = $('outline-list').scrollTop;
   const focused = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
   const focusedBranch = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.branchId : null;
   const query = $('search').value.toLowerCase();
-  const nodes = state.document.nodes.filter(n => `${n.question} ${n.answer} ${n.category}`.toLowerCase().includes(query));
+  const nodes = state.document.nodes.filter(n => `${n.question} ${n.answer} ${n.category}`.toLowerCase().includes(query) && revisitMatches(n.revisit, $('revisit-filter').value, revisitDay));
   $('outline-list').replaceChildren(...nodes.map(n => el('div', { class: 'outline-row' },
-    button([n.question, el('small', {}, `${n.category} · ${nodeStatus(n)}${n.review ? '; needs review' : ''}${collapsed.has(n.id) ? ` · ${hiddenSummary(n.id)}` : ''}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id }),
+    button([n.question, el('small', {}, `${n.category} · ${nodeStatus(n)}${n.review ? '; needs review' : ''}${collapsed.has(n.id) ? ` · ${hiddenSummary(n.id)}` : ''}${n.revisit ? ` · Reminder: ${revisitLabel(n)}` : ''}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id }),
     branchButton(n))));
   if (focused) [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
   $('outline-list').scrollTop = scroll;
@@ -1544,6 +1603,7 @@ $('guidance-form').addEventListener('submit', async event => {
 $('library-toggle').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); void refreshLibrary(); $('library-search').focus(); });
 $('library-return').addEventListener('click', () => { libraryView = false; showView(); refreshScene(); $('map').focus({ preventScroll: true }); });
 $('library-search').addEventListener('input', refreshLibrary);
+$('library-reminder').addEventListener('change', refreshLibrary);
 $('library-archived').addEventListener('change', refreshLibrary);
 $('library-refresh').addEventListener('click', refreshLibrary);
 $('library-new').addEventListener('click', () => $('topic').focus());
@@ -1883,6 +1943,7 @@ $('outline').addEventListener('keydown', event => {
   event.preventDefault(); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); $('outline-toggle').focus({ preventScroll: true });
 });
 $('search').addEventListener('input', renderOutline);
+$('revisit-filter').addEventListener('change', renderOutline);
 $('request-status').addEventListener('click', () => {
   if (state.pending || state.preview) {
     const id = (state.pending ?? state.preview).nodeId;
@@ -1924,7 +1985,7 @@ window.addEventListener('pointermove', event => {
 for (const name of ['pointerup', 'pointercancel']) window.addEventListener(name, endDrag);
 $('map').addEventListener('lostpointercapture', event => { if (event.target === $('map')) endDrag(event); });
 window.addEventListener('blur', () => endDrag());
-document.addEventListener('visibilitychange', () => { if (document.hidden) { endDrag(); void draftClient.flush(true).catch(() => {}); } });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { endDrag(); void draftClient.flush(true).catch(() => {}); } else refreshRevisitDay(); });
 $('map').addEventListener('click', event => {
   if (suppressClick && event.detail > 0) { event.preventDefault(); event.stopImmediatePropagation(); suppressClick = false; }
 }, true);
@@ -1989,6 +2050,7 @@ window.addEventListener('pageshow', event => {
 });
 async function poll() {
   if (closed || suspended || pollFlight) return;
+  refreshRevisitDay();
   clearTimeout(pollTimer);
   const epoch = actionEpoch, page = pageEpoch, abort = new AbortController(), flight = { abort };
   pollFlight = flight;

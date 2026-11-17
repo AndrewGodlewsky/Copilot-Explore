@@ -17,6 +17,7 @@ const assets = new Map([
   ['layout.mjs', ['layout.mjs', 'text/javascript; charset=utf-8']],
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
   ['answer-state.mjs', ['answer-state.mjs', 'text/javascript; charset=utf-8']],
+  ['revisit.mjs', ['revisit.mjs', 'text/javascript; charset=utf-8']],
   ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
   ['cleanup.mjs', ['cleanup.mjs', 'text/javascript; charset=utf-8']],
   ['question-help-client.mjs', ['question-help-client.mjs', 'text/javascript; charset=utf-8']],
@@ -152,7 +153,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       }
       if (req.method === 'GET' && route === 'api/library') {
         if (!explorer.library) return json(200, { revision: 0, entries: [], errors: [] });
-        return json(200, await explorer.library.list({ search: url.searchParams.get('search') ?? '', archived: url.searchParams.get('archived') === 'true' }));
+        return json(200, await explorer.library.list({ search: url.searchParams.get('search') ?? '', archived: url.searchParams.get('archived') === 'true', reminder: url.searchParams.get('reminder') ?? 'all', ...(url.searchParams.has('today') ? { today: url.searchParams.get('today') } : {}) }));
       }
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });

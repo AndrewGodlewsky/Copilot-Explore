@@ -4,6 +4,7 @@ import { ProjectContext } from './project-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
 import { Library } from './library.mjs';
+import { validateRevisit } from './web/revisit.mjs';
 import { operationEvidence } from './operation-recovery.mjs';
 import { prepareBrief, captureBrief, briefFreshness, acceptBrief, validateBrief } from './decision-brief.mjs';
 import { prepareAnswerCheck, captureCheck, checkFreshness, validateCheck } from './answer-check.mjs';
@@ -731,6 +732,21 @@ export class Explorer {
       const next = structuredClone(this.doc);
       this.error = '';
       switch (action) {
+        case 'set-revisit':
+        case 'acknowledge-revisit':
+        case 'clear-revisit': {
+          const allowed = ['nodeId', 'revision', 'action', 'scope', ...(action === 'set-revisit' ? ['date', 'condition'] : [])];
+          if (Object.keys(input).some(key => !allowed.includes(key))) throw new Error('Invalid revisit action fields; acknowledgment timestamps are server-owned.');
+          await this.withDocumentLock(async () => {
+            const saved = await this.fresh(), changed = structuredClone(saved), node = findNode(changed, input.nodeId);
+            if (!isQuestion(node)) throw new Error('Only ordinary questions can have revisit reminders.');
+            if (action === 'set-revisit') node.revisit = validateRevisit({ date: input.date, condition: input.condition, acknowledgedAt: null });
+            else if (action === 'clear-revisit') delete node.revisit;
+            else if (node.revisit && !node.revisit.acknowledgedAt) node.revisit.acknowledgedAt = new Date().toISOString();
+            await this.commitCurrentLocked(saved, changed, action === 'set-revisit' ? 'Revisit scheduled or reactivated' : action === 'clear-revisit' ? 'Revisit cleared' : 'Revisit acknowledged');
+          });
+          break;
+        }
         case 'accept-questions': {
           const batch = this.preview;
           if (!batch || input.batchId !== batch.id) throw new Error('This question preview is no longer available.');

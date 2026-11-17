@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { researchSettings, researchSettingsText } from './web/research-policy.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './web/answer-state.mjs';
 import { effectiveMode, validMode, MODES } from './web/modes.mjs';
+import { validateRevisit } from './web/revisit.mjs';
+export { localDate, revisitStatuses } from './web/revisit.mjs';
 export { effectiveMode } from './web/modes.mjs';
 export { effectiveAnswerState, questionCounts, isQuestion, effectiveKind } from './web/answer-state.mjs';
 
@@ -181,10 +183,12 @@ export function validateDocument(value) {
     ...(Object.hasOwn(n, 'rationale') ? { rationale: text(n.rationale, 'Question rationale', 1000) } : {}),
     ...(Object.hasOwn(n, 'answerState') ? { answerState: n.answerState } : {}),
     research: n.research === null ? null : research(n.research), review: n.review === true,
+    ...(Object.hasOwn(n, 'revisit') ? { revisit: validateRevisit(n.revisit) } : {}),
     ...(Object.hasOwn(n, 'generation') ? { generation: generation(n.generation, text(n.question, 'Question', 600), text(n.category, 'Category', 60)) } : {}),
   }));
   const byId = new Map(nodes.map(n => [n.id, n]));
   for (const node of nodes) {
+    if (Object.hasOwn(node, 'revisit') && !isQuestion(node)) throw new Error('Only ordinary questions can have revisit reminders.');
     if (Object.hasOwn(node, 'kind') && (node.kind !== 'direction' || node.id === value.rootId)) throw new Error('Invalid node kind.');
     if (Object.hasOwn(node, 'rationale') && (node.id === value.rootId || !isQuestion(node) || !node.generation)) throw new Error('Only generated ordinary questions can have a rationale.');
     if (!isQuestion(node) && node.kind === 'direction' && (node.answer !== '' || Object.hasOwn(node, 'answerState') || node.research !== null || Object.hasOwn(node, 'generation'))) throw new Error('A direction cannot have an answer, answer state, research or AI generation provenance.');
@@ -312,6 +316,7 @@ export function toMarkdown(doc) {
     if (n.review) lines.push('**Needs review:** an ancestor answer changed after this branch was created.', '');
     if (!isQuestion(n)) { lines.push('Direction (user supplied). Original direction text; not an answer or decision.', ''); continue; }
     lines.push('### User answer', '', `State: ${ANSWER_STATES[effectiveAnswerState(n)]}.`, '', n.answer ? md(n.answer) : '_No answer text._', '');
+    if (n.revisit) lines.push('### User revisit reminder', '', `Review date (local calendar): ${n.revisit.date ?? 'Not set'}.`, '', 'Manual condition (evaluated by you; not monitored):', '', n.revisit.condition ? md(n.revisit.condition) : '_Not set._', '', `Acknowledged: ${n.revisit.acknowledgedAt ?? 'Not yet'}. Acknowledgment records a review, not a changed answer or resolved decision.`, '');
     if (n.generation) lines.push('### Question provenance', '', `Generated question: ${md(n.generation.originalQuestion)}`, '', `Generated category: ${md(n.generation.originalCategory)}. ${n.generation.adjusted ? 'Wording adjusted by the user before acceptance.' : 'Accepted without wording changes.'}`, '');
     if (n.rationale) {
       lines.push('### Why this question?', '', 'Historical model explanation for the original suggested wording and context; not a user fact or decision.', '');

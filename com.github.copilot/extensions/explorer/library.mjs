@@ -1,5 +1,6 @@
 import { acquireLock } from './owned-lock.mjs';
 import { questionCounts } from './web/answer-state.mjs';
+import { localDate, validReviewDate, REVISIT_FILTERS, revisitSummary } from './web/revisit.mjs';
 import { mkdir, readdir, lstat, realpath, readFile } from 'node:fs/promises';
 import { join, resolve, dirname, basename } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -64,20 +65,22 @@ export class Library {
       throw new Error('Library metadata could not be read. It has been preserved; restore library.json before changing the library.');
     }
   }
-  summary(record, metadata, ambiguous) {
+  summary(record, metadata, ambiguous, today = localDate()) {
     const { key, document: doc } = record;
     return { key, id: doc.id, topic: doc.topic, updatedAt: doc.updatedAt, nodeCount: doc.nodes.length, questionCount: questionCounts(doc).total,
       pinned: false, archived: false, lastOpenedAt: null, ...metadata.entries[key],
-      ambiguous: ambiguous.has(doc.id) };
+      ambiguous: ambiguous.has(doc.id), revisit: revisitSummary(doc.nodes, today) };
   }
-  async list({ search = '', archived = false } = {}) {
+  async list({ search = '', archived = false, reminder = 'all', today = localDate() } = {}) {
     if (typeof search !== 'string' || search.length > 4000 || typeof archived !== 'boolean') throw new Error('Invalid library filter.');
+    if (!Object.hasOwn(REVISIT_FILTERS, reminder) || !validReviewDate(today)) throw new Error('Invalid library reminder filter or local date.');
     const { records, errors } = await this.scan();
     let metadata;
     try { metadata = await this.metadata(); } catch (error) { metadata = emptyMetadata(); errors.push({ message: error.message }); }
     const ambiguous = ambiguousIds(records);
-    const entries = records.map(record => this.summary(record, metadata, ambiguous))
+    const entries = records.map(record => this.summary(record, metadata, ambiguous, today))
       .filter(entry => entry.archived === archived && entry.topic.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+      .filter(entry => reminder === 'all' || entry.revisit.counts[reminder] > 0)
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || Date.parse(b.lastOpenedAt ?? b.updatedAt) - Date.parse(a.lastOpenedAt ?? a.updatedAt) || a.key.localeCompare(b.key));
     return { revision: metadata.revision, entries, errors };
   }

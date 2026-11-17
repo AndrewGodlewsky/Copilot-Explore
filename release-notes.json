@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.52",
+    "summary": "Set local-calendar review dates and manual revisit conditions on questions. Find due, overdue and acknowledged reminders in the Library and question list, including archived journeys. Acknowledge, reschedule or clear with History while preserving answers and certainty. Conditions stay user-evaluated; no monitoring, notifications or calendar writes. Native and Markdown exports retain reminders."
+  },
+  {
     "version": "0.1.51",
     "summary": "Share a read-only offline HTML viewer after previewing exact selected nodes, saved answers and research. Search and navigate without Copilot or the plugin, preserve uncertainty and source provenance, and open sources only by deliberate clicks. Private metadata and excluded nodes stay out; selected text is not redacted. Size limits and stale-preview checks protect the export."
   },

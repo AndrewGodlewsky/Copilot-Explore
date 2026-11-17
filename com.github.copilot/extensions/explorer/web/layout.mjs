@@ -63,3 +63,43 @@ export function layout(nodes, rootId, sizes = new Map()) {
   }
   return result;
 }
+
+// One geometry value per active scene; no document or node objects are retained.
+export class GeometryCache {
+  value = null;
+  key = '';
+  get(nodes, rootId, sizes = new Map(), inputs = []) {
+    const key = JSON.stringify([rootId, inputs, nodes.map(node => {
+      const size = sizes.get(node.id) ?? { width: 220, height: 110 };
+      return [node.id, node.parentId, size.width, size.height];
+    })]);
+    if (this.value && key === this.key) return this.value;
+    const positions = layout(nodes, rootId, sizes), edges = new Map();
+    const bounds = { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
+    for (const node of nodes) {
+      const box = positions.get(node.id);
+      bounds.left = Math.min(bounds.left, box.x); bounds.right = Math.max(bounds.right, box.x + box.width);
+      bounds.top = Math.min(bounds.top, box.y); bounds.bottom = Math.max(bounds.bottom, box.y + box.height);
+      if (!node.parentId) continue;
+      const parent = positions.get(node.parentId), x1 = parent.x + parent.width / 2, y1 = parent.y + parent.height;
+      const x2 = box.x + box.width / 2, y2 = box.y;
+      edges.set(node.id, {
+        path: `M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}`,
+        // The cubic lies inside its control-point bounds, including viewport crossings.
+        bounds: { x: Math.min(x1, x2), y: y1, width: Math.abs(x2 - x1), height: y2 - y1 },
+      });
+    }
+    this.key = key;
+    return this.value = { positions, edges, bounds };
+  }
+  clear() { this.key = ''; this.value = null; }
+}
+
+export function viewportBounds(view, size, overscan = 96) {
+  return { left: (-view.x - overscan) / view.zoom, top: (-view.y - overscan) / view.zoom,
+    right: (size.width - view.x + overscan) / view.zoom, bottom: (size.height - view.y + overscan) / view.zoom };
+}
+
+export function intersects(box, viewport) {
+  return box.x <= viewport.right && box.x + box.width >= viewport.left && box.y <= viewport.bottom && box.y + box.height >= viewport.top;
+}

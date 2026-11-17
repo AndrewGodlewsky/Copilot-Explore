@@ -5,13 +5,14 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { JSDOM } from 'jsdom';
+import { fixtureSpecs, makeFixture } from '../scripts/perf-fixtures.mjs';
 import { parseBrief } from '../com.github.copilot/extensions/explorer/decision-brief.mjs';
 import { parseAnswerCheck } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
 import { createDocument, contextFor } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
-import { layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
+import { GeometryCache, viewportBounds, intersects, layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
 import { CleanupClient } from '../com.github.copilot/extensions/explorer/web/cleanup.mjs';
@@ -49,6 +50,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom, document = window.document;
+  const scriptErrors = []; window.addEventListener('error', event => scriptErrors.push(event.error));
   const briefDialog = document.getElementById('brief-dialog');
   briefDialog.showModal = () => { briefDialog.open = true; };
   briefDialog.close = () => { briefDialog.open = false; };
@@ -69,22 +71,23 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     window.dispatchEvent(new window.Event('pagehide'));
     await Promise.allSettled([...requests]); await delay(0);
     dom.window.close(); await server.close(); assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true });
+    assert.deepEqual(scriptErrors, [], 'no uncaught app event errors');
   });
   const map = document.getElementById('map');
   // jsdom has no visual layout. Only geometry inputs are stubbed; DOM events,
   // the shipped app, HTTP server, controller, persistence and callbacks are real.
-  let height = 720;
+  let height = 720, workspaceHeight = 540;
   map.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height });
   Object.defineProperties(window.HTMLElement.prototype, {
     offsetWidth: { get() { return parseFloat(this.style.width) || (this.id === 'map' ? width : 220); } },
-    offsetHeight: { get() { return this.id === 'node-workspace' ? Math.min(540, parseFloat(this.style.maxHeight) || 540) : 110; } },
+    offsetHeight: { get() { return this.id === 'node-workspace' ? Math.min(workspaceHeight, parseFloat(this.style.maxHeight) || 540) : 110; } },
   });
   let captures = 0, holdAnswer = null, holdState = null, holdAdd = null, holdDraftRead = options.holdDraftRead, holdDraftWrite = null, holdHistory = null, holdNavigationRead = null, holdReferencesRead = options.holdReferencesRead, holdVoiceCancel = options.holdVoiceCancel, holdVoicePoll;
   const captured = new Set(), observers = new Map();
   map.setPointerCapture = id => { captures++; captured.add(id); };
   map.hasPointerCapture = id => captured.has(id);
   map.releasePointerCapture = id => captured.delete(id);
-  window.ResizeObserver = class { constructor(callback) { this.callback = callback; } observe(element) { observers.set(element.id, this.callback); } disconnect() {} };
+  window.ResizeObserver = class { constructor(callback) { this.callback = callback; } observe(element) { observers.set(element.id, this.callback); } disconnect() { for (const [id, fn] of observers) if (fn === this.callback) observers.delete(id); } };
   const motionListeners = new Set(), motionMedia = { matches: true, addEventListener: (_, fn) => motionListeners.add(fn) };
   window.matchMedia = () => motionMedia;
   window.HTMLElement.prototype.scrollIntoView = function () {};
@@ -111,6 +114,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     requests.add(request); request.then(() => requests.delete(request), () => requests.delete(request));
     return request;
   };
+  Object.assign(window, { GeometryCache, viewportBounds, intersects });
+  Object.defineProperty(document, 'fonts', { value: new window.EventTarget() });
   window.layout = layout;
   window.branchView = branchView;
   window.revealPath = revealPath;
@@ -120,8 +125,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.QuestionHelpClient = QuestionHelpClient;
   window.attachNavigation = attachNavigation;
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
-  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, scene: () => ({ positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; transform(); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
+  window.eval(script.replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -130,7 +135,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   };
   const type = (id, value) => { const e = document.getElementById(id); assert.ok(e, id); e.value = value; e.dispatchEvent(new window.Event('input', { bubbles: true })); };
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
-  return { explorer, window, document, open, type, click, actions, poll: () => window.__updates.poll(), resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
+  return { explorer, window, document, open, type, click, actions, observers, resizeWorkspace: value => { workspaceHeight = value; observers.get('node-workspace')(); }, poll: () => window.__updates.poll(), resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
@@ -871,6 +876,7 @@ test('wheel zoom anchors at the pointer, reaches 300%, resets, and respects text
   for (let i = 0; i < 30; i++) wheel(f, map, 120);
   assert.equal(viewOf(f).zoom, .1, 'wheel respects minimum zoom');
   f.document.getElementById('zoom-level').click();
+  f.document.getElementById('fit').click(); // Recover cards culled by pointer-anchored zoom.
   f.open(f.explorer.doc.nodes[1].id);
   const answer = f.document.getElementById('answer'), stable = viewOf(f);
   assert.equal(wheel(f, answer, 100).defaultPrevented, false); assert.deepEqual(viewOf(f), stable);
@@ -954,9 +960,10 @@ test('whole map fits a wide or deep tree instead of stopping at an unreadable zo
     const doc = structuredClone(template);
     for (let i = 0; i < 100; i++) doc.nodes.push({ ...template.nodes[1], id: `large-${i}`, parentId: deep && i ? `large-${i - 1}` : doc.rootId });
     await f.explorer.command('import', { revision: f.explorer.doc.revision, document: doc });
-    await until(() => f.document.querySelectorAll('.node').length === doc.nodes.length &&
-      (deep ? Math.max(...[...f.document.querySelectorAll('.node')].map(e => parseFloat(e.style.top))) > 10000 : true), 'large map rendered');
+    await until(() => f.window.__updates.scene().positions.size === doc.nodes.length &&
+      (deep ? Math.max(...[...f.window.__updates.scene().positions.values()].map(box => box.y)) > 10000 : true), 'large map laid out');
     f.document.getElementById('fit').click(); const v = viewOf(f);
+    assert.equal(f.document.querySelectorAll('.node').length, doc.nodes.length, 'Fit mounts the complete visible layout');
     assert.ok(v.zoom < .1, 'map can fit below 10%');
     for (const node of f.document.querySelectorAll('.node')) {
       const left = v.x + parseFloat(node.style.left) * v.zoom, top = v.y + parseFloat(node.style.top) * v.zoom;
@@ -2412,7 +2419,8 @@ test('question preview acceptance reveals focused folded children and keeps edit
   assert.equal(d.getElementById('answer').selectionStart, 2); assert.equal(d.querySelector('.manual').open, true);
   assert.equal(d.getElementById('branch-workspace').getAttribute('aria-expanded'), 'true');
   assert.match(d.getElementById('focus-status').textContent, /Who should borrow/);
-  d.getElementById('show-whole-map').click(); assert.equal(d.querySelector(`[data-branch-id="${other.id}"]`).getAttribute('aria-expanded'), 'false');
+  d.getElementById('show-whole-map').click(); d.getElementById('outline-toggle').click();
+  assert.equal(d.querySelector(`#outline-list [data-branch-id="${other.id}"]`).getAttribute('aria-expanded'), 'false', 'offscreen fold remains available in full Outline');
 });
 
 
@@ -2650,4 +2658,118 @@ test('library row moves preserve keyboard action focus and visible scroll, with 
   const archive = row.querySelector('[data-action="archive"]'); archive.focus(); archive.click();
   await until(() => !row.isConnected, 'archive removes row');
   assert.equal(f.document.activeElement, $('library-list').querySelector('[data-action="archive"]')); assert.equal($('welcome').scrollTop, 120);
+});
+
+test('large-map culling retains the focused compact owner then releases it and reveals before focus', async t => {
+  const source = makeFixture(fixtureSpecs.find(spec => spec.name === 'near5000-deep')).document;
+  const f = await fixture(t, 340, undefined, false, { before: explorer => { explorer.doc = structuredClone(source); } });
+  const d = f.document, ui = f.window.__updates;
+  ui.setView({ x: 170, y: 16, zoom: 1 });
+  const mounted = () => d.querySelectorAll('#nodes [data-node-id]').length;
+  assert.ok(mounted() < 10, 'offscreen compact contents are not mounted');
+  assert.equal(f.explorer.doc.nodes.length, 4950);
+  const root = d.querySelector('#nodes [data-node-id="node-0"]');
+  root.focus();
+  const geometry = ui.scene().positions;
+  ui.setView({ x: 170, y: -50000, zoom: 1 });
+  assert.equal(d.activeElement, root); assert.equal(root.isConnected, true, 'focused card survives pan');
+  assert.equal(ui.scene().positions, geometry, 'pan reuses geometry');
+  ui.refresh(); assert.equal(ui.scene().positions, geometry, 'stable refresh reuses geometry');
+  d.getElementById('map').focus(); await delay(0);
+  assert.equal(root.isConnected, false, 'focus retention is bounded to the current owner');
+  ui.reveal('node-1');
+  const branch = d.querySelector('#nodes [data-branch-id="node-1"]'); branch.focus();
+  ui.setView({ x: 170, y: -60000, zoom: 1 });
+  assert.equal(d.activeElement, branch); assert.equal(branch.isConnected, true, 'branch control survives pan');
+  d.getElementById('map').focus(); await delay(0);
+  assert.equal(branch.isConnected, false, 'old branch control is released');
+  ui.reveal('node-4949');
+  const target = d.querySelector('#nodes [data-node-id="node-4949"]');
+  assert.ok(target?.isConnected, 'reveal mounts synchronously before focus');
+  target.focus(); assert.equal(d.activeElement, target);
+  ui.select('node-4949');
+  const answer = d.getElementById('answer'); answer.value = 'Unsaved answer'; answer.focus();
+  ui.setView({ x: -10000, y: 16, zoom: 3 });
+  assert.equal(d.getElementById('answer'), answer); assert.equal(answer.isConnected, true);
+  assert.equal(answer.value, 'Unsaved answer'); assert.equal(ui.scene().selected, 'node-4949');
+  assert.ok(mounted() < 10);
+  ui.reveal('node-4949');
+  const view = ui.scene().view, box = ui.scene().positions.get('node-4949');
+  assert.ok(view.x + box.x * view.zoom >= 15);
+  assert.ok(view.y + box.y * view.zoom >= 15);
+  d.getElementById('outline-toggle').click();
+  assert.equal(d.querySelectorAll('#outline-list .outline-row').length, 4950, 'full logical outline survives culling');
+});
+
+test('large-map geometry invalidates on resize, fonts, expansion, history and journey and releases observers', async t => {
+  const source = makeFixture(fixtureSpecs.find(spec => spec.name === 'medium-wide')).document;
+  const f = await fixture(t, 1100, undefined, false, { before: explorer => { explorer.doc = structuredClone(source); } });
+  const d = f.document, ui = f.window.__updates;
+  ui.setView({ x: 550, y: 16, zoom: 1 });
+  const first = ui.scene().positions;
+  f.resize(340); assert.notEqual(ui.scene().positions, first);
+  let previous = ui.scene().positions;
+  d.fonts.dispatchEvent(new f.window.Event('loadingdone')); await delay(30);
+  assert.notEqual(ui.scene().positions, previous, 'fonts invalidate');
+  previous = ui.scene().positions; ui.select('node-1');
+  assert.notEqual(ui.scene().positions, previous, 'expansion changes geometry');
+  const editor = d.getElementById('answer');
+  previous = ui.scene().positions; f.resizeWorkspace(220); await delay(30);
+  assert.notEqual(ui.scene().positions, previous, 'measured panel height invalidates geometry');
+  assert.equal(ui.scene().positions.get('node-1').height, 220);
+  const next = structuredClone(source); next.revision++;
+  next.nodes = next.nodes.filter(n => Number(n.id.slice(5)) < 8);
+  ui.apply({ document: next, error: '', pending: null });
+  assert.equal(d.getElementById('answer'), editor);
+  assert.equal(ui.scene().positions.size, 8, 'history replacement drops stale geometry');
+  const current = ui.scene().geometry;
+  ui.apply({ document: { ...structuredClone(next), id: 'replacement-journey' }, error: '', pending: null });
+  assert.notEqual(ui.scene().geometry, current, 'new journey never reuses old cache');
+  assert.equal(editor.isConnected, false);
+  const focus = d.querySelector('#nodes [data-node-id="node-1"]'); focus.focus();
+  ui.apply({ document: { ...next, id: 'replacement-journey', revision: 3, nodes: [next.nodes[0]] }, error: '', pending: null });
+  assert.notEqual(d.activeElement, d.body, 'logical removal transfers keyboard focus');
+  f.window.dispatchEvent(new f.window.Event('pagehide'));
+  assert.equal(ui.scene().geometry, null); assert.equal(ui.scene().positions.size, 0);
+  assert.equal(f.observers.size, 0, 'map and workspace observers disconnect');
+  d.fonts.dispatchEvent(new f.window.Event('loadingdone')); await delay(30);
+  assert.equal(ui.scene().geometry, null, 'closed scene cannot be recreated by fonts');
+});
+
+test('large-map near-limit long-text cards stay bounded through zoom, folds and full-map recovery', async t => {
+  const source = makeFixture(fixtureSpecs.find(spec => spec.name === 'near9mib-wide')).document;
+  const f = await fixture(t, 340, undefined, false, { before: explorer => { explorer.doc = structuredClone(source); } });
+  const d = f.document, ui = f.window.__updates;
+  assert.equal(d.querySelectorAll('#nodes [data-node-id]').length, 4950, 'initial Fit includes the whole valid map');
+  ui.select('node-4949');
+  const editor = d.getElementById('answer'), positions = ui.scene().positions;
+  assert.ok(d.querySelectorAll('#nodes [data-node-id]').length < 20);
+  assert.ok(d.querySelectorAll('#edges path').length < 100);
+  for (const zoom of [.1, 1, 3]) {
+    ui.setView({ x: -10000, y: -1000, zoom });
+    assert.equal(ui.scene().positions, positions);
+    assert.equal(d.getElementById('answer'), editor);
+  }
+  ui.select('node-7');
+  d.getElementById('focus-branch').click();
+  const focusedCount = ui.scene().positions.size;
+  assert.ok(focusedCount < 4950);
+  d.getElementById('branch-workspace').click();
+  assert.ok(ui.scene().positions.size < focusedCount);
+  d.getElementById('branch-workspace').click();
+  assert.equal(ui.scene().positions.size, focusedCount);
+  d.getElementById('show-whole-map').click();
+  d.getElementById('collapse-node').click(); d.getElementById('fit').click();
+  assert.equal(d.querySelectorAll('#nodes [data-node-id]').length, 4950);
+  assert.equal(d.querySelectorAll('#edges path').length, 4949);
+  assert.equal(JSON.stringify(f.explorer.doc), JSON.stringify(source), 'rendering never edits logical content');
+});
+
+test('large-map journey replacement transfers a compact control focus to the new map', async t => {
+  const f = await fixture(t), d = f.document, ui = f.window.__updates;
+  const card = d.querySelector('#nodes [data-node-id]'); card.focus();
+  const next = structuredClone(f.explorer.doc); next.id = 'new-journey';
+  ui.apply({ document: next, error: '', pending: null });
+  assert.equal(card.isConnected, false);
+  assert.equal(d.activeElement.id, 'map', 'removed compact owner has an explicit surviving focus target');
 });

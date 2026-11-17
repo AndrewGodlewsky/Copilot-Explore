@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.37",
+    "summary": "Keep large maps responsive by mounting nearby cards and reusing stable layout geometry. Preserve focused controls, expanded editors, crossing connectors and full Outline access. Add near-limit culling, focus, resize and disposal regressions with separate pan/zoom benchmark counters."
+  },
+  {
     "version": "0.1.36",
     "summary": "Keep answer editors connected during polling, research and sibling updates, preserving typing, composition, caret and dictation. Reuse map and library rows, retain library keyboard focus, and refresh Outline only when visible. Add stable-editor regressions and separately labeled update performance counters."
   },

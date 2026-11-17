@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.36.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.37.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -240,7 +240,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.36, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.36**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.37, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.37**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
@@ -273,3 +273,5 @@ AI request context offers ancestor-path-only or additional-decision scope for th
 The 128 KiB (131,072 byte) ceiling measures UTF-8 bytes in the actual Explorer-authored SDK prompt and instruction strings, including serialized JSON escaping and the packaged research instructions. It is not a token estimate, provider limit or measure of existing attached-chat context. Native `get_exploration` still exposes the full current committed map to the attached chat. Payload exclusions do not erase information already in chat. Drafts, private visual references, library metadata, history and audio are excluded from these prepared payloads. Generation also uses bounded child question/direction cues and separately labeled historical model explanations to avoid repeats and preserve reasoning continuity. Path-only scope excludes child cues. These are never user decisions; research does not acquire those generation-only fields.
 
 Question help retains its smaller 16,000 serialized-character input bound, adding only explicit pinned guidance and matching freshness checks; it can fail if mandatory guidance cannot fit. It still excludes the selected answer and other branches. Clean My Answer remains answer-only. Visible native layout, microphone behavior and live model quality require manual checks.
+
+Large maps mount compact cards near the viewport while keeping the selected editor and the current keyboard-focused control connected. Pan and zoom reuse stable layout geometry; resizing, folding and changed editor dimensions refresh it. Use **Outline** to reach any logical node and **Fit** to recover the visible map. Existing document/node limits still apply; fitting an entire map can mount every visible card.

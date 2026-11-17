@@ -88,3 +88,66 @@ test('maximum-depth focus and nested folds stay iterative', () => {
   assert.equal(focused.edges.length, 4999);
   assert.equal(branchView(deep, 'root', new Set(['d4999']), 'd4998').nodes.length, 5000);
 });
+import * as geometry from '../com.github.copilot/extensions/explorer/web/layout.mjs';
+
+test('geometry cache reuses stable layout and releases changed topology, dimensions and journey', () => {
+  assert.equal(typeof geometry.GeometryCache, 'function', 'geometry cache is available');
+  const cache = new geometry.GeometryCache();
+  const boxes = new Map([['a', { width: 560, height: 400 }]]);
+  const first = cache.get(nodes, 'root', boxes, ['journey', 1100, 720, 0, 'a']);
+  assert.equal(cache.get(structuredClone(nodes), 'root', boxes, ['journey', 1100, 720, 0, 'a']), first);
+  assert.equal(first.positions.size, 8);
+  assert.equal(first.edges.size, 7);
+  for (const inputs of [['journey', 340, 720, 0, 'a'], ['journey', 340, 720, 1, 'a'], ['other', 340, 720, 1, 'a']]) {
+    const previous = cache.value;
+    assert.notEqual(cache.get(nodes, 'root', boxes, inputs), previous);
+  }
+  const before = cache.value;
+  boxes.set('a', { width: 560, height: 600 });
+  const after = cache.get(nodes, 'root', boxes, ['other', 340, 720, 1, 'a']);
+  assert.notEqual(after, before);
+  assert.equal(after.positions.get('a1').y, before.positions.get('a1').y + 200);
+  const folded = branchView(nodes, 'root', new Set(['a']));
+  assert.equal(cache.get(folded.nodes, 'root', boxes, []).positions.has('a1'), false);
+  cache.clear(); assert.equal(cache.value, null);
+});
+
+test('viewport conversion and crossing connectors retain edges with both endpoints offscreen', () => {
+  assert.equal(typeof geometry.viewportBounds, 'function', 'viewport conversion is available');
+  for (const zoom of [.0001, .1, 1, 3]) {
+    const view = { x: -1200, y: -500, zoom };
+    const rect = geometry.viewportBounds(view, { width: 340, height: 720 }, 0);
+    assert.equal(rect.left * zoom + view.x, 0);
+    assert.equal(rect.top * zoom + view.y, 0);
+    assert.ok(Math.abs(rect.right * zoom + view.x - 340) < .000001);
+    assert.ok(Math.abs(rect.bottom * zoom + view.y - 720) < .000001);
+  }
+  const cache = new geometry.GeometryCache();
+  const scene = cache.get([{ id: 'r', parentId: null }, { id: 'c', parentId: 'r' }], 'r');
+  const viewport = { left: -30, right: 30, top: 125, bottom: 160 };
+  assert.equal(geometry.intersects(scene.positions.get('r'), viewport), false);
+  assert.equal(geometry.intersects(scene.positions.get('c'), viewport), false);
+  assert.equal(geometry.intersects(scene.edges.get('c').bounds, viewport), true);
+  assert.equal(geometry.intersects({ x: 30, y: 160, width: 10, height: 10 }, viewport), true, 'inclusive boundary');
+  assert.equal(geometry.intersects({ x: 31, y: 161, width: 10, height: 10 }, viewport), false);
+});
+
+test('near-limit deep and wide geometry remains finite and nonoverlapping with long text and expansion', () => {
+  assert.equal(typeof geometry.GeometryCache, 'function', 'geometry cache is available');
+  for (const wide of [false, true]) {
+    const tree = Array.from({ length: 5000 }, (_, i) => ({ id: String(i), parentId: i ? String(wide ? 0 : i - 1) : null, question: 'Long text '.repeat(200) }));
+    const scene = new geometry.GeometryCache().get(tree, '0', new Map([['2500', { width: 560, height: 680 }]]));
+    assert.equal(scene.positions.size, 5000); assert.equal(scene.edges.size, 4999);
+    let previous;
+    for (const node of tree) {
+      const box = scene.positions.get(node.id);
+      assert.ok(Object.values(box).every(Number.isFinite));
+      if (node.parentId) {
+        const parent = scene.positions.get(node.parentId);
+        assert.ok(box.y >= parent.y + parent.height + 72);
+        if (wide && previous) assert.ok(box.x >= previous.x + previous.width + 36);
+        previous = box;
+      }
+    }
+  }
+});

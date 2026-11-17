@@ -11,7 +11,7 @@ import { prepareBrief } from '../com.github.copilot/extensions/explorer/decision
 import { prepareAnswerCheck } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { prepareResearch } from '../com.github.copilot/extensions/explorer/research-context.mjs';
 import { Explorer, atomicWrite } from '../com.github.copilot/extensions/explorer/controller.mjs';
-import { layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
+import { GeometryCache, viewportBounds, intersects, layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
 import { CleanupClient } from '../com.github.copilot/extensions/explorer/web/cleanup.mjs';
@@ -47,7 +47,7 @@ export async function measure(phases, name, operation, work, { count = samples, 
 
 const imports = [
   "import { CleanupClient } from './cleanup.mjs';", "import { QuestionHelpClient } from './question-help-client.mjs';",
-  "import { layout, branchView, revealPath } from './layout.mjs';", "import { attachVoice } from './voice.mjs';",
+  "import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", "import { attachVoice } from './voice.mjs';",
   "import { DraftClient } from './drafts.mjs';", "import { attachNavigation } from './navigation.mjs';",
   "import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';",
   "import { effectiveMode, MODES } from './modes.mjs';",
@@ -78,10 +78,10 @@ async function domFixture(document) {
       url === 'api/voice' ? { ready: false, error: 'Disabled in synthetic benchmark.' } : {};
     return new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
   };
-  Object.assign(window, { layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
+  Object.assign(window, { GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
     ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   const source = imports.reduce((text, statement) => text.replace(statement, ''), appScript)
-    .replace('void poll();', 'window.__perf = { renderMap, renderWorkspace, renderOutline, poll, select, stopPoll: () => clearTimeout(pollTimer) }; void poll();');
+    .replace('void poll();', 'window.__perf = { renderMap, renderWorkspace, renderOutline, poll, select, zoom, pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); }, geometry: () => geometryCache.value, stopPoll: () => clearTimeout(pollTimer) }; void poll();');
   window.eval(source);
   for (let i = 0; i < 100 && !window.document.querySelector('#nodes [data-node-id]'); i++) await new Promise(resolve => setTimeout(resolve, 10));
   window.__perf.stopPoll();
@@ -164,7 +164,24 @@ async function benchmark(spec) {
   await measure(steadyState, 'hiddenOutlineUpdates', 'additional: ten hidden Outline calls', (_, resource) => {
     for (let i = 0; i < 10; i++) resource.window.__perf.renderOutline();
   }, { setup: countedDom, report: (_, resource) => resource.counts(), dispose: closeDom });
-  return { fixture: definition, phases, steadyState };
+  const viewInteractions = {};
+  await measure(viewInteractions, 'panZoom', 'additional: ten pan/zoom pairs at selected research workspace', (_, resource) => {
+    const { window } = resource, app = window.__perf;
+    let previous = app.geometry(), layoutReplacements = 0;
+    for (let i = 0; i < 10; i++) {
+      app.pan(i % 2 ? -40 : 40, i % 2 ? -20 : 20);
+      if (app.geometry() !== previous) layoutReplacements++;
+      previous = app.geometry();
+      app.zoom(i % 2 ? 1 / .9 : .9);
+      if (app.geometry() !== previous) layoutReplacements++;
+      previous = app.geometry();
+    }
+    return { panUpdates: 10, zoomUpdates: 10, layoutReplacements, positionedNodes: previous.positions.size,
+      mountedNodes: window.document.querySelectorAll('#nodes [data-node-id]').length,
+      mountedEdges: window.document.querySelectorAll('#edges path').length,
+      sameEditor: window.document.getElementById('answer') === resource.editor };
+  }, { setup: async () => { const resource = await researchDom(); resource.editor = resource.window.document.getElementById('answer'); return resource; }, dispose: closeDom });
+  return { fixture: definition, phases, steadyState, viewInteractions };
 }
 
 export const phaseNames = ['validate', 'contextResearch', 'contextBrief', 'contextCheck', 'markdown', 'nativeExport', 'branchView', 'layout', 'atomicWrite', 'controllerHistoryWrite', 'renderMap', 'renderWorkspace', 'renderOutline', 'poll'];
@@ -178,7 +195,8 @@ export function validResult(result, { cases = fixtureSpecs.map(spec => spec.name
     new Set(result.cases.map(item => item.fixture?.name)).size === cases.length && result.cases.every(item =>
       cases.includes(item.fixture?.name) && (failure(item.phases?.fixture) && Object.keys(item.phases).length === 1 ||
       !!item.fixture?.fingerprint && item.phases && Object.keys(item.phases).length === phases.length && phases.every(name => validPhase(item.phases[name]))) &&
-      (!item.steadyState || ['workspaceUpdates', 'hiddenOutlineUpdates'].every(name => validPhase(item.steadyState[name]))));
+      (!item.steadyState || ['workspaceUpdates', 'hiddenOutlineUpdates'].every(name => validPhase(item.steadyState[name]))) &&
+      (!item.viewInteractions || validPhase(item.viewInteractions.panZoom)));
 }
 
 export async function runBaseline({ specs = fixtureSpecs, runCase = benchmark, outputDirectory = output, expectedPhases = phaseNames, log = console.log } = {}) {
@@ -204,11 +222,13 @@ export async function runBaseline({ specs = fixtureSpecs, runCase = benchmark, o
   for (const item of result.cases) for (const [name, phase] of Object.entries(item.phases)) if (phase.status === 'ok') lines.push(`| ${item.fixture.name} | ${name} | ${JSON.stringify(phase.operations)} | ${phase.medianMs.toFixed(2)} [${phase.minMs.toFixed(2)}, ${phase.maxMs.toFixed(2)}] |`);
   lines.push('', '## Additional steady-state counters (not task23 phases)', '', '| Fixture | Update | Operations | Median ms |', '| --- | --- | --- | ---: |');
   for (const item of result.cases) for (const [name, phase] of Object.entries(item.steadyState ?? {})) if (phase.status === 'ok') lines.push(`| ${item.fixture.name} | ${name} | ${JSON.stringify(phase.operations)} | ${phase.medianMs.toFixed(2)} |`);
+  lines.push('', '## Additional viewport interactions (not task23 phases)', '', '| Fixture | Update | Operations | Median ms |', '| --- | --- | --- | ---: |');
+  for (const item of result.cases) for (const [name, phase] of Object.entries(item.viewInteractions ?? {})) if (phase.status === 'ok') lines.push(`| ${item.fixture.name} | ${name} | ${JSON.stringify(phase.operations)} | ${phase.medianMs.toFixed(2)} |`);
   lines.push('', 'jsdom measures JavaScript and DOM mutations only. It does not measure native paint, frame rate, pointer latency, IME, or desktop embedding.',
     'Targets are informational: watch for repeatable changes above 2× the same phase and fixture on the same machine. Compare only when fixture fingerprints and procedures match.');
   await writeFile(markdown, lines.join('\n') + '\n');
   log(`Results: ${json}\nSummary: ${markdown}`);
-  return { result, json, markdown, exitCode: result.cases.some(item => [...Object.values(item.phases), ...Object.values(item.steadyState ?? {})].some(phase => phase.status === 'failed')) ? 1 : 0 };
+  return { result, json, markdown, exitCode: result.cases.some(item => [...Object.values(item.phases), ...Object.values(item.steadyState ?? {}), ...Object.values(item.viewInteractions ?? {})].some(phase => phase.status === 'failed')) ? 1 : 0 };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

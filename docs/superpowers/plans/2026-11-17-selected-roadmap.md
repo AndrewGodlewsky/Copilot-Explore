@@ -814,6 +814,22 @@ Read issue-43.md, task-24-design-notes.md, AGENTS.md and the task23 benchmark re
 - Run npm test/check/package, and installed fixtures only if host integration changes. Synchronize the confirmed patch metadata/README/release note and include the controller plan update. Self-review and commit; no nested agents, publishing or issue closure.
 - Write task-24-report.md with rendering ownership and disposal contracts, carried Minor resolutions, actual checks/benchmark evidence, SHA and owner-only native IME/typing/layout checks. Controller independently reviews and publishes.
 
+Published task 24: **v0.1.36**, `ea156d4`, required checks and rendering evidence retained; independent review approved and remote main verified.
+
+## Task 25: Keep large maps responsive (#34 / original44)
+
+Read issue-44.md, task-25-design-notes.md, AGENTS.md and task23/task24 benchmark and rendering reports. BASE is `ea156d4c55d56d5265a23849b5a5139e40f65349`; ship version **0.1.37**. Preserve the published task24 editor identity, current-callback and disposal contracts. Use the final retained task23/task24 comparison artifacts and disclose any measurement-procedure change.
+
+- Separate the full logical document, folded/focused layout and viewport-mounted nodes. Cull unnecessary offscreen compact-node contents with a small overscan boundary, without deleting logical nodes, answers, drafts or source dependencies. Keep the expanded selected editor mounted and usable even near a viewport edge.
+- Cache stable geometry so ordinary pan/zoom does not repeat full tree layout. Use explicit invalidation inputs for topology, folded/focused visibility, relevant node dimensions and expansion; measured size changes, font/viewport resize, generated children and history/journey replacement must invalidate correctly. Bound caches to the active journey and release stale references.
+- Preserve connectors crossing the viewport even when endpoints lie offscreen. Do not infer visibility solely from endpoint inclusion. Screen/world coordinate conversion must remain consistent at supported zoom extremes, resize and negative pan positions.
+- Navigation/reveal must mount a target before focusing it and leave it reachable. Preserve Fit visible/whole-map recovery, folding/focus semantics, selected expanded node and the full Outline accessibility alternative. Do not silently change the user's selection because a compact card is culled.
+- Do not remove the currently keyboard-focused control merely because it moves outside the overscan area. Keep that active element mounted until focus changes, or use an explicit meaningful focus transfer when its logical owner is removed. Test focused-card pan/cull and reveal-before-focus ordering, not only selected-editor retention.
+- Use the existing no-dependency SVG/DOM layout modules and current validated map limits. Do not raise capacity or claim infinite rendering/storage. Keep task24 stable editor DOM and listener lifecycle guarantees.
+- Add deterministic deep/wide/long-text near-limit cases, viewport/edge crossings, pan/zoom/resize and folds/focus/history replacement. Assert geometry, mounted-node/edge counts, cache invalidation and resource disposal; never treat jsdom as proof of native frame rate or real IME.
+- Compare the same task23 benchmark cases and record before/after counts and timings. Fix any baseline layout failure that this task explicitly owns and retain transparent failure/coverage reporting. Native appearance, pointer responsiveness and narrow-pane checks remain manual; no browser/desktop automation, live mic, paid provider or existing user session.
+- Run npm test/check/package and applicable fixtures only when integration changes. Synchronize confirmed patch metadata/README/release note, include controller plan update, self-review and commit. No nested agents or publication. Write task-25-report.md with cache/culling contracts, tests, benchmark artifacts, SHA and remaining manual checks.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

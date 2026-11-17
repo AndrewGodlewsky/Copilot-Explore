@@ -1,4 +1,4 @@
-import { layout, branchView, revealPath } from './layout.mjs';
+import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
 import { CleanupClient } from './cleanup.mjs';
@@ -12,6 +12,8 @@ const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'
 let state = { document: null, pending: null, error: '' };
 let selected = null, expanded = false, signature = '', positions = new Map(), busy = false, firstFit = true;
 let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame, viewportSize;
+const geometryCache = new GeometryCache();
+let geometryBranches = null, geometryInputs = '', fontEpoch = 0;
 let workspace = null;
 let suppressClick = false, restoringFocus = false, composing = null;
 let actionEpoch = 0, closed = false, pollTimer;
@@ -99,6 +101,7 @@ function apply(next, reset = false) {
   if (stamp === signature && !reset) return;
   captureWorkspace();
   const workspaceFocused = $('node-workspace').contains(document.activeElement);
+  const compactFocused = $('nodes').contains(document.activeElement);
   const previousSelection = selected;
   const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
@@ -110,6 +113,8 @@ function apply(next, reset = false) {
     cleanup.cancel();
     questionHelp.sync();
     voice.cancel();
+    geometryCache.clear(); geometryBranches = null; geometryInputs = '';
+    $('nodes').replaceChildren(); $('edges').replaceChildren();
     workspace = null; composing = null; drafts.clear(); nodeUi.clear(); positions.clear(); collapsed.clear(); branches = null; focusId = null; wholeView = null; $('node-workspace').replaceChildren();
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
     $('start-objective').value = ''; $('start-criteria').value = ''; $('start-mode').value = 'understand'; showModeDescription('start-mode'); $('start-guidance').open = false;
@@ -156,6 +161,7 @@ function apply(next, reset = false) {
     $('request-status').textContent = `${state.pending.kind === 'research' ? 'Researching' : 'Finding questions for'} ${work?.category ?? 'this map'}…`;
   }
   renderWorkspace(); refreshScene(anchor); renderOutline();
+  if (compactFocused && changedDocument) $('map').focus({ preventScroll: true });
   if (workspaceFocused && (changedDocument || previousSelection !== selected)) (expanded ? $('expanded-title') : [...$('nodes').children].find(e => e.dataset.nodeId === selected) ?? $('map')).focus({ preventScroll: true });
   renderQuestionFeedback();
   renderDraftSummary();
@@ -418,10 +424,11 @@ function collapseNode(focus = true) {
   voice.cancel();
   const anchor = anchorPoint(); captureWorkspace(); expanded = false;
   renderWorkspace(); refreshScene(anchor);
+  if (focus) revealNode(selected);
   if (focus) [...$('nodes').children].find(e => e.dataset.nodeId === selected)?.focus({ preventScroll: true });
 }
 function refreshScene(anchor = anchorPoint()) {
-  if (!state.document) return;
+  if (closed || !state.document) return;
   const panel = $('node-workspace'), rect = $('map').getBoundingClientRect();
   if (!rect.width || !rect.height) return;
   viewportSize ??= { width: rect.width, height: rect.height };
@@ -430,18 +437,28 @@ function refreshScene(anchor = anchorPoint()) {
   const height = Math.max(80, rect.height - focusTop(selected, rect.height) - 16) / scale;
   panel.style.width = `${width}px`; panel.style.maxHeight = `${height}px`;
   panel.style.setProperty('--heading-limit', `${Math.min(190, height * .42)}px`);
-  const sizes = new Map(branches.nodes.map(n => [n.id, { width: 220, height: n.answer ? 150 : 110 }]));
-  if (expanded) sizes.set(selected, { width, height: panel.offsetHeight });
-  positions = layout(branches.nodes, state.document.rootId, sizes);
+  const measuredHeight = expanded ? panel.offsetHeight : 0;
+  const inputs = JSON.stringify([state.activeKey, state.document.id, rect.width, rect.height, fontEpoch, expanded ? selected : null, expanded ? width : 0, measuredHeight]);
+  if (geometryBranches !== branches || geometryInputs !== inputs) {
+    const sizes = new Map(branches.nodes.map(n => [n.id, { width: 220, height: n.answer ? 150 : 110 }]));
+    if (expanded) sizes.set(selected, { width, height: measuredHeight });
+    positions = geometryCache.get(branches.nodes, state.document.rootId, sizes, inputs).positions;
+    geometryBranches = branches; geometryInputs = inputs;
+  }
   if (anchor && positions.has(anchor.id)) {
     const p = positions.get(anchor.id);
     view.x = anchor.x - (p.x + p.width / 2) * view.zoom; view.y = anchor.y - p.y * view.zoom;
   }
   if (expanded) { const p = positions.get(selected); panel.style.left = `${p.x}px`; panel.style.top = `${p.y}px`; }
-  renderMap(); transform();
+  transform();
 }
 function scheduleLayout() { if (!closed) { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(() => refreshScene()); } }
 function renderMap() {
+  // Workspace focus can fire between visibility replacement and its synchronous scene refresh.
+  if (closed || !geometryCache.value || geometryBranches !== branches) return;
+  const viewport = viewportBounds(view, $('map').getBoundingClientRect());
+  const active = document.activeElement, owner = $('nodes').contains(active) ? active.closest('[data-node-id],[data-branch-id]') : null;
+  const activeId = owner?.dataset.nodeId ?? owner?.dataset.branchId;
   const doc = state.document, nodes = $('nodes'), edges = $('edges');
   const cards = new Map([...nodes.querySelectorAll('[data-node-id]')].map(e => [e.dataset.nodeId, e]));
   const toggles = new Map([...nodes.querySelectorAll('[data-branch-id]')].map(e => [e.dataset.branchId, e]));
@@ -450,7 +467,7 @@ function renderMap() {
   const total = questionCounts(doc).total;
   for (const n of branches.nodes) {
     const p = positions.get(n.id), root = n.id === doc.rootId;
-    if (!expanded || n.id !== selected) {
+    if ((!expanded || n.id !== selected) && (n.id === activeId || intersects(p, viewport))) {
       const hidden = collapsed.has(n.id) ? hiddenSummary(n.id) : '';
       let card = cards.get(n.id); cards.delete(n.id);
       if (!card) {
@@ -477,21 +494,20 @@ function renderMap() {
         toggle.style.left = `${p.x + p.width - 106}px`; toggle.style.top = `${p.y + p.height - 36}px`;
       }
     }
-    if (!root) {
-      const parent = positions.get(n.parentId), x1 = parent.x + parent.width / 2, y1 = parent.y + parent.height, x2 = p.x + p.width / 2, y2 = p.y;
+    const edge = geometryCache.value.edges.get(n.id);
+    if (edge && intersects(edge.bounds, viewport)) {
       let path = paths.get(n.id); paths.delete(n.id);
       if (!path) { path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.dataset.edgeId = n.id; edges.append(path); }
-      path.setAttribute('d', `M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}`);
+      path.setAttribute('d', edge.path);
       path.setAttribute('class', n.id === selected || n.parentId === selected ? 'current' : '');
     }
   }
-  for (const stale of [...cards.values(), ...toggles.values(), ...paths.values()]) stale.remove();
+  for (const stale of [...cards.values(), ...toggles.values(), ...paths.values()]) {
+    if (stale === active || stale.contains(active)) $('map').focus({ preventScroll: true });
+    stale.remove();
+  }
 }
-function bounds() {
-  const boxes = [...positions.values()];
-  return { left: Math.min(...boxes.map(p => p.x)), right: Math.max(...boxes.map(p => p.x + p.width)),
-    top: Math.min(...boxes.map(p => p.y)), bottom: Math.max(...boxes.map(p => p.y + p.height)) };
-}
+function bounds() { return geometryCache.value.bounds; }
 function fitScale() {
   if (!positions.size) return 1;
   const b = bounds(), rect = $('map').getBoundingClientRect();
@@ -509,6 +525,7 @@ function transform() {
   $('zoom-level').textContent = `${Number((view.zoom * 100).toPrecision(3))}%`;
   $('zoom-in').disabled = view.zoom >= 3;
   $('zoom-out').disabled = view.zoom <= Math.min(.1, fitScale());
+  renderMap();
 }
 function fit() {
   endDrag(); voice.cancel();
@@ -1303,6 +1320,7 @@ $('map').addEventListener('click', event => {
 }, true);
 $('map').addEventListener('auxclick', event => { if (event.button === 1) event.preventDefault(); });
 $('map').addEventListener('dragstart', event => { if (event.target.closest('.node,.node-head') || drag?.active) event.preventDefault(); });
+$('nodes').addEventListener('focusout', () => queueMicrotask(() => { if (!closed) renderMap(); }));
 $('node-workspace').addEventListener('focusin', () => { if (expanded && !restoringFocus) revealNode(selected); });
 $('node-workspace').addEventListener('compositionstart', event => { composing = event.target; renderCleanup(); });
 $('node-workspace').addEventListener('compositionend', () => {
@@ -1325,7 +1343,7 @@ $('map').addEventListener('wheel', event => {
   navigation.wheel(event, $('map').getBoundingClientRect());
 }, { passive: false });
 window.addEventListener('beforeunload', event => { if (draftClient.pending()) { void draftClient.flush(true).catch(() => {}); event.preventDefault(); event.returnValue = ''; } });
-new ResizeObserver(() => {
+const mapObserver = new ResizeObserver(() => {
   const rect = $('map').getBoundingClientRect();
   if (!state.document || !rect.width || !rect.height) return;
   if (firstFit) { viewportSize = { width: rect.width, height: rect.height }; refreshScene(null); expanded ? centerSelected() : fit(); firstFit = false; return; }
@@ -1334,8 +1352,12 @@ new ResizeObserver(() => {
   if (viewportSize) { view.x += (rect.width - viewportSize.width) / 2; view.y += (rect.height - viewportSize.height) / 2; }
   viewportSize = { width: rect.width, height: rect.height };
   refreshScene();
-}).observe($('map'));
-new ResizeObserver(() => { if (expanded) scheduleLayout(); }).observe($('node-workspace'));
+});
+mapObserver.observe($('map'));
+const workspaceObserver = new ResizeObserver(() => { if (expanded) scheduleLayout(); });
+workspaceObserver.observe($('node-workspace'));
+const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
+document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
   cleanup.cancel();
   closeBrief();
@@ -1344,6 +1366,8 @@ window.addEventListener('pagehide', event => {
   void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;
   closed = true; clearTimeout(pollTimer); cancelAnimationFrame(layoutFrame); endDrag();
+  mapObserver.disconnect(); workspaceObserver.disconnect(); document.fonts?.removeEventListener('loadingdone', fontsChanged);
+  geometryCache.clear(); geometryBranches = null; geometryInputs = ''; positions.clear(); branches = null;
 });
 async function poll() {
   const epoch = actionEpoch;

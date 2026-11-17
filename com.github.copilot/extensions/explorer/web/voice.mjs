@@ -26,11 +26,21 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
   }
   function lockControls() {
     if (!binding) return;
+    const focused = document.activeElement;
     binding.mic.disabled = binding.model.disabled = binding.save.disabled = optionsBusy || !!recording || !options;
     binding.refresh.disabled = optionsBusy || !!recording;
     binding.record.disabled = !settings?.ready || optionsBusy || !!recording;
     binding.stop.disabled = !recording || recording.phase !== 'listening' || !!recording.finishing;
     binding.cancel.disabled = !recording;
+    if (focused === binding.record && recording) {
+      recording.followRecordFocus = true;
+      binding.cancel.focus({ preventScroll: true });
+    } else if (recording?.followRecordFocus && recording.phase === 'listening') {
+      recording.followRecordFocus = false;
+      if (focused === binding.cancel) binding.stop.focus({ preventScroll: true });
+    } else if (focused === binding.stop && binding.stop.disabled) {
+      (recording ? binding.cancel : binding.answer).focus({ preventScroll: true });
+    } else if (focused === binding.cancel && binding.cancel.disabled) binding.answer.focus({ preventScroll: true });
   }
   function paintChoices() {
     if (!binding) return;

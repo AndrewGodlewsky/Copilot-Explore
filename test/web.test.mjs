@@ -888,6 +888,13 @@ function voiceFixture(mode = 'push_to_talk') {
   };
 }
 const key = (f, type, props = {}) => f.document.getElementById('answer').dispatchEvent(new f.window.KeyboardEvent(type, { bubbles: true, cancelable: true, key: ' ', code: 'Space', ctrlKey: true, ...props }));
+function activateButtonWithKeyboard(f, button) {
+  button.focus();
+  const down = new f.window.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true });
+  button.dispatchEvent(down);
+  if (!down.defaultPrevented) button.click(); // jsdom does not synthesize native button activation.
+  button.dispatchEvent(new f.window.KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+}
 
 const draftInput = (e, node = e.doc.nodes[1], text = 'Recovered 🌿\n  exact  ') => ({ journey: e.activeKey ?? e.doc.id, nodeId: node.id, text, base: { question: node.question, answer: node.answer }, revision: 0 });
 
@@ -1252,6 +1259,7 @@ test('leaving voice controls cancels while focus moving within them does not', a
   await until(() => voice.counts().starts === 1, 'start');
   f.document.getElementById('voice-cancel').focus(); assert.equal(voice.counts().cancels, 0);
   f.document.getElementById('answer-state').focus(); await until(() => voice.counts().cancels === 1, 'workspace exit cancels');
+  assert.equal(f.document.activeElement.id, 'answer-state', 'outside navigation keeps its intended focus');
   assert.equal(answer.value, '');
 });
 
@@ -1318,6 +1326,38 @@ test('same-question rerender keeps an active Stop control and its recording', as
   f.document.getElementById('voice-stop').click();
   await until(() => f.document.getElementById('answer').value === 'our neighbors', 'final result');
   assert.equal(voice.counts().starts, 1); assert.equal(voice.counts().finishes, 1);
+});
+
+test('keyboard Record keeps usable control focus across phases and same-question rerenders', async t => {
+  const voice = voiceFixture(); let id, phase = 'loading';
+  voice.start = recordingId => { id = recordingId; return { id, phase }; };
+  voice.poll = () => ({ id, phase });
+  voice.finish = () => { phase = 'transcribing'; return { id, phase }; };
+  const f = await fixture(t, 340, voice), [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
+  await until(() => !f.document.getElementById('voice-record')?.disabled, 'Record ready');
+  f.type('answer', 'For everyone nearby.');
+  f.document.getElementById('answer').setSelectionRange(4, 12);
+  activateButtonWithKeyboard(f, f.document.getElementById('voice-record'));
+  assert.equal(f.document.getElementById('voice-record').disabled, true);
+  assert.equal(f.document.activeElement.id, 'voice-cancel', 'Loading focuses enabled Cancel');
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Loading update' });
+  await until(() => f.document.getElementById('nodes').textContent.includes('Loading update'), 'loading rerender');
+  assert.equal(f.document.activeElement.id, 'voice-cancel'); assert.equal(voice.counts().cancels, 0);
+  phase = 'listening'; await until(() => !f.document.getElementById('voice-stop').disabled, 'Listening');
+  assert.equal(f.document.activeElement.id, 'voice-stop', 'Listening focuses enabled Stop');
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Listening update' });
+  await until(() => f.document.getElementById('nodes').textContent.includes('Listening update'), 'listening rerender');
+  assert.equal(f.document.activeElement.id, 'voice-stop'); assert.equal(voice.counts().cancels, 0);
+  activateButtonWithKeyboard(f, f.document.getElementById('voice-stop'));
+  await until(() => f.document.getElementById('voice-feedback').dataset.phase === 'transcribing', 'Transcribing');
+  assert.equal(f.document.activeElement.id, 'answer', 'Stop returns focus to the answer');
+  assert.equal(f.document.getElementById('answer').selectionStart, 4); assert.equal(f.document.getElementById('answer').selectionEnd, 12);
+  f.document.getElementById('voice-cancel').focus();
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Transcribing update' });
+  await until(() => f.document.getElementById('nodes').textContent.includes('Transcribing update'), 'transcribing rerender');
+  assert.equal(f.document.activeElement.id, 'voice-cancel'); assert.equal(voice.counts().cancels, 0);
+  activateButtonWithKeyboard(f, f.document.getElementById('voice-cancel'));
+  await until(() => voice.counts().cancels === 1, 'Cancel activated');
 });
 
 test('unavailable local dictation leaves settings accessible for recovery', async t => {

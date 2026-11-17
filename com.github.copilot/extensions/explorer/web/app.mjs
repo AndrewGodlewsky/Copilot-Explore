@@ -359,6 +359,10 @@ function switchAllowed() {
   if (state.pending) { notice('Cancel the current Copilot request before opening another journey.'); return false; }
   if (state.preview) { notice('Dismiss the unsaved question preview before switching journeys or restoring. Return to the map to review it.'); return false; }
   if ([...nodeUi.values()].some(ui => ui.question.length)) { notice('Add or clear your missing-direction drafts before opening another journey. Back to current map keeps your drafts.'); return false; }
+  if (orphanReminderDrafts().length) {
+    notice('Copy or discard removed-question reminder drafts before switching or restoring.');
+    $('notice').append(button('Review removed reminders', revealOrphanReminders, { id: 'review-orphan-reminders' })); return false;
+  }
   if ([...nodeUi.values()].some(ui => ui.revisitDraft)) { notice('Save your reminder edits or choose Use saved reminder before opening another journey.'); return false; }
   return true;
 }
@@ -643,13 +647,24 @@ function renderDraftRecovery(node) {
   }, { id: 'discard-unsaved-draft' }));
   if (drafts.has(node.id) || conflict) area.append(button('Discard draft', () => choose('discard'), { id: 'discard-draft' }));
 }
+function orphanReminderDrafts() {
+  const questions = new Set(state.document?.nodes.filter(isQuestion).map(node => node.id));
+  return [...nodeUi].filter(([id, ui]) => ui.revisitDraft && !questions.has(id));
+}
+function revealOrphanReminders() {
+  if ($('history-dialog').open) closeHistory();
+  libraryView = false; showView(); renderDraftSummary();
+  const text = $('orphan-drafts').querySelector('[data-orphan-reminder] textarea');
+  text?.focus({ preventScroll: true }); text?.scrollIntoView({ block: 'nearest' });
+}
 function renderDraftSummary() {
   const summary = $('draft-summary'), area = $('orphan-drafts');
   if (!summary || !area) return;
   const entries = [...draftClient.entries.values()];
   summary.textContent = draftClient.loadError || entries.some(e => e.error) ? 'Draft could not be saved. Open the question to retry or discard unsaved editor text.' :
     entries.some(e => e.dirty || e.saving) ? 'Saving drafts locally…' : draftClient.uncommitted() ? 'Local drafts are separate from saved answers and exports.' : '';
-  const stamp = JSON.stringify(entries.filter(e => e.orphaned));
+  const reminders = orphanReminderDrafts();
+  const stamp = JSON.stringify([entries.filter(e => e.orphaned), reminders.map(([id, ui]) => [id, ui.revisitDraft])]);
   if (area.renderStamp === stamp) return;
   area.renderStamp = stamp; area.replaceChildren();
   for (const [id, orphan] of draftClient.entries) {
@@ -658,6 +673,12 @@ function renderDraftSummary() {
     area.append(el('p', {}, `Saved draft state: ${ANSWER_STATES[effectiveAnswerState({ answer: orphan.conflict.text, answerState: orphan.conflict.answerState })]}`));
     area.append(el('p', {}, 'Draft for a removed question. Copy the text to keep it elsewhere.'), text,
       button('Discard removed-question draft', () => { void draftClient.choose(id, 'discard').catch(error => notice(error.message)); }));
+  }
+  for (const [, ui] of reminders) {
+    const draft = ui.revisitDraft, text = el('textarea', { readonly: '', rows: '3', 'aria-label': 'Reminder condition for a removed question' }); text.value = draft.condition;
+    area.append(el('section', { 'data-orphan-reminder': '' }, el('p', {}, `Unsaved reminder for a removed question: ${draft.question}`),
+      el('p', {}, `Review date: ${draft.date || 'Not set'}. Copy the date and condition to keep them elsewhere before discarding. This draft stays only in this canvas.`), text,
+      button('Discard removed-question reminder', () => { delete ui.revisitDraft; renderDraftSummary(); notice('Removed-question reminder draft discarded.'); $('map').focus({ preventScroll: true }); })));
   }
 }
 function renderWorkspace() {
@@ -762,7 +783,7 @@ function renderWorkspace() {
       el('p', { id: 'revisit-status', role: 'status' }), el('p', { class: 'quiet' }, 'Optional local-calendar date or condition you evaluate yourself. No monitoring or notifications. Acknowledging records a review; it does not change your answer, certainty or ancestor review flag.'));
     const date = el('input', { id: 'revisit-date', type: 'date', min: '0001-01-01', max: '9999-12-31' }), condition = el('textarea', { id: 'revisit-condition', maxlength: '1000', rows: '2' });
     const edit = event => {
-      ui.revisitDraft = { date: date.value, condition: event.target === condition ? condition.value : ui.revisitDraft?.condition ?? node.revisit?.condition ?? '', base: ui.revisitDraft?.base ?? JSON.stringify(node.revisit ?? null) };
+      ui.revisitDraft = { question: ui.revisitDraft?.question ?? node.question, date: date.value, condition: event.target === condition ? condition.value : ui.revisitDraft?.condition ?? node.revisit?.condition ?? '', base: ui.revisitDraft?.base ?? JSON.stringify(node.revisit ?? null) };
       workspace.update();
     };
     date.addEventListener('input', edit); condition.addEventListener('input', edit);
@@ -1498,7 +1519,11 @@ $('checkpoint-form').addEventListener('submit', async event => {
 });
 $('history-restore').addEventListener('click', async () => {
   if (historySelection === null || busy) return;
-  if (!switchAllowed()) { $('history-status').textContent = $('notice').textContent; return; }
+  if (!switchAllowed()) {
+    $('history-status').textContent = $('notice').textContent;
+    if (orphanReminderDrafts().length) $('history-status').append(button('Review removed reminders', revealOrphanReminders, { id: 'review-orphan-reminders-history' }));
+    return;
+  }
   const epoch = historyEpoch, journey = historyJourney(), revision = historyRevision, snapshotRevision = historySelection;
   voice.cancel(); $('history-restore').disabled = true; $('workspace').inert = true;
   try {

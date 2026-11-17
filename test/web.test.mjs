@@ -95,6 +95,39 @@ test('revisit UI untouched save preserves imported CRLF condition bytes and crea
   assert.equal(f.explorer.doc.nodes[1].revisit.condition, condition);
 });
 
+test('orphan revisit drafts survive external History removal until explicit discard permits restore and switching', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  const originalKey = f.explorer.activeKey, priorRevision = f.explorer.doc.revision;
+  const destination = await f.explorer.library.import(createDocument('Another reminder journey'));
+  await f.explorer.command('add', { revision: priorRevision, nodeId: f.explorer.doc.rootId, question: 'Temporary reminder question', category: 'Review' });
+  await f.poll(); const node = f.explorer.doc.nodes.at(-1), addedRevision = f.explorer.doc.revision;
+  f.open(node.id); f.type('revisit-date', '2026-12-20'); f.type('revisit-condition', '  KEEP THIS <script>REMINDER</script> 🌱\n');
+  const other = await new Explorer({ library: f.explorer.library, binding: 'orphan-reminder-test' }).load(); t.after(() => other.close());
+  await other.attach(originalKey);
+  await other.command('restore', { revision: other.doc.revision, journey: other.activeKey, snapshotRevision: priorRevision });
+  $('history-open').click(); $('history-refresh').click();
+  await until(() => !f.explorer.doc.nodes.some(n => n.id === node.id) && !$('revisit-condition'), 'external restore refreshed through HTTP');
+  $('history-close').click();
+  const orphan = $('orphan-drafts').querySelector('[data-orphan-reminder]');
+  assert.ok(orphan, 'removed reminder has a reachable recovery area');
+  assert.match(orphan.textContent, /Temporary reminder question/); assert.match(orphan.textContent, /2026-12-20/);
+  const retained = orphan.querySelector('textarea'); assert.equal(retained.value, '  KEEP THIS <script>REMINDER</script> 🌱\n'); assert.equal(retained.readOnly, true); assert.equal(orphan.querySelector('script'), null);
+  retained.focus(); retained.setSelectionRange(2, 6); await f.poll(); assert.equal(retained.isConnected, true); assert.equal(f.document.activeElement, retained); assert.equal(retained.selectionStart, 2);
+  $('library-toggle').click(); await until(() => f.document.querySelector(`[data-key="${destination.key}"] [data-action="open"]`), 'library target');
+  f.document.querySelector(`[data-key="${destination.key}"] [data-action="open"]`).click(); assert.equal(f.explorer.activeKey, originalKey); assert.match($('notice').textContent, /removed-question reminder/);
+  $('review-orphan-reminders').click(); assert.equal($('welcome').hidden, true); assert.equal(f.document.activeElement, retained); assert.equal(retained.value, '  KEEP THIS <script>REMINDER</script> 🌱\n');
+  $('history-open').click(); await until(() => f.document.querySelector(`[data-history-revision="${addedRevision}"]`), 'restore removed source');
+  f.document.querySelector(`[data-history-revision="${addedRevision}"]`).click(); await until(() => !$('history-restore').disabled, 'restoration preview');
+  $('history-restore').click(); assert.match($('history-status').textContent, /removed-question reminder/); assert.equal(f.explorer.doc.nodes.some(n => n.id === node.id), false);
+  $('review-orphan-reminders-history').click(); assert.equal($('history-dialog').open, false); assert.equal(f.document.activeElement, retained);
+  orphan.querySelector('button').click(); assert.equal($('orphan-drafts').querySelector('[data-orphan-reminder]'), null); assert.equal(f.document.activeElement.id, 'map');
+  $('history-open').click(); await until(() => f.document.querySelector(`[data-history-revision="${addedRevision}"]`), 'source history after discard');
+  f.document.querySelector(`[data-history-revision="${addedRevision}"]`).click(); await until(() => !$('history-restore').disabled, 'restoration after discard'); $('history-restore').click();
+  await until(() => !$('history-dialog').open && f.explorer.doc.nodes.some(n => n.id === node.id), 'restore permitted');
+  $('library-toggle').click(); await until(() => f.document.querySelector(`[data-key="${destination.key}"] [data-action="open"]`), 'switch target after discard');
+  f.document.querySelector(`[data-key="${destination.key}"] [data-action="open"]`).click(); await until(() => f.explorer.activeKey === destination.key && $('welcome').hidden, 'switch permitted');
+});
+
 test('visual export UI explicitly captures full or selected scope despite folding/focus and excludes answer drafts', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {
     await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, category: 'People', question: 'Folded child?' });

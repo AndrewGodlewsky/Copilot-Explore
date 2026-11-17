@@ -31,7 +31,7 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
     inputSchema: { type: 'object', properties: { topic: string(4000) }, additionalProperties: false },
     actions: [
       { name: 'get_exploration', description: 'Read the current map and pending request.', inputSchema: actionSchemas.get_exploration, handler: ctx => get(ctx).explorer.snapshot() },
-      { name: 'submit_questions', description: 'Complete a pending question-generation request with specific new questions.', inputSchema: actionSchemas.submit_questions, handler: ctx => get(ctx).explorer.receive('questions', ctx.input) },
+      { name: 'submit_questions', description: 'Stage specific questions for a pending request in an unsaved preview. Only the user can accept questions in the canvas; this callback never saves nodes.', inputSchema: actionSchemas.submit_questions, handler: ctx => get(ctx).explorer.receive('questions', ctx.input) },
       { name: 'fail_request', description: 'Explain why a pending request cannot be completed.', inputSchema: actionSchemas.fail_request, handler: ctx => get(ctx).explorer.receive('fail', ctx.input) },
     ],
     async open(ctx) {

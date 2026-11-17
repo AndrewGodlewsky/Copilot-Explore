@@ -30,6 +30,7 @@ test('research is isolated, abortable, rejects chat callbacks and preserves answ
   t.after(async () => { resolveRun?.(findings); await explorer.close(); assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true }); });
   await explorer.command('start', { topic: 'Pilot' });
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ question: 'Who first?', category: 'People' }] });
+  await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: explorer.preview.questions.map((q, index) => ({ index, question: q.question })) });
   const nodeId = explorer.doc.nodes[1].id;
   await explorer.command('answer', { revision: explorer.doc.revision, nodeId, answer: 'My decision' });
   const begin = () => explorer.command('research', { revision: explorer.doc.revision, nodeId });

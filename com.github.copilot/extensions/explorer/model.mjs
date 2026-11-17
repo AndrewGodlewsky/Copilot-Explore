@@ -29,6 +29,39 @@ export function questions(value) {
   if (!result.length) throw new Error('Return at least one question.');
   return result;
 }
+export function candidateQuestions(doc, parentId, values) {
+  findNode(doc, parentId);
+  const seen = new Set(doc.nodes.filter(n => n.parentId === parentId).map(n => n.question.toLowerCase()));
+  return questions(values).map(q => {
+    const key = q.question.toLowerCase();
+    if (seen.has(key)) throw new Error('Duplicate question. Adjust or deselect it before accepting.');
+    seen.add(key); return q;
+  });
+}
+function generation(value, question, category) {
+  if (!value || Object.keys(value).some(k => !['requestId', 'originalQuestion', 'originalCategory', 'adjusted'].includes(k))) throw new Error('Invalid question generation provenance.');
+  const result = { requestId: text(value.requestId, 'Generation request ID', 100), originalQuestion: text(value.originalQuestion, 'Original question', 600), originalCategory: text(value.originalCategory, 'Original category', 60), adjusted: value.adjusted };
+  if (typeof result.adjusted !== 'boolean' || result.adjusted !== (question !== result.originalQuestion) || category !== result.originalCategory) throw new Error('Invalid question adjustment provenance.');
+  return result;
+}
+export function acceptQuestions(doc, parentId, batch, selected) {
+  if (!Array.isArray(selected) || !selected.length || selected.length > 6) throw new Error('Select at least one preview question (at most six).');
+  const seen = new Set();
+  const values = selected.map(value => {
+    if (!value || Object.keys(value).some(k => !['index', 'question'].includes(k)) || !Number.isInteger(value.index) || !batch.questions[value.index] || seen.has(value.index)) throw new Error('Invalid preview selection.');
+    seen.add(value.index);
+    return { question: value.question, category: batch.questions[value.index].category };
+  });
+  const validated = candidateQuestions(doc, parentId, values);
+  const next = structuredClone(doc), nodes = addQuestions(next, parentId, validated);
+  nodes.forEach((node, i) => {
+    const original = batch.questions[selected[i].index];
+    node.generation = generation({ requestId: batch.id, originalQuestion: original.question, originalCategory: original.category, adjusted: node.question !== original.question }, node.question, node.category);
+  });
+  next.finishedAt = null;
+  validateDocument(next);
+  return { document: next, ids: nodes.map(n => n.id) };
+}
 export function research(value) {
   if (!value || !['sources', 'reasoning'].includes(value.basis)) throw new Error('Research needs a basis: sources or reasoning.');
   const sources = list(value.sources, 'sources', 15, source => {
@@ -71,6 +104,7 @@ export function validateDocument(value) {
     category: text(n.category, 'Category', 60), answer: guidanceText(n.answer, 'Answer', 20000),
     ...(Object.hasOwn(n, 'answerState') ? { answerState: n.answerState } : {}),
     research: n.research === null ? null : research(n.research), review: n.review === true,
+    ...(Object.hasOwn(n, 'generation') ? { generation: generation(n.generation, text(n.question, 'Question', 600), text(n.category, 'Category', 60)) } : {}),
   }));
   const byId = new Map(nodes.map(n => [n.id, n]));
   for (const node of nodes) {
@@ -175,6 +209,7 @@ export function toMarkdown(doc) {
     lines.push('', `## ${ids.get(n.id)}: ${md(n.question)}`, '', `Category: ${md(n.category)}. Parent: ${ids.get(n.parentId)}.`, '');
     if (n.review) lines.push('**Needs review:** an ancestor answer changed after this branch was created.', '');
     lines.push('### User answer', '', `State: ${ANSWER_STATES[effectiveAnswerState(n)]}.`, '', n.answer ? md(n.answer) : '_No answer text._', '');
+    if (n.generation) lines.push('### Question provenance', '', `Generated question: ${md(n.generation.originalQuestion)}`, '', `Generated category: ${md(n.generation.originalCategory)}. ${n.generation.adjusted ? 'Wording adjusted by the user before acceptance.' : 'Accepted without wording changes.'}`, '');
     if (n.research) {
       const r = n.research;
       lines.push('### AI research', '', `Basis: ${r.basis === 'sources' ? 'Consulted sources' : 'Model reasoning; not externally verified'}.`, '', md(r.summary), '');

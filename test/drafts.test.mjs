@@ -45,6 +45,7 @@ async function fixture(t) {
   const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), send: async m => messages.push(m), target: {} }).load();
   await explorer.command('start', { topic: 'Drafts' });
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ question: 'Who?', category: 'People' }, { question: 'When?', category: 'Time' }] });
+  await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: explorer.preview.questions.map((q, index) => ({ index, question: q.question })) });
   t.after(async () => { await explorer.close(); await rm(dir, { recursive: true, force: true }); });
   const input = (node = explorer.doc.nodes[1], text = '  exact 🌿\n日本語  ') => ({ journey: explorer.activeKey ?? explorer.doc.id, nodeId: node.id, base: { question: node.question, answer: node.answer }, text, revision: 0 });
   return { dir, explorer, messages, input };

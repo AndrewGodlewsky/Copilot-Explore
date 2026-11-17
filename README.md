@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.21.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.22.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 <!-- explorer-current-version:end -->
 
 ## Install from GitHub
@@ -86,6 +86,10 @@ Typed answers, accepted dictation, research additions, and undo are recovered in
 A failed write keeps the editor text and blocks journey switching until retry succeeds or you explicitly **Discard unsaved editor text**; that option leaves any previously stored draft intact. **Save file** exports committed answers and states only; finishing requires resolving local drafts. Manual-question text is still held only in memory. Closing or hiding the page attempts a final flush, but abrupt termination can lose keystrokes within the debounce window or an unfinished write. Wait for **Draft saved locally** before closing. The draft store is limited to 8 MiB and 10,000 journey/question records, including retained clear markers. Malformed files are preserved and need manual restoration; there is no cloud backup. See [draft storage and recovery](docs/drafts.md).
 
 Pan by dragging the background, a compact card, or an expanded question heading. Middle-button dragging also works over the editor. Scroll over the map to zoom around the pointer, or use Ctrl/Command+wheel (including trackpad pinch) anywhere on the map. Normal scrolling inside an expanded node scrolls its contents. The +/? controls zoom up to 300%; click the percentage to return to 100%. **Collapse node** keeps your place and shows a saved-answer preview; **Fit visible map** collapses the workspace and fits the currently visible nodes. **Show whole map** leaves branch focus without closing the editor. **Center question** returns to the selected node at reading size. Keyboard users can Tab to nodes (including those off screen), navigate the outline, or press Escape to close the outline or collapse a question. With the map focused, arrow keys pan, +/? zoom, 0 resets zoom, and Home fits the currently visible map. Window resizing preserves your zoom and position. Ctrl/Command + Enter saves an answer and explores deeper. Revising an answered node preserves its descendants and marks them for review.
+
+Generated questions first appear in a **not saved** preview inside the requesting node. Select a subset, optionally adjust wording, then use **Accept selected** to add them in one undoable change, or **Dismiss all**. Dismiss before switching journeys, restoring history or generating again. Empty maps retain **Generate questions** for an explicit retry. A saved source change makes the preview stale; dismiss, refresh and generate again. Draft answers are preserved and do not become generation context. Accepted questions keep their original wording/category and adjustment provenance. The added-question link and static outline highlight make new nodes discoverable while respecting focus, folds and reduced motion.
+
+Previews are temporary canvas memory, excluded from exports, history and native map context. Closing or restarting the canvas discards them; polling preserves selections and wording edits. A renderer reload can recover the original batch while the canvas remains alive, but loses browser-only wording/selection edits. See [question preview contracts](docs/question-preview.md).
 
 Initial questions and **Save & explore deeper** are queued in the attached Copilot chat. Research uses a fresh SDK session with the same verified account and selected enabled Copilot model; normal Copilot usage applies. It receives your saved question path, answers and states with a dedicated [research skill](com.github.copilot/extensions/explorer/research/skills/explorer-research/SKILL.md), and checks web search/fetch availability before inference. The main chat receives no research transcript. Status shows preparation, search, reading and comparison; Cancel stops the research helper. Question cancellation still only discards the result, since Explorer cannot stop the main chat turn.
 
@@ -216,7 +220,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.21, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.21**.
+- Update to v0.1.22, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.22**.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

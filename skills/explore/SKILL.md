@@ -17,6 +17,8 @@ Question generation:
 
 Research runs in an isolated SDK session when the user clicks Research options. Its dedicated research skill, web tools, progress, results and cancellation belong to the plugin. The main chat does not perform or complete this work. The user can add a recommendation or selected details to their editable draft; only explicit Save commits an answer.
 
-Complete question requests through `submit_questions`, using the exact request ID. If question generation cannot be completed, call `fail_request` with a useful explanation. A stale or cancelled request must not be retried into a different exploration. Research results cannot be submitted through canvas actions.
+Complete question requests through `submit_questions` with the exact request ID and `{requestId, questions:[{question,category}]}`. This stages an unsaved preview at the requesting node; it never saves questions. Tell the user the suggestions are ready to review. The user selects, optionally adjusts wording, then clicks **Accept selected** or **Dismiss all** in the canvas. Only accepted questions enter the map, exports and later AI context. Keep acceptance in the canvas; do not call private HTTP commands or insert questions by another route.
+
+If question generation cannot be completed, call `fail_request` with a useful explanation. A stale or cancelled request must not be retried into a different exploration. Research results cannot be submitted through canvas actions.
 
 If the canvas is unavailable, explain that Explorer requires the GitHub Copilot desktop app and an enabled Explorer plugin; ask the user to start a new session after installation. Do not substitute a chat-only interview or claim the canvas opened.

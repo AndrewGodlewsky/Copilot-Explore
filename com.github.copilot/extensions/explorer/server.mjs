@@ -69,7 +69,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (!['start', 'poll', 'finish', 'cancel'].includes(input.action) || typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || Object.keys(input).some(k => !['action', 'id'].includes(k))) throw new Error('Invalid voice request.');
         return json(200, voice[input.action](input.id));
       }
-      if (req.method === 'GET' && route === 'api/state') return json(200, explorer.snapshot());
+      if (req.method === 'GET' && route === 'api/state') return json(200, explorer.uiSnapshot());
       if (req.method === 'GET' && route === 'api/history') {
         const selected = url.searchParams.get('snapshotRevision');
         if (selected !== null && !/^(0|[1-9][0-9]*)$/.test(selected)) throw new Error('Invalid history revision.');

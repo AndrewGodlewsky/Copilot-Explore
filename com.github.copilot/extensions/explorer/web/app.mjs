@@ -15,6 +15,7 @@ let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument =
 let collapsed = new Set(), branches = null, focusId = null, wholeView = null;
 let historyEpoch = 0, historyReturn = null, historySelection = null, historyRevision = null;
 let guidanceReturn = null, guidanceBase = null, guidanceNeedsChoice = false, guidanceNeedsRefresh = false;
+let previewEdits = null, acceptedIds = new Set(), acceptedParentId = null;
 const drafts = new Map(), nodeUi = new Map();
 const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
   changed: () => { const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); } },
@@ -81,8 +82,14 @@ function apply(next, reset = false) {
     $('start-objective').value = ''; $('start-criteria').value = ''; $('start-guidance').open = false;
     if ($('history-dialog').open) closeHistory();
     if ($('guidance-dialog').open) $('guidance-dialog').close();
+    acceptedIds.clear(); acceptedParentId = null;
   }
   signature = stamp; state = next;
+  if (state.preview?.id !== previewEdits?.id) previewEdits = state.preview ? { id: state.preview.id, questions: state.preview.questions.map(q => ({ question: q.question, selected: true })) } : null;
+  if (next.acceptedIds) {
+    acceptedIds = new Set(next.acceptedIds); acceptedParentId = next.acceptedParentId;
+    collapsed = revealPath(state.document.nodes, collapsed, next.acceptedIds[0]);
+  }
   if (changedDocument) draftClient.reset(state.activeKey ?? state.document?.id, state.document?.nodes ?? []);
   else draftClient.updateNodes(state.document?.nodes ?? []);
   if (state.library && !state.document) void refreshLibrary();
@@ -104,12 +111,14 @@ function apply(next, reset = false) {
   $('map-title').textContent = doc.topic;
   const { answered, resolved, deferred, unresolved } = questionCounts(doc);
   $('progress').textContent = `${answered} answered · ${resolved} resolved · ${deferred} deferred · ${unresolved} unresolved · Saved locally`;
-  $('request-status').hidden = !state.pending;
+  $('request-status').hidden = !state.pending && !state.preview;
+  if (state.preview) $('request-status').textContent = `${state.preview.questions.length} questions to review (not saved)`;
   if (state.pending) {
     const work = doc.nodes.find(n => n.id === state.pending.nodeId);
     $('request-status').textContent = `${state.pending.kind === 'research' ? 'Researching' : 'Finding questions for'} ${work?.category ?? 'this map'}…`;
   }
   renderWorkspace(); refreshScene(anchor); renderOutline();
+  renderQuestionFeedback();
   renderDraftSummary();
   if (firstFit || firstQuestions) {
     const rect = $('map').getBoundingClientRect(); firstFit = !rect.width || !rect.height;
@@ -148,6 +157,7 @@ async function refreshLibrary() {
 function switchAllowed() {
   if (busy || closed || draftClient.savingAnswer) return false;
   if (state.pending) { notice('Cancel the current Copilot request before opening another journey.'); return false; }
+  if (state.preview) { notice('Dismiss the unsaved question preview before switching journeys or restoring. Return to the map to review it.'); return false; }
   if ([...nodeUi].some(([id, ui]) => {
     const node = state.document?.nodes.find(n => n.id === id);
     return ui.question.length || (ui.category && ui.category !== (node?.id === state.document?.rootId ? '' : node?.category));
@@ -296,7 +306,7 @@ function renderMap() {
     const p = positions.get(n.id), root = n.id === doc.rootId;
     if (!expanded || n.id !== selected) {
       const hidden = collapsed.has(n.id) ? branches.descendants.get(n.id) : null;
-      const node = button('', () => select(n.id), { class: `node ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''} ${branches.descendants.get(n.id).total ? 'has-branch' : ''}`,
+      const node = button('', () => select(n.id), { class: `node ${acceptedIds.has(n.id) ? 'new-question' : ''} ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''} ${branches.descendants.get(n.id).total ? 'has-branch' : ''}`,
         title: n.question, 'data-node-id': n.id, 'aria-expanded': 'false', 'aria-label': `${n.category}: ${n.question}. ${root ? 'Central idea' : ANSWER_STATES[effectiveAnswerState(n)]}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden.total} hidden, ${hidden.unresolved} unresolved` : ''}` });
       node.style.left = `${p.x}px`; node.style.top = `${p.y}px`; node.style.width = `${p.width}px`; node.style.height = `${p.height}px`; node.style.setProperty('--branch', colors[p.branch % colors.length]);
       node.addEventListener('focus', () => { if (!restoringFocus) revealNode(n.id); });
@@ -450,8 +460,12 @@ function renderWorkspace() {
     content.append(el('div', { class: 'pending', role: 'status' }, el('strong', {}, state.pending.kind === 'research' ? `${state.pending.progress ?? 'Researching'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, state.pending.kind === 'research' ? 'Research runs separately from your chat. Cancelling stops its helper.' : 'Cancelling discards the result; the chat turn may still finish.')));
   }
   if (node.review) content.append(el('p', { class: 'note' }, 'An earlier answer changed. Review this question and save your answer again when it still fits.'));
+  if (state.preview && (state.preview.nodeId === node.id || root && !byId.has(state.preview.nodeId))) content.append(renderQuestionPreview());
+  if (!state.preview && !pending && /saved question context changed/.test(state.error)) content.append(button('Refresh saved journey & generate again', async () => {
+    if (await api('refresh-answer')) await api('questions', { nodeId: node.id });
+  }, { id: 'refresh-question-context' }));
   if (root) {
-    content.append(el('p', { class: 'quiet' }, 'Pick a connected question to explore it. Each question opens into its own workspace on the map.'), button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending }));
+    content.append(el('p', { class: 'quiet' }, 'Pick a connected question to explore it. Each question opens into its own workspace on the map.'), button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
   } else {
     const form = el('form', { class: 'answer-form' }), answer = el('textarea', { id: 'answer', rows: '4', maxlength: '20000', placeholder: 'A decision, a hunch, or what you know so far…' });
     answer.value = drafts.get(node.id) ?? node.answer;
@@ -463,6 +477,7 @@ function renderWorkspace() {
     answer.addEventListener('focus', () => draftClient.touch(node.id));
     answer.addEventListener('compositionstart', () => draftClient.touch(node.id));
     const save = async deepen => {
+      if (deepen && state.preview) return notice('Accept or dismiss the unsaved question preview before generating again.');
       voice.cancel();
       const error = answerStateError(answer.value, draftClient.state(node.id));
       if (error) return notice(error);
@@ -476,7 +491,7 @@ function renderWorkspace() {
           return result;
         }, () => state.document.nodes.find(n => n.id === node.id))) {
           renderWorkspace(); refreshScene();
-          if (deepen) notice('Answer saved. Copilot will add follow-up questions to this branch.');
+          if (deepen) notice('Answer saved. Copilot will propose follow-up questions for your review.');
         }
       } catch (error) { notice(error.message); }
     };
@@ -527,6 +542,40 @@ function renderWorkspace() {
   if (answerCaret && $('answer')) $('answer').setSelectionRange(answerCaret.start, answerCaret.end, answerCaret.direction);
   for (const [id, scroll] of textScroll) { const input = $(id); if (input) { input.style.height = scroll.height; input.scrollTop = scroll.top; input.scrollLeft = scroll.left; } }
   content.scrollTop = ui.scroll;
+}
+function renderQuestionFeedback() {
+  let feedback = $('question-feedback');
+  if (!feedback) { feedback = el('div', { id: 'question-feedback', role: 'status' }); $('request-status').after(feedback); }
+  const ids = [...acceptedIds].filter(id => state.document.nodes.some(n => n.id === id));
+  feedback.replaceChildren();
+  if (ids.length) feedback.append(button(`${ids.length} question${ids.length === 1 ? '' : 's'} added — show in branch`, () => {
+    select(acceptedParentId); collapsed.delete(acceptedParentId);
+    branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId); refreshScene();
+  }));
+}
+function renderQuestionPreview() {
+  const batch = state.preview, edits = previewEdits.questions;
+  const section = el('section', { id: 'question-preview', class: 'question-preview', 'aria-labelledby': 'preview-title' },
+    el('h3', { id: 'preview-title' }, 'Review suggested questions'),
+    el('p', { class: 'quiet' }, 'Not saved. Select questions and optionally adjust their wording. Closing or restarting this canvas discards this preview.'));
+  if (batch.stale) section.append(el('p', { class: 'notice' }, 'Saved context changed. Dismiss and generate again.'));
+  edits.forEach((edit, index) => {
+    const check = el('input', { id: `candidate-select-${index}`, type: 'checkbox' }); check.checked = edit.selected;
+    check.addEventListener('change', () => { edit.selected = check.checked; $('accept-questions').disabled = batch.stale || !edits.some(q => q.selected); });
+    const wording = el('textarea', { id: `candidate-question-${index}`, rows: '2', maxlength: '600', 'aria-label': `Question ${index + 1} wording` }); wording.value = edit.question;
+    wording.addEventListener('input', () => { edit.question = wording.value; });
+    section.append(el('div', { class: 'candidate' }, el('label', { for: check.id }, check, `Include ${batch.questions[index].category} question`), wording));
+  });
+  section.append(el('div', { class: 'actions' }, button('Accept selected', async () => {
+    const result = await api('accept-questions', { batchId: batch.id, selected: edits.flatMap((q, index) => q.selected ? [{ index, question: q.question }] : []) });
+    if (!result) { const retry = $('preview-retry'); if (retry) retry.hidden = false; }
+  }, { id: 'accept-questions', disabled: batch.stale || !edits.some(q => q.selected) }),
+  button('Dismiss all', () => api('dismiss-questions', { batchId: batch.id }), { id: 'dismiss-questions' })));
+  const retry = button('Dismiss, refresh & generate again', async () => {
+    if (!await api('dismiss-questions', { batchId: batch.id })) return;
+    if (await api('refresh-answer')) await api('questions', { nodeId: state.document.nodes.some(n => n.id === batch.nodeId) ? batch.nodeId : state.document.rootId });
+  }, { id: 'preview-retry' }); retry.hidden = !batch.stale; section.append(retry);
+  return section;
 }
 function renderResearch(node) {
   const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r);
@@ -748,7 +797,12 @@ $('outline').addEventListener('keydown', event => {
   event.preventDefault(); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); $('outline-toggle').focus({ preventScroll: true });
 });
 $('search').addEventListener('input', renderOutline);
-$('request-status').addEventListener('click', () => { if (state.pending) select(state.pending.nodeId); });
+$('request-status').addEventListener('click', () => {
+  if (state.pending || state.preview) {
+    const id = (state.pending ?? state.preview).nodeId;
+    select(state.document.nodes.some(n => n.id === id) ? id : state.document.rootId);
+  }
+});
 $('fit').addEventListener('click', () => { collapseNode(false); fit(); }); $('center-question').addEventListener('click', centerSelected);
 $('show-whole-map').addEventListener('click', showWholeMap);
 $('zoom-in').addEventListener('click', () => zoom(1.2)); $('zoom-out').addEventListener('click', () => zoom(1 / 1.2));

@@ -87,7 +87,13 @@ try {
   assert.ok(JSON.stringify(requests).includes('submit_questions'));
   let snapshot = await state();
   await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_questions', input: { requestId: snapshot.pending.id, questions: [{ question: 'Who will care for it?', category: 'People' }] } });
-  snapshot = await state(); assert.equal(snapshot.document.nodes.length, 2); assert.equal(snapshot.pending, null);
+  snapshot = await state(); assert.equal(snapshot.document.nodes.length, 1); assert.equal(snapshot.pending, null);
+  assert.equal(snapshot.preview.questions.length, 1);
+  const native = await session.rpc.canvas.action.invoke({ instanceId, actionName: 'get_exploration', input: {} });
+  assert.ok(!JSON.stringify(native).includes('Who will care for it?'), 'Native context excludes candidates');
+  assert.equal((await (await fetch(opened.url + 'export.json')).json()).nodes.length, 1);
+  snapshot = await action('accept-questions', { batchId: snapshot.preview.id, selected: [{ index: 0, question: 'Who will care for it?' }] });
+  assert.equal(snapshot.document.nodes.length, 2); assert.equal(snapshot.preview, null);
   const nodeId = snapshot.document.nodes[1].id;
   await action('answer', { nodeId, answer: 'Neighbors', expand: false });
   await action('research', { nodeId });
@@ -130,12 +136,21 @@ try {
   const crossPending = await followup.json(); assert.ok(crossPending.pending);
   await until(async () => requests, values => JSON.stringify(values).includes('library-other-session'), 'currently attached session question delivery');
   await secondSession.rpc.canvas.action.invoke({ instanceId: 'library-other-session', actionName: 'submit_questions', input: { requestId: crossPending.pending.id, questions: [{ question: 'How will the new group coordinate?', category: 'People' }] } });
-  assert.equal((await (await fetch(across.url + 'api/state')).json()).document.nodes.length, 3);
+  const staged = await (await fetch(across.url + 'api/state')).json(); assert.equal(staged.document.nodes.length, 2);
+  const accepted = await acrossPost({ action: 'accept-questions', revision: staged.document.revision, batchId: staged.preview.id, selected: [{ index: 0, question: staged.preview.questions[0].question }] });
+  assert.equal(accepted.status, 200); assert.equal((await accepted.json()).document.nodes.length, 3);
+  const unsaved = await acrossPost({ action: 'questions', revision: staged.document.revision + 1, nodeId });
+  const unsavedRequest = await unsaved.json();
+  await secondSession.rpc.canvas.action.invoke({ instanceId: 'library-other-session', actionName: 'submit_questions', input: { requestId: unsavedRequest.pending.id, questions: [{ question: 'Unsaved proposal?', category: 'People' }] } });
+  await secondSession.rpc.canvas.close({ instanceId: 'library-other-session' });
+  const previewReopen = await secondSession.rpc.canvas.open({ canvasId: 'explorer', instanceId: 'library-other-session', input: {} });
+  const previewRestored = await (await fetch(previewReopen.url + 'api/state')).json();
+  assert.equal(previewRestored.preview, null); assert.equal(previewRestored.document.nodes.length, 3);
   await secondSession.rpc.canvas.close({ instanceId: 'library-other-session' });
   await session.rpc.canvas.close({ instanceId: 'explorer-import' });
   await session.rpc.canvas.close({ instanceId });
   const { version } = JSON.parse(await readFile(join(root, 'plugin.json'), 'utf8'));
-  console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, canvas callbacks, answers, research access guard, exports, stale-response rejection, close/reopen, duplicate import, cross-session library reopen and shared-writer protection. Local fixture only; no paid model or UI automation.`);
+  console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, preview staging/explicit acceptance/native exclusion/close discard, answers, research access guard, exports, stale-response rejection, close/reopen, duplicate import, cross-session library reopen and shared-writer protection. Local fixture only; no paid model or UI automation.`);
 } finally {
   clearTimeout(deadline);
   await session?.disconnect().catch(() => {});

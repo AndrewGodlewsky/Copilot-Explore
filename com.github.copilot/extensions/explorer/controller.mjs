@@ -1,7 +1,7 @@
 import { mkdir, readFile, open, unlink, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createDocument, validateDocument, findNode, addQuestions, answerNode, contextFor, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA } from './model.mjs';
+import { createDocument, validateDocument, findNode, addQuestions, candidateQuestions, acceptQuestions, answerNode, contextFor, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
 import { History } from './history.mjs';
 import { Drafts, draftBase, draftHash, matchesDraftBase } from './drafts.mjs';
@@ -13,6 +13,7 @@ export class Explorer {
   constructor({ file, library, binding, send, target, researcher, timeoutMs = 240000 }) {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
+    this.preview = null; this.questionSource = null;
     this.researcher = researcher; this.researchTasks = new Set();
     this.library = library; this.binding = binding; this.activeKey = null;
   }
@@ -27,6 +28,25 @@ export class Explorer {
     return this;
   }
   snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
+  uiSnapshot() {
+    let stale = this.preview?.stale ?? false;
+    if (this.preview) {
+      try { stale ||= this.sourceContext(this.preview.nodeId) !== this.questionSource; }
+      catch { stale = true; } // Another canvas can remove the parent before an explicit refresh.
+    }
+    const preview = this.preview ? { ...this.preview, stale } : null;
+    return { ...this.snapshot(), preview: structuredClone(preview) };
+  }
+  sourceContext(nodeId, doc = this.doc) { return JSON.stringify({ journey: this.activeKey ?? doc.id, context: contextFor(doc, nodeId) }); }
+  async checkQuestionSource(nodeId) {
+    try {
+      const current = await this.readCurrent();
+      if (this.sourceContext(nodeId) !== this.questionSource || this.sourceContext(nodeId, current) !== this.questionSource) throw new Error('Source changed');
+    } catch {
+      if (this.preview) this.preview.stale = true;
+      throw new Error('The saved question context changed. Dismiss this preview, refresh the saved journey and generate again.');
+    }
+  }
   async attach(key) {
     const record = await this.library.opened(key, this.binding);
     this.file = record.file; this.doc = record.document; this.activeKey = key;
@@ -133,6 +153,7 @@ export class Explorer {
     }), this.timeoutMs);
     this.timer.unref?.();
     const context = contextFor(this.doc, nodeId);
+    if (kind === 'questions') this.questionSource = this.sourceContext(nodeId);
     if (kind === 'research') {
       const controller = new AbortController(); this.researchAbort = controller;
       this.pending.progress = 'Preparing research';
@@ -160,15 +181,33 @@ export class Explorer {
   }
   command(action, input = {}) {
     return this.transact(async () => {
-      if (action === 'cancel') { this.clearPending(); this.error = ''; return this.snapshot(); }
+      if (action === 'cancel') { this.clearPending(); this.error = ''; return this.uiSnapshot(); }
+      if (action === 'dismiss-questions') {
+        if (!this.preview || input.batchId !== this.preview.id) throw new Error('This question preview is no longer available.');
+        this.preview = null; this.questionSource = null; this.error = ''; return this.uiSnapshot();
+      }
       if (action === 'library-update' && this.library) {
-        await this.library.update(input.key, input.patch, input.metadataRevision); return this.snapshot();
+        await this.library.update(input.key, input.patch, input.metadataRevision); return this.uiSnapshot();
       }
       if (this.pending) throw new Error('Wait for Copilot or cancel the current request first.');
+      if (this.preview && (['start', 'open', 'import', 'restore', 'questions'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
       if (this.doc && input.revision !== this.doc.revision) throw new Error('The map changed. Refresh and try again; your draft is still here.');
       const next = structuredClone(this.doc);
       this.error = '';
       switch (action) {
+        case 'accept-questions': {
+          const batch = this.preview;
+          if (!batch || input.batchId !== batch.id) throw new Error('This question preview is no longer available.');
+          let acceptedIds;
+          await this.withDocumentLock(async () => {
+            await this.checkQuestionSource(batch.nodeId);
+            if (batch.stale) throw new Error('This preview is stale. Dismiss it and generate again.');
+            const accepted = acceptQuestions(this.doc, batch.nodeId, batch, input.selected);
+            await this.saveLocked(accepted.document, 'Questions accepted'); acceptedIds = accepted.ids;
+          });
+          this.preview = null; this.questionSource = null;
+          return { ...this.uiSnapshot(), acceptedIds, acceptedParentId: batch.nodeId };
+        }
         case 'start':
           if (this.library) {
             const doc = createDocument(input.topic, input); doc.revision = 1;
@@ -212,6 +251,7 @@ export class Explorer {
           findNode(next, input.nodeId);
           if (action === 'research' && input.nodeId === next.rootId) throw new Error('Select a question to research.');
           if (action === 'questions' && input.nodeId !== next.rootId && effectiveAnswerState(findNode(next, input.nodeId)) === 'unanswered') throw new Error('Save an answer before exploring deeper.');
+          if (action === 'questions') await this.fresh();
           this.request(action, input.nodeId);
           break;
         case 'add':
@@ -259,7 +299,7 @@ export class Explorer {
           break;
         default: throw new Error('Unknown Explorer action.');
       }
-      return this.snapshot();
+      return this.uiSnapshot();
     });
   }
   receive(kind, input) {
@@ -269,12 +309,13 @@ export class Explorer {
       if (pending.kind === 'research') throw new Error('Research is owned by the isolated helper, not the attached chat.');
       if (kind === 'fail') { this.error = text(input.message, 'Error message', 2000); this.clearPending(); return { saved: false }; }
       if (pending.kind !== kind) throw new Error('The response type does not match this request.');
-      const next = structuredClone(this.doc);
-      if (kind === 'questions') addQuestions(next, pending.nodeId, input.questions);
-      await this.save(next, 'Questions generated');
+      try { await this.checkQuestionSource(pending.nodeId); }
+      catch (error) { this.clearPending(); this.error = error.message; throw error; }
+      const questions = candidateQuestions(this.doc, pending.nodeId, input.questions);
+      this.preview = { id: pending.id, journey: this.activeKey ?? this.doc.id, nodeId: pending.nodeId, questions, stale: false };
       this.clearPending(); this.error = '';
-      return { saved: true, nodeCount: next.nodes.length };
+      return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.clearPending(); await Promise.allSettled([...this.researchTasks]); await this.queue; }
+  async close() { this.clearPending(); await Promise.allSettled([...this.researchTasks]); await this.queue; this.preview = null; this.questionSource = null; }
 }

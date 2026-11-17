@@ -55,3 +55,11 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .map-heading { flex-wrap: wrap; }
 .map-heading > div:first-child { flex: 1 1 180px; min-width: 0; }
 #history-dialog p { overflow-wrap: anywhere; }
+
+.question-preview { border: 1px solid var(--line); padding: 12px; margin-block: 12px; }
+.candidate { margin-block: 12px; }
+.candidate label { display: flex; align-items: center; gap: 8px; }
+.candidate input { width: auto; }
+.candidate textarea { width: 100%; box-sizing: border-box; }
+.node.new-question { border: 3px solid var(--blue); }
+#question-feedback:empty { display: none; }

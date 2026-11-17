@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.22",
+    "summary": "Review generated questions before adding them. Select a subset, adjust wording or dismiss the unsaved preview. Accepted questions retain their original wording, and stale suggestions cannot overwrite changed context. New questions are highlighted without losing answer drafts or branch focus."
+  },
+  {
     "version": "0.1.21",
     "summary": "Map settings now save wheel zoom or pan, scroll sensitivity and motion preference across Explorer canvases. Ctrl/Command+scroll still zooms around the pointer, while scrolling inside a question stays native. System motion follows the OS; settings changes preserve maps, drafts and history."
   },

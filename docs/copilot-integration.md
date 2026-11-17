@@ -16,7 +16,7 @@ Assessed November 16, 2026 from `A:\Claude\copilot-usage-insights` and `A:\Claud
 
 ## Intentional differences
 
-Initial questions and Save & explore deeper deliberately queue a request in the attached chat. `/explore <topic>` authorizes initial generation. The host owns that chat's model, permissions and billing. Its generated questions return through a correlated canvas action. Research options instead starts the isolated helper described below; its conversation stays out of the main chat.
+Initial questions and Save & explore deeper deliberately queue a request in the attached chat. `/explore <topic>` authorizes initial generation. The host owns that chat's model, permissions and billing. Its generated questions return through a correlated canvas action into an unsaved preview. Only explicit user acceptance commits nodes; native get_exploration and future generation context exclude proposals. See [question preview contracts](question-preview.md). Research options instead starts the isolated helper described below; its conversation stays out of the main chat.
 
 Enhance Prompt's automatic-send approval flow, rewrite styles, code-reading policies, vendor migrations, React build pipeline, and product-specific usage aggregation are not Explorer requirements. They were not copied. Explorer's iteration and publishing workflow follows the owner's direct instructions recorded in [AGENTS.md](../AGENTS.md#complete-every-iteration).
 

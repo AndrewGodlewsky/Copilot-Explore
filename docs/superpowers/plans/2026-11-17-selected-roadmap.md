@@ -335,13 +335,45 @@ Keep navigation preference parsing/persistence in a small focused extension modu
 
 ### Verification and release
 
-- [ ] RED/GREEN store tests for defaults, bounds/type validation, persisted reload, same-file writers, corrupt/oversized/linked storage and failed write preservation. Keep failures recoverable without user file deletion by tests.
-- [ ] Real HTTP/jsdom tests for setting save/cancel/reset/retry, wheel mode/modifier/delta normalization, horizontal pan, sensitivity, zoom bounds, cursor anchoring, answer scroll/selection, system motion updates and explicit override. Verify docs/history/context unchanged.
-- [ ] Run npm test, npm run check and npm run package; runtime fixture only if host integration changes. No paid providers or existing sessions.
-- [ ] Bump to **0.1.21**, synchronize metadata/README/release notes, document navigation/motion behavior and limitations, include controller roadmap edit, self-review and commit. No merge/push/issue closure.
-- [ ] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-9-report.md with storage/API contracts, RED/GREEN/final checks, commit and manual hardware/visual limits.
+- [x] RED/GREEN store tests for defaults, bounds/type validation, persisted reload, same-file writers, corrupt/oversized/linked storage and failed write preservation. Keep failures recoverable without user file deletion by tests.
+- [x] Real HTTP/jsdom tests for setting save/cancel/reset/retry, wheel mode/modifier/delta normalization, horizontal pan, sensitivity, zoom bounds, cursor anchoring, answer scroll/selection, system motion updates and explicit override. Verify docs/history/context unchanged.
+- [x] Run npm test, npm run check and npm run package; runtime fixture only if host integration changes. No paid providers or existing sessions.
+- [x] Bump to **0.1.21**, synchronize metadata/README/release notes, document navigation/motion behavior and limitations, include controller roadmap edit, self-review and commit. No merge/push/issue closure.
+- [x] Write .superpowers/sdd/2026-11-17-selected-roadmap/task-9-report.md with storage/API contracts, RED/GREEN/final checks, commit and manual hardware/visual limits.
 
 Capture native exit codes/stdout/stderr without wrapping ordinary npm notices as PowerShell test errors. No nested agents or browser/desktop automation. Controller reviews and publishes. Raise concrete conflicts while continuing independent work.
+
+Published task9: **v0.1.21**, `ccc02a3`, 210 tests, checks, package and installed local canvas fixture passed; independent review/fix review approved and remote main verified.
+
+## Task 10: Review generated questions before adding them (#17 / selection19)
+
+Read issue-19.md and task-10-design-notes.md in this workspace, AGENTS.md, docs/copilot-integration.md and final history/focus/navigation reports. BASE is ccc02a3d10c86c436887f42acacad7a412eeb164; ship **0.1.22**. This changes the existing generation callback from permanent insertion to a proposal; answering/deepening still uses the attached main chat.
+
+### Contract
+
+- submit_questions fulfills only the existing correlated request by staging a validated batch. It cannot initiate work or commit nodes. Preserve request/instance/session identity checks, enqueue-only attached-session wiring, failure/cancellation behavior, and compatibility with the existing {requestId,questions:[{question,category}]} callback shape.
+- Root initial generation and deeper generation both show a compact candidate preview at the relevant expanding node. Provide Accept selected and Dismiss all, individually selected candidates, and optional wording adjustment before acceptance. No question sidebar or general map editor. Empty-map dismissal leaves an explicit user-triggered retry.
+- Use a single explicit acceptance to add the selected subset atomically. Revalidate edited candidates, duplicates and document/file limits at acceptance; reject invalid input without partial changes. Keep original generated wording/category plus user-adjustment provenance separately from final question text, with bounded validated additive schema fields. Legacy nodes retain their meaning.
+- A candidate batch is temporary and owned by the current canvas/journey/request/parent. Label it as not saved. It survives state polls within this canvas, but is discarded on close/restart; an intentional journey switch or replacement generation requires explicit dismissal or confirmation so preview work is not silently lost. Do not add a new persistent proposal store for this issue. Do not include unaccepted candidates as committed map/export/history/AI context.
+- Bind source validity to the actual committed generation context (contextFor currently includes topic/objective/criteria, ancestor question+answer+state+review, existing child questions and answered/stateful nodes elsewhere), not merely the draft text. Detect relevant changes before staging and before accepting, including disk changes from another canvas; reject stale proposals with a clear regenerate path. Pending callbacks after cancel/switch/restore cannot revive a batch. Draft edits do not become implicit AI context.
+- Dismissal and preview wording changes do not increment document revision or history. Acceptance creates one committed change through the existing save/history protocol. Preserve saved answer states, local text/state drafts, caret and disclosure state; existing source answer save may already be a separate committed change.
+- Reveal accepted nodes through focus/fold contracts without opening unrelated branches, with a clear discoverable count/link or highlight that honors reduced-motion settings. Do not force selection away from a dirty editor. Ordinary hidden-branch research/polling must retain focus/folds.
+- Update the /explore skill, callback description and documentation so a legacy callback stages questions and never bypasses review. Inspect installed SDK declarations before wiring changes. Keep all controls keyboard-accessible and usable in narrow panes; safe text rendering only.
+
+### Published integration seams to preserve
+
+- Navigation preferences now use `NavigationPreferences(file)` and private GET/POST `api/navigation-settings`. Browser `attachNavigation({document,window,fetch,zoom,pan})` in `web/navigation.mjs` owns preferences, wheel interpretation and effective root `data-motion`. New-node feedback must honor that motion setting. Read the final task-9 report for its validated bounds/revision contract.
+- Full Outline already searches question/answer/category; do not replace it or add a detached editor. `branchView(nodes,rootId,collapsed,focusId=null)` preserves an ancestor path plus focused subtree and honors subtree folds; fold/focus are browser view state, not document edits.
+- The skill file is root `skills/explore/SKILL.md` (the issue starting-point shorthand is not an extension-local skill path). `Explorer.snapshot()` currently serves both HTTP UI and native `get_exploration`; separate browser-only preview payloads from attached-chat context so adding a preview property does not expose unaccepted candidates through the native action. The callback result must describe staging honestly rather than report that nodes were saved. Keep source fingerprints/private captured context out of the portable document and UI unless needed.
+- Do not put full source context or user answers into node provenance. Keep only the bounded generation/original wording/category and adjustment information necessary for this feature. Name the chosen additive fields and their validation/export semantics in the report.
+
+### Verification and release
+
+- [ ] RED/GREEN model/controller tests for initial and deeper batches, subset acceptance/all dismissed, optional wording and original provenance, duplicate/invalid edits, exact limits and atomic near-limit failure, source changes/disk staleness, cancellation and late/legacy-shaped callbacks, no-op dismissal and acceptance history.
+- [ ] Real HTTP/jsdom tests for preview controls, keyboard/selection, retry, drafts/state/caret, focused/folded parent reveal, polls/restart/journey-switch semantics and unchanged committed exports/context until accepted.
+- [ ] Extend and run the installed local canvas runtime fixture for generation staging and explicit acceptance using simulated authorized user commands; no paid provider or existing user session. Run npm test, npm run check and npm run package. Research fixture only if helper context changes.
+- [ ] Bump to **0.1.22**, synchronize all release metadata/README/release notes, document temporary-preview/provenance contracts, include controller plan update, self-review and commit. No merge/push/issue closure.
+- [ ] Write task-10-report.md in this workspace with APIs/schema, TDD/final command evidence, commit and native limitations. No nested agents or browser/desktop UI automation. Raise concrete conflicts to the controller while continuing independent work.
 
 ## Issue index
 

@@ -123,6 +123,7 @@ test('history covers supported mutations and restores sourced provenance without
   await command('questions', { nodeId }); const requestId = e.pending.id;
   await assert.rejects(command('restore', { snapshotRevision: initial }), /cancel/i);
   await e.receive('questions', { requestId, questions: [{ question: 'Generated?', category: 'Scope' }] });
+  await e.command('accept-questions', { revision: e.doc.revision, batchId: e.preview.id, selected: e.preview.questions.map((q, index) => ({ index, question: q.question })) });
   const sourced = { ...findings, basis: 'sources', sources: [{ title: 'Evidence', url: 'https://example.com/evidence' }] };
   e.researcher = { run: async () => sourced }; await command('research', { nodeId }); await Promise.all([...e.researchTasks]);
   const sourcedRevision = e.doc.revision;
@@ -130,7 +131,7 @@ test('history covers supported mutations and restores sourced provenance without
   await command('guidance', { objective: '  Objective ??', successCriteria: 'Done' });
   await command('finish');
   const labels = (await e.readHistory(e.doc.id)).entries.map(r => r.label);
-  for (const label of ['Answer or state changed', 'Question added', 'Questions generated', 'Research replaced', 'Guidance changed']) assert.ok(labels.includes(label), label);
+  for (const label of ['Answer or state changed', 'Question added', 'Questions accepted', 'Research replaced', 'Guidance changed']) assert.ok(labels.includes(label), label);
   await command('questions', { nodeId }); const late = e.pending.id; await command('cancel');
   await command('restore', { snapshotRevision: sourcedRevision });
   assert.deepEqual(e.doc.nodes[1].research, sourced); assert.equal(e.doc.nodes[1].answer, '  My decision ??\n');

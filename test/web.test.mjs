@@ -37,6 +37,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [
     { category: 'People', question: 'Who should borrow first?' }, { category: 'Trust', question: 'What if a tool breaks?' },
   ] });
+  if (!options.preview) await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: explorer.preview.questions.map((q, index) => ({ index, question: q.question })) });
   await options.before?.(explorer);
   const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
@@ -101,7 +102,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts });
   const script = await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8');
   window.eval(script.replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts } from './answer-state.mjs';", ''));
-  await until(() => width ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
+  await until(() => width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
     const button = [...document.querySelectorAll('#nodes button')].find(b => b.title === question);
@@ -685,6 +686,7 @@ test('research callbacks and follow-ups work inside a narrow expanded node witho
   assert.equal(f.explorer.doc.nodes[1].answer, '');
   f.click('Save & explore deeper'); await until(() => f.explorer.pending?.kind === 'questions', 'follow-ups requested');
   await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [{ category: 'People', question: 'How will you invite them?' }] });
+  await until(() => f.document.getElementById('accept-questions'), 'review follow-ups'); f.document.getElementById('accept-questions').click();
   await until(() => [...f.document.querySelectorAll('#node-workspace .followup')].length, 'follow-up link');
   f.document.querySelector('#node-workspace .followup').click();
   assert.equal(f.document.getElementById('expanded-title').textContent, 'How will you invite them?');
@@ -1579,4 +1581,88 @@ test('history checkpoint errors remain readable inside the open dialog', async t
   f.document.getElementById('checkpoint-name').value = 'Eleventh'; f.document.getElementById('checkpoint-save').click();
   await until(() => /10 named checkpoints/.test(f.document.getElementById('history-status').textContent), 'dialog limit error');
   assert.equal(f.document.getElementById('history-dialog').open, true); assert.equal(f.explorer.doc.revision, revision);
+});
+
+
+test('question preview controls keep edits across polls and accept a subset in a narrow root', async t => {
+  const f = await fixture(t, 340, undefined, false, { preview: true }), d = f.document;
+  assert.match(d.getElementById('question-preview').textContent, /not saved/i);
+  assert.equal(f.explorer.doc.nodes.length, 1);
+  f.type('candidate-question-0', 'Who will join? ??');
+  d.getElementById('candidate-select-1').click();
+  const edit = d.getElementById('candidate-question-0'); edit.focus(); edit.setSelectionRange(2, 5);
+  await delay(1400);
+  assert.equal(d.getElementById('candidate-question-0').value, 'Who will join? ??');
+  assert.equal(d.getElementById('candidate-select-1').checked, false);
+  assert.equal(d.activeElement.id, 'candidate-question-0');
+  assert.equal((await (await f.window.fetch('export.json')).json()).nodes.length, 1);
+  d.getElementById('accept-questions').click();
+  await until(() => f.explorer.doc.nodes.length === 2 && d.getElementById('node-workspace').hidden, 'accepted subset');
+  assert.equal(f.explorer.doc.nodes[1].question, 'Who will join? ??');
+  assert.match(d.getElementById('question-feedback').textContent, /1 question added/);
+  assert.equal(d.querySelectorAll('.new-question').length, 1);
+});
+
+test('question preview dismissal leaves an explicit retry and blocks journey switches', async t => {
+  const f = await fixture(t, 340, undefined, true, { preview: true }), d = f.document, before = f.explorer.doc.revision;
+  d.getElementById('library-toggle').click();
+  f.type('topic', 'Other journey'); d.getElementById('start-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await delay(50); assert.match(d.getElementById('notice').textContent, /dismiss/i);
+  assert.equal(f.explorer.doc.topic, 'A tool library');
+  d.getElementById('library-return').click(); d.getElementById('dismiss-questions').click();
+  await until(() => !f.explorer.preview && !d.getElementById('question-preview'), 'dismissed');
+  assert.equal(f.explorer.doc.revision, before); assert.equal(d.getElementById('generate-questions').disabled, false);
+  d.getElementById('generate-questions').click(); await until(() => f.explorer.pending, 'user retry');
+  await f.explorer.command('cancel');
+});
+
+test('question preview acceptance reveals focused folded children and keeps editor drafts state caret and disclosures', async t => {
+  const f = await fixture(t, 340), d = f.document, e = f.explorer, parent = e.doc.nodes[1], other = e.doc.nodes[2];
+  await e.command('add', { revision: e.doc.revision, nodeId: parent.id, question: 'Existing child?', category: 'Scope' });
+  await e.command('add', { revision: e.doc.revision, nodeId: other.id, question: 'Other child?', category: 'Scope' });
+  await until(() => d.querySelector(`[data-branch-id="${other.id}"]`), 'branches');
+  d.querySelector(`[data-branch-id="${other.id}"]`).click(); f.open(parent.id);
+  d.getElementById('focus-branch').click(); d.getElementById('branch-workspace').click();
+  f.type('answer', 'Saved answer'); d.getElementById('save-deeper').click(); await until(() => e.pending, 'deepen');
+  await until(() => d.getElementById('save-deeper').disabled, 'pending UI');
+  f.type('answer', 'New unsaved answer'); d.getElementById('answer-state').value = 'assumption'; d.getElementById('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  const answer = d.getElementById('answer'); answer.focus(); answer.setSelectionRange(2, 8, 'backward');
+  d.querySelector('.manual').open = true; d.querySelector('.manual').dispatchEvent(new f.window.Event('toggle'));
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  await e.receive('questions', { requestId: e.pending.id, questions: [{ question: 'Next generated?', category: 'Scope' }] });
+  await delay(1400); assert.equal(d.getElementById('answer'), answer, 'live composition keeps the editor mounted');
+  assert.equal(d.getElementById('question-preview'), null);
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  await until(() => d.getElementById('question-preview'), 'deeper preview');
+  assert.equal(d.activeElement.id, 'answer'); assert.equal(d.getElementById('answer').selectionStart, 2);
+  d.getElementById('accept-questions').click();
+  await until(() => d.querySelector('.new-question'), 'new child revealed');
+  assert.equal(d.getElementById('expanded-title').textContent, parent.question);
+  assert.equal(d.getElementById('answer').value, 'New unsaved answer'); assert.equal(d.getElementById('answer-state').value, 'assumption');
+  assert.equal(d.getElementById('answer').selectionStart, 2); assert.equal(d.querySelector('.manual').open, true);
+  assert.equal(d.getElementById('branch-workspace').getAttribute('aria-expanded'), 'true');
+  assert.match(d.getElementById('focus-status').textContent, /Who should borrow/);
+  d.getElementById('show-whole-map').click(); assert.equal(d.querySelector(`[data-branch-id="${other.id}"]`).getAttribute('aria-expanded'), 'false');
+});
+
+
+test('question preview stale callbacks and accepted-context changes expose explicit regenerate controls', async t => {
+  const f = await fixture(t, 340), e = f.explorer, d = f.document;
+  f.open(e.doc.rootId); d.getElementById('generate-questions').click(); await until(() => e.pending, 'requested');
+  const other = await new Explorer({ file: e.file }).load();
+  await other.command('guidance', { revision: other.doc.revision, objective: 'Changed on disk', successCriteria: '' });
+  await assert.rejects(e.receive('questions', { requestId: e.pending.id, questions: [{ question: 'Stale?', category: 'Scope' }] }), /context changed/);
+  await until(() => d.getElementById('refresh-question-context'), 'refresh after stale callback');
+  d.getElementById('refresh-question-context').click(); await until(() => e.pending, 'regenerated');
+  await e.receive('questions', { requestId: e.pending.id, questions: [{ question: 'Fresh?', category: 'Scope' }] });
+  await until(() => d.getElementById('candidate-question-0'), 'fresh preview');
+  f.type('candidate-question-0', 'My edited proposal');
+  const check = d.getElementById('candidate-select-0'); check.focus(); assert.equal(check.type, 'checkbox');
+  check.click(); assert.equal(d.getElementById('accept-questions').disabled, true); check.click();
+  await e.command('guidance', { revision: e.doc.revision, objective: 'Changed again', successCriteria: '' });
+  await until(() => d.getElementById('accept-questions').disabled, 'stale preview');
+  assert.equal(d.getElementById('candidate-question-0').value, 'My edited proposal');
+  assert.equal(d.getElementById('preview-retry').hidden, false);
+  d.getElementById('preview-retry').click(); await until(() => e.pending, 'explicit stale regeneration');
+  await e.command('cancel');
 });

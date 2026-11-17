@@ -97,6 +97,7 @@ async function started(t, options) {
   const f = await fixture(t, options);
   await f.explorer.command('start', { topic: 'A community garden 🌿' });
   await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [question] });
+  await f.explorer.command('accept-questions', { revision: f.explorer.doc.revision, batchId: f.explorer.preview.id, selected: f.explorer.preview.questions.map((q, index) => ({ index, question: q.question })) });
   return f;
 }
 test('legacy guidance defaults to empty and invalid explicit guidance is rejected', () => {
@@ -218,6 +219,7 @@ test('queued generation and isolated research persist across reopen', async t =>
   await explorer.command('answer', { revision: explorer.doc.revision, nodeId: node.id, answer: 'Neighbors', expand: true });
   assert.match(messages.at(-1).prompt, /Neighbors/);
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ question: 'How will neighbors join?', category: 'Access' }] });
+  await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: [{ index: 0, question: explorer.preview.questions[0].question }] });
   await explorer.command('research', { revision: explorer.doc.revision, nodeId: node.id });
   await Promise.all([...explorer.researchTasks]);
   const reopened = await new Explorer({ file: explorer.file }).load();

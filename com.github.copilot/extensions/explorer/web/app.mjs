@@ -168,6 +168,8 @@ function zoom(factor) {
 function answerStatus(node) {
   const dirty = drafts.has(node.id) && drafts.get(node.id).trim() !== node.answer;
   if ($('answer-status')) $('answer-status').textContent = dirty ? 'Unsaved draft' : node.answer ? 'Answer saved' : 'No answer yet';
+  const undo = $('undo-addition'), addition = uiFor(node.id).addition;
+  if (undo) { undo.hidden = !addition; undo.disabled = !addition || (drafts.get(node.id) ?? node.answer) !== addition.after; }
 }
 function renderWorkspace() {
   const panel = $('node-workspace'); captureWorkspace(); panel.hidden = !expanded;
@@ -187,7 +189,7 @@ function renderWorkspace() {
   const content = el('div', { class: 'node-content' }); panel.append(heading, content);
   if (pending) {
     const workNode = byId.get(state.pending.nodeId);
-    content.append(el('div', { class: 'pending', role: 'status' }, el('strong', {}, state.pending.kind === 'research' ? 'Copilot is researching…' : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, 'Cancelling discards the result; the chat turn may still finish.')));
+    content.append(el('div', { class: 'pending', role: 'status' }, el('strong', {}, state.pending.kind === 'research' ? `${state.pending.progress ?? 'Researching'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, state.pending.kind === 'research' ? 'Research runs separately from your chat. Cancelling stops its helper.' : 'Cancelling discards the result; the chat turn may still finish.')));
   }
   if (node.review) content.append(el('p', { class: 'note' }, 'An earlier answer changed. Review this question and save your answer again when it still fits.'));
   if (root) {
@@ -212,10 +214,16 @@ function renderWorkspace() {
     answer.setAttribute('aria-describedby', 'voice-status');
     voice.bind(answer, voiceStatus);
     form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), el('span', { id: 'answer-status', class: 'quiet' })), answer, voiceStatus, el('div', { class: 'actions' }, button('Save answer', () => { voice.cancel(); void save(false); }, { id: 'save-answer', disabled: pending }), el('button', { type: 'submit', id: 'save-deeper', class: 'primary', disabled: pending }, 'Save & explore deeper')));
+    form.append(button('Undo addition', () => {
+      const addition = ui.addition;
+      if (!addition || (drafts.get(node.id) ?? node.answer) !== addition.after) return;
+      voice.cancel(); drafts.set(node.id, addition.before); answer.value = addition.before; ui.addition = null;
+      answerStatus(node); answer.focus({ preventScroll: true }); notice('Addition undone. Your earlier draft is restored.');
+    }, { id: 'undo-addition', class: 'undo-addition' }));
     content.append(form); answerStatus(node);
     const research = el('details', { class: 'research-disclosure' }, el('summary', { id: 'research-summary' }, 'Explore options')); research.open = ui.researchOpen;
     research.addEventListener('toggle', () => { if (research.isConnected) { ui.researchOpen = research.open; scheduleLayout(); } });
-    research.append(el('p', { class: 'quiet' }, 'Compare possibilities before you decide. Suggestions stay separate from your saved answer.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; void api('research', { nodeId: node.id }); }, { id: 'research-request', disabled: pending }));
+    research.append(el('p', { class: 'quiet' }, 'A separate researcher compares possibilities using your saved decisions. Suggestions stay separate from your answer; normal Copilot usage applies.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; void api('research', { nodeId: node.id }); }, { id: 'research-request', disabled: pending }));
     if (node.research) research.append(renderResearch(node));
     content.append(research);
   }
@@ -237,16 +245,35 @@ function renderWorkspace() {
   }
 }
 function renderResearch(node) {
-  const r = node.research;
-  const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'), el('p', {}, r.summary));
-  for (const [index, o] of r.options.entries()) section.append(el('section', { class: 'option' }, el('h3', {}, o.title), el('p', {}, o.description), el('strong', { class: 'pro' }, 'Pros'), el('ul', {}, o.pros.map(v => el('li', {}, v))), el('strong', { class: 'con' }, 'Cons'), el('ul', {}, o.cons.map(v => el('li', {}, v))), button('Add to my answer', () => {
-    const previous = drafts.get(node.id) ?? node.answer, suggestion = `${o.title}: ${o.description}`, value = previous ? `${previous}\n\n${suggestion}` : suggestion;
-    if (value.length > 20000) return notice('Your answer is too long to add this option. Shorten it first.');
+  const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r);
+  if (ui.researchKey !== key) { ui.researchKey = key; ui.selectedDetails = new Set(); }
+  const add = suggestion => {
+    const previous = drafts.get(node.id) ?? node.answer, value = previous ? `${previous}\n\n${suggestion}` : suggestion;
+    if (value.length > 20000) return notice('Your answer is too long to add this suggestion. Shorten it first.');
+    voice.cancel(); ui.addition = { before: previous, after: value };
     drafts.set(node.id, value); $('answer').value = value; answerStatus(node);
-    $('answer').focus({ preventScroll: true }); $('answer').setSelectionRange(value.length, value.length); $('answer').scrollIntoView({ block: 'nearest' }); notice('Option added to your draft. Edit it into your own answer before saving.');
-  }, { id: `add-option-${index}` })));
-  section.append(el('h3', {}, 'Recommendation'), el('p', {}, r.recommendation), el('h3', {}, 'What is still uncertain'), el('p', {}, r.uncertainty));
-  if (r.sources.length) section.append(el('div', { class: 'sources' }, el('h3', {}, 'Sources'), r.sources.map((s, index) => el('a', { id: `source-${index}`, href: s.url, target: '_blank', rel: 'noopener noreferrer' }, s.title))));
+    $('answer').focus({ preventScroll: true }); $('answer').setSelectionRange(value.length, value.length); $('answer').scrollIntoView({ block: 'nearest' });
+    notice('Added to your draft. Edit it before saving, or undo the addition.');
+  };
+  const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'), el('p', {}, r.summary));
+  section.append(el('div', { class: 'recommendation' }, el('h3', {}, 'Recommendation'), el('p', {}, r.recommendation), button('Use recommendation', () => add(r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation' })));
+  const details = [];
+  for (const [index, o] of r.options.entries()) {
+    const option = el('section', { class: 'option' }, el('h3', {}, o.title), el('p', {}, o.description), el('strong', { class: 'pro' }, 'Pros'), el('ul', {}, o.pros.map(v => el('li', {}, v))), el('strong', { class: 'con' }, 'Cons'), el('ul', {}, o.cons.map(v => el('li', {}, v))), button('Use this option', () => add(o.proposedAnswer ?? `${o.title}: ${o.description}`), { id: `add-option-${index}` }));
+    for (const [i, detail] of (o.details ?? []).entries()) {
+      const id = `detail-${index}-${i}`, checkbox = el('input', { type: 'checkbox', id });
+      checkbox.checked = ui.selectedDetails.has(id); details.push({ id, ...detail });
+      checkbox.addEventListener('change', () => { checkbox.checked ? ui.selectedDetails.add(id) : ui.selectedDetails.delete(id); $('add-details').disabled = !ui.selectedDetails.size; });
+      option.append(el('label', { class: 'research-detail', for: id }, checkbox, el('span', {}, el('strong', {}, detail.label), ': ', detail.value)));
+    }
+    section.append(option);
+  }
+  if (details.length) section.append(button('Add selected details', () => {
+    const selected = details.filter(d => ui.selectedDetails.has(d.id));
+    if (selected.length) add(selected.map(d => `${d.label}: ${d.value}`).join('\n'));
+  }, { id: 'add-details', disabled: !ui.selectedDetails.size }));
+  section.append(el('h3', {}, 'What is still uncertain'), el('p', {}, r.uncertainty));
+  if (r.sources.length) section.append(el('div', { class: 'sources' }, el('h3', {}, 'Sources'), r.sources.map((s, index) => el('a', { id: `source-${index}`, href: s.url, target: '_blank', rel: 'noopener noreferrer' }, `[${index + 1}] ${s.title}`))));
   return section;
 }
 function renderOutline() {

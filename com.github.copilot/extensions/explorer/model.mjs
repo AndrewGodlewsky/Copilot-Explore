@@ -34,10 +34,13 @@ export function research(value) {
     description: text(option.description, 'Option description', 3000),
     pros: list(option.pros, 'pros', 6, v => text(v, 'Pro', 1000)),
     cons: list(option.cons, 'cons', 6, v => text(v, 'Con', 1000)),
+    ...(option.proposedAnswer !== undefined ? { proposedAnswer: text(option.proposedAnswer, 'Proposed answer', 5000) } : {}),
+    ...(option.details !== undefined ? { details: list(option.details, 'details', 8, d => ({ label: text(d?.label, 'Detail label', 80), value: text(d.value, 'Detail value', 1000) })) } : {}),
   }));
   if (options.length < 2) throw new Error('Compare at least two options.');
   return { basis: value.basis, summary: text(value.summary, 'Research summary', 5000), options,
     recommendation: text(value.recommendation, 'Recommendation', 5000),
+    ...(value.proposedAnswer !== undefined ? { proposedAnswer: text(value.proposedAnswer, 'Proposed answer', 5000) } : {}),
     uncertainty: text(value.uncertainty, 'Uncertainty', 3000), sources };
 }
 export function createDocument(topic) {
@@ -151,8 +154,11 @@ export function toMarkdown(doc) {
       lines.push('### AI research', '', `Basis: ${r.basis === 'sources' ? 'Consulted sources' : 'Model reasoning; not externally verified'}.`, '', md(r.summary), '');
       for (const o of r.options) {
         lines.push(`#### ${md(o.title)}`, '', md(o.description), '', '**Pros**', '', ...o.pros.map(p => `- ${md(p)}`), '', '**Cons**', '', ...o.cons.map(p => `- ${md(p)}`), '');
+        if (o.proposedAnswer) lines.push('Suggested draft: ' + md(o.proposedAnswer), '');
+        for (const detail of o.details ?? []) lines.push(`- ${md(detail.label)}: ${md(detail.value)}`);
       }
       lines.push('**Recommendation:** ' + md(r.recommendation), '', '**Uncertainty:** ' + md(r.uncertainty), '');
+      if (r.proposedAnswer) lines.push('Suggested draft: ' + md(r.proposedAnswer), '');
       for (const source of r.sources) lines.push(`- [${md(source.title)}](<${source.url.replace(/>/g, '%3E').replace(/</g, '%3C')}>)`);
     }
   }

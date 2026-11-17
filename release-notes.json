@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.11",
+    "summary": "Research options now uses an isolated Copilot SDK researcher with dedicated instructions, web search, source checks, progress and cancellation. The main chat stays focused on questions. Apply recommendations, options or selected details to an editable draft with safe undo. Research usage receipts are retained locally."
+  },
+  {
     "version": "0.1.10",
     "summary": "Added Voice settings inside expanded nodes for microphone and downloaded-model selection. Dictation now shows real input levels, elapsed recording time, and distinct loading/transcription states. Choices persist separately from Copilot. README includes the voice architecture diagram and explanation."
   },

@@ -24,3 +24,8 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .voice-settings{margin:8px 0}.voice-settings summary{font-size:12px;font-weight:400;color:var(--muted)}.voice-fields{padding:12px 0 0}.voice-fields label{font-size:12px;margin-bottom:6px}.voice-fields select{font-size:12px;margin-bottom:12px}.voice-fields p{margin:8px 0;overflow-wrap:anywhere}.voice-settings-actions{display:flex;gap:8px;flex-wrap:wrap}.voice-settings-actions button{font-size:11px;padding:6px 8px}
 @keyframes voice-turn{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}.voice-spinner{animation:none}.voice-level{transition:none}}
+
+.recommendation { border-left: 3px solid var(--blue); padding-left: 14px; margin: 18px 0; }
+.research-detail { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; font-weight: normal; }
+.research-detail input { flex: 0 0 auto; width: 16px; height: 16px; margin: 3px 0 0; }
+.undo-addition { margin-top: 8px; }

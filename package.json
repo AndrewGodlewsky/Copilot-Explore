@@ -1,6 +1,6 @@
 {
   "name": "copilot-explorer",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": true,
   "type": "module",
   "description": "An exploration map canvas for the GitHub Copilot desktop app.",
@@ -14,7 +14,8 @@
     "preview": "node scripts/preview.mjs",
     "prototype:layouts": "node scripts/prototype-layouts.mjs",
     "install:copilot": "node scripts/install.mjs",
-    "package": "node scripts/package.mjs"
+    "package": "node scripts/package.mjs",
+    "e2e:research": "node scripts/e2e-research.mjs"
   },
   "devDependencies": {
     "jsdom": "26.1.0"

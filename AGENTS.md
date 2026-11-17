@@ -6,10 +6,10 @@ Explorer is a GitHub Copilot desktop plugin. `/explore` opens its native canvas.
 
 - Inspect the installed desktop SDK declarations before changing integration. Copilot supplies `@github/copilot-sdk/extension`; do not bundle, download, or substitute an npm SDK/runtime.
 - Keep SDK wiring in `extension.mjs` and `canvas.mjs`, map rules in `model.mjs`, persistence/request coordination in `controller.mjs`, HTTP in `server.mjs`, and browser rendering in `web/`.
-- Generation/research uses the attached session's `send({ mode: 'enqueue' })`. Never steer immediately, answer permissions, change the session's model, or send to another session. Canvas callbacks only fulfill an existing request; they cannot initiate a user operation.
-- Match callback request IDs and instance/session identities. Preserve user answers; reject stale responses. Cancelling invalidates a result but cannot stop the attached chat turn.
+- Question generation uses the attached session's `send({ mode: 'enqueue' })`. Never steer immediately, answer its permissions, change its model, or send to another existing session. Research uses an owned isolated SDK helper in `research.mjs`; canvas callbacks cannot fulfill research or initiate a user operation.
+- Match callback request IDs and instance/session identities. Preserve user answers; reject stale responses. Cancelling questions invalidates the result but cannot stop the attached chat turn. Cancelling research stops only its owned helper.
 - Use `metadata.snapshot().workingDirectory` if project reads are added; `session.workspacePath` is an artifact directory. Explorer currently reads no project context.
-- Before introducing background model sessions, read [the SDK handoff](docs/copilot-integration.md#future-background-model-work). It requires account/model checks, isolation, cancellation, and retained usage receipts. Do not copy the other plugins' product identity or data directory.
+- Before changing background model sessions, read [the SDK handoff](docs/copilot-integration.md#background-model-work) and [research tool findings](docs/research-sdk-tools.md). Preserve account/model/tool checks, isolation, cancellation, and retained usage receipts. The packaged research skill is loaded explicitly into the helper prompt; ambient skills/instructions remain disabled. Use Explorer's identity and data directory.
 
 ## Data and UI
 

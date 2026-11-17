@@ -23,6 +23,8 @@ assert.ok(logo.toString('base64').length < 350000);
 const skill = await readFile(join(root, 'skills/explore/SKILL.md'), 'utf8');
 assert.match(skill, /^---\r?\nname: explore\r?\n/);
 assert.match(skill, /open_canvas/);
+const researchSkill = await readFile(join(root, 'com.github.copilot/extensions/explorer/research/skills/explorer-research/SKILL.md'), 'utf8');
+assert.match(researchSkill, /^---\r?\nname: explorer-research\r?\n/);
 async function checkTree(folder) {
   for (const item of await readdir(folder, { withFileTypes: true })) {
     const path = join(folder, item.name);

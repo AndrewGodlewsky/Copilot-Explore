@@ -1,6 +1,6 @@
 # Explorer for GitHub Copilot
 
-**Proof of concept, v0.1.10.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
+**Proof of concept, v0.1.11.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
 
 ## Install from GitHub
 
@@ -66,13 +66,15 @@ Local marketplace installs can show a generic native tab icon due to a host issu
 
 1. Start with an idea. Copilot creates questions in several directions around it.
 2. Select a question in the map or searchable **Outline**. The node expands in its branch; its answer, research, and follow-up controls are inside it.
-3. Open **Explore options**, then use **Research options** to ask Copilot for alternatives, pros/cons, a recommendation, and uncertainty. Consulted sources are linked; unsourced reasoning is labeled. **Add to my answer** appends an option to your draft for editing.
+3. Open **Explore options**, then use **Research options** for alternatives, pros/cons, a recommendation, and uncertainty. A separate Copilot researcher works inside this node. Consulted sources are numbered and linked; unsourced reasoning is labeled. **Use recommendation**, **Use this option**, or **Add selected details** appends suggestions to your editable draft. **Undo addition** restores the previous draft until you edit it. Nothing is saved as your answer until you click Save.
 4. Write your answer. **Save answer** records it; **Save & explore deeper** also generates follow-up questions on that branch. You can add a question manually.
 5. **Finish exploration** saves the record and offers two downloads: Markdown and `.explore.json`. Use **Open file** to resume the latter in another canvas/session.
 
 Pan by dragging the map background. Use the zoom controls or Ctrl+wheel. **Collapse node** keeps your place and shows a saved-answer preview; **Whole map** collapses the workspace and fits the tree. **Center question** returns to the selected node at reading size. Keyboard users can Tab to nodes, use the map's arrow-key pan, navigate the outline, or press Escape to collapse. Ctrl/Command + Enter saves an answer and explores deeper. Revising an answered node preserves its descendants and marks them for review.
 
-AI work is queued in the canvas's attached Copilot chat and uses that session's model, tools, permissions, and normal usage accounting. It can appear in chat and wait behind other work. Web research depends on browsing tools being available there. Research never saves an answer for you. Cancel discards the pending result; it does not stop the host's chat turn. A three-minute timeout releases a stalled request and preserves saved answers.
+Initial questions and **Save & explore deeper** are queued in the attached Copilot chat. Research uses a fresh SDK session with the same verified account and selected enabled Copilot model; normal Copilot usage applies. It receives your saved question path and decisions with a dedicated [research skill](com.github.copilot/extensions/explorer/research/skills/explorer-research/SKILL.md), and checks web search/fetch availability before inference. The main chat receives no research transcript. Status shows preparation, search, reading and comparison; Cancel stops the research helper. Question cancellation still only discards the result, since Explorer cannot stop the main chat turn.
+
+Research has a three-minute deadline. It reads public web pages, compares practical options and validates its returned data and source URLs. A source must have been successfully fetched to be accepted; this does not guarantee every claim is correct. If pages cannot be consulted, the result is clearly labeled model reasoning. Missing account, model or search access produces an error without falling back to the main chat. Save relevant draft decisions before research so they are included. Very large maps use a bounded context snapshot and disclose omissions.
 
 ## Voice dictation
 
@@ -161,7 +163,9 @@ PvRecorder captures mono, 16-bit PCM audio at 16 kHz. Foundry Local runs the spe
 
 Each canvas autosaves a versioned JSON document under `~/.copilot/plugin-data/explorer/` (`COPILOT_HOME` is respected). `EXPLORER_DATA_DIR` can override this for testing. Finish also saves a Markdown sibling there. Export names use an exploration identifier; every node's ID and parent relationship are preserved in the resumable file.
 
-Question/answer/research data is stored locally as plain text and sent to your attached Copilot session when generating questions or researching. The plugin reads no repository files and loads no external UI assets. Downloaded files contain the exploration text. Imported files replace the current canvas after confirmation; save the current map first if you want to retain it. Unsaved text-area drafts are not part of exports; save them before leaving.
+Question/answer/research data is stored locally as plain text. Generating questions sends map context to the attached chat; research sends a bounded saved-context snapshot to its isolated Copilot session and may include relevant terms in web searches. The plugin reads no repository context and loads no external UI assets. Downloaded files contain the exploration text. Imported files replace the current canvas after confirmation; save the current map first if you want to retain it. Unsaved text-area drafts are not part of exports or research input; save them before leaving.
+
+Research usage receipts are retained under `~/.copilot/plugin-data/explorer/usage/session-state/`, respecting the same directory overrides. They contain model, token/credit metrics and accounting IDs, without prompts, answers, account names or credentials. The temporary research conversation is removed after the helper stops and usage is retained. Cleanup/accounting failures preserve recovery files rather than losing receipts; `usage/recovery-<session>.json` identifies the temporary directory when a pointer can be saved. See [integration notes](docs/copilot-integration.md#background-model-work).
 
 Dictation reads Copilot's voice settings record and local voice assets. Explorer's microphone and model choices are saved in `voice-settings.json` in its data directory, separately from exploration exports and Copilot settings. Audio stays in memory in a separate helper and is processed locally; no recording file is saved. Temporary Explorer catalog metadata is removed when the helper exits. Foundry's native library can emit operational telemetry. Dictated text follows the same save/research behavior as typed answers.
 
@@ -184,18 +188,18 @@ The [interaction research](docs/explorer-interaction-research.md) examines six p
 
 DOM interaction tests run the shipped HTML/JavaScript against the real local server and persistence controller, with geometry stubs because [jsdom does not render a visual browser](https://github.com/jsdom/jsdom#pretending-to-be-a-visual-browser). They cover in-map forms, drafts, saves, research results and follow-up navigation. Layout tests separately check variable-size boxes and branch separation.
 
-For the real SDK/runtime smoke test, set `COPILOT_SDK_DIR` to the installed SDK directory containing `index.js`, and `COPILOT_CLI_PATH` to its paired runtime executable, then run `npm run e2e`. The test uses a disposable home/session and a loopback model fixture. It checks actual plugin discovery, HTTP serving, queued chat delivery, canvas callbacks, persistence and export/import without paid inference or browser automation.
+For the real SDK/runtime smoke tests, set `COPILOT_SDK_DIR` to the installed SDK directory containing `index.js`, and `COPILOT_CLI_PATH` to its paired runtime executable, then run `npm run e2e` and `npm run e2e:research`. Disposable homes and loopback model/MCP fixtures check plugin discovery, HTTP serving, queued chat delivery, canvas callbacks, isolated research tools/context, cancellation, accounting and export/import without paid inference or browser automation.
 
 `npm run package` creates a clean, dependency-free installable directory under `dist/`. Register that directory as a local marketplace if you prefer a snapshot. There is no build step; the checked JavaScript/HTML/CSS is the shipped code.
 
 Manual acceptance in Copilot:
 
-- Update to v0.1.10, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.10**.
+- Update to v0.1.11, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.11**.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
 - Focus the answer, hold your configured voice shortcut until **Listening**, speak, then release. Confirm the text enters the draft and is not saved automatically. Check Escape cancellation and switching questions.
 - Open **Voice settings**, choose a microphone and downloaded model, save, and reopen Explorer to check persistence. Disconnect a selected device and confirm Explorer explains the problem. Check that the recording bars respond to your speech, stay flat in silence, and stop during transcription.
 - Answer a question and confirm relevant deeper questions appear.
-- Research another question; inspect the options, source links and uncertainty.
+- Research another question; confirm progress appears in the node and the main chat stays quiet. Inspect relevance, source links and uncertainty. Add a recommendation and selected details to an existing draft, undo an addition, then save explicitly. Cancel another research run and confirm your answer is preserved.
 - Export both files, open the JSON in a new canvas, and confirm the full map returns.
 - Check the narrow layout, keyboard focus, pan/zoom, and light/dark appearance.
 

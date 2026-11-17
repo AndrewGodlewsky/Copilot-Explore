@@ -16,17 +16,25 @@ Assessed November 16, 2026 from `A:\Claude\copilot-usage-insights` and `A:\Claud
 
 ## Intentional differences
 
-Explorer's Research and Save & explore deeper buttons deliberately queue a request in their attached chat. `/explore <topic>` authorizes the initial generation. The host owns model selection, permissions, tool availability, and billing records. The skill and queued instructions ask the agent to browse when appropriate, then complete a structured canvas action. Plain model reasoning is explicitly labeled. This route can create visible chat activity and wait behind other queued work.
+Initial questions and Save & explore deeper deliberately queue a request in the attached chat. `/explore <topic>` authorizes initial generation. The host owns that chat's model, permissions and billing. Its generated questions return through a correlated canvas action. Research options instead starts the isolated helper described below; its conversation stays out of the main chat.
 
 Enhance Prompt's automatic-send approval flow, rewrite styles, code-reading policies, vendor migrations, React build pipeline, and product-specific usage aggregation are not Explorer requirements. They were not copied. Explorer's iteration and publishing workflow follows the owner's direct instructions recorded in [AGENTS.md](../AGENTS.md#complete-every-iteration).
 
-Explorer does not read repository files, launch independent models, retain another plugin's credentials, or alter either reference project. Existing conversation context is naturally available to the attached Copilot agent; Explorer only submits the map context described in its request.
+Explorer reads no repository context and changes neither reference project. The attached agent can use its existing conversation for questions. The researcher receives only a bounded snapshot of the selected path and saved decisions, plus Explorer's packaged research instructions; it has no access to the main conversation or unsaved drafts.
 
-## Future background model work
+## Background model work
 
-Before replacing the attached-chat flow with hidden model sessions, read Enhance Prompt's `docs/copilot-sdk-agent-handoff.md`, `docs/copilot-background-rewriting.md`, `src/copilot/models.ts`, and `src/copilot/usage.ts`, plus Usage Insights' scanner integration. The host-paired executable and SDK, verified matching GitHub identity, eligible Copilot catalog, isolated temporary workspace, explicit tool permissions, cancellation, and durable accounting are all part of that approach. A general `CopilotClient` call alone is not an equivalent port.
+Research follows Enhance Prompt's `docs/copilot-sdk-agent-handoff.md`, `docs/copilot-background-rewriting.md`, `src/copilot/models.ts`, and `src/copilot/usage.ts`. It uses the host-paired executable and SDK, verifies matching GitHub identity and an eligible Copilot catalog model, creates an empty temporary workspace/configuration, validates exactly two web tools before inference, and retains usage receipts before cleanup. The parent model is read, never changed. External providers or unavailable models fail before inference.
+
+`research.mjs` explicitly reads `research/skills/explorer-research/SKILL.md` into the helper's system prompt. This makes the curated instructions available on every research run without ambient skill discovery. The model returns strict JSON validated by `model.mjs`; a third result tool is unnecessary. Only built-in `web_fetch` and GitHub MCP `web_search` are enabled. Public URL and MCP permissions are narrowly scoped; managed human approval and sandbox bypass stop the helper with a visible error. Successful fetch hooks establish citation eligibility, not factual correctness. Missing hook IDs fail visibly rather than attributing a read to the wrong page. Missing search fails visibly; retrieval failures may produce clearly labeled reasoning without sources. See [the installed-runtime findings](research-sdk-tools.md) for why configuration discovery must be enabled inside the isolated directories.
+
+The helper has a three-minute overall deadline and a 24-tool-call ceiling; its instructions request at most four searches and eight page reads. Cancel or canvas close stops the owned client. The controller rejects late results and does not expose a research callback to the main chat. The helper's temporary conversation is removed after stopping and reconciling usage. Failure to stop or retain accounting preserves the temporary directory and a `usage/recovery-<session>.json` pointer where possible.
+
+Usage projection was adapted from Enhance Prompt into `research-usage.mjs`, with Explorer's identity and explicit data directory. Live and durable receipts are deduplicated by accounting ID. Retained fields include model, tokens, credits/status and accounting identifiers, excluding prompts, results, account names, provider endpoints and credentials. Explorer's `usage/` directory uses a Copilot-compatible `session-state/` layout. Usage Insights does not automatically discover this new location; add it as an extra Copilot home there if desired. No changes were made to that plugin.
 
 Do not hardcode the reference runtime's versioned directory in production. Development scripts accept explicit paths to the inspected installed pair. Do not copy source-repository paths into runtime behavior.
+
+`npm run e2e:research` runs the actual installed SDK with anonymous loopback model/MCP fixtures. Only identity/catalog reads are substituted for the local provider; tool discovery, permissions, hooks, prompts, JSON validation, cancellation and usage journals are real. It does not verify production account entitlement, organization policy enforcement, live source quality or desktop rendering. Unit tests separately cover mismatches, missing tools, unread citations, late results and draft preservation.
 
 ## Install and release boundaries
 

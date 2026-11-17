@@ -22,8 +22,8 @@ async function fixture(t, options = {}) {
   t.after(async () => { await explorer.close(); assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true }); });
   return { explorer, dir, messages };
 }
-async function started(t) {
-  const f = await fixture(t);
+async function started(t, options) {
+  const f = await fixture(t, options);
   await f.explorer.command('start', { topic: 'A community garden 🌿' });
   await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [question] });
   return f;
@@ -62,15 +62,15 @@ test('duplicate generated questions are not appended', () => {
   const doc = createDocument('Garden'); addQuestions(doc, doc.rootId, [question, question]);
   assert.equal(doc.nodes.length, 2); assert.throws(() => addQuestions(doc, doc.rootId, [question]), /already exist/);
 });
-test('queued generation and research are correlated and persist across reopen', async t => {
-  const { explorer, messages } = await started(t);
+test('queued generation and isolated research persist across reopen', async t => {
+  const { explorer, messages } = await started(t, { researcher: { run: async () => findings } });
   assert.equal(messages[0].mode, 'enqueue'); assert.match(messages[0].prompt, /submit_questions/);
   const node = explorer.doc.nodes[1];
   await explorer.command('answer', { revision: explorer.doc.revision, nodeId: node.id, answer: 'Neighbors', expand: true });
   assert.match(messages.at(-1).prompt, /Neighbors/);
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ question: 'How will neighbors join?', category: 'Access' }] });
   await explorer.command('research', { revision: explorer.doc.revision, nodeId: node.id });
-  await explorer.receive('research', { requestId: explorer.pending.id, research: findings });
+  await Promise.all([...explorer.researchTasks]);
   const reopened = await new Explorer({ file: explorer.file }).load();
   assert.deepEqual(reopened.doc, explorer.doc); assert.equal(reopened.doc.nodes[1].answer, 'Neighbors');
   await explorer.command('finish', { revision: explorer.doc.revision });

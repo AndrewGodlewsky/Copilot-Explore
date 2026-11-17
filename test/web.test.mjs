@@ -22,7 +22,10 @@ async function until(read, label) {
 
 async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
-  const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), send: async () => {}, target: { instanceId: 'dom-test' } }).load();
+  let resolveResearch;
+  const explorer = await new Explorer({ file: join(dir, 'map.explore.json'), send: async () => {}, target: { instanceId: 'dom-test' },
+    researcher: { run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
+  }).load();
   await explorer.command('start', { topic: 'A tool library' });
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [
     { category: 'People', question: 'Who should borrow first?' }, { category: 'Trust', question: 'What if a tool breaks?' },
@@ -62,7 +65,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   };
   const type = (id, value) => { const e = document.getElementById(id); assert.ok(e, id); e.value = value; e.dispatchEvent(new window.Event('input', { bubbles: true })); };
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
-  return { explorer, window, document, open, type, click, captures: () => captures, pauseAnswer: fn => { holdAnswer = fn; } };
+  return { explorer, window, document, open, type, click, resolveResearch: value => resolveResearch(value), captures: () => captures, pauseAnswer: fn => { holdAnswer = fn; } };
 }
 
 test('installed questions expand inside the map, preserve drafts, and collapse to saved previews', async t => {
@@ -92,11 +95,11 @@ test('research callbacks and follow-ups work inside a narrow expanded node witho
   f.click('Research options');
   await until(() => f.explorer.pending?.kind === 'research', 'research requested');
   f.type('answer', 'My own thought, still editing');
-  await f.explorer.receive('research', { requestId: f.explorer.pending.id, research: findings });
+  f.resolveResearch(findings);
   await until(() => f.document.querySelector('#node-workspace .option'), 'research delivered');
   assert.equal(f.document.getElementById('answer').value, 'My own thought, still editing');
   assert.match(f.document.getElementById('node-workspace').textContent, /not externally verified/);
-  f.click('Add to my answer');
+  f.click('Use this option');
   assert.match(f.document.getElementById('answer').value, /^My own thought, still editing\n\nOne block/);
   assert.equal(f.explorer.doc.nodes[1].answer, '');
   f.click('Save & explore deeper'); await until(() => f.explorer.pending?.kind === 'questions', 'follow-ups requested');
@@ -120,6 +123,36 @@ test('typing while saving survives the response and editing does not drag the ca
   await delay(80);
   assert.equal(f.document.getElementById('answer').value, 'Newer unsaved thought');
   assert.match(f.document.getElementById('answer-status').textContent, /Unsaved/);
+});
+
+test('recommendations and selected details append to editable drafts with safe undo', async t => {
+  const f = await fixture(t, 340), a = f.explorer.doc.nodes[1]; f.open(a.id);
+  f.type('answer', 'My own words');
+  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options');
+  await until(() => f.explorer.pending?.kind === 'research', 'research requested');
+  const richer = structuredClone(findings); richer.proposedAnswer = 'I will run a pilot.';
+  richer.options[0].proposedAnswer = 'I will start on my block.';
+  richer.options[0].details = [{ label: 'Pilot size', value: 'Ten neighbors' }, { label: 'Duration', value: 'One month' }];
+  f.resolveResearch(richer);
+  await until(() => f.document.getElementById('use-recommendation'), 'new controls');
+  f.click('Use recommendation');
+  assert.equal(f.document.getElementById('answer').value, 'My own words\n\nI will run a pilot.');
+  assert.equal(f.explorer.doc.nodes[1].answer, '');
+  f.click('Undo addition'); assert.equal(f.document.getElementById('answer').value, 'My own words');
+  const check = f.document.getElementById('detail-0-0'); check.click(); check.focus();
+  // A map refresh retains both the checkbox selection and its focus.
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Shared fund' });
+  await until(() => f.document.getElementById('progress').textContent.startsWith('1 answered'), 'background refresh');
+  assert.equal(f.document.getElementById('detail-0-0').checked, true); assert.equal(f.document.activeElement.id, 'detail-0-0');
+  f.click('Add selected details');
+  assert.equal(f.document.getElementById('answer').value, 'My own words\n\nPilot size: Ten neighbors');
+  f.type('answer', f.document.getElementById('answer').value + '\nNew typing');
+  assert.equal(f.document.getElementById('undo-addition').disabled, true, 'undo cannot erase newer typing');
+  f.click('Use this option'); f.click('Undo addition');
+  assert.match(f.document.getElementById('answer').value, /New typing$/);
+  f.type('answer', 'x'.repeat(19999)); f.click('Use recommendation');
+  assert.equal(f.document.getElementById('answer').value.length, 19999); assert.match(f.document.getElementById('notice').textContent, /too long/);
+  await delay(50); // Let the voice-status refresh from the background render settle before closing jsdom.
 });
 
 test('pending work remains reachable from the whole map and cancellation preserves drafts', async t => {

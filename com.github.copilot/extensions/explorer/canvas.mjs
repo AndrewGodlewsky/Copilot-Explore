@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { Explorer } from './controller.mjs';
 import { startServer } from './server.mjs';
+import { createResearcher } from './research.mjs';
 
 const string = (maxLength = 5000) => ({ type: 'string', minLength: 1, maxLength });
 const array = (items, maxItems) => ({ type: 'array', items, maxItems });
@@ -10,11 +11,6 @@ const requestId = string(100);
 export const actionSchemas = {
   get_exploration: object({}),
   submit_questions: object({ requestId, questions: { ...array(object({ question: string(600), category: string(60) }), 6), minItems: 1 } }),
-  submit_research: object({ requestId, research: object({
-    basis: { type: 'string', enum: ['sources', 'reasoning'] }, summary: string(),
-    options: { ...array(object({ title: string(150), description: string(3000), pros: array(string(1000), 6), cons: array(string(1000), 6) }), 4), minItems: 2 },
-    recommendation: string(), uncertainty: string(3000), sources: array(object({ title: string(300), url: string(2000) }), 15),
-  }) }),
   fail_request: object({ requestId, message: string(2000) }),
 };
 
@@ -34,7 +30,6 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
     actions: [
       { name: 'get_exploration', description: 'Read the current map and pending request.', inputSchema: actionSchemas.get_exploration, handler: ctx => get(ctx).explorer.snapshot() },
       { name: 'submit_questions', description: 'Complete a pending question-generation request with specific new questions.', inputSchema: actionSchemas.submit_questions, handler: ctx => get(ctx).explorer.receive('questions', ctx.input) },
-      { name: 'submit_research', description: 'Complete a pending research request. Preserve the user answer. Sources must be pages actually consulted.', inputSchema: actionSchemas.submit_research, handler: ctx => get(ctx).explorer.receive('research', ctx.input) },
       { name: 'fail_request', description: 'Explain why a pending request cannot be completed.', inputSchema: actionSchemas.fail_request, handler: ctx => get(ctx).explorer.receive('fail', ctx.input) },
     ],
     async open(ctx) {
@@ -43,6 +38,7 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
         starting.set(ctx.instanceId, (async () => {
           const key = createHash('sha256').update(`${ctx.sessionId}\0${ctx.instanceId}`).digest('hex').slice(0, 32);
           const explorer = await new Explorer({ file: join(directory, `${key}.explore.json`),
+            researcher: createResearcher(getSession(), { usageDirectory: join(directory, 'usage') }),
             target: { extensionId: ctx.extensionId, canvasId: 'explorer', instanceId: ctx.instanceId },
             send: async options => {
               try { return await getSession().send(options); }

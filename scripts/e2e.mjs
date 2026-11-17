@@ -86,17 +86,14 @@ try {
   const nodeId = snapshot.document.nodes[1].id;
   await action('answer', { nodeId, answer: 'Neighbors', expand: false });
   await action('research', { nodeId });
-  snapshot = await state();
-  await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_research', input: { requestId: snapshot.pending.id,
-    research: { basis: 'reasoning', summary: 'Synthetic comparison.', options: [
-      { title: 'Volunteer rota', description: 'Share work.', pros: ['Shared effort'], cons: ['Scheduling'] },
-      { title: 'Coordinator', description: 'One owner.', pros: ['Clear ownership'], cons: ['Bottleneck'] },
-    ], recommendation: 'Try a rota.', uncertainty: 'Fixture only, no actual research.', sources: [] },
-  } });
+  snapshot = await until(state, value => !value.pending, 'research access check');
+  assert.match(snapshot.error, /Sign in|enabled Copilot model|Checking Copilot access/);
+  const researchAction = await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_research', input: {} }).catch(error => ({ error: error.message }));
+  assert.match(JSON.stringify(researchAction), /error|not found|unknown/i);
   await action('finish');
   const exported = await (await fetch(opened.url + 'export.json')).json();
-  assert.equal(exported.nodes[1].answer, 'Neighbors'); assert.equal(exported.nodes[1].research.options.length, 2);
-  assert.match(await (await fetch(opened.url + 'export.md')).text(), /Volunteer rota/);
+  assert.equal(exported.nodes[1].answer, 'Neighbors'); assert.equal(exported.nodes[1].research, null);
+  assert.match(await (await fetch(opened.url + 'export.md')).text(), /Neighbors/);
   const pendingLate = await action('questions', { nodeId });
   await action('cancel');
   const late = await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_questions', input: { requestId: pendingLate.pending.id, questions: [{ question: 'Stale question?', category: 'Stale' }] } }).catch(error => ({ error: error.message }));
@@ -112,7 +109,7 @@ try {
   await session.rpc.canvas.close({ instanceId: 'explorer-import' });
   await session.rpc.canvas.close({ instanceId });
   const { version } = JSON.parse(await readFile(join(root, 'plugin.json'), 'utf8'));
-  console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, canvas callbacks, answers, research payload, exports, stale-response rejection, close/reopen and file import. Local fixture only; no paid model or UI automation.`);
+  console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, canvas callbacks, answers, research access guard, exports, stale-response rejection, close/reopen and file import. Local fixture only; no paid model or UI automation.`);
 } finally {
   clearTimeout(deadline);
   await session?.disconnect().catch(() => {});

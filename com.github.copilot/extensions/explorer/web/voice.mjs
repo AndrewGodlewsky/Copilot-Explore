@@ -4,16 +4,88 @@ export function matchesShortcut(event, shortcut) {
 
 export function attachVoice({ document, window, fetch, context, insert, changed }) {
   let settings, binding, recording, message = 'Checking local dictation…', checking = false;
+  let options, choices, settingsOpen = false, optionsBusy = false, optionsMessage = '', feedback = { phase: 'idle' };
   const hint = () => settings?.ready ? `${settings.mode === 'toggle' ? 'Press' : 'Hold'} ${settings.label} to dictate · local model` : settings?.error || 'Checking local dictation…';
-  const show = text => { message = text; if (binding) binding.status.textContent = text; changed(); };
+  const show = (text, result = { phase: 'idle' }) => {
+    const resized = message !== text || feedback.phase !== result.phase;
+    message = text; feedback = result; paintFeedback(); lockControls(); if (resized) changed();
+  };
+  function element(tag, className, text) {
+    const el = document.createElement(tag); if (className) el.className = className; if (text) el.textContent = text; return el;
+  }
+  function paintFeedback() {
+    if (!binding) return;
+    const { status, bar, bars, elapsed, activity } = binding;
+    if (status.textContent !== message) status.textContent = message;
+    bar.dataset.phase = feedback.phase; bar.hidden = !['loading', 'listening', 'transcribing'].includes(feedback.phase);
+    activity.textContent = feedback.phase === 'listening' ? 'Listening' : feedback.phase === 'transcribing' ? 'Transcribing' : 'Loading model';
+    const levels = (feedback.levels || []).slice(-24);
+    bars.forEach((b, i) => { const level = levels[i - (24 - levels.length)]; b.style.height = `${2 + 26 * (Number.isFinite(level) ? Math.max(0, Math.min(1, level)) : 0)}px`; });
+    const seconds = Math.floor(Math.max(0, feedback.elapsedMs || 0) / 1000);
+    elapsed.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  }
+  function lockControls() {
+    if (!binding) return;
+    binding.mic.disabled = binding.model.disabled = binding.save.disabled = optionsBusy || !!recording || !options;
+    binding.refresh.disabled = optionsBusy || !!recording;
+  }
+  function paintChoices() {
+    if (!binding) return;
+    const { mic, model, note } = binding;
+    note.textContent = optionsMessage;
+    const populate = (select, items, value) => {
+      select.replaceChildren();
+      for (const item of items) { const opt = element('option', '', item.label); opt.value = item.value; opt.disabled = item.disabled; opt.title = item.reason || ''; select.append(opt); }
+      if (!items.some(i => i.value === value)) { const opt = element('option', '', `Unavailable: ${value}`); opt.value = value; opt.disabled = true; select.append(opt); }
+      select.value = value;
+    };
+    populate(mic, [{ value: '', label: 'System default microphone' }, ...(options?.microphones || []).map(d => ({ value: d.name, label: d.name + (d.supported ? '' : ' — duplicate name'), disabled: !d.supported }))], choices?.microphone || '');
+    populate(model, [{ value: 'copilot', label: `Follow Copilot${options ? ' — ' + options.copilotModel : ''}` }, ...(options?.models || []).map(m => ({ value: m.id, label: m.label + (m.supported ? '' : /incomplete/i.test(m.reason) ? ' — incomplete download' : ' — unsupported'), disabled: !m.supported, reason: m.reason }))], choices?.model || 'copilot');
+    lockControls(); changed();
+  }
+  async function loadOptions(save = false) {
+    if (optionsBusy || recording) return;
+    optionsBusy = true; optionsMessage = save ? 'Saving voice settings…' : 'Checking microphones and downloaded models…'; paintChoices();
+    try {
+      const response = await fetch('api/voice/settings', save ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ ...choices, revision: options.preferences.revision }) } : undefined);
+      const result = await response.json(); if (!response.ok) throw new Error(result.error);
+      options = result; settings = result;
+      if (!choices || save) choices = { microphone: result.preferences.microphone, model: result.preferences.model };
+      optionsMessage = result.error || (save ? 'Saved for Explorer. Copilot settings are unchanged.' : 'Only downloaded models are listed. Unsupported models cannot be selected.');
+      if (!recording) show(hint());
+    } catch (error) { optionsMessage = error.message + ' Use Refresh to try again.'; }
+    finally { optionsBusy = false; paintChoices(); }
+  }
+  function buildControls(answer, root) {
+    const status = element('p', 'quiet voice-status'); status.id = 'voice-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+    const bar = element('div', 'voice-feedback'); bar.id = 'voice-feedback'; bar.setAttribute('aria-hidden', 'true');
+    const activity = element('span', 'voice-activity'), spinner = element('span', 'voice-spinner'), meter = element('span', 'voice-meter'), elapsed = element('span', 'voice-elapsed');
+    const bars = Array.from({ length: 24 }, () => element('i', 'voice-level')); meter.append(...bars); bar.append(spinner, activity, meter, elapsed);
+    const details = element('details', 'voice-settings'); details.id = 'voice-settings'; details.open = settingsOpen;
+    const summary = element('summary', '', 'Voice settings'), fields = element('div', 'voice-fields');
+    const mic = element('select'), model = element('select'); mic.id = 'voice-microphone'; model.id = 'voice-model';
+    for (const [select, name] of [[mic, 'Microphone'], [model, 'Downloaded voice model']]) {
+      const label = element('label', '', name); label.htmlFor = select.id; fields.append(label, select);
+      select.addEventListener('change', () => { choices = { microphone: mic.value, model: model.value }; optionsMessage = 'Unsaved voice settings. Save to use these choices.'; binding.note.textContent = optionsMessage; changed(); });
+    }
+    const save = element('button', '', 'Save voice settings'), refresh = element('button', '', 'Refresh devices and models'), actions = element('div', 'voice-settings-actions');
+    save.type = refresh.type = 'button'; refresh.id = 'voice-refresh'; actions.append(save, refresh);
+    save.addEventListener('click', () => { void loadOptions(true); }); refresh.addEventListener('click', () => { void loadOptions(); });
+    const note = element('p', 'quiet'); note.setAttribute('role', 'status');
+    fields.append(actions, note, element('p', 'quiet', 'Your shortcut and recording mode follow Copilot. Model downloads are managed in Copilot.'));
+    details.append(summary, fields); root.replaceChildren(bar, status, details);
+    binding = { answer, status, bar, bars, elapsed, activity, mic, model, save, refresh, note };
+    details.addEventListener('toggle', () => { if (!details.isConnected) return; settingsOpen = details.open; if (settingsOpen && !options) void loadOptions(); changed(); });
+    paintFeedback(); paintChoices();
+  }
   const request = async (action, id, keepalive = false) => {
     const response = await fetch('api/voice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, id }), keepalive });
     const result = await response.json(); if (!response.ok) throw new Error(result.error); return result;
   };
   async function check() {
-    if (checking || recording) return;
+    if (checking || recording || optionsBusy) return;
     checking = true;
-    try { settings = await (await fetch('api/voice')).json(); if (!recording) show(hint()); }
+    try { const result = await (await fetch('api/voice')).json(); if (!optionsBusy) { settings = result; if (!recording) show(hint()); } }
     catch { settings = { ready: false }; show('Local dictation unavailable. Reopen Explorer to reconnect.'); }
     finally { checking = false; }
   }
@@ -40,13 +112,13 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
       insert(value, before.length + addition.length);
       show('Dictation added to your draft. Review it before saving.');
     } else if (['cancelled', 'error'].includes(result.phase)) { recording = null; show(result.error || 'Dictation stopped.'); }
-    else { job.phase = result.phase; show(result.phase === 'listening' ? `Listening… ${job.settings.mode === 'toggle' ? 'Press ' + job.settings.label + ' to finish' : 'Release to finish'} · Esc to cancel` : result.phase === 'transcribing' ? 'Transcribing locally…' : 'Loading local voice model… Wait for “Listening” before speaking.'); }
+    else { job.phase = result.phase; show(result.phase === 'listening' ? `Listening… ${job.settings.mode === 'toggle' ? 'Press ' + job.settings.label + ' to finish' : 'Release to finish'} · Esc to cancel` : result.phase === 'transcribing' ? 'Transcribing locally…' : 'Loading local voice model… Wait for “Listening” before speaking.', result); }
   }
   async function start() {
-    if (!settings?.ready || !binding || recording) return;
+    if (!settings?.ready || !binding || recording || optionsBusy) return;
     const answer = binding.answer;
     const job = recording = { id: window.crypto.randomUUID(), settings, context: context(), value: answer.value, start: answer.selectionStart, end: answer.selectionEnd, phase: 'loading' };
-    show('Loading local voice model… Wait for “Listening” before speaking.');
+    show('Loading local voice model… Wait for “Listening” before speaking.', { phase: 'loading' });
     try { receive(job, await request('start', job.id)); }
     catch (error) { if (recording === job) { cancel(); show(error.message); } }
   }
@@ -83,12 +155,12 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     try { receive(job, await request('poll', job.id)); }
     catch (error) { if (recording === job) { cancel(); show(error.message); } }
     finally { job.polling = false; }
-  }, 350);
+  }, 200);
   window.addEventListener('pagehide', () => window.clearInterval(timer));
   return {
     cancel,
-    bind(answer, status) {
-      binding = { answer, status }; status.textContent = message;
+    bind(answer, root) {
+      buildControls(answer, root);
       answer.addEventListener('focus', () => { if (!recording) void check(); });
       answer.addEventListener('blur', cancel);
       answer.addEventListener('input', () => { if (recording && answer.value !== recording.value) cancel(); });

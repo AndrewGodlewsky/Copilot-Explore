@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.10",
+    "summary": "Added Voice settings inside expanded nodes for microphone and downloaded-model selection. Dictation now shows real input levels, elapsed recording time, and distinct loading/transcription states. Choices persist separately from Copilot. README includes the voice architecture diagram and explanation."
+  },
+  {
     "version": "0.1.9",
     "summary": "Added Windows answer-box dictation using Copilot's configured shortcut and existing Nemotron English model. Includes listening status, push-to-talk/toggle, cancellation, and draft protection. Corrects v0.1.8's mistaken claim that native canvas dictation already worked. Requires compatible installed voice components and the default microphone."
   },

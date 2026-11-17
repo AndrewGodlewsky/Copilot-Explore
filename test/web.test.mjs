@@ -253,3 +253,49 @@ test('dictation respects the answer length limit without losing the existing dra
   key(f, 'keyup'); await until(() => f.document.getElementById('voice-status').textContent.includes('exceed'), 'limit explained');
   assert.equal(answer.value, previous); assert.equal(f.explorer.doc.nodes[1].answer, '');
 });
+
+test('voice settings list local choices, save independently and retain unsaved choices across nodes', async t => {
+  const voice = voiceFixture(); let saved, reads = 0;
+  const options = { ...(await voice.status()), preferences: { revision: 0, microphone: 'Disconnected mic', model: 'copilot' }, copilotModel: 'Nemotron English',
+    microphones: [{ name: 'USB microphone', supported: true }],
+    models: [{ id: 'english', label: 'Nemotron English', supported: true }, { id: 'whisper', label: 'Whisper', supported: false, reason: 'Unsupported format' }] };
+  voice.options = async () => { reads++; return options; };
+  voice.configure = async input => { saved = input; options.preferences = { ...input, revision: input.revision + 1 }; return options; };
+  const f = await fixture(t, 340, voice), [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
+  const disclosure = f.document.getElementById('voice-settings'); assert.ok(disclosure);
+  disclosure.open = true;
+  await until(() => f.document.querySelector('#voice-microphone option[value="USB microphone"]'), 'device choices');
+  assert.match(f.document.querySelector('#voice-microphone option:checked').textContent, /Unavailable/);
+  assert.equal(f.document.querySelector('#voice-model option[value="whisper"]').disabled, true);
+  const mic = f.document.getElementById('voice-microphone'); mic.value = 'USB microphone'; mic.dispatchEvent(new f.window.Event('change'));
+  f.open(b.id);
+  assert.equal(f.document.getElementById('voice-settings').open, true);
+  assert.equal(f.document.getElementById('voice-microphone').value, 'USB microphone');
+  f.click('Save voice settings'); await until(() => saved, 'saved settings');
+  assert.deepEqual(saved, { microphone: 'USB microphone', model: 'copilot', revision: 0 });
+  await until(() => !f.document.getElementById('voice-refresh').disabled, 'save finishes');
+  f.click('Refresh devices and models'); await until(() => reads === 2, 'refresh');
+  assert.equal(f.explorer.doc.nodes.every(n => !n.answer), true, 'settings do not submit an answer');
+});
+
+test('voice bar distinguishes loading, measured audio, silence, transcription and cancellation', async t => {
+  const voice = voiceFixture(); let phase = 'loading', levels = [], elapsedMs = 0, id;
+  voice.start = recordingId => { id = recordingId; return { id, phase }; };
+  voice.poll = () => ({ id, phase, levels, elapsedMs });
+  voice.finish = () => { phase = 'transcribing'; return { id, phase }; };
+  const f = await fixture(t, 1100, voice); f.open(f.explorer.doc.nodes[1].id);
+  await until(() => f.document.getElementById('voice-status').textContent.includes('Hold Ctrl'), 'settings');
+  const bar = f.document.getElementById('voice-feedback'); assert.ok(bar); assert.equal(bar.hidden, true);
+  f.document.getElementById('answer').focus(); key(f, 'keydown');
+  await until(() => bar.dataset.phase === 'loading', 'loading'); assert.equal(bar.hidden, false);
+  phase = 'listening'; levels = [0, .5, 1]; elapsedMs = 2100;
+  await until(() => bar.dataset.phase === 'listening', 'listening');
+  const bars = [...bar.querySelectorAll('.voice-level')]; assert.equal(bars.length, 24);
+  await until(() => bars.at(-1).style.height === '28px', 'measured levels arrive');
+  assert.equal(bars.at(-1).style.height, '28px'); assert.equal(bars.at(-2).style.height, '15px');
+  assert.equal(bar.querySelector('.voice-elapsed').textContent, '0:02');
+  levels = [0, 0];
+  await until(() => [...bar.querySelectorAll('.voice-level')].every(b => b.style.height === '2px'), 'silence is flat');
+  key(f, 'keyup'); await until(() => bar.dataset.phase === 'transcribing', 'transcription');
+  key(f, 'keydown', { key: 'Escape', code: 'Escape', ctrlKey: false }); assert.equal(bar.hidden, true);
+});

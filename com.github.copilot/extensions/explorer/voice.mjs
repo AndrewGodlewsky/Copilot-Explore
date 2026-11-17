@@ -1,8 +1,10 @@
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { discoverVoice } from './voice-settings.mjs';
-import { spawnVoiceWorker } from './voice-process.mjs';
+import { discoverVoice, inspectVoice, selectVoice } from './voice-settings.mjs';
+import { spawnVoiceWorker, listVoiceDevices } from './voice-process.mjs';
+import { VoicePreferences, validatePreferences } from './voice-preferences.mjs';
+import { microphoneIndex } from './voice-audio.mjs';
 
 const active = phase => ['loading', 'listening', 'transcribing'].includes(phase);
 let microphoneOwner;
@@ -23,13 +25,36 @@ async function launch(config) {
 }
 
 export class VoiceService {
-  constructor({ discover = discoverVoice, launch: spawn = launch, now = Date.now } = {}) {
+  constructor({ discover = discoverVoice, inspect = inspectVoice, devices = listVoiceDevices, preferencesFile, launch: spawn = launch, now = Date.now } = {}) {
+    this.preferences = new VoicePreferences(preferencesFile); this.inspect = inspect; this.devices = devices;
     this.discover = discover; this.launch = spawn; this.now = now; this.job = null; this.closed = false; this.cancelled = new Set();
     this.timer = setInterval(() => this.tick(), 500); this.timer.unref();
   }
   async status() {
-    try { const { shortcut, label, mode } = await this.discover(); return { ready: true, shortcut, label, mode }; }
+    try { const { shortcut, label, mode } = await this.discover(await this.preferences.read()); return { ready: true, shortcut, label, mode }; }
     catch (error) { return { ready: false, error: error.message }; }
+  }
+  async options() {
+    const preferences = await this.preferences.read(), inventory = await this.inspect();
+    const names = await this.devices(inventory.recorder);
+    let ready = true, error;
+    try { selectVoice(inventory, preferences); microphoneIndex(preferences.microphone, names); }
+    catch (e) { ready = false; error = e.message; }
+    return { ready, error, label: inventory.label, mode: inventory.mode, shortcut: inventory.shortcut, preferences,
+      microphones: [...new Set(names)].map(name => ({ name, supported: names.filter(n => n === name).length === 1 })),
+      models: inventory.models.map(({ id, label, supported, reason }) => ({ id, label, supported, reason })),
+      copilotModel: inventory.models.find(m => m.alias === inventory.selectedModel && m.supported)?.label || 'Unavailable or unsupported',
+    };
+  }
+  async configure(input) {
+    if (active(this.job?.phase)) throw new Error('Finish dictation before changing voice settings.');
+    validatePreferences(input);
+    const inventory = await this.inspect();
+    selectVoice(inventory, input);
+    microphoneIndex(input.microphone, await this.devices(inventory.recorder));
+    if (this.closed || active(this.job?.phase)) throw new Error('Finish dictation before changing voice settings.');
+    await this.preferences.save(input, input.revision);
+    return this.options();
   }
   start(id) {
     if (this.closed) throw new Error('Voice session is closed.');
@@ -37,11 +62,11 @@ export class VoiceService {
     if (this.cancelled.has(id)) return { id, phase: 'cancelled' };
     if (this.job?.id === id) return this.poll(id);
     if (microphoneOwner || active(this.job?.phase)) throw new Error('Another Explorer recording is already active.');
-    const job = this.job = { id, phase: 'loading', started: this.now(), heartbeat: this.now() };
+    const job = this.job = { id, phase: 'loading', started: this.now(), heartbeat: this.now(), levels: [] };
     microphoneOwner = job;
     void (async () => {
       try {
-        const config = await this.discover();
+        const config = await this.discover(await this.preferences.read());
         if (this.job !== job || job.phase !== 'loading') return;
         const { child } = await this.launch(config);
         if (this.job !== job || job.phase !== 'loading') { child.kill(); return; }
@@ -49,8 +74,9 @@ export class VoiceService {
         child.on('message', message => {
           if (this.job !== job || !active(job.phase)) return;
           if (message.phase === 'listening' && job.phase === 'loading') { job.phase = 'listening'; job.started = this.now(); }
+          if (message.phase === 'level' && job.phase === 'listening' && Number.isFinite(message.level)) { job.levels.push(Math.max(0, Math.min(1, message.level))); job.levels = job.levels.slice(-24); }
           if (message.phase === 'done' && job.phase === 'transcribing' && typeof message.text === 'string' && message.text.length <= 20000) { job.phase = 'done'; job.text = message.text; }
-          if (message.phase === 'error') { job.phase = 'error'; job.error = 'Local dictation failed. Check microphone access and Copilot’s downloaded model, then try again.'; }
+          if (message.phase === 'error') { job.phase = 'error'; job.error = typeof message.error === 'string' ? message.error.slice(0, 500) : 'Local dictation failed. Check microphone access and Copilot’s downloaded model, then try again.'; }
           if (!active(job.phase)) this.stop(job);
         });
         child.once('error', () => this.fail(job, 'Could not start Copilot’s installed local voice runtime.'));
@@ -60,7 +86,7 @@ export class VoiceService {
     return this.poll(id);
   }
   current(id) { if (!this.job || this.job.id !== id) throw new Error('This recording is no longer active.'); return this.job; }
-  poll(id) { if (this.job?.id !== id && this.cancelled.has(id)) return { id, phase: 'cancelled' }; const job = this.current(id); job.heartbeat = this.now(); return { id: job.id, phase: job.phase, text: job.text, error: job.error }; }
+  poll(id) { if (this.job?.id !== id && this.cancelled.has(id)) return { id, phase: 'cancelled' }; const job = this.current(id); job.heartbeat = this.now(); return { id: job.id, phase: job.phase, text: job.text, error: job.error, levels: job.phase === 'listening' ? job.levels : [], elapsedMs: job.phase === 'listening' ? Math.max(0, this.now() - job.started) : 0 }; }
   finish(id) {
     if (this.job?.id !== id) return this.cancel(id);
     const job = this.current(id);

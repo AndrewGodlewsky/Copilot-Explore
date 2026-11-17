@@ -67,6 +67,9 @@ try {
   const voice = await (await fetch(opened.url + 'api/voice')).json();
   assert.equal(voice.ready, false, 'The disposable home has no configured host voice model; do not record or download.');
   assert.ok(voice.error);
+  const voiceOptions = await fetch(opened.url + 'api/voice/settings');
+  assert.equal(voiceOptions.status, 400, 'Settings explain missing host configuration without enumerating or recording devices.');
+  assert.ok((await voiceOptions.json()).error);
   const state = async () => (await fetch(opened.url + 'api/state')).json();
   const action = async (name, input = {}) => {
     const current = await state();

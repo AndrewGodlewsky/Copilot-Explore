@@ -12,8 +12,8 @@ test('host voice settings preserve the shortcut and reject incompatible configur
   assert.equal(parsed.shortcut.code, 'Space'); assert.equal(parsed.shortcut.ctrl, true);
   assert.equal(parsed.label, 'Ctrl + Space'); assert.equal(parsed.mode, 'push_to_talk');
   assert.throws(() => parseVoiceSettings({ ...settings, version: 2 }), /settings format/);
-  assert.throws(() => parseVoiceSettings({ ...settings, state: { ...settings.state, selectedInputDeviceId: 'unmapped-device' } }), /default microphone/);
-  assert.throws(() => parseVoiceSettings({ ...settings, state: { ...settings.state, selectedModelId: '../wrong' } }), /Nemotron English/);
+  assert.equal(parseVoiceSettings({ ...settings, state: { ...settings.state, selectedInputDeviceId: 'unmapped-device' } }).label, 'Ctrl + Space', 'Explorer selects its own microphone');
+  assert.throws(() => parseVoiceSettings({ ...settings, state: { ...settings.state, selectedModelId: '<invalid>' } }), /invalid/);
 });
 
 function fixture(options = {}) {
@@ -26,7 +26,7 @@ const id = '12345678-1234-1234-1234-123456789012';
 test('release during discovery prevents any late microphone process', async t => {
   let release;
   const f = fixture({ discover: () => new Promise(resolve => { release = resolve; }) }); t.after(() => f.service.close());
-  f.service.start(id); f.service.finish(id); release({ ready: true }); await delay(10);
+  f.service.start(id); await delay(0); f.service.finish(id); release({ ready: true }); await delay(10);
   assert.equal(f.launches, 0); assert.equal(f.service.poll(id).phase, 'cancelled');
 });
 test('a release arriving before a new start prevents reordered capture', async t => {
@@ -74,4 +74,16 @@ test('closing during asynchronous child creation kills a late child', async () =
   f.service.start(id); await delay(10); f.service.close();
   release({ child: { kill: () => { killed = true; } } }); await delay(10);
   assert.equal(killed, true);
+});
+
+test('live levels are bounded, retain recent audio only and disappear outside listening', async t => {
+  let now = 0; const f = fixture({ now: () => now }); t.after(() => f.service.close());
+  f.service.start(id); await delay(10);
+  f.child.emit('message', { phase: 'level', level: 1 }); assert.deepEqual(f.service.poll(id).levels, []);
+  f.child.emit('message', { phase: 'listening' }); now = 2400;
+  for (let i = 0; i < 30; i++) f.child.emit('message', { phase: 'level', level: .5 });
+  f.child.emit('message', { phase: 'level', level: NaN }); f.child.emit('message', { phase: 'level', level: 100 });
+  const listening = f.service.poll(id); assert.equal(listening.levels.length, 24); assert.equal(listening.levels.at(-1), 1); assert.equal(listening.elapsedMs, 2400);
+  f.service.finish(id); assert.deepEqual(f.service.poll(id).levels, []);
+  f.child.emit('message', { phase: 'level', level: .8 }); assert.deepEqual(f.service.poll(id).levels, []);
 });

@@ -1,6 +1,6 @@
 # Explorer for GitHub Copilot
 
-**Proof of concept, v0.1.9.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
+**Proof of concept, v0.1.10.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions now expand into workspaces inside the installed map.
 
 ## Install from GitHub
 
@@ -74,9 +74,88 @@ Pan by dragging the map background. Use the zoom controls or Ctrl+wheel. **Colla
 
 AI work is queued in the canvas's attached Copilot chat and uses that session's model, tools, permissions, and normal usage accounting. It can appear in chat and wait behind other work. Web research depends on browsing tools being available there. Research never saves an answer for you. Cancel discards the pending result; it does not stop the host's chat turn. A three-minute timeout releases a stalled request and preserves saved answers.
 
-**Voice dictation (Windows preview):** Explorer reads your Copilot voice shortcut and reuses the downloaded **Nemotron English** model with the **default microphone**. Focus **Your answer**, hold your shortcut (for example Ctrl+Space), wait for **Listening**, then speak. Release to transcribe into the draft; toggle mode uses a second press instead. Review the text before saving. Escape, leaving the answer, or editing while recording cancels dictation. Recordings are limited to two minutes. Each recording initially loads the local model.
+## Voice dictation
 
-The earlier v0.1.8 claim that Copilot automatically dictated into Explorer was incorrect: native dictation is bound to the main chat composer. v0.1.9 adds an Explorer adapter that explains unsupported configurations beneath the answer. It never downloads a model or changes Copilot settings. It currently supports installed Foundry SDK 2.2.1 and recorder 1.2.9 with matching desktop libraries. See the [voice integration findings](docs/voice-integration-research.md) for compatibility and pending live desktop verification.
+Focus **Your answer**, hold your Copilot voice shortcut (for example **Ctrl+Space**), wait for **Listening**, then speak. Release to transcribe into the draft; toggle mode uses a second press instead. Review the text before saving. Explorer reads your shortcut and recording mode from Copilot, so you do not need to learn another combination.
+
+The bar beneath the answer distinguishes three stages:
+
+| Stage | What you see | What is happening |
+| --- | --- | --- |
+| Loading model | Loading indicator and a reminder to wait | The helper loads the selected local model. The microphone has not started yet. |
+| Listening | Moving audio bars and elapsed recording time | Your microphone is recording. The bars reflect measured input loudness; silence stays flat. |
+| Transcribing | Transcription indicator | The microphone has stopped. The local model is converting the recording into text. |
+
+There is no live partial transcript: the complete text appears after transcription finishes. The indicators respect reduced-motion preferences, and recording states are also provided as text. Each recording loads the model afresh. Escape, leaving the answer, editing the draft, or switching questions cancels dictation. Releasing during loading cancels startup. Recordings are limited to two minutes.
+
+### Microphone and model settings
+
+Open **Voice settings** beneath any expanded answer:
+
+- **Microphone:** choose the system default or a named input device. Explorer checks the name again when recording starts, so changing device order does not select a different microphone. A disconnected or duplicate device name produces an explanation instead of silently switching inputs.
+- **Downloaded voice model:** keep **Follow Copilot** or choose a supported downloaded model. The list reads actual local model folders, not the online catalog. Unsupported speech models are visible but disabled. Download additional models through Copilot, then use **Refresh devices and models**.
+- **Save voice settings** applies your choices to subsequent recordings and future Explorer sessions. These preferences belong to Explorer; they do not change Copilot's microphone or model selection. Settings cannot change during dictation.
+
+This Windows x64 preview supports the inspected Nemotron English, Nemotron Spanish, and Nemotron 3.5 Multilingual CPU formats with installed Foundry SDK 2.2.1, PvRecorder 1.2.9, and matching desktop libraries. English is the model verified on this machine. Spanish and multilingual compatibility is based on source inspection; their weights were not downloaded or exercised here. Whisper and Parakeet use a different audio path and cannot currently be selected. See the [voice integration findings](docs/voice-integration-research.md).
+
+### From shortcut to answer
+
+Explorer handles recording inside its canvas and reuses Copilot's installed libraries and downloaded model weights. It does not route dictation through the main chat composer. The owner confirmed the v0.1.9 adapter works in the installed app; the earlier v0.1.8 claim of automatic native canvas dictation was incorrect.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant UI as Explorer answer box
+    participant Server as Explorer localhost server
+    participant Files as Settings and model files
+    participant Helper as Explorer voice helper
+    participant Mic as Selected microphone
+
+    You->>UI: Focus the answer box
+    UI->>Server: Check voice availability
+    Server->>Files: Read Copilot shortcut and Explorer preferences
+    Files-->>Server: Shortcut, recording mode, selected model
+    Server-->>UI: Ready and configured shortcut
+
+    You->>UI: Press and hold Ctrl+Space
+    UI->>UI: Check focus and shortcut, then remember draft and cursor
+    UI->>Server: Start with a unique recording ID
+    Note over UI,Server: Token-protected HTTP on this computer only
+    Server->>Helper: Launch isolated helper with installed Copilot runtime
+    Helper->>Files: Load installed voice libraries and selected model weights
+    Note over Files,Helper: No model download or copying of weights
+    Helper->>Mic: Resolve device and start PvRecorder
+    Helper-->>Server: Listening
+
+    loop While you speak
+        Mic->>Helper: Audio frames, kept in memory
+        Helper-->>Server: Measured audio level
+        UI->>Server: Poll recording status
+        Server-->>UI: Listening, recent levels and elapsed time
+        UI-->>You: Show input bars and recording time
+    end
+
+    You->>UI: Release Space or Ctrl
+    UI->>Server: Finish this recording
+    Server->>Helper: Stop capture and transcribe
+    Helper->>Mic: Stop and release microphone
+    Helper->>Helper: Feed PCM in 100 ms frames to Foundry Local
+    Helper->>Helper: Selected Nemotron model converts speech into text
+    Helper-->>Server: Final transcript
+    Server->>Helper: End process and clean temporary catalog
+    UI->>Server: Poll for completed result
+    Server-->>UI: Transcript for this recording ID
+
+    alt Same question and unchanged draft
+        UI->>UI: Insert text at the remembered cursor or selection
+        UI-->>You: Editable, unsaved answer
+    else Cancelled or draft changed
+        UI->>UI: Discard stale transcript
+    end
+```
+
+PvRecorder captures mono, 16-bit PCM audio at 16 kHz. Foundry Local runs the speech model on your computer after capture ends. Only loudness measurements, status, and the final transcript travel between Explorer's helper, local server, and answer UI; raw audio stays in the helper's memory. The transcript is inserted directly into the draft, without submitting it to chat or saving the answer. Lost connections and timeouts stop capture, and recording IDs prevent late results from entering another question.
 
 ## Files and privacy
 
@@ -84,7 +163,7 @@ Each canvas autosaves a versioned JSON document under `~/.copilot/plugin-data/ex
 
 Question/answer/research data is stored locally as plain text and sent to your attached Copilot session when generating questions or researching. The plugin reads no repository files and loads no external UI assets. Downloaded files contain the exploration text. Imported files replace the current canvas after confirmation; save the current map first if you want to retain it. Unsaved text-area drafts are not part of exports; save them before leaving.
 
-Dictation reads Copilot's voice settings record and local voice assets. Audio stays in memory in a separate helper and is processed locally; no recording file is saved. Temporary Explorer catalog metadata is removed when the helper exits. Foundry's native library can emit operational telemetry. Dictated text follows the same save/research behavior as typed answers.
+Dictation reads Copilot's voice settings record and local voice assets. Explorer's microphone and model choices are saved in `voice-settings.json` in its data directory, separately from exploration exports and Copilot settings. Audio stays in memory in a separate helper and is processed locally; no recording file is saved. Temporary Explorer catalog metadata is removed when the helper exits. Foundry's native library can emit operational telemetry. Dictated text follows the same save/research behavior as typed answers.
 
 There is no fixed depth limit. This POC supports up to 5,000 nodes, 20,000 characters per answer, 9 MiB of saved map data, and 10 MiB imports. The saved-data limit keeps exports reloadable. Very large maps or prompts can hit host/context limits sooner. A crashed process may leave a `.lock` file; fully exit Copilot before removing only the matching lock, then reopen the map. Corrupt files are preserved and reported, never silently reset.
 
@@ -111,9 +190,10 @@ For the real SDK/runtime smoke test, set `COPILOT_SDK_DIR` to the installed SDK 
 
 Manual acceptance in Copilot:
 
-- Update to v0.1.9, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.9**.
+- Update to v0.1.10, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.10**.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.
 - Focus the answer, hold your configured voice shortcut until **Listening**, speak, then release. Confirm the text enters the draft and is not saved automatically. Check Escape cancellation and switching questions.
+- Open **Voice settings**, choose a microphone and downloaded model, save, and reopen Explorer to check persistence. Disconnect a selected device and confirm Explorer explains the problem. Check that the recording bars respond to your speech, stay flat in silence, and stop during transcription.
 - Answer a question and confirm relevant deeper questions appear.
 - Research another question; inspect the options, source links and uncertainty.
 - Export both files, open the JSON in a new canvas, and confirm the full map returns.

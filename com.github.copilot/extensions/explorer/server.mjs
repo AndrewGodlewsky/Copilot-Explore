@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { toMarkdown } from './model.mjs';
 import { VoiceService } from './voice.mjs';
 
@@ -23,7 +24,7 @@ async function body(req, limit = MAX_BODY) {
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
-export async function startServer(explorer, voice = new VoiceService()) {
+export async function startServer(explorer, voice = new VoiceService({ preferencesFile: explorer.file ? join(dirname(explorer.file), 'voice-settings.json') : undefined })) {
   const { version } = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
   const token = randomBytes(24).toString('hex');
   const prefix = `/${token}/`;
@@ -40,6 +41,13 @@ export async function startServer(explorer, voice = new VoiceService()) {
       if (!url.pathname.startsWith(prefix)) return json(404, { error: 'Not found.' });
       const route = url.pathname.slice(prefix.length);
       if (req.method === 'GET' && route === 'api/voice') return json(200, await voice.status());
+      if (req.method === 'GET' && route === 'api/voice/settings') return json(200, await voice.options());
+      if (req.method === 'POST' && route === 'api/voice/settings') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        const input = await body(req, 4096);
+        if (!input || Object.keys(input).some(k => !['microphone', 'model', 'revision'].includes(k)) || !Number.isSafeInteger(input.revision) || input.revision < 0) throw new Error('Invalid voice settings.');
+        return json(200, await voice.configure(input));
+      }
       if (req.method === 'POST' && route === 'api/voice') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req, 1024);

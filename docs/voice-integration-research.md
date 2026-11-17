@@ -45,4 +45,24 @@ Copilot runs extensions with its single-executable Node runtime. A normal `fork(
 
 `node scripts/voice-smoke.mjs` runs the shipped helper with synthetic silence. An optional file argument accepts at most 30 seconds of raw PCM16 mono at 16 kHz, never microphone input. Synthetic spoken audio verified complete transcription using the existing model, both under Node and through Copilot's actual bundled runtime. No browser/desktop automation, microphone capture, model download, or paid inference was used.
 
-These checks do not establish live desktop key delivery, microphone permission, device selection, or speech quality. Those remain the owner's manual acceptance check in the installed app.
+The owner subsequently confirmed v0.1.9 dictation works in the installed app. Automated checks alone do not establish live desktop key delivery, microphone permission, or speech quality.
+
+## v0.1.10 controls and feedback
+
+Explorer now keeps its own microphone/model preferences in `voice-settings.json` beside exploration files. Writes are atomic and revision checked. Shortcut and recording mode still come from the read-only Copilot record. The default is the system microphone and Copilot-selected model; choosing another input/model does not modify Copilot.
+
+Microphones are enumerated with static `PvRecorder.getAvailableDevices()` in a disposable helper; no recorder is constructed for enumeration. The [Node API](https://github.com/Picovoice/pvrecorder/blob/main/binding/nodejs/README.md#usage) exposes names and current indices, not persistent OS identifiers. Explorer saves a name and resolves it again before capture. Missing or duplicate names fail visibly. Read-only enumeration on this machine found two distinct inputs.
+
+The downloaded inventory scans existing model package directories for `genai_config.json` and `inference_model.json`, retaining speech formats only. Recognized Nemotron packages must also have nonempty encoder/decoder/joiner graphs and external weights, tokenizer/vocabulary files, and the configured VAD graph. Missing assets or unfamiliar packaging disable the choice; this presence check does not prove file integrity. Cached online catalog entries are not evidence of a download. The inspected Copilot voice worker and [GenAI streaming processor](https://github.com/microsoft/onnxruntime-genai/blob/v0.18.0/src/models/preprocessing/streaming_processor.cpp#L118-L130) support the Nemotron PCM path. Recognized CPU metadata variants are:
+
+| Model | Variant | Verification |
+| --- | --- | --- |
+| Nemotron English | `nemotron-speech-streaming-en-0.6b-generic-cpu` | Downloaded version 3, synthetic transcription and owner-confirmed v0.1.9 live dictation |
+| Nemotron Spanish | `nemotron-speech-streaming-es-0.6b-ft-generic-cpu` | Installed worker and upstream source inspection; weights not exercised |
+| Nemotron 3.5 Multilingual | `nemotron-3.5-asr-streaming-0.6b-generic-cpu` | Installed worker and upstream source inspection; weights not exercised |
+
+Only English is downloaded on this machine. The host catalog contains more speech entries, which are intentionally absent from the picker. Downloaded Whisper and Parakeet formats remain visible but disabled because they need a different inference path. Language hints are passed only for the multilingual family: [Foundry's audio session](https://github.com/microsoft/Foundry-Local/blob/main/sdk_v2/cpp/src/inferencing/generative/audio/audio_session.cc) translates language options, and [GenAI's Nemotron model](https://github.com/microsoft/onnxruntime-genai/blob/v0.18.0/src/models/nemotron_speech.cpp#L488-L494) only has that input when declared by the model. The downloaded English config has no language input.
+
+While listening, the helper computes RMS loudness from each 100 ms PCM frame, maps −60 to 0 dBFS onto a bounded 0–1 value, and sends only that scalar to the server. The server retains 24 recent measurements. The UI polls every 200 ms and displays those levels plus elapsed recording time; silence is flat. Loading and transcription use an indeterminate indicator, with text and reduced-motion support. No partial transcript is claimed.
+
+Automated coverage includes preferences/revision conflicts, unavailable devices, duplicate names, unsupported models, HTTP authorization, level bounds/history, UI save/refresh, retained settings drafts, and all bar phases. Device enumeration and synthetic audio do not open a microphone. The new controls' visual appearance, alternate device capture, and additional model families remain manual acceptance checks.

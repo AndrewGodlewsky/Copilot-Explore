@@ -70,6 +70,27 @@ test('guidance edits are revision checked, no-op safe, and clear finished state 
   const saved = JSON.parse(await readFile(explorer.file, 'utf8'));
   assert.equal(saved.objective, 'Find a practical plan');
 });
+test('stale no-op guidance save rejects another canvas revision without editing the file', async t => {
+  const { explorer } = await started(t);
+  const stale = await new Explorer({ file: explorer.file }).load();
+  await explorer.command('guidance', { revision: explorer.doc.revision, objective: 'New objective', successCriteria: '' });
+  const disk = await readFile(explorer.file, 'utf8');
+  await assert.rejects(stale.command('guidance', { revision: stale.doc.revision, objective: '', successCriteria: '' }), /Another canvas/);
+  assert.equal(await readFile(explorer.file, 'utf8'), disk);
+  assert.equal(stale.doc.revision + 1, explorer.doc.revision);
+});
+test('refreshing a stale guidance writer rebases on a newer answer and keeps identity', async t => {
+  const { explorer } = await started(t), nodeId = explorer.doc.nodes[1].id;
+  const stale = await new Explorer({ file: explorer.file }).load();
+  await explorer.command('answer', { revision: explorer.doc.revision, nodeId, answer: 'Other canvas answer' });
+  const refreshed = await stale.command('refresh-guidance', { revision: stale.doc.revision });
+  assert.equal(refreshed.document.id, explorer.doc.id);
+  assert.equal(refreshed.document.nodes[1].answer, 'Other canvas answer');
+  assert.equal(refreshed.document.revision, explorer.doc.revision);
+  await stale.command('guidance', { revision: refreshed.document.revision, objective: 'My objective', successCriteria: 'One clear option' });
+  assert.equal(stale.doc.nodes[1].answer, 'Other canvas answer');
+  assert.equal(stale.doc.objective, 'My objective');
+});
 test('guidance reaches queued questions and native HTTP exports without draft text', async t => {
   const { explorer, messages } = await started(t);
   await explorer.command('guidance', { revision: explorer.doc.revision, objective: 'Choose a garden 🌿', successCriteria: 'One practical location' });

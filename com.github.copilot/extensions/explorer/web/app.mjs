@@ -10,7 +10,7 @@ let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame, viewportSize;
 let suppressClick = false, restoringFocus = false, composing = null, workspaceDirty = false;
 let actionEpoch = 0, closed = false, pollTimer;
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
-let guidanceReturn = null;
+let guidanceReturn = null, guidanceBase = null, guidanceNeedsChoice = false, guidanceNeedsRefresh = false;
 const drafts = new Map(), nodeUi = new Map();
 const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
   changed: () => { const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); } },
@@ -459,28 +459,59 @@ function closeGuidance() {
     $('answer').setSelectionRange(guidanceReturn.start, guidanceReturn.end, guidanceReturn.direction);
   }
   $('edit-guidance').focus({ preventScroll: true });
-  guidanceReturn = null;
+  guidanceReturn = null; guidanceBase = null; guidanceNeedsChoice = false; guidanceNeedsRefresh = false;
 }
 $('edit-guidance').addEventListener('click', () => {
   if (!state.document || state.pending) return notice('Wait for Copilot or cancel the current request before editing guidance.');
   const answer = expanded && $('answer');
   guidanceReturn = answer ? { nodeId: selected, start: answer.selectionStart, end: answer.selectionEnd, direction: answer.selectionDirection } : null;
+  guidanceBase = { objective: state.document.objective ?? '', successCriteria: state.document.successCriteria ?? '' };
+  guidanceNeedsChoice = false; guidanceNeedsRefresh = false;
   $('edit-objective').value = state.document.objective ?? '';
   $('edit-criteria').value = state.document.successCriteria ?? '';
   $('guidance-error').hidden = true; $('guidance-error').textContent = '';
+  $('refresh-guidance').hidden = true; $('guidance-conflict').hidden = true; $('save-guidance').disabled = false;
   $('guidance-dialog').showModal(); $('edit-objective').focus();
 });
 $('cancel-guidance').addEventListener('click', closeGuidance);
 $('guidance-dialog').addEventListener('cancel', event => { event.preventDefault(); closeGuidance(); });
+$('refresh-guidance').addEventListener('click', async () => {
+  if (busy || !guidanceNeedsRefresh) return;
+  const result = await api('refresh-guidance');
+  if (!result) { $('guidance-error').textContent = $('notice').textContent || 'Could not refresh the saved journey.'; $('guidance-error').hidden = false; return; }
+  const latest = { objective: result.document.objective, successCriteria: result.document.successCriteria };
+  guidanceNeedsChoice = latest.objective !== guidanceBase.objective || latest.successCriteria !== guidanceBase.successCriteria;
+  guidanceBase = latest; guidanceNeedsRefresh = false; $('refresh-guidance').hidden = true;
+  $('guidance-conflict').hidden = !guidanceNeedsChoice;
+  $('save-guidance').disabled = guidanceNeedsChoice;
+  $('guidance-latest').textContent = `Saved objective: ${latest.objective || '(empty)'}\nSaved success criteria: ${latest.successCriteria || '(empty)'}`;
+  $('guidance-error').textContent = guidanceNeedsChoice ? 'The saved guidance changed. Choose a version below.' : 'Saved journey refreshed. Review and save your guidance.';
+  $('guidance-error').hidden = false;
+});
+function chooseGuidance(choice) {
+  if (!guidanceNeedsChoice) return;
+  if (choice === 'latest') { $('edit-objective').value = guidanceBase.objective; $('edit-criteria').value = guidanceBase.successCriteria; }
+  guidanceNeedsChoice = false; $('guidance-conflict').hidden = true; $('save-guidance').disabled = false;
+  $('guidance-error').hidden = true; $('guidance-error').textContent = '';
+  $('edit-objective').focus();
+}
+$('use-latest-guidance').addEventListener('click', () => chooseGuidance('latest'));
+$('keep-guidance-edits').addEventListener('click', () => chooseGuidance('local'));
 $('guidance-form').addEventListener('submit', async event => {
   event.preventDefault();
-  if (busy) return;
+  if (busy || guidanceNeedsChoice || guidanceNeedsRefresh) return;
   $('save-guidance').disabled = true;
   try {
     const result = await api('guidance', { objective: $('edit-objective').value, successCriteria: $('edit-criteria').value });
-    if (!result) { $('guidance-error').textContent = $('notice').textContent || 'Could not save guidance. Try again.'; $('guidance-error').hidden = false; return; }
+    if (!result) {
+      const message = $('notice').textContent || 'Could not save guidance. Try again.';
+      guidanceNeedsRefresh = /Another canvas|map changed/.test(message);
+      $('refresh-guidance').hidden = !guidanceNeedsRefresh;
+      $('guidance-error').textContent = message; $('guidance-error').hidden = false;
+      return;
+    }
     closeGuidance();
-  } finally { $('save-guidance').disabled = false; }
+  } finally { $('save-guidance').disabled = guidanceNeedsChoice || guidanceNeedsRefresh; }
 });
 $('library-toggle').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); void refreshLibrary(); $('library-search').focus(); });
 $('library-return').addEventListener('click', () => { libraryView = false; showView(); refreshScene(); $('map').focus({ preventScroll: true }); });

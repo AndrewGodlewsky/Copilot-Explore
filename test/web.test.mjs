@@ -745,6 +745,7 @@ test('optional creation guidance is saved without carrying settings into another
   f.type('start-criteria', 'Neighbors can reach it');
   f.document.getElementById('start-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
   await until(() => f.explorer.doc?.topic === 'A shared orchard', 'guided journey created');
+  await until(() => !f.document.getElementById('workspace').hidden && f.document.getElementById('start-objective').value === '', 'new journey rendered');
   assert.equal(f.explorer.doc.objective, 'Decide where to plant 🌳');
   assert.equal(f.explorer.doc.successCriteria, 'Neighbors can reach it');
   await f.explorer.command('cancel');
@@ -782,6 +783,45 @@ test('guidance edit, cancel, and stale retry preserve the expanded answer draft 
   await until(() => /Another canvas/.test(f.document.getElementById('guidance-error').textContent), 'stale edit rejected');
   assert.equal(f.document.getElementById('edit-objective').value, 'Keep this on failure');
   assert.equal(f.document.getElementById('guidance-dialog').open, true);
+});
+test('stale guidance retry refreshes an unrelated answer and preserves the local draft', async t => {
+  const f = await fixture(t, 340), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'My unsaved answer');
+  f.document.getElementById('edit-guidance').click();
+  f.type('edit-objective', 'My objective');
+  const other = await new Explorer({ file: f.explorer.file }).load();
+  await other.command('answer', { revision: other.doc.revision, nodeId: node.id, answer: 'Other saved answer' });
+  const form = f.document.getElementById('guidance-form');
+  form.dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => !f.document.getElementById('refresh-guidance').hidden, 'refresh offered');
+  f.document.getElementById('refresh-guidance').click();
+  await until(() => f.explorer.doc.nodes[1].answer === 'Other saved answer' && f.document.getElementById('refresh-guidance').hidden, 'latest answer loaded');
+  assert.equal(f.document.getElementById('edit-objective').value, 'My objective');
+  assert.equal(f.document.getElementById('guidance-conflict').hidden, true);
+  form.dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => f.explorer.doc.objective === 'My objective' && !f.document.getElementById('guidance-dialog').open, 'retry saved');
+  assert.equal(f.explorer.doc.nodes[1].answer, 'Other saved answer');
+  assert.equal(f.document.getElementById('answer').value, 'My unsaved answer');
+});
+test('stale guidance retry requires an explicit choice before replacing changed guidance', async t => {
+  const f = await fixture(t, 340);
+  f.document.getElementById('edit-guidance').click();
+  f.type('edit-objective', 'My objective');
+  const other = await new Explorer({ file: f.explorer.file }).load();
+  await other.command('guidance', { revision: other.doc.revision, objective: 'Other objective', successCriteria: 'Other criterion' });
+  const form = f.document.getElementById('guidance-form');
+  form.dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => !f.document.getElementById('refresh-guidance').hidden, 'refresh offered');
+  f.document.getElementById('refresh-guidance').click();
+  await until(() => !f.document.getElementById('guidance-conflict').hidden, 'conflict choice shown');
+  assert.equal(f.document.getElementById('edit-objective').value, 'My objective');
+  assert.equal(f.explorer.doc.objective, 'Other objective');
+  assert.equal(f.document.getElementById('save-guidance').disabled, true);
+  f.document.getElementById('keep-guidance-edits').click();
+  assert.equal(f.document.getElementById('save-guidance').disabled, false);
+  form.dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => f.explorer.doc.objective === 'My objective' && !f.document.getElementById('guidance-dialog').open, 'explicit overwrite saved');
+  assert.equal(f.explorer.doc.successCriteria, '');
 });
 
 test('one conflicting node does not prevent other nodes from saving drafts', async t => {

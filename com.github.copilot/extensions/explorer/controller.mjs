@@ -58,6 +58,15 @@ export class Explorer {
     this.queue = work.catch(() => {});
     return work;
   }
+  async readCurrent() {
+    const saved = this.library ? await this.library.resolve(this.activeKey) :
+      { file: this.file, document: validateDocument(JSON.parse(await readFile(this.file, 'utf8'))) };
+    if (saved.file !== this.file || saved.document.id !== this.doc.id || saved.document.revision < this.doc.revision ||
+      (saved.document.revision === this.doc.revision && JSON.stringify(saved.document) !== JSON.stringify(validateDocument(this.doc)))) {
+      throw new Error('This journey changed on disk. Reopen it from the library.');
+    }
+    return saved.document;
+  }
   async save(next) {
     await mkdir(dirname(this.file), { recursive: true });
     let lock;
@@ -178,11 +187,18 @@ export class Explorer {
           if (!next) throw new Error('Start an exploration first.');
           const objective = guidanceText(input.objective, 'Objective', MAX_OBJECTIVE);
           const successCriteria = guidanceText(input.successCriteria, 'Success criteria', MAX_SUCCESS_CRITERIA);
-          if (next.objective === objective && next.successCriteria === successCriteria) break;
+          if (next.objective === objective && next.successCriteria === successCriteria) {
+            if ((await this.readCurrent()).revision !== next.revision) throw new Error('Another canvas updated this file. Refresh the saved journey before retrying.');
+            break;
+          }
           next.objective = objective; next.successCriteria = successCriteria; next.finishedAt = null;
           await this.save(next);
           break;
         }
+        case 'refresh-guidance':
+          if (!next) throw new Error('Start an exploration first.');
+          this.doc = await this.readCurrent();
+          break;
         case 'finish':
           if (!next) throw new Error('Start an exploration first.');
           next.finishedAt = new Date().toISOString();

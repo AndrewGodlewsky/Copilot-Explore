@@ -32,6 +32,7 @@ let workspace = null;
 let suppressClick = false, restoringFocus = false, composing = null;
 let actionEpoch = 0, closed = false, pollTimer;
 let viewerTarget = null, viewerEpoch = 0, viewerPreview = null;
+let scenarioFork = null, scenarioFlight = null;
 let stateCursor = null, pollFlight = null, pollFailures = 0, pageEpoch = 0, suspended = false, actionAbort = null;
 function stopPolling() {
   clearTimeout(pollTimer); pollFlight?.abort.abort(); pollFlight = null; stateCursor = null;
@@ -604,6 +605,7 @@ function apply(next, reset = false) {
     if ($('project-reconcile-dialog').open) closeProjectReconciliation();
     cancelProjectGitStatus(); projectGitResult = null; projectGitError = '';
     if ($('project-copy-dialog').open) closeProjectCopy();
+    if ($('scenario-fork-dialog').open) closeScenarioFork(true);
     outlineNavigated = false;
     minimap.reset();
     if (state.document?.id !== next.document?.id || state.activeKey !== next.activeKey) nextQuestion = new NextQuestion();
@@ -669,7 +671,7 @@ function apply(next, reset = false) {
   notice(state.error || state.recoveryNotice?.message || (['failed', 'interrupted'].includes(state.exportObservation?.status) ? 'Export did not finish. Open Recovery to explicitly retry. Browser file saving is unknown.' : ''));
   if (!doc) return;
   if (firstQuestions && selected === doc.rootId) expanded = false;
-  $('map-title').textContent = doc.topic;
+  $('map-title').textContent = doc.forkOrigin ? `Alternative scenario: ${doc.topic}` : doc.topic;
   $('journey-storage').textContent = state.storage?.scope === 'project' ? `Project: ${state.storage.path}. Saved locally; commit and share through Git for teammates to receive changes. Drafts, history and usage stay private.` : 'Personal library: Saved on this computer.';
   renderProjectGitStatus();
   $('current-mode').textContent = `Mode: ${MODES[effectiveMode(doc)].label}`;
@@ -878,8 +880,8 @@ async function refreshLibrary() {
           button('', () => change('pinned'), { 'data-action': 'pin' }), button('', () => change('archived'), { 'data-action': 'archive' })));
       }
       row.entry = entry;
-      row.querySelector('h2').textContent = entry.topic;
-      row.querySelector('.library-meta').textContent = `${entry.pinned ? 'Pinned · ' : ''}${entry.questionCount} questions · ${entry.lastOpenedAt ? 'Opened' : 'Edited'} ${new Date(entry.lastOpenedAt ?? entry.updatedAt).toLocaleString()}`;
+      row.querySelector('h2').textContent = entry.scenario ? `Alternative scenario: ${entry.topic}` : entry.topic;
+      row.querySelector('.library-meta').textContent = `${entry.pinned ? 'Pinned · ' : ''}${entry.questionCount} questions · ${entry.lastOpenedAt ? 'Opened' : 'Edited'} ${new Date(entry.lastOpenedAt ?? entry.updatedAt).toLocaleString()}${entry.scenario ? ` · Scenario ID: ${entry.id}` : ''}`;
       const reminders = entry.revisit;
       row.querySelector('.library-reminders').textContent = reminders?.counts.any ? `${reminders.counts.any} reminder(s); ${reminders.counts.attention} need attention${reminders.nextDate ? `; earliest active date ${reminders.nextDate}` : ''}. ${Object.entries(reminders.counts).filter(([key, count]) => !['any', 'attention'].includes(key) && count).map(([key, count]) => `${REVISIT_FILTERS[key]}: ${count}`).join('; ')}. Status counts can overlap.` : 'No revisit reminders.';
       row.querySelector('[data-action="revisit"]').hidden = !reminders?.counts.any;
@@ -950,6 +952,91 @@ function switchAllowed(reason = 'opening another journey') {
   if ([...nodeUi.values()].some(ui => ui.revisitDraft)) { notice(`Save your reminder edits or choose Use saved reminder before ${reason}.`); return false; }
   return true;
 }
+function closeScenarioFork(force = false) {
+  if (scenarioFlight && !force) return;
+  const prior = scenarioFork; scenarioFork = null;
+  scenarioFlight?.abort(); scenarioFlight = null;
+  if ($('scenario-fork-dialog').open) $('scenario-fork-dialog').close();
+  if (prior?.preview && !prior.saved) void fetch('api/scenario-fork', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'discard', journey: prior.journey, revision: prior.revision, id: prior.preview.id }) }).catch(() => {});
+  if (!force) prior?.focus?.focus({ preventScroll: true });
+}
+function resetScenarioPreview() {
+  if (!scenarioFork || scenarioFlight) return;
+  scenarioFork.preview = null; scenarioFork.saved = null;
+  $('scenario-fork-review').hidden = true; $('scenario-fork-content').value = '';
+  $('scenario-fork-confirm').hidden = true; $('scenario-fork-open').hidden = true;
+  $('scenario-fork-status').textContent = 'Preview this alternative before saving.';
+}
+function renderScenarioLinks(page) {
+  scenarioFork.links = page;
+  $('scenario-fork-links').replaceChildren(...page.items.map(link => el('li', {}, `${link.dependent} (${link.dependentId}) depends on ${link.prerequisite} (${link.prerequisiteId})${link.explanation ? `: ${link.explanation}` : ''}. Omitted from this scenario.`)));
+  $('scenario-fork-link-page').textContent = page.total ? `${page.offset + 1}–${page.offset + page.items.length} of ${page.total} omitted cross-path links.` : 'No dependency links cross outside the copied path.';
+  $('scenario-fork-prev').disabled = page.offset === 0; $('scenario-fork-next').disabled = page.offset + page.items.length >= page.total;
+}
+async function openScenarioFork(node, answer, answerState) {
+  if (!state.library || !switchAllowed('forking an alternative')) return;
+  voice.cancel(); cleanup.cancel();
+  const journey = referenceJourney(), source = JSON.stringify(state.document), page = pageEpoch, focus = $('answer');
+  const edits = draftClient.entries.get(node.id)?.edits;
+  try {
+    await draftClient.flush();
+    if (closed || suspended || page !== pageEpoch || journey !== referenceJourney() || selected !== node.id || source !== JSON.stringify(state.document) || edits !== draftClient.entries.get(node.id)?.edits) return notice('The editor or saved source changed. Review it before forking.');
+    scenarioFork = { journey, revision: state.document.revision, source, nodeId: node.id, page, focus };
+    $('scenario-fork-question').textContent = node.question; $('scenario-fork-answer').value = answer;
+    $('scenario-fork-state').replaceChildren(...Object.entries(ANSWER_STATES).filter(([value]) => value !== 'unanswered').map(([value, label]) => el('option', { value }, label)));
+    $('scenario-fork-state').value = answerState === 'unanswered' ? 'tentative' : answerState;
+    for (const id of ['scenario-fork-answer', 'scenario-fork-state', 'scenario-fork-preview', 'scenario-fork-confirm', 'scenario-fork-close', 'scenario-fork-open', 'scenario-fork-prev', 'scenario-fork-next']) $(id).disabled = false;
+    resetScenarioPreview();
+    $('scenario-fork-dialog').showModal(); $('scenario-fork-answer').focus();
+  } catch (error) { notice(`Draft could not be preserved. ${error.message}`); }
+}
+async function requestScenarioFork(action, offset) {
+  const context = scenarioFork;
+  if (!context || scenarioFlight || closed || suspended) return;
+  if (context.journey !== referenceJourney() || context.source !== JSON.stringify(state.document) || state.pending || state.preview) { $('scenario-fork-status').textContent = 'The saved source changed or work is active. Close and preview again after resolving it.'; return; }
+  const current = () => scenarioFork === context && context.page === pageEpoch && !closed && !suspended;
+  const abort = new AbortController(); scenarioFlight = abort; const timer = setTimeout(() => abort.abort(), 15000);
+  for (const id of ['scenario-fork-answer', 'scenario-fork-state', 'scenario-fork-preview', 'scenario-fork-confirm', 'scenario-fork-close', 'scenario-fork-open', 'scenario-fork-prev', 'scenario-fork-next']) $(id).disabled = true;
+  $('scenario-fork-status').textContent = action === 'confirm' ? 'Saving the reviewed scenario…' : 'Reading saved context…';
+  try {
+    const input = { action, journey: context.journey, revision: context.revision, ...(action === 'preview' ? { nodeId: context.nodeId, answer: $('scenario-fork-answer').value, answerState: $('scenario-fork-state').value } : { id: context.preview.id }), ...(action === 'links' ? { offset } : {}) };
+    const response = await fetch('api/scenario-fork', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) }), result = await response.json();
+    if (!current()) return;
+    if (!response.ok) throw Error(result.error);
+    if (action === 'preview') {
+      context.preview = result; context.saved = null;
+      $('scenario-fork-review').hidden = false; $('scenario-fork-content').value = result.content;
+      $('scenario-fork-summary').textContent = `${result.copiedNodes} copied path nodes; ${result.omittedNodes} other nodes remain only in the original. Destination: personal library. Scenario ID: ${result.scenarioId}.`;
+      renderScenarioLinks(result.links); $('scenario-fork-confirm').hidden = false; $('scenario-fork-open').hidden = true;
+      $('scenario-fork-status').textContent = result.existing ? 'An identical scenario already exists. Confirm to verify and reopen it.' : 'Review the exact copied answers and omissions, then save.';
+      $('scenario-fork-content').focus();
+    } else if (action === 'links') { renderScenarioLinks(result); $('scenario-fork-status').textContent = 'Review the omitted dependency links.'; }
+    else {
+      context.saved = result; $('scenario-fork-confirm').hidden = true; $('scenario-fork-open').hidden = false;
+      $('scenario-fork-status').textContent = 'Scenario saved in your personal library. The original is still open. Open the scenario explicitly to continue or use Save project copy there to share it.';
+    }
+  } catch (error) { if (current()) $('scenario-fork-status').textContent = abort.signal.aborted ? 'Response timed out. A save may have completed. Retry the same confirmation to verify the same scenario.' : error.message; }
+  finally {
+    clearTimeout(timer);
+    if (scenarioFlight === abort) {
+      scenarioFlight = null;
+      for (const id of ['scenario-fork-answer', 'scenario-fork-state', 'scenario-fork-preview', 'scenario-fork-confirm', 'scenario-fork-close', 'scenario-fork-open']) $(id).disabled = false;
+      if (current() && context.links) renderScenarioLinks(context.links);
+    }
+  }
+}
+$('scenario-fork-preview').addEventListener('click', () => { void requestScenarioFork('preview'); });
+$('scenario-fork-confirm').addEventListener('click', () => { void requestScenarioFork('confirm'); });
+$('scenario-fork-prev').addEventListener('click', () => { void requestScenarioFork('links', scenarioFork.links.offset - 25); });
+$('scenario-fork-next').addEventListener('click', () => { void requestScenarioFork('links', scenarioFork.links.offset + 25); });
+for (const id of ['scenario-fork-answer', 'scenario-fork-state']) $(id).addEventListener('input', resetScenarioPreview);
+$('scenario-fork-close').addEventListener('click', () => closeScenarioFork());
+$('scenario-fork-dialog').addEventListener('cancel', event => { event.preventDefault(); closeScenarioFork(); });
+$('scenario-fork-open').addEventListener('click', async () => {
+  const context = scenarioFork;
+  if (!context?.saved || scenarioFlight) return;
+  if (await switchJourney('open', { key: context.saved.key }, () => scenarioFork === context && context.page === pageEpoch)) closeScenarioFork(true);
+});
 function cancelProjectGitStatus() { projectGitEpoch++; projectGitFlight?.abort(); projectGitFlight = null; }
 function renderProjectGitStatus() {
   $('project-git-panel').hidden = state.storage?.scope !== 'project';
@@ -1746,6 +1833,7 @@ function renderWorkspace() {
       button('Save & continue', () => { voice.cancel(); void save(false); }, { id: 'save-answer', class: 'primary', 'aria-label': 'Save & continue', title: 'Save and open an existing useful question; Ctrl/Command + Enter', disabled: pending && !['research', 'research-follow-up'].includes(state.pending.kind) }));
     toolPanels.explore.append(el('p', { class: 'quiet' }, 'Save this answer and ask Copilot for follow-up questions to review.'), button('Explore deeper', () => { voice.cancel(); void save(true); }, { id: 'save-deeper', title: 'Save this answer and ask Copilot for follow-up questions', 'aria-label': 'Save answer and explore deeper', disabled: pending }));
     toolPanels.explore.append(el('p', { class: 'quiet' }, 'Correct an assumption and restart below this question. Review exact removals first; a protected History checkpoint keeps the old branch recoverable.'), button('Restart branch…', () => { voice.cancel(); void save(false, true); }, { id: 'restart-branch', disabled: pending || !!state.preview }));
+    if (state.library) toolPanels.explore.append(el('p', { class: 'quiet' }, 'Try an alternative in a separate saved scenario. Review copied ancestor context; the original stays intact.'), button('Fork alternative…', () => { void openScenarioFork(node, answer.value, draftClient.state(node.id)); }, { id: 'fork-scenario', disabled: pending || !!state.preview }));
     panel.append(savebar);
     savebar.addEventListener('keydown', saveKey); toolsBody.addEventListener('keydown', saveKey);
     const researchNote = el('p', { id: 'research-save-note', class: 'quiet' }, 'Save is available during research. Saving its source context discards that research. Wait or cancel research before Explore deeper.'); toolPanels.explore.append(researchNote);
@@ -2017,7 +2105,7 @@ function renderWorkspace() {
     for (const id of ['research-request', 'followup-review', 'save-deeper']) if ($(id)) $(id).disabled = pending;
     if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up'].includes(state.pending?.kind);
     if ($('save-answer')) $('save-answer').disabled = pending && !['research', 'research-follow-up'].includes(state.pending.kind);
-    for (const id of ['generate-questions', 'add-direction', 'restart-branch']) if ($(id)) $(id).disabled = pending || !!state.preview;
+    for (const id of ['generate-questions', 'add-direction', 'restart-branch', 'fork-scenario']) if ($(id)) $(id).disabled = pending || !!state.preview;
     if (root && $('generate-questions')) $('generate-questions').textContent = doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions';
     if ($('manual-question').value !== ui.question) $('manual-question').value = ui.question;
     const answer = $('answer'), value = drafts.get(node.id) ?? node.answer;
@@ -3286,6 +3374,7 @@ document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
   closeAnswerChange();
   closeReviewQueue(true);
+  closeScenarioFork(true);
   if ($('project-merge-dialog').open) closeProjectMerge();
   if ($('project-reconcile-dialog').open) closeProjectReconciliation();
   if ($('project-copy-dialog').open) closeProjectCopy();

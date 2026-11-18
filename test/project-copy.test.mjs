@@ -13,9 +13,18 @@ import { projectStorageContext } from '../com.github.copilot/extensions/explorer
 import { ProjectJourney } from '../com.github.copilot/extensions/explorer/project-journey.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
+import { buildScenario } from '../com.github.copilot/extensions/explorer/scenario-fork.mjs';
 import { prepareBrief, parseBrief, acceptBrief, briefFreshness } from '../com.github.copilot/extensions/explorer/decision-brief.mjs';
 import { prepareHandoff, parseHandoff, acceptHandoff } from '../com.github.copilot/extensions/explorer/implementation-handoff.mjs';
 const exec = promisify(execFile);
+test('project copy preserves scenario origin mappings under a separate project identity', async t => {
+  const f = await fixture(t), scenario = buildScenario(f.doc, { nodeId: f.doc.nodes[1].id, answer: 'Alternative', answerState: 'decided' }).document;
+  f.change(JSON.stringify(scenario));
+  const preview = await f.copy.preview({ folder: '.explorer/journeys', includeResearch: false, newCopy: false });
+  await f.copy.confirm(preview.id); const shared = JSON.parse(await readFile(join(f.checkout, preview.path), 'utf8'));
+  assert.notEqual(shared.journey.id, scenario.id); assert.deepEqual(shared.journey.forkOrigin, scenario.forkOrigin);
+  assert.equal(shared.journey.nodes.at(-1).answer, 'Alternative');
+});
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'explorer-copy-')); t.after(() => rm(root, { recursive: true, force: true }));
   const checkout = join(root, 'checkout'), local = join(root, 'private'); await mkdir(checkout); await mkdir(local);

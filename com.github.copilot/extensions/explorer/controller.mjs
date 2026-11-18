@@ -4,6 +4,7 @@ import { ProjectContext } from './project-context.mjs';
 import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
+import { ScenarioFork } from './scenario-fork.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
 import { ProjectMerge } from './project-merge.mjs';
@@ -652,6 +653,35 @@ export class Explorer {
         }
         if (!this.projectCopy) throw Error('Project copy preview expired. Preview again.');
         return this.projectCopy.confirm(input.id);
+      });
+    });
+  }
+  scenarioForkRequest(input) {
+    return this.transact(async () => {
+      const fields = { preview: 'action,answer,answerState,journey,nodeId,revision', confirm: 'action,id,journey,revision', discard: 'action,id,journey,revision', links: 'action,id,journey,offset,revision' };
+      if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(fields, input.action) || Object.keys(input).sort().join(',') !== fields[input.action]) throw Error('Invalid scenario fork request.');
+      if (this.closed || !this.doc || !this.library) throw Error('Scenario forks require an open journey and the installed personal library.');
+      const valid = () => {
+        if (this.closed || input.journey !== this.activeKey || input.revision !== this.doc?.revision || this.pending || this.preview) throw Error('The journey changed or a request is active. Finish or cancel it, then preview the alternative again.');
+      };
+      valid();
+      return this.withDocumentLock(async () => {
+        if (input.action === 'preview') {
+          this.scenarioFork = null;
+          const file = this.file, store = this.projectStore;
+          const fork = new ScenarioFork(this.library, async () => {
+            valid();
+            if (this.file !== file || this.projectStore !== store) throw Error('The source journey changed. Preview again.');
+            const source = await this.readCurrent();
+            if (source.revision !== input.revision) throw Error('The saved source changed. Reopen it and preview again.');
+            return source;
+          });
+          const result = await fork.preview(input); this.scenarioFork = fork; return result;
+        }
+        if (!this.scenarioFork) throw Error('Scenario preview expired. Preview the alternative again.');
+        if (input.action === 'discard') { this.scenarioFork.get(input.id); this.scenarioFork.clear(); return { discarded: true }; }
+        if (input.action === 'links') { await this.scenarioFork.check(this.scenarioFork.get(input.id)); return this.scenarioFork.links(input.id, input.offset); }
+        const result = await this.scenarioFork.confirm(input.id); this.dashboard?.invalidate(); return result;
       });
     });
   }

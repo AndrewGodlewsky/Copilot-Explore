@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.85",
+    "summary": "Fork an alternative answer into a separate saved scenario. Review copied ancestor context and omitted dependencies, save to your personal library, then explicitly open it. Original answers, branches and drafts stay intact. Portable origin mappings support later comparison, and retries reuse the same scenario without overwriting edits."
+  },
+  {
     "version": "0.1.84",
     "summary": "Review affected answers in an ordered queue with upstream change context. Reaffirm one cause at a time, revise in your retained editor, or explicitly clear the saved answer. Other causes, private drafts and stale research stay visible. Dependency edits now record both endpoints; changed sources require fresh confirmation."
   },

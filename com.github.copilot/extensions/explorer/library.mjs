@@ -7,7 +7,7 @@ import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './web/search.mjs';
 import { join, resolve, dirname, basename } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { validateDocument, importedDocument, MAX_DOCUMENT_BYTES } from './model.mjs';
-import { atomicWrite } from './storage.mjs';
+import { atomicWrite, atomicCreate } from './storage.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 export const searchFingerprint = document => hash(JSON.stringify(document));
@@ -74,6 +74,7 @@ export class Library {
   summary(record, metadata, ambiguous, today = localDate()) {
     const { key, document: doc } = record;
     return { key, id: doc.id, topic: doc.topic, updatedAt: doc.updatedAt, nodeCount: doc.nodes.length, questionCount: questionCounts(doc).total,
+      ...(doc.forkOrigin ? { scenario: true } : {}),
       pinned: false, archived: false, lastOpenedAt: null, ...metadata.entries[key],
       ambiguous: ambiguous.has(doc.id), revisit: revisitSummary(doc.nodes, today) };
   }
@@ -194,13 +195,21 @@ export class Library {
     }
     return null;
   }
-  async import(document, { asCopy = false } = {}) {
+  async import(document, { asCopy = false, beforeWrite } = {}) {
     let doc = validateDocument(document);
     if (typeof asCopy !== 'boolean') throw new Error('Invalid import choice.');
     return this.locked(async () => {
       const { records } = await this.scan(), matches = records.filter(record => record.document.id === doc.id);
       if (matches.length && !asCopy) {
-        if (matches.every(record => same(record.document, doc))) return matches[0];
+        if (matches.every(record => same(record.document, doc))) {
+          await beforeWrite?.();
+          if (beforeWrite) {
+            const fresh = await this.resolve(matches[0].key);
+            if (!same(fresh.document, doc)) throw Error('The saved scenario changed. Reopen it from the personal library.');
+            return fresh;
+          }
+          return matches[0];
+        }
         const metadata = await this.metadata();
         const ambiguous = ambiguousIds(records);
         return { conflict: matches.map(record => this.summary(record, metadata, ambiguous)) };
@@ -212,7 +221,8 @@ export class Library {
       try { await lstat(file); throw new Error('A saved file already occupies this journey identity. Import as a new copy.'); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
       await this.metadata();
-      try { await atomicWrite(file, JSON.stringify(doc, null, 2)); }
+      await beforeWrite?.();
+      try { await (beforeWrite ? atomicCreate : atomicWrite)(file, JSON.stringify(doc, null, 2)); }
       catch { throw new Error('Could not save the imported journey. Existing saved files are preserved.'); }
       const key = entryKey(name, doc.id); this.files.set(key, basename(file));
       return { key, file, document: doc };

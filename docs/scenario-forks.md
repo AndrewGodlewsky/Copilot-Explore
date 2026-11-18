@@ -1,0 +1,27 @@
+# Alternative scenarios
+
+In a question's Explore drawer, choose **Fork alternative**. Write a different answer or choose a different answered state, then preview the copied context. Your current editor text seeds the alternative field, but editing that field does not edit the original answer or its private draft. Save the reviewed scenario, then explicitly choose **Open saved scenario** or keep the original open.
+
+The first destination is the personal library, including when the source is a shared project exploration. After opening the scenario, use **Save project copy** to share it through the existing repository workflow. Creating or opening a fork never generates questions; use **Explore deeper** explicitly. There is no merge, answer promotion or preferred-scenario selection in this feature.
+
+The preview includes the exact new file. It copies the root-to-question path, saved ancestor answers and states, objective, success criteria, mode, pinned constraints and dependencies whose endpoints are both on that path. Each copied node has a fresh ID. Other branches and downstream answers remain only in the original. Dependencies crossing outside the copied path are listed in pages of 25 and omitted; affected copied ancestors carry review warnings. Links wholly outside the path are not part of the scenario context. A mixed tree/dependency cycle cannot cause duplicate copying.
+
+Research, generation details, revisit reminders, detailed historical review causes, accepted briefs/handoffs, drafts, references, history and helper requests are not copied. Existing review flags remain; affected ancestors also need review. The alternative itself is the user's explicit new answer. Review warnings describe retained or omitted premises, not verified real-world consequences. Open the original for detailed historical reasoning. New scenario history begins independently on subsequent saved changes.
+
+Saving does not change the source file, its history or its active binding. The editor's private drafts must flush successfully before opening the fork dialog. Pending question/research work and staged question previews must be resolved first. On explicit journey opening, existing journey guards invalidate or cancel owned helper results; callbacks from the old question request cannot populate the new scenario. Attached chat turns are never stopped by a fork.
+
+## Identity and retry behavior
+
+Optional `forkOrigin` version 1 records the immediate source journey/root/creation identity, fork question, saved source revision and SHA-256 fingerprint of its normalized document. Each mapping retains the new node ID, immediate source node ID and earliest known origin identity. Nested forks inherit those earliest mappings. They are historical claims, not verified current source content or authenticated authorship. A missing or edited source does not break the scenario. Historical mappings remain after mapped nodes are removed.
+
+Native JSON import/export and the shared format preserve lineage; project copies can acquire their own journey identity without changing the historical mappings. Markdown displays the origin and mappings but is not a reopenable import format. Older strict shared-format readers reject the unfamiliar field rather than silently remove it; older personal readers may omit it on save, so use the current version when retaining lineage matters.
+
+Preview tokens expire after 15 minutes and bind the saved source content and selection. The source is checked under its writer lock before saving. A deterministic scenario identity binds the normalized source and exact alternative text/state. Repeating the same fork reuses an identical saved scenario; an evolved scenario is never overwritten. Find that existing scenario in the personal library instead. A failed or lost response can be retried against the same preview. If the original changes after a save but before its response, the scenario may already exist; inspect the library before choosing a new alternative.
+
+New fork files use atomic, exclusive publication through a same-directory temporary file and hard link. Filesystems without that capability fail with the original preserved; there is no overwrite fallback. The personal library is bounded by its existing discovery limits; an undiscovered occupied canonical path also fails safely. Source maps remain limited to 5,000 nodes and 9 MiB, and the new file must fit that limit including lineage. Preview responses are bounded; no unbounded ancestor recursion is used.
+
+## Verification
+
+Automated coverage includes interior and nested forks, maximum-depth paths, cross-path dependency warnings, strict lineage validation, native/shared/project-copy portability, personal and project sources, source bytes and private draft isolation, late callbacks, cancellation, stale sources, failed writes, lost responses, occupied destinations and explicit UI save/open behavior. Required release checks include the full suite, syntax/release check, package and installed local-model fixture.
+
+Pending owner checks: narrow native pane scrolling and readable exact-file review; keyboard focus through the alternative, preview, omitted-link pages, save and explicit open; Escape/cancel retaining the original editor and caret; and returning through the personal library to both scenarios. No browser/desktop automation or live paid-model validation was performed.

@@ -174,6 +174,22 @@
     <p class="quiet">Off by default. Works outside text fields only when the configured voice shortcut is known and different. Copilot or the OS may reserve it; use Commands if it conflicts.</p>
     <button id="palette-close">Close</button>
   </dialog>
+  <dialog id="scenario-fork-dialog" aria-labelledby="scenario-fork-title">
+    <h2 id="scenario-fork-title">Fork an alternative answer</h2>
+    <p id="scenario-fork-question"></p>
+    <p>Save a separate scenario in your personal library. The original map and its private drafts stay intact. Opening the scenario is a separate choice; new questions require Explore deeper.</p>
+    <label for="scenario-fork-answer">Alternative answer for the new scenario</label><textarea id="scenario-fork-answer" rows="5" maxlength="20000"></textarea>
+    <label for="scenario-fork-state">Alternative answer state</label><select id="scenario-fork-state"></select>
+    <button id="scenario-fork-preview">Preview copied context</button>
+    <section id="scenario-fork-review" hidden><p id="scenario-fork-summary"></p>
+      <p>Copies the root-to-question path, saved ancestor answers, guidance and dependencies within that path. Other branches and descendants stay in the original. Research, generation details, reminders, accepted briefs, handoffs and private data are omitted. Affected ancestor answers retain review warnings; detailed historical causes stay in the source.</p>
+      <label for="scenario-fork-content">Exact scenario file, including copied answers and origin mappings</label><textarea id="scenario-fork-content" rows="10" readonly spellcheck="false"></textarea>
+      <h3>Dependencies crossing outside the copied path</h3><ul id="scenario-fork-links"></ul><p id="scenario-fork-link-page"></p>
+      <div class="actions"><button id="scenario-fork-prev">Previous links</button><button id="scenario-fork-next">Next links</button></div>
+    </section>
+    <p id="scenario-fork-status" role="status" aria-live="polite"></p>
+    <div class="actions"><button id="scenario-fork-close">Keep original open</button><button id="scenario-fork-confirm" hidden>Save reviewed scenario</button><button id="scenario-fork-open" hidden>Open saved scenario</button></div>
+  </dialog>
   <dialog id="review-queue-dialog" aria-labelledby="review-queue-title">
     <h2 id="review-queue-title">Review affected answers</h2>
     <p>Inspect the saved answer and changed premises. Reaffirm one cause at a time, revise your answer, or explicitly clear it. Reaffirming records your judgment against current sources; it does not verify their correctness.</p>

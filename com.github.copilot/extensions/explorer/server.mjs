@@ -186,6 +186,12 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.projectCopyRequest(await body(req, 4096)));
       }
+      if (req.method === 'POST' && route === 'api/scenario-fork') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        const result = await explorer.scenarioForkRequest(await body(req, 128 * 1024));
+        if (Buffer.byteLength(JSON.stringify(result)) > 20 * 1024 * 1024) throw Error('Scenario preview response limit reached.');
+        return json(200, result);
+      }
       if (req.method === 'POST' && route === 'api/project-reconciliation') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.projectReconciliationRequest(await body(req, 4096)));

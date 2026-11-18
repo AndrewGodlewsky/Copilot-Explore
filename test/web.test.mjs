@@ -1161,6 +1161,65 @@ test('project library refresh and pin preserve an answer draft, and listed openi
   assert.equal(f.explorer.pending, null); assert.equal($('workspace').hidden, false);
 });
 
+test('scenario fork reviews an alternative, keeps the source editor and opens its saved journey only by choice', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), e = f.explorer, node = e.doc.nodes[1];
+  const key = e.activeKey, original = await readFile(e.file), file = e.file;
+  f.open(node.id); f.type('answer', 'Private source editor'); const editor = $('answer'); editor.setSelectionRange(2, 6);
+  $('fork-scenario').click(); await until(() => $('scenario-fork-dialog')?.open, 'fork modal');
+  f.type('scenario-fork-answer', 'Different 🦞 answer'); $('scenario-fork-preview').click();
+  await until(() => !$('scenario-fork-confirm').hidden && !$('scenario-fork-confirm').disabled, 'fork preview');
+  assert.match($('scenario-fork-summary').textContent, /personal library/i); assert.match($('scenario-fork-content').value, /Different 🦞 answer/);
+  $('scenario-fork-close').click(); assert.equal($('answer'), editor); assert.equal(editor.value, 'Private source editor'); assert.equal(editor.selectionStart, 2);
+  assert.equal((await e.library.list()).entries.length, 1);
+  $('fork-scenario').click(); await until(() => $('scenario-fork-dialog').open, 'fork again'); f.type('scenario-fork-answer', 'Different 🦞 answer');
+  $('scenario-fork-preview').click(); await until(() => !$('scenario-fork-confirm').hidden && !$('scenario-fork-confirm').disabled, 'new preview');
+  $('scenario-fork-confirm').click(); await until(() => !$('scenario-fork-open').hidden, 'fork saved');
+  assert.equal(e.activeKey, key); assert.deepEqual(await readFile(file), original); assert.equal($('answer'), editor); assert.equal(editor.value, 'Private source editor');
+  assert.equal((await e.readDrafts(key)).entries[0].text, 'Private source editor');
+  $('scenario-fork-open').click(); await until(() => e.activeKey !== key && !$('scenario-fork-dialog').open, 'explicit fork open');
+  assert.equal(e.doc.nodes.at(-1).answer, 'Different 🦞 answer'); assert.equal(e.pending, null); assert.equal((await e.readDrafts(e.activeKey)).entries.length, 0);
+  assert.match($('map-title').textContent, /Alternative scenario/);
+  $('library-toggle').click(); await until(() => $('library-list').textContent.includes(e.doc.id), 'distinct scenario identity');
+});
+
+test('scenario fork preserves draft failures and invalidates edited alternatives and stale sources', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), e = f.explorer, node = e.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Unsaved text'); const write = e.writeDraft.bind(e);
+  e.writeDraft = async () => { throw Error('Draft disk unavailable'); }; $('fork-scenario').click();
+  await until(() => $('notice').textContent.includes('Draft disk unavailable'), 'draft flush failure'); assert.equal($('scenario-fork-dialog').open, false);
+  assert.equal($('answer').value, 'Unsaved text'); e.writeDraft = write;
+  $('fork-scenario').click(); await until(() => $('scenario-fork-dialog').open, 'recovered draft');
+  $('scenario-fork-preview').click(); await until(() => !$('scenario-fork-confirm').hidden && !$('scenario-fork-confirm').disabled, 'fork review');
+  f.type('scenario-fork-answer', 'Changed alternative'); assert.equal($('scenario-fork-confirm').hidden, true);
+  $('scenario-fork-preview').click(); await until(() => !$('scenario-fork-confirm').hidden && !$('scenario-fork-confirm').disabled, 'changed preview');
+  await writeFile(e.file, JSON.stringify({ ...e.doc, revision: e.doc.revision + 1 }));
+  $('scenario-fork-confirm').click(); await until(() => /changed/i.test($('scenario-fork-status').textContent), 'stale fork rejection');
+  assert.equal((await e.library.list()).entries.length, 1); assert.equal($('answer').value, 'Unsaved text');
+});
+
+test('scenario fork suspension during preview or save reopens editable controls and ignores late responses', async t => {
+  for (const action of ['preview', 'confirm']) {
+    const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), e = f.explorer, node = e.doc.nodes[1];
+    f.open(node.id); f.type('answer', 'Source draft retained'); $('fork-scenario').click(); await until(() => $('scenario-fork-dialog').open, 'fork before suspension');
+    if (action === 'confirm') { $('scenario-fork-preview').click(); await until(() => !$('scenario-fork-confirm').hidden && !$('scenario-fork-confirm').disabled, 'review before save'); }
+    const originalFetch = f.window.fetch; let release, received = false;
+    f.window.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      if (args[0] === 'api/scenario-fork' && JSON.parse(args[1].body).action === action) { received = true; await new Promise(resolve => { release = resolve; }); }
+      return response;
+    };
+    $(`scenario-fork-${action}`).click(); await until(() => received, 'held scenario response');
+    $('scenario-fork-close').click(); $('scenario-fork-dialog').dispatchEvent(new f.window.Event('cancel', { cancelable: true })); assert.equal($('scenario-fork-dialog').open, true);
+    f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+    f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await f.poll();
+    $('fork-scenario').click(); await until(() => $('scenario-fork-dialog').open, 'reopened scenario dialog');
+    assert.equal($('scenario-fork-answer').disabled, false); assert.equal($('scenario-fork-state').disabled, false);
+    f.type('scenario-fork-answer', 'New alternative after resume'); release(); await delay(40);
+    assert.equal($('scenario-fork-answer').value, 'New alternative after resume'); assert.equal($('scenario-fork-confirm').hidden, true); assert.equal($('scenario-fork-open').hidden, true);
+    assert.equal($('answer').value, 'Source draft retained'); assert.equal((await e.library.list()).entries.length, action === 'confirm' ? 2 : 1);
+  }
+});
+
 test('reviewed project copy shows exact content, excludes drafts, saves once and continues only by choice', async t => {
   const project = await mkdtemp(join(tmpdir(), 'explorer-copy-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
   await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
@@ -1684,6 +1743,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   exportDialog.close = () => { exportDialog.open = false; };
   const storageDialog = document.getElementById('storage-dialog');
   const copyDialog = document.getElementById('project-copy-dialog');
+  const forkDialog = document.getElementById('scenario-fork-dialog');
+  if (forkDialog) { forkDialog.showModal = () => { forkDialog.open = true; }; forkDialog.close = () => { forkDialog.open = false; }; }
   const reconcileDialog = document.getElementById('project-reconcile-dialog');
   const mergeDialog = document.getElementById('project-merge-dialog');
   mergeDialog.showModal = () => { mergeDialog.open = true; };

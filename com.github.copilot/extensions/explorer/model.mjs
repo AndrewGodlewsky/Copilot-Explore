@@ -1,4 +1,5 @@
 import { validateHandoff, handoffMarkdown } from './implementation-handoff.mjs';
+import { scenarioOrigin } from './scenario-origin.mjs';
 import { validateBrief, briefMarkdown } from './decision-brief.mjs';
 import { randomUUID } from 'node:crypto';
 import { DecisionImpact } from './web/decision-impact.mjs';
@@ -272,6 +273,7 @@ export function validateDocument(value) {
   if (root.question !== topic) throw new Error('The root must match the idea.');
   if (Object.hasOwn(value, 'copyOrigin') && (!value.copyOrigin || Object.keys(value.copyOrigin).sort().join(',') !== 'kind,sourceDigest,sourceId' || value.copyOrigin.kind !== 'personal-copy' || typeof value.copyOrigin.sourceId !== 'string' || !value.copyOrigin.sourceId || value.copyOrigin.sourceId.trim() !== value.copyOrigin.sourceId || value.copyOrigin.sourceId.length > 100 || !/^[a-f0-9]{64}$/.test(value.copyOrigin.sourceDigest))) throw Error('Invalid project copy origin lineage.');
   const document = { format: FORMAT, version: 1, id: text(value.id, 'Exploration ID', 100),
+    ...(Object.hasOwn(value, 'forkOrigin') ? { forkOrigin: scenarioOrigin(value.forkOrigin) } : {}),
     ...(Object.hasOwn(value, 'copyOrigin') ? { copyOrigin: { ...value.copyOrigin } } : {}),
     revision: Number.isSafeInteger(value.revision) && value.revision >= 0 ? value.revision : 0,
     topic, objective: guidanceText(Object.hasOwn(value, 'objective') ? value.objective : '', 'Objective', MAX_OBJECTIVE),
@@ -403,6 +405,10 @@ export function toMarkdown(doc) {
     '## Map', '',
     '| ID | Parent | Category | Question | Status |', '| --- | --- | --- | --- | --- |'];
   const ids = new Map(doc.nodes.map((n, i) => [n.id, `N${i}`]));
+  if (doc.forkOrigin) {
+    const origin = doc.forkOrigin;
+    lines.splice(lines.indexOf('## Map'), 0, '## Scenario origin', '', `Historical source journey: ${md(origin.source.journeyId)}; root: ${md(origin.source.rootId)}; created: ${md(origin.source.createdAt)}; question: ${md(origin.source.nodeId)}; revision: ${origin.source.revision}; fingerprint: ${origin.source.digest}.`, '', `Fork question: ${md(origin.forkNodeId)}. Source availability and current content are not verified. Historical mappings may refer to removed nodes. Use JSON for a reopenable file.`, '', ...origin.nodes.map(row => `- ${md(row.nodeId)} from ${md(row.sourceNodeId)}; earliest origin: ${md(JSON.stringify(row.origin))}`), '');
+  }
   for (const n of doc.nodes) lines.push(`| ${ids.get(n.id)} | ${ids.get(n.parentId) ?? '—'} | ${md(n.category).replace(/\n/g, ' ')} | ${md(n.question).replace(/\n/g, ' ')} | ${nodeStatus(n)}${n.review ? '; needs review' : ''} |`);
   if (doc.dependencies?.length) {
     lines.push('', '## Confirmed decision dependencies', '', 'User assertions, separate from tree navigation and research evidence. B depends on A means changing A may affect B.', '');

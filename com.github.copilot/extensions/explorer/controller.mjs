@@ -1005,7 +1005,7 @@ export class Explorer {
   clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; }
   reviewResearch(input) { return this.transact(() => this.researchReview.prepare(this, input)); }
   adrFormatRequest(input) { return this.transact(() => this.adrFormats.request(this, input)); }
-  adrFileRequest(input) { return this.transact(() => this.withDocumentLock(() => this.adrWriter.request(this, input))); }
+  adrFileRequest(input) { return this.transact(() => input?.action === 'sources' ? this.adrWriter.request(this, input) : this.withDocumentLock(() => this.adrWriter.request(this, input))); }
   adrScopeRequest(input) {
     return this.transact(async () => {
       if (!input || typeof input !== 'object' || Array.isArray(input) || !['status', 'save'].includes(input.action) ||

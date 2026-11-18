@@ -3,19 +3,27 @@ import { ANSWER_STATES, effectiveAnswerState, isQuestion } from './answer-state.
 export const IMPACT_RULES = 'High: at least 20 affected questions or 5 confirmed dependents. Medium: at least 5 affected questions or 1 confirmed dependent. Otherwise low. Counts describe recorded reasoning, not code-change effort or confidence.';
 const order = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : a.via < b.via ? -1 : a.via > b.via ? 1 : 0;
 const band = counts => counts.total >= 20 || counts.confirmed >= 5 ? 'high' : counts.total >= 5 || counts.confirmed >= 1 ? 'medium' : 'low';
+const adrRecords = doc => (doc.adrFiles ?? []).map(entry => {
+  const capture = entry.sources, journey = capture?.journey;
+  const known = journey?.id === doc.id && journey.rootId === doc.rootId && journey.createdAt === doc.createdAt;
+  return { id: entry.id, title: entry.title, path: capture?.adrPath ?? entry.path, pathBase: capture?.adrPath ? 'Git root' : 'original working folder',
+    sourceIds: known ? capture.nodes.map(node => node.record.id).sort() : null };
+});
 
 /** Include every input to analysis or its displayed paths, independent of revision and serialization order. */
 export function decisionImpactKey(doc) {
   const byId = (a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0;
   return JSON.stringify([doc.id, doc.rootId,
     doc.nodes.map(node => [node.id, node.parentId, isQuestion(node), node.question, effectiveAnswerState(node), !!node.review]).sort(byId),
-    (doc.dependencies ?? []).map(link => [link.dependentId, link.prerequisiteId]).sort(byId)]);
+    (doc.dependencies ?? []).map(link => [link.dependentId, link.prerequisiteId]).sort(byId),
+    adrRecords(doc).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)]);
 }
 
 /** A snapshot index of a validated saved map. Rebuild when saved content changes. */
 export class DecisionImpact {
   bands = new Map();
   constructor(doc) {
+    this.adrs = adrRecords(doc);
     this.nodes = new Map(doc.nodes.map(node => [node.id, { id: node.id, question: isQuestion(node), state: effectiveAnswerState(node), review: !!node.review }]));
     this.edges = new Map(doc.nodes.map(node => [node.id, []]));
     for (const node of doc.nodes) if (node.parentId !== null) this.edges.get(node.parentId).push({ id: node.id, via: 'tree' });
@@ -60,8 +68,12 @@ export class DecisionImpact {
       for (const key of ['structural', 'confirmed', 'mixedOnly', 'review']) if (item[key]) counts[key]++;
       counts.states[item.state]++; if (item.state === 'assumption') counts.assumptions++;
     }
+    const unknown = this.adrs.filter(entry => entry.sourceIds === null).length;
+    const entries = this.adrs.filter(entry => entry.sourceIds?.some(id => predecessors.combined.has(id))).map(({ sourceIds, ...entry }) => entry);
+    const reason = (entries.length ? `${entries.length} recorded ADR association(s) may be affected: ${entries.map(entry => `${entry.title} [${entry.id}] (${entry.path}; ${entry.pathBase})`).join('; ')}.` : 'No recorded ADR associations match this decision or its reachable dependents.') +
+      ` Captured historical associations only; ADR approval and current file content are not verified.${unknown ? ` ${unknown} legacy or other-journey association(s) have unknown coverage.` : ''}`;
     return { sourceId, affected, counts, band: band(counts), rules: IMPACT_RULES, predecessors, visitedEdges,
-      adrAssociations: { status: 'unavailable', count: null, reason: 'ADR source associations are not supported yet. No ADR count or impact has been inferred.' } };
+      adrAssociations: { status: unknown ? 'partial' : 'available', count: entries.length, unknown, entries, reason } };
   }
 }
 

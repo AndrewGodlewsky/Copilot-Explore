@@ -5,6 +5,7 @@ import { DraftClient } from './drafts.mjs';
 import { CommentsClient } from './comments-client.mjs';
 import { ReviewHandoffsClient } from './review-handoffs-client.mjs';
 import { PortableReferenceClient } from './portable-reference-client.mjs';
+import { AdrSourcesClient } from './adr-sources-client.mjs';
 import { CleanupClient } from './cleanup.mjs';
 import { QuestionHelpClient } from './question-help-client.mjs';
 import { ResearchReviewClient } from './research-review-client.mjs';
@@ -3468,17 +3469,21 @@ $('adr-questions-start').addEventListener('click', async () => {
 });
 
 let adrFile = null;
+const adrSources = new AdrSourcesClient({ $, active: () => adrFileCurrent(adrFile) && !busy && !adrFile.flight,
+  openReference: text => { closeAdrFile(false); portableReferences.prefill(text); } });
 const adrFileCurrent = f => !!f && adrFile === f && !closed && !suspended && f.page === pageEpoch && f.journey === (state.activeKey ?? state.document?.id) && $('adr-file-dialog').open;
 const adrFileWrites = action => ['save', 'reconcile', 'discard-operation'].includes(action);
 function adrFileControls() {
   const f = adrFile, locked = !adrFileCurrent(f) || !!f.flight || busy;
   for (const name of ['selection', 'number', 'review', 'refresh']) $(`adr-file-${name}`).disabled = locked;
   $('adr-file-number').disabled = locked || $('adr-file-selection').value !== 'new' || f?.format?.naming === 'slug';
+  $('adr-file-sources').disabled = locked || $('adr-file-selection').value === 'new'; adrSources.update(locked);
   $('adr-file-save').disabled = locked || !f.value || Date.now() >= f.value.expiresAt;
   $('adr-file-retry').hidden = !f?.recovery?.canReconcile; $('adr-file-retry').disabled = locked;
   $('adr-file-discard').hidden = !f?.recovery?.canDiscard; $('adr-file-discard').disabled = locked;
 }
 function invalidateAdrFile(message = 'Destination changed. Preview the current Markdown and path again.') {
+  adrSources.clear();
   const f = adrFile;
   if (f) {
     f.epoch++; f.value = null; clearTimeout(f.expiry);
@@ -3496,7 +3501,7 @@ function renderAdrFileStatus(result) {
   const f = adrFile; f.format = result.format; f.recovery = result.recovery; f.revision = result.revision;
   const selection = $('adr-file-selection'), selected = selection.value;
   selection.replaceChildren(new Option('New ADR file', 'new'));
-  for (const record of result.entries) selection.append(new Option(`Update proposed: ${record.path}`, record.id));
+  for (const record of result.entries) selection.append(new Option(`Proposed ADR: ${record.path}`, record.id));
   if ([...selection.options].some(option => option.value === selected)) selection.value = selected;
   const recovery = result.recovery, part = value => value === true ? 'saved' : value === false ? 'not saved' : 'unknown';
   $('adr-file-status').textContent = [result.error, recovery ? `ADR file: ${part(recovery.fileSaved)}. Exploration association: ${part(recovery.associationSaved)}. ${recovery.message}` : result.hasDraft ? 'Saved proposed wording is available. Preview the exact Markdown and destination before saving.' : 'Accept proposed ADR wording into the exploration first.'].filter(Boolean).join(' ');
@@ -3509,10 +3514,10 @@ async function requestAdrFile(action) {
   if (action === 'save' && (!review || Date.now() >= review.expiresAt)) return invalidateAdrFile('Preview expired. Review again before saving.');
   if (action === 'reconcile' && !f.recovery?.canReconcile || action === 'discard-operation' && !f.recovery?.canDiscard) return;
   const sequence = ++f.sequence, generation = ++f.epoch, abort = new AbortController(); f.flight = abort; f.action = action;
-  const input = { action, journey: f.journey, ...(action === 'prepare' ? { clientId: f.clientId, sequence, selection: $('adr-file-selection').value === 'new' ? { kind: 'new', number: f.format?.naming === 'slug' ? null : Number($('adr-file-number').value) } : { kind: 'update', id: $('adr-file-selection').value } } : action === 'save' ? { token: review.token, revision: f.revision } : writes ? { operationId: f.recovery.id, revision: f.revision } : {}) };
+  const input = { action, journey: f.journey, ...(action === 'sources' ? { id: $('adr-file-selection').value, revision: state.document.revision } : action === 'prepare' ? { clientId: f.clientId, sequence, selection: $('adr-file-selection').value === 'new' ? { kind: 'new', number: f.format?.naming === 'slug' ? null : Number($('adr-file-number').value) } : { kind: 'update', id: $('adr-file-selection').value } } : action === 'save' ? { token: review.token, revision: f.revision } : writes ? { operationId: f.recovery.id, revision: f.revision } : {}) };
   if (writes) { busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); }
-  const mapEpoch = actionEpoch, timer = setTimeout(() => abort.abort(), 10000);
-  f.value = null; clearTimeout(f.expiry); $('adr-file-preview').hidden = true; adrFileControls();
+  const mapEpoch = actionEpoch, timer = setTimeout(() => abort.abort(), 60000);
+  f.value = null; clearTimeout(f.expiry); $('adr-file-preview').hidden = true; adrSources.clear(); adrFileControls();
   $('adr-file-status').textContent = writes ? 'Saving or recovering the confirmed ADR operation…' : action === 'prepare' ? 'Checking current sources and reading the exact destination…' : 'Checking saved wording and any confirmed operation…';
   try {
     const response = await fetch('api/adr-file', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
@@ -3520,14 +3525,17 @@ async function requestAdrFile(action) {
     if (!adrFileCurrent(f) || !writes && generation !== f.epoch || writes && mapEpoch !== actionEpoch) return;
     if (!response.ok) throw Error(result.error);
     if (result.journey !== f.journey || action === 'prepare' && (result.clientId !== f.clientId || result.sequence !== sequence)) throw Error('ADR file response changed. Refresh and review again.');
-    if (action === 'prepare') {
+    if (action === 'sources') {
+      if (result.id !== input.id || result.revision !== input.revision || state.document.revision !== input.revision) throw Error('ADR source view changed. Refresh and inspect again.');
+      adrSources.render(result); $('adr-file-status').textContent = 'Historical sources loaded. Inspect a portable reference explicitly to open current content.';
+    } else if (action === 'prepare') {
       f.value = result; $('adr-file-preview').hidden = false; $('adr-file-path').textContent = result.path; $('adr-file-content').textContent = result.content;
       $('adr-file-old').textContent = result.oldContent ?? ''; $('adr-file-before').hidden = result.oldContent === null; $('adr-file-notes').textContent = result.message;
       const report = result.readiness; $('adr-file-readiness').textContent = `${report.blockers} correctness blockers. ${report.items.filter(item => item.severity === 'advisory').length} advisory gaps. ${report.items.map(item => item.reason).join(' ')}`;
       $('adr-file-status').textContent = 'Read the complete proposed Markdown and path. Save ADR confirms exactly this file.';
       f.expiry = setTimeout(() => { if (adrFileCurrent(f) && f.value === result) invalidateAdrFile('Preview expired. Review again.'); }, Math.max(0, result.expiresAt - Date.now()));
     } else {
-      if (writes) { busy = false; await api('refresh-answer'); if (!adrFileCurrent(f)) return; }
+      if (writes) { busy = false; await api('refresh-answer', { revision: result.revision }); if (!adrFileCurrent(f)) return; }
       renderAdrFileStatus(result);
     }
   } catch (error) {
@@ -3545,7 +3553,7 @@ $('adr-file-open').addEventListener('click', () => {
 });
 $('adr-file-from-draft').addEventListener('click', () => { if (!adrDraftSavePending && !briefBusy) { hideBrief(); $('adr-file-open').click(); } });
 for (const name of ['selection', 'number']) for (const event of ['input', 'change']) $(`adr-file-${name}`).addEventListener(event, () => { if (adrFileCurrent(adrFile) && !adrFile.flight) invalidateAdrFile(); });
-for (const [name, action] of [['review', 'prepare'], ['save', 'save'], ['retry', 'reconcile'], ['discard', 'discard-operation']]) $(`adr-file-${name}`).addEventListener('click', () => void requestAdrFile(action));
+for (const [name, action] of [['review', 'prepare'], ['sources', 'sources'], ['save', 'save'], ['retry', 'reconcile'], ['discard', 'discard-operation']]) $(`adr-file-${name}`).addEventListener('click', () => void requestAdrFile(action));
 $('adr-file-refresh').addEventListener('click', async () => { const f = adrFile; if (adrFileCurrent(f) && !f.flight && await api('refresh-answer') && adrFileCurrent(f)) { invalidateAdrFile(); await requestAdrFile('status'); } });
 $('adr-file-close').addEventListener('click', () => closeAdrFile(true));
 $('adr-file-dialog').addEventListener('cancel', event => { event.preventDefault(); closeAdrFile(true); });

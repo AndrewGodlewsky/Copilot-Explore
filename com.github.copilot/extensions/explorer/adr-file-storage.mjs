@@ -189,6 +189,7 @@ export class AdrFileStorage {
         intent = await this.stage(intent); await this.fault('before-publish', intent); await guard(intent);
         status = await this.inspectIntent(intent); await this.stageData(intent);
         if (status.publication !== 'published') {
+          await guard(intent);
           const destination = join(intent.target.root.path, intent.target.path);
           if (intent.target.base) await rename(this.stagePath(intent), destination); else await link(this.stagePath(intent), destination);
           await this.fault('after-publish', intent);

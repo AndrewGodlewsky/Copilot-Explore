@@ -4,6 +4,7 @@ import { validateAdrDraft } from './adr-draft.mjs';
 import { renderAdr } from './adr-format.mjs';
 import { validateProjectPaths } from './project-context.mjs';
 import { scenarioMarkdown } from './scenario-export.mjs';
+import { validateAdrSources, adrSourcesMarkdown } from './adr-sources.mjs';
 
 export const ADR_FILE_LIMIT = 65536;
 const keys = (v, names) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join(',') === names.split(',').sort().join(',');
@@ -19,23 +20,23 @@ export function adrFilePath(value) {
   return value;
 }
 export function adrFileMarker(value) { if (!id(value)) invalid(); return `<!-- copilot-explorer-adr:v1:${value}:proposed -->`; }
-export function adrFileMarkdown(value, managedId, scenario = null) {
+export function adrFileMarkdown(value, managedId, scenario = null, sources = null) {
   const draft = validateAdrDraft(value), marker = adrFileMarker(managedId);
   if (scenario !== null && (!scenario || !['hypothetical', 'unselected', 'preferred'].includes(scenario.classification) || !['personal', 'project'].includes(scenario.scope) || !Number.isSafeInteger(scenario.preferenceRevision) || scenario.preferenceRevision < 0)) throw Error('Invalid scenario label for ADR writing.');
   const labels = { 'user-decision': 'User-stated decision', 'user-statement': 'User statement', uncertain: 'Uncertain', assumption: 'Assumption', suggestion: 'Suggestion' };
   const content = { title: draft.title, ...Object.fromEntries(Object.entries(draft.sections).map(([key, statements]) => [key,
-    statements.map(statement => `[${labels[statement.certainty]}; ${statement.edited ? 'user-edited wording; sources not reverified' : 'AI synthesis'}]\n${statement.text}`).join('\n\n')])) };
+    statements.map(statement => `[${labels[statement.certainty]}; ${statement.edited ? 'user-edited wording; sources not reverified' : 'AI synthesis'}${sources ? `; source mapping: ${statement.id}` : ''}]\n${statement.text}`).join('\n\n')])) };
   if (draft.format.layout.metadata.includes('status') || draft.format.layout.sections.some(section => section.key === 'status')) content.status = 'proposed';
   const output = renderAdr(draft.format, content) + '\n> Status: proposed. Accepting wording is not decision approval. Source statements and AI synthesis retain their uncertainty.\n' +
-    (draft.titleEdited ? '\n> Title wording was edited by the user.\n' : '') + (scenario ? '\n' + scenarioMarkdown('', scenario) : '\n') + marker + '\n';
+    (draft.titleEdited ? '\n> Title wording was edited by the user.\n' : '') + (scenario ? '\n' + scenarioMarkdown('', scenario) : '\n') + (sources ? adrSourcesMarkdown(sources, managedId) + '\n' : '') + marker + '\n';
   if (Buffer.byteLength(output) > ADR_FILE_LIMIT) throw Error('Rendered ADR exceeds the 64 KiB output limit. Reduce the wording; nothing was clipped.');
   return output;
 }
 export function validateAdrFile(value) {
-  if (!keys(value, 'version,id,path,title,status,sha256,artifactDigest,readinessDigest,writtenAt') || value.version !== 1 || !id(value.id) || value.status !== 'proposed' ||
+  if (!keys(value, 'version,id,path,title,status,sha256,artifactDigest,readinessDigest,writtenAt' + (Object.hasOwn(value ?? {}, 'sources') ? ',sources' : '')) || value.version !== 1 || !id(value.id) || value.status !== 'proposed' ||
       typeof value.title !== 'string' || !value.title.trim() || value.title.length > 200 || !value.title.isWellFormed() || /[\x00-\x1f\x7f]/.test(value.title) ||
       !digest(value.sha256) || !digest(value.artifactDigest) || !digest(value.readinessDigest) || typeof value.writtenAt !== 'string' || value.writtenAt.length > 40 || !Number.isFinite(Date.parse(value.writtenAt))) invalid();
-  return { version: 1, id: value.id, path: adrFilePath(value.path), title: value.title, status: 'proposed', sha256: value.sha256, artifactDigest: value.artifactDigest, readinessDigest: value.readinessDigest, writtenAt: value.writtenAt };
+  return { version: 1, id: value.id, path: adrFilePath(value.path), title: value.title, status: 'proposed', sha256: value.sha256, artifactDigest: value.artifactDigest, readinessDigest: value.readinessDigest, writtenAt: value.writtenAt, ...(Object.hasOwn(value, 'sources') ? { sources: validateAdrSources(value.sources) } : {}) };
 }
 export function validateAdrFiles(value) {
   if (!Array.isArray(value) || value.length > 50) invalid();

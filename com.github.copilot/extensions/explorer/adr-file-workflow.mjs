@@ -5,6 +5,8 @@ import { adrFileMarkdown, adrArtifactDigest, adrBytesDigest, associateAdrFile } 
 import { defaultAdrFormat, adrFilename } from './adr-format.mjs';
 import { adrReadiness } from './adr-readiness.mjs';
 import { savedDigest } from './review-causes.mjs';
+import { captureAdrSources, adrSourcesStatus } from './adr-sources.mjs';
+import { captureAdrSourceLocation } from './adr-source-location.mjs';
 
 const TTL = 10 * 60 * 1000;
 const keys = (v, names) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join(',') === names.split(',').sort().join(',');
@@ -54,7 +56,8 @@ export class AdrFileWorkflow {
     let recovery;
     try { recovery = await this.recovery(e, store); }
     catch (problem) { recovery = { phase: 'unavailable', fileSaved: null, associationSaved: null, canReconcile: false, canDiscard: false, message: message(problem) }; }
-    return { journey: e.activeKey ?? e.doc.id, revision: e.doc.revision, format: e.doc.adrFormat ?? defaultAdrFormat(), hasDraft: !!e.doc.adrDraft, entries: structuredClone(e.doc.adrFiles ?? []), recovery, ...(error ? { error: message(error) } : {}) };
+    const entries = (e.doc.adrFiles ?? []).map(({ id, path, title, status, writtenAt, sources }) => ({ id, path, title, status, writtenAt, hasSources: !!sources }));
+    return { journey: e.activeKey ?? e.doc.id, revision: e.doc.revision, format: e.doc.adrFormat ?? defaultAdrFormat(), hasDraft: !!e.doc.adrDraft, entries, recovery, ...(error ? { error: message(error) } : {}) };
   }
   async associate(e, store, intent, owner) {
     await this.fault('before-association', intent);
@@ -72,8 +75,18 @@ export class AdrFileWorkflow {
     await this.associate(e, store, intent, owner);
   }
   async request(e, input) {
-    const fields = { status: 'action,journey', prepare: 'action,journey,clientId,sequence,selection', cancel: 'action,journey,clientId,sequence', save: 'action,journey,token,revision', reconcile: 'action,journey,operationId,revision', 'discard-operation': 'action,journey,operationId,revision' };
+    const fields = { status: 'action,journey', sources: 'action,journey,id,revision', prepare: 'action,journey,clientId,sequence,selection', cancel: 'action,journey,clientId,sequence', save: 'action,journey,token,revision', reconcile: 'action,journey,operationId,revision', 'discard-operation': 'action,journey,operationId,revision' };
     if (!input || !Object.hasOwn(fields, input.action) || !keys(input, fields[input.action]) || typeof input.journey !== 'string' || input.journey.length > 100 || e.closed || !e.doc || input.journey !== (e.activeKey ?? e.doc.id)) invalid();
+    if (input.action === 'sources') {
+      if (!Number.isSafeInteger(input.revision) || input.revision !== e.doc.revision) throw Error('Exploration revision changed. Refresh before inspecting ADR sources.');
+      const doc = e.doc, entry = doc.adrFiles?.find(item => item.id === input.id);
+      if (typeof input.id !== 'string' || !entry) invalid();
+      const capture = structuredClone(entry.sources ?? null); let current = null;
+      try { current = await e.readCurrent(); } catch { /* Historical capture remains readable when current source authority is unavailable. */ }
+      if (e.closed || e.doc !== doc || e.doc.revision !== input.revision || input.journey !== (e.activeKey ?? e.doc.id)) obsolete();
+      return { journey: input.journey, revision: input.revision, id: entry.id, path: entry.path, title: entry.title, capture,
+        sourceStatus: adrSourcesStatus(capture, current, e.projectStore?.context.relativePath ?? null) };
+    }
     const store = await this.storage(e);
     if (input.action === 'status') return this.result(e, store);
     if (['save', 'reconcile', 'discard-operation'].includes(input.action)) {
@@ -110,9 +123,12 @@ export class AdrFileWorkflow {
     if (selection.kind === 'update' && !base) throw Error('Select a recorded managed proposed ADR to update.');
     if (selection.kind === 'new' && (format.naming === 'slug' ? selection.number !== null : !Number.isSafeInteger(selection.number))) invalid();
     const path = base?.path ?? adrFilename(format, source.doc.adrDraft.title, selection.number), id = base?.id ?? randomUUID();
-    const content = adrFileMarkdown(source.doc.adrDraft, id, source.policy.label), record = { version: 1, id, path, title: source.doc.adrDraft.title, status: 'proposed', sha256: adrBytesDigest(content), artifactDigest: source.artifactDigest, readinessDigest: source.readiness.digest, writtenAt: new Date().toISOString() };
+    const preview = await store.capture(path, base ?? null), located = await captureAdrSourceLocation(e, preview.target);
+    if (base?.sources?.adrPath && located.location.adrPath !== base.sources.adrPath) throw Error('The ADR destination location changed with the working directory. Reopen the original folder before updating this recorded file.');
+    const sources = captureAdrSources(source.doc, located.location);
+    const content = adrFileMarkdown(source.doc.adrDraft, id, source.policy.label, sources), record = { version: 1, id, path, title: source.doc.adrDraft.title, status: 'proposed', sha256: adrBytesDigest(content), artifactDigest: source.artifactDigest, readinessDigest: source.readiness.digest, writtenAt: new Date().toISOString(), sources };
     associateAdrFile(source.doc.adrFiles, record, base ?? null);
-    const preview = await store.capture(path, base ?? null), latest = await this.source(e);
+    await located.assertCurrent(); const latest = await this.source(e);
     if (!this.valid(e, review) || source.digest !== latest.digest || source.readiness.digest !== latest.readiness.digest) obsolete();
     Object.assign(review, { ...preview, content, record, base: base ?? null, sourceDigest: source.digest, previousId: recovery?.id ?? null, token: randomUUID() });
     this.current = review; this.timer = setTimeout(() => this.invalidate(), TTL); this.timer.unref?.();

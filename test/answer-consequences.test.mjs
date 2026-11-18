@@ -48,7 +48,7 @@ test('read-only consequence preview and confirmed atomic save have exactly the s
   const f = await fixture(t), before = await readFile(f.file, 'utf8'), p = await f.prepare();
   assert.equal(await readFile(f.file, 'utf8'), before); assert.equal(p.requiresConfirmation, true);
   assert.equal(p.counts.total, 2); assert.equal(p.directions, 1); assert.equal(p.total, 3);
-  assert.match(p.adr, /not supported/);
+  assert.match(p.adr, /No recorded ADR associations/);
   await assert.rejects(f.e.command('answer', f.input), /consequences/);
   await assert.rejects(f.e.command('answer', { ...f.input, answerPreview: p.token }), /preview/);
   await f.e.command('answer', { ...f.input, answerPreview: p.token, confirmConsequences: true });

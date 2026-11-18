@@ -6,6 +6,7 @@ import { ProjectContext } from './project-context.mjs';
 import { directoryState, projectDocumentAccess, projectStorageContext } from './storage-context.mjs';
 import { ProjectJourney } from './project-journey.mjs';
 import { readSharedDocument } from './shared-document.mjs';
+import { validateProjectPath as relativePath } from './project-path.mjs';
 
 const exec = promisify(execFile), same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const gitOptions = () => ({ env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))), windowsHide: true, timeout: 5000, maxBuffer: 65536 });
@@ -17,11 +18,6 @@ async function gitIdentity(directory) {
   const branch = await read(['symbolic-ref', '--quiet', 'HEAD']), head = await read(['rev-parse', '--verify', '--quiet', 'HEAD']);
   if ((!branch && !head) || head !== null && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(head)) throw Error('Git checkout identity is unavailable.');
   return { branch, head };
-}
-function relativePath(value) {
-  if (typeof value !== 'string' || !value || value.length > 240 || isAbsolute(value) || /[\\:\x00-\x1f\x7f<>"|?*]/.test(value) ||
-    value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git' || /[. ]$/.test(part) || /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part))) throw Error('Use a project-relative path with forward slashes and ordinary folder names. Traversal, Git metadata and special paths are excluded.');
-  return value;
 }
 export { relativePath as validateProjectPath };
 export class ProjectRepository {

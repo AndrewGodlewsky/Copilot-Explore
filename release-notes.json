@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.101",
+    "summary": "Keep saved questions, answers and recorded evidence with written ADRs. Inspect original source captures, see changed or missing sources and open shared references explicitly. Preserve proven source commits and fingerprints across recovery. Impact previews identify affected ADRs. File review allows slower local Git checks; late source changes stop publication."
+  },
+  {
     "version": "0.1.100",
     "summary": "Share portable references to saved Project journeys and questions. Copy readable Markdown, inspect the exact target in another checkout, and explicitly open it through folds or branch focus. Changed content needs acknowledgement; missing or mismatched targets stay unopened. Keep private drafts and show manual copy text when clipboard access fails."
   },

@@ -18,7 +18,7 @@ The total is the union of all reachable ordinary question IDs, excluding the sel
 
 Each affected question contributes once to its saved answer-state count. Every **Assumption** is counted as unverified, regardless of its review flag. Review is counted separately and can overlap any state. Deferred or not-relevant questions remain in recorded exposure totals; their state provides context instead of erasing a recorded relationship. Draft text and draft answer state are not inputs.
 
-Current ADR source associations are **unavailable**, with a null count. Explorer has no supported ADR association schema yet. It does not infer that no ADR would be affected; later traceability work must add that evidence explicitly.
+ADR impact lists recorded associations whose captured source IDs include the selected question or a reachable structural/confirmed dependent. It includes the ADR identity, title and recorded relative location, with an explicit path base. These are historical source relationships, not approval or verification of current ADR files. Legacy and other-journey records have unknown coverage rather than an inferred zero. ADR associations do not change the question-importance bands. See [durable ADR sources](adr-sources.md).
 
 ## Bands
 
@@ -68,7 +68,7 @@ Derived impact is not stored in the shared file. Visual/offline exports label un
 
 Run `npm run benchmark:impact` for synthetic deep/wide maps near 5,000 nodes (with 10,000 explicit links), plus a near-9 MiB map without extra links. It reuses the existing benchmark's one-warmup/two-sample measurement helper and jsdom harness. `.perf-baseline/impact.json` and `.perf-baseline/impact.md` record environment, version, commit/dirty state, fingerprints, byte counts, median/min/max timings, actual edge visits and DOM row bounds. Fixture setup/teardown are excluded. Initial workspace construction is outside the impact-open phase. No native browser, user map or provider is used.
 
-Tests cover leaves, wide/deep maps, thresholds, overlapping and mixed paths, cycles in the combined graph, states/review, unavailable ADR evidence, historical importance preservation, paged details, saved dependency changes, and unchanged drafts/folds/focus. Native narrow-pane, keyboard and screen-reader verification remains pending owner checks. Synthetic timing is not native paint or input-latency evidence.
+Tests cover leaves, wide/deep maps, thresholds, overlapping and mixed paths, cycles in the combined graph, states/review, historical ADR association coverage, unknown legacy evidence, historical importance preservation, paged details, saved dependency changes, and unchanged drafts/folds/focus. Native narrow-pane, keyboard and screen-reader verification remains pending owner checks. Synthetic timing is not native paint or input-latency evidence.
 
 Measured on Windows 10.0.26300, Intel Core Ultra 9 285K, Node v24.22.1, v0.1.78 worktree based on `7538d81` (dirty during implementation):
 

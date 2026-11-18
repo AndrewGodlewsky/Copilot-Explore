@@ -29,7 +29,20 @@ test('impact separates tree, confirmed and mixed exposure, counts unique questio
   assert.deepEqual(model.impactPath(result, 'c', 'dependency'), [{ id: 'a', via: null }, { id: 'b', via: 'dependency' }, { id: 'c', via: 'dependency' }]);
   assert.deepEqual(model.impactPath(result, 'f', 'combined'), [{ id: 'a', via: null }, { id: 'e', via: 'tree' }, { id: 'f', via: 'dependency' }]);
   assert.deepEqual(model.impactPath(result, 'f', 'dependency'), []);
-  assert.equal(result.adrAssociations.status, 'unavailable'); assert.equal(result.adrAssociations.count, null);
+  assert.equal(result.adrAssociations.status, 'available'); assert.equal(result.adrAssociations.count, 0);
+});
+
+test('impact identifies historical ADR sources across the changed node and combined dependency closure without changing bands', () => {
+  const doc = fixture(), original = index(doc).analyze('a');
+  const association = (id, ids) => ({ id, title: `ADR ${id}`, path: `docs/${id}.md`, status: 'proposed', sources: { journey: { id: doc.id, rootId: doc.rootId, createdAt: doc.createdAt }, adrPath: `nested/docs/${id}.md`, nodes: ids.map(id => ({ record: { id } })) } });
+  doc.adrFiles = [association('direct', ['a']), association('dependent', ['c', 'f']), association('unrelated', [doc.rootId]), { id: 'legacy', title: 'Legacy', path: 'old.md', status: 'proposed' }];
+  const before = structuredClone(doc), result = index(doc).analyze('a');
+  assert.equal(result.band, original.band); assert.deepEqual(result.counts, original.counts); assert.deepEqual(doc, before);
+  assert.equal(result.adrAssociations.count, 2); assert.equal(result.adrAssociations.unknown, 1); assert.equal(result.adrAssociations.status, 'partial');
+  assert.deepEqual(result.adrAssociations.entries.map(entry => entry.id), ['direct', 'dependent']); assert.match(result.adrAssociations.reason, /nested\/docs\/direct.md/); assert.match(result.adrAssociations.reason, /historical|captured/i);
+  const key = model.decisionImpactKey(doc), next = structuredClone(doc); next.adrFiles[0].sources.nodes[0].record.id = 'missing'; assert.notEqual(model.decisionImpactKey(next), key);
+  next.adrFiles = [...doc.adrFiles].reverse(); assert.equal(model.decisionImpactKey(next), key);
+  next.adrFiles = [association('foreign', ['a'])]; next.adrFiles[0].sources.journey.id = 'other'; assert.equal(index(next).analyze('a').adrAssociations.count, 0); assert.equal(index(next).analyze('a').adrAssociations.unknown, 1);
 });
 
 test('union traversal tolerates reverse-to-tree dependency cycles and never counts its source', () => {

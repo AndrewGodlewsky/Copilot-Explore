@@ -27,6 +27,11 @@ export class PortableReferenceClient {
     this.control('dialog').showModal(); this.invalidate(); this.control(nodeId ? 'output' : 'text').focus();
     if (nodeId) return this.copy();
   }
+  prefill(text) {
+    if (!this.active() || this.navigating) return;
+    this.open(); this.control('text').value = text;
+    this.invalidate('Historical reference loaded. Inspect its current target before opening.');
+  }
   close(focus = true) {
     this.stopRead(); this.preview = null; this.navigating = false;
     this.control('preview').textContent = ''; this.control('go').disabled = true;

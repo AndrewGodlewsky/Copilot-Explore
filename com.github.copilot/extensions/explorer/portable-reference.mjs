@@ -1,4 +1,4 @@
-import { validateProjectPath } from './project-repository.mjs';
+import { validateProjectPath } from './project-path.mjs';
 import { savedDigest } from './review-causes.mjs';
 import { effectiveAnswerState, effectiveKind } from './web/answer-state.mjs';
 
@@ -8,7 +8,7 @@ const prefix = `${heading}\n\n\`\`\`explorer-reference\n`, suffix = '\n```';
 const invalid = () => { throw Error('Invalid portable reference. Copy a supported Explorer reference with an exact saved-file location and target identity.'); };
 const identity = value => typeof value === 'string' && value.isWellFormed() && value.length <= 100 && !!value.trim() && value.trim() === value;
 
-function validate(value) {
+export function validatePortableReference(value) {
   if (!value || typeof value !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) invalid();
   const keys = Reflect.ownKeys(value);
   if (keys.some(key => typeof key !== 'string' || !Object.hasOwn(Object.getOwnPropertyDescriptor(value, key), 'value')) ||
@@ -19,6 +19,7 @@ function validate(value) {
   if (Object.hasOwn(value, 'fingerprint') && (typeof value.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(value.fingerprint))) invalid();
   return { format: 'explorer-reference', version: 1, path: value.path, journeyId: value.journeyId, nodeId: value.nodeId, ...(Object.hasOwn(value, 'fingerprint') ? { fingerprint: value.fingerprint } : {}) };
 }
+const validate = validatePortableReference;
 
 export function parsePortableReference(text) {
   if (typeof text !== 'string' || !text.isWellFormed() || Buffer.byteLength(text, 'utf8') > PORTABLE_REFERENCE_LIMIT) throw Error('Portable reference text must be valid Unicode within the 8 KiB limit.');

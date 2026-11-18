@@ -30,6 +30,7 @@ import { changeComments } from '../com.github.copilot/extensions/explorer/commen
 import { CommentsClient } from '../com.github.copilot/extensions/explorer/web/comments-client.mjs';
 import { ReviewHandoffsClient } from '../com.github.copilot/extensions/explorer/web/review-handoffs-client.mjs';
 import { PortableReferenceClient } from '../com.github.copilot/extensions/explorer/web/portable-reference-client.mjs';
+import { AdrSourcesClient } from '../com.github.copilot/extensions/explorer/web/adr-sources-client.mjs';
 import { changeReviewHandoffs } from '../com.github.copilot/extensions/explorer/review-handoffs.mjs';
 import { createPortableReference, formatPortableReference, parsePortableReference } from '../com.github.copilot/extensions/explorer/portable-reference.mjs';
 import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
@@ -246,7 +247,7 @@ test('impact uses saved full-map context across drafts and folds, explains mixed
   $('question-tools-toggle').click(); $('question-tab-context').click(); assert.ok($('decision-impact'));
   $('decision-impact').open = true; $('decision-impact').dispatchEvent(new f.window.Event('toggle'));
   assert.match($('impact-summary').textContent, /medium.*2 affected/i); assert.match($('impact-counts').textContent, /1 confirmed/); assert.match($('impact-counts').textContent, /1 mixed/);
-  assert.match($('impact-states').textContent, /Assumption: 1/); assert.match($('impact-adr').textContent, /not supported/);
+  assert.match($('impact-states').textContent, /Assumption: 1/); assert.match($('impact-adr').textContent, /No recorded ADR associations match/);
   const before = $('impact-summary').textContent;
   f.document.querySelector(`[data-branch-id="${b.id}"]`).click();
   $('focus-branch').click(); await f.poll(); assert.equal($('impact-summary').textContent, before); assert.equal($('answer'), editor); assert.equal(editor.selectionStart, 3);
@@ -2019,12 +2020,13 @@ test('claim evidence disclosure shows literal support, source navigation and imp
   f.open(f.explorer.doc.nodes[2].id); f.open(f.explorer.doc.nodes[1].id); assert.ok(f.document.getElementById('claim-c1'));
 });
 
-async function commentFixture(t) {
+async function commentFixture(t, before) {
   const project = await mkdtemp(join(tmpdir(), 'explorer-comment-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
   await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
   return fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
     const store = await e.projectRepository.create(e.doc); await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
     await e.contributorSettingsRequest({ action: 'save', revision: 0, displayName: 'Alice <script> λ' });
+    await before?.(e);
   } });
 }
 
@@ -2361,6 +2363,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.CommentsClient = CommentsClient;
   window.ReviewHandoffsClient = ReviewHandoffsClient;
   window.PortableReferenceClient = PortableReferenceClient;
+  window.AdrSourcesClient = AdrSourcesClient;
   window.CleanupClient = CleanupClient;
   window.QuestionHelpClient = QuestionHelpClient;
   window.ResearchReviewClient = ResearchReviewClient;
@@ -2376,7 +2379,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { AdrSourcesClient } from './adr-sources-client.mjs';", '').replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.empty ? !document.getElementById('library-home').hidden : options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -6036,6 +6039,31 @@ async function adrFileFixture(t) {
   const reviewFile = async () => { $('adr-file-review').click(); await until(() => !$('adr-file-save').disabled, 'ADR file preview'); };
   return { ...f, root, $, editor, openFile, reviewFile };
 }
+for (const outcome of ['slow preview', 'timeout']) test(`ADR file UI permits local Git preparation and still bounds a ${outcome}`, async t => {
+  const f = await adrFileFixture(t), $ = f.$; await f.openFile();
+  const fetch = f.window.fetch, timeout = f.window.setTimeout.bind(f.window), clear = f.window.clearTimeout.bind(f.window), timers = new Map(); let next = -1, release, signal;
+  f.window.setTimeout = (fn, ms, ...args) => {
+    if (ms < 10000) return timeout(fn, ms, ...args);
+    const id = next--; timers.set(id, { ms, run: () => fn(...args) }); return id;
+  };
+  f.window.clearTimeout = id => { if (!timers.delete(id)) clear(id); };
+  f.window.fetch = (path, options) => {
+    if (path !== 'api/adr-file' || JSON.parse(options.body).action !== 'prepare') return fetch(path, options);
+    signal = options.signal;
+    return new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(Error('Simulated pending request aborted')), { once: true });
+      release = () => fetch(path, options).then(resolve, reject);
+    });
+  };
+  t.after(() => { f.window.setTimeout = timeout; f.window.clearTimeout = clear; f.window.fetch = fetch; });
+  $('adr-file-review').click(); await until(() => release, 'slow preparation started');
+  const advance = ms => { for (const [id, timer] of timers) if (timer.ms <= ms) { timers.delete(id); timer.run(); } };
+  advance(11000); assert.equal(signal.aborted, false, 'a local Git preview can finish after ten seconds');
+  if (outcome === 'slow preview') { release(); await until(() => !$('adr-file-save').disabled, 'slow exact preview accepted'); assert.match($('adr-file-content').textContent, /Captured exploration sources/); }
+  else { advance(61000); await until(() => /Request timed out/.test($('adr-file-status').textContent), 'bounded request timeout'); assert.equal(signal.aborted, true); assert.equal($('adr-file-save').disabled, true); assert.equal($('adr-file-review').disabled, false); }
+  assert.equal($('answer'), f.editor); assert.equal(f.editor.selectionStart, 2); assert.equal(f.explorer.doc.adrFiles, undefined);
+});
+
 test('ADR file UI previews exact literal Markdown before saving and shows complete update comparison', async t => {
   const f = await adrFileFixture(t), $ = f.$; await f.openFile(); assert.equal($('adr-file-save').disabled, true); await f.reviewFile();
   const path = $('adr-file-path').textContent, bytes = $('adr-file-content').textContent;
@@ -6045,6 +6073,45 @@ test('ADR file UI previews exact literal Markdown before saving and shows comple
   $('adr-file-selection').value = f.explorer.doc.adrFiles[0].id; $('adr-file-selection').dispatchEvent(new f.window.Event('change')); await f.reviewFile();
   assert.equal($('adr-file-before').hidden, false); assert.equal($('adr-file-old').textContent, bytes); assert.equal($('adr-file-path').textContent, path);
   f.type('adr-file-number', '2'); assert.equal($('adr-file-save').disabled, true);
+});
+
+test('ADR source UI shows captured Personal answers and later source changes while preserving the editor', async t => {
+  const f = await adrFileFixture(t), $ = f.$; await f.openFile(); await f.reviewFile(); $('adr-file-save').click();
+  await until(() => /file and exploration association are saved/.test($('adr-file-status').textContent), 'source ADR saved');
+  const association = f.explorer.doc.adrFiles[0]; $('adr-file-selection').value = association.id; $('adr-file-selection').dispatchEvent(new f.window.Event('change'));
+  assert.equal(f.window.__updates.document().revision, f.explorer.doc.revision);
+  assert.ok($('adr-file-sources')); await until(() => !$('adr-file-sources').disabled, 'source control ready'); $('adr-file-sources').click(); await until(() => !$('adr-sources-panel').hidden, 'captured source view');
+  assert.match($('adr-sources-record').textContent, /Use <script>literal<\/script> storage/); assert.match($('adr-sources-meta').textContent, /Personal/); assert.equal($('adr-sources-inspect').disabled, true);
+  assert.equal($('adr-sources-panel').querySelector('script'), null); assert.equal($('answer'), f.editor); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ'); assert.equal(f.editor.selectionStart, 2);
+  const next = structuredClone(f.explorer.doc); next.nodes[1].answer = 'New saved choice'; await f.explorer.save(next); await f.poll();
+  assert.equal($('adr-sources-panel').hidden, true); await uiResponse(f, 'api/adr-file', 'status', () => $('adr-file-refresh').click()); await until(() => !$('adr-file-refresh').disabled, 'fresh status');
+  $('adr-file-sources').click(); await until(() => !$('adr-sources-panel').hidden, 'changed capture view'); assert.match($('adr-sources-status').textContent, /changed/); assert.match($('adr-sources-record').textContent, /Use <script>literal/); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ');
+});
+
+for (const leave of ['hide', 'revision']) test(`ADR source UI ignores a late inspection after ${leave}`, async t => {
+  const f = await adrFileFixture(t), $ = f.$; await f.openFile(); await f.reviewFile(); $('adr-file-save').click(); await until(() => f.explorer.doc.adrFiles?.length && !$('adr-file-refresh').disabled, 'source saved');
+  $('adr-file-selection').value = f.explorer.doc.adrFiles[0].id; $('adr-file-selection').dispatchEvent(new f.window.Event('change')); assert.ok($('adr-file-sources'));
+  const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-file' && JSON.parse(options.body).action === 'sources') await new Promise(resolve => { release = resolve; }); return response; };
+  $('adr-file-sources').click(); await until(() => release, 'source reply held');
+  if (leave === 'hide') $('adr-file-close').click(); else { const doc = structuredClone(f.explorer.doc); doc.nodes[1].answer += ' changed'; await f.explorer.save(doc); await f.poll(); }
+  release(); f.window.fetch = fetch; await delay(30); assert.equal($('adr-sources-panel').hidden, true); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ');
+});
+
+test('ADR source UI opens the historical shared reference through explicit inspection and keeps another question draft', async t => {
+  const f = await commentFixture(t, async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].answer = 'Use A'; doc.nodes[1].answerState = 'decided'; await e.save(saveAdrFixture(doc, (await e.scenarioPolicy()).label));
+    const p = await e.adrFileRequest({ action: 'prepare', journey: e.activeKey, clientId: randomUUID(), sequence: 1, selection: { kind: 'new', number: 1 } }); await e.adrFileRequest({ action: 'save', journey: e.activeKey, revision: e.doc.revision, token: p.token });
+  }), $ = id => f.document.getElementById(id), e = f.explorer;
+  const association = e.doc.adrFiles[0], other = e.doc.nodes[2]; f.open(other.id); f.type('answer', 'Keep other draft');
+  await uiResponse(f, 'api/adr-file', 'status', () => $('adr-file-open').click()).catch(error => { throw Error(`ADR status failed: ${error.message}; UI: ${$('adr-file-status').textContent}`); }); await until(() => !$('adr-file-review').disabled, 'project ADR status');
+  $('adr-file-selection').value = association.id; $('adr-file-selection').dispatchEvent(new f.window.Event('change')); assert.ok($('adr-file-sources'));
+  await uiResponse(f, 'api/adr-file', 'sources', () => $('adr-file-sources').click()); await until(() => !$('adr-sources-inspect').disabled, 'project source inspected');
+  $('adr-sources-inspect').click(); assert.equal($('adr-file-dialog').open, false); assert.equal($('portable-reference-dialog').open, true);
+  assert.deepEqual(JSON.parse($('portable-reference-text').value), association.sources.references[0]); assert.equal(f.window.__updates.scene().selected, other.id);
+  await uiResponse(f, 'api/portable-reference', 'inspect', () => $('portable-reference-inspect').click()); await until(() => !$('portable-reference-go').disabled, 'explicit reference inspection');
+  await uiResponse(f, 'api/action', 'open-reference', () => $('portable-reference-go').click()); await until(() => f.window.__updates.scene().selected === association.sources.nodes[0].record.id, 'source question selected');
+  f.open(other.id); assert.equal($('answer').value, 'Keep other draft');
 });
 test('ADR file UI reports collisions and explicitly reconciles a published file after association failure', async t => {
   const f = await adrFileFixture(t), $ = f.$; await f.openFile(); await f.reviewFile();

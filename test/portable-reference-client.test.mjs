@@ -27,6 +27,12 @@ test('portable copy presents literal selectable text, retains it on clipboard fa
   fail = false; await f.client.copy(); assert.equal(f.requests.length, 1); assert.match(f.$('status').textContent, /copied/i);
 });
 
+test('historical ADR reference prefill retains its original text and requires explicit inspection and navigation', async t => {
+  const f = await fixture(t), text = '{"format":"explorer-reference","fingerprint":"historical"}';
+  f.client.prefill(text); assert.equal(f.$('dialog').open, true); assert.equal(f.$('text').value, text); assert.equal(f.requests.length, 0); assert.equal(f.navigations.length, 0); assert.equal(f.$('go').disabled, true);
+  await f.client.inspect(); assert.equal(f.requests[0].text, text); assert.equal(f.navigations.length, 0);
+});
+
 test('portable inspection is explicit, literal, current-bound and opening passes the selected identity then focuses the result', async t => {
   const f = await fixture(t); f.client.open(); f.input('reference text'); assert.equal(f.requests.length, 0);
   await f.client.inspect(); assert.equal(f.requests[0].journey, 'current'); assert.equal(f.requests[0].revision, 1);

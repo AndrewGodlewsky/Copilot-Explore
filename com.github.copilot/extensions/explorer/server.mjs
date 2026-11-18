@@ -13,6 +13,7 @@ const assets = new Map([
   ['dashboard.mjs', ['dashboard.mjs', 'text/javascript; charset=utf-8']],
   ['app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
   ['portable-reference-client.mjs', ['portable-reference-client.mjs', 'text/javascript; charset=utf-8']],
+  ['adr-sources-client.mjs', ['adr-sources-client.mjs', 'text/javascript; charset=utf-8']],
   ['layout.mjs', ['layout.mjs', 'text/javascript; charset=utf-8']],
   ['minimap.mjs', ['minimap.mjs', 'text/javascript; charset=utf-8']],
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],

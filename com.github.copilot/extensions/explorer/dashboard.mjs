@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { opendir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Library } from './library.mjs';
+import { validateLibraryMetadata } from './library.mjs';
 import { StorageManagement } from './storage-management.mjs';
 import { validateDocument, MAX_DOCUMENT_BYTES } from './model.mjs';
 import { ANSWER_STATES, questionCounts, effectiveAnswerState, isQuestion } from './web/answer-state.mjs';
@@ -32,7 +32,7 @@ export function projectMap(doc) {
 }
 const distribution = (values, bounds) => bounds.map(([label, min, max]) => ({ label, value: values.filter(n => n >= min && n <= max).length }));
 export class Dashboard {
-  constructor(directory) { this.directory = directory; this.storage = new StorageManagement(directory); this.library = new Library(directory); this.scan = null; this.helpers = null; this.stale = false; }
+  constructor(directory) { this.directory = directory; this.storage = new StorageManagement(directory); this.scan = null; this.helpers = null; this.stale = false; }
   invalidate() { this.stale = true; }
   async start() {
     const scan = { names: [], rows: [], examined: 0, unavailable: 0, truncated: false, metadataUnavailable: false, startedAt: new Date().toISOString(), metadata: null };
@@ -41,7 +41,14 @@ export class Dashboard {
       await this.storage.root(); let discovered = 0;
       for await (const entry of await opendir(this.directory)) { if (++discovered > DASHBOARD_LIMITS.entries) { scan.truncated = true; break; } if (entry.name.endsWith('.explore.json')) scan.names.push(entry.name); }
       scan.names.sort();
-      try { scan.metadata = await this.library.metadata(); } catch { scan.metadataUnavailable = true; }
+      let metadataObserved = false;
+      try {
+        const file = join(this.directory, 'library.json'), entry = await this.storage.safe(file); metadataObserved = true;
+        const read = await this.storage.read(file, MAX_DOCUMENT_BYTES);
+        if (read.stamp !== entry.stamp) throw new Error('Archive metadata changed.');
+        const value = validateLibraryMetadata(JSON.parse(read.text));
+        scan.metadata = Object.fromEntries(Object.entries(value.entries).map(([key, entry]) => [key, entry.archived]));
+      } catch (error) { if (error.code === 'ENOENT' && !metadataObserved) scan.metadata = {}; else scan.metadataUnavailable = true; }
     } catch { scan.unavailable++; scan.truncated = true; }
     this.helpers = await readHelpers(this.directory);
   }
@@ -52,7 +59,7 @@ export class Dashboard {
       try {
         const read = await this.storage.read(join(this.directory, name), MAX_DOCUMENT_BYTES); bytes += Buffer.byteLength(read.text);
         const doc = validateDocument(JSON.parse(read.text)), row = projectMap(doc), key = hash(`${name}\0${doc.id}`);
-        row.archived = scan.metadata ? scan.metadata.entries[key]?.archived ?? false : null;
+        row.archived = scan.metadata ? scan.metadata[key] ?? false : null;
         scan.rows.push(row);
       } catch { scan.unavailable++; bytes += MAX_DOCUMENT_BYTES + 1; }
     }
@@ -112,7 +119,7 @@ export async function readHelpers(directory) {
           const event = JSON.parse(line); if (event.type === 'session.start') continue;
           const usage = event?.data?.usage;
           if (event.type !== 'session.usage_record' || !safeId(event.id) || !timestamp(event.timestamp) || !usage || typeof usage !== 'object' || Array.isArray(usage)) throw new Error();
-          const accounting = usage.accounting, key = accounting?.sourceSessionId === id && safeId(accounting.usageId) && count(accounting.sequence) ? `${id}:${accounting.usageId}` : `${id}:event:${event.id}`;
+          const accounting = usage.accounting, key = JSON.stringify(accounting?.sourceSessionId === id && safeId(accounting.usageId) && count(accounting.sequence) ? [id, 'accounting', accounting.usageId] : [id, 'event', event.id]);
           if (seen.has(key)) continue; seen.add(key);
           const row = { time: new Date(event.timestamp).toISOString(), model: safeId(usage.model, 128) ? usage.model : 'Unknown', credits: ['complete', 'partial', 'unavailable'].includes(usage.aiCreditsStatus) ? usage.aiCreditsStatus : 'unavailable' };
           for (const field of fields) { const value = field === 'totalNanoAiu' ? usage.copilotUsage?.totalNanoAiu : usage[field]; if (count(value)) row[field] = value; }

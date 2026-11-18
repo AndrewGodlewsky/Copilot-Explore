@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, appendFile, rename, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { createDocument, addQuestions, addDirection, answerNode } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { createDocument, addQuestions, addDirection, answerNode, MAX_DOCUMENT_BYTES } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { Dashboard, readHelpers, aggregateHelpers } from '../com.github.copilot/extensions/explorer/dashboard.mjs';
+import { createUsageRecorder } from '../com.github.copilot/extensions/explorer/research-usage.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { atomicWrite } from '../com.github.copilot/extensions/explorer/storage.mjs';
@@ -23,6 +25,63 @@ async function fixture(t) {
   return { directory, library, explorer };
 }
 const request = (explorer, action = 'refresh', extra = {}) => explorer.dashboardRequest({ action, scope: 'active', from: '', to: '', ...extra });
+
+test('recorder-backed accounting and fallback receipt identities cannot collide', async t => {
+  const f = await fixture(t), id = randomUUID(), recorder = await createUsageRecorder(id, join(f.directory, 'usage'));
+  t.after(() => recorder.finish('completed'));
+  const accounting = { type: 'session.usage_record', id: 'accounted', timestamp: '2026-11-17T00:00:00Z', data: { usage: { totalTokens: 11, accounting: { sourceSessionId: id, usageId: 'event:receipt-1', sequence: 0 } } } };
+  const repeated = { ...accounting, id: 'repeat', data: { usage: { ...accounting.data.usage, totalTokens: 999 } } };
+  recorder.record(accounting); recorder.record({ ...accounting, id: 'receipt-1', data: { usage: { totalTokens: 17 } } }); recorder.record(repeated);
+  await recorder.flush();
+  const file = join(f.directory, 'usage', 'session-state', id, 'events.jsonl');
+  const retained = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(row => row.type === 'session.usage_record');
+  assert.equal(retained.length, 2); assert.equal(retained.reduce((sum, row) => sum + row.data.usage.totalTokens, 0), 28);
+  let summary = aggregateHelpers(await readHelpers(f.directory), { from: '', to: '' });
+  assert.equal(summary.receipts, 2); assert.equal(summary.metrics.totalTokens.value, 28);
+  await appendFile(file, JSON.stringify(repeated) + '\n');
+  summary = aggregateHelpers(await readHelpers(f.directory), { from: '', to: '' });
+  assert.equal(summary.receipts, 2); assert.equal(summary.metrics.totalTokens.value, 28, 'first accounting identity wins even if replayed in retained input');
+});
+
+test('dashboard metadata growth and replacement after the precheck are unknown, not active defaults', async t => {
+  for (const mutation of ['grow', 'replace', 'remove']) await t.test(mutation, async t => {
+    const f = await fixture(t), doc = createDocument('Map'), file = join(f.directory, 'library.json');
+    await writeFile(join(f.directory, 'a.explore.json'), JSON.stringify(doc));
+    const initial = JSON.stringify({ version: 1, revision: 0, entries: {}, bindings: {} }); await writeFile(file, initial);
+    const dashboard = new Dashboard(f.directory); let changed = false;
+    const change = async () => {
+      if (changed) return; changed = true;
+      if (mutation === 'grow') await appendFile(file, ' '.repeat(MAX_DOCUMENT_BYTES));
+      else if (mutation === 'remove') await rm(file);
+      else { const replacement = file + '.replacement'; await writeFile(replacement, initial); await rename(replacement, file); }
+    };
+    const safe = dashboard.storage.safe.bind(dashboard.storage);
+    dashboard.storage.safe = async (path, options) => { const result = await safe(path, options); if (path === file) await change(); return result; };
+    // Exercise the same mutation against the old precheck seam for the RED run.
+    const safeFile = Library.prototype.safeFile;
+    t.mock.method(Library.prototype, 'safeFile', async function (name, limit) { const result = await safeFile.call(this, name, limit); if (result === file) await change(); return result; });
+    const result = await dashboard.request({ action: 'refresh', scope: 'active', from: '', to: '' });
+    assert.equal(changed, true); assert.equal(result.stock.metadataUnavailable, true); assert.equal(result.stock.journeys, 0);
+    assert.equal((await dashboard.request({ action: 'cached', scope: 'all', from: '', to: '' })).stock.journeys, 1);
+  });
+});
+
+test('dashboard archive metadata is bounded, schema-validated and compact with missing metadata still active', async t => {
+  const f = await fixture(t), doc = createDocument('Map'), file = join(f.directory, 'library.json'), key = digest(`a.explore.json\0${doc.id}`);
+  await writeFile(join(f.directory, 'a.explore.json'), JSON.stringify(doc));
+  const dashboard = new Dashboard(f.directory), input = { action: 'refresh', scope: 'active', from: '', to: '' };
+  assert.equal((await dashboard.request(input)).stock.journeys, 1, 'missing metadata preserves legacy active default');
+  const metadata = { version: 1, revision: 0, entries: { [key]: { pinned: false, archived: true, lastOpenedAt: null, ignored: canary } }, bindings: { [digest('binding')]: key }, ignored: canary.repeat(1000) };
+  await writeFile(file, JSON.stringify(metadata));
+  let result = await dashboard.request({ ...input, scope: 'archived' }); assert.equal(result.stock.journeys, 1);
+  assert.deepEqual(dashboard.scan.metadata, { [key]: true });
+  assert.ok(!JSON.stringify(dashboard.scan).includes(canary)); assert.ok(JSON.stringify(dashboard.scan).length < 2000);
+  for (const invalid of [{ ...metadata, bindings: { invalid: key } }, { ...metadata, entries: { [key]: { ...metadata.entries[key], pinned: 'yes' } } }]) {
+    await writeFile(file, JSON.stringify(invalid)); result = await dashboard.request(input); assert.equal(result.stock.metadataUnavailable, true); assert.equal(result.stock.journeys, 0);
+  }
+  await writeFile(file, JSON.stringify(metadata) + ' '.repeat(MAX_DOCUMENT_BYTES));
+  result = await dashboard.request(input); assert.equal(result.stock.metadataUnavailable, true); assert.equal(result.stock.journeys, 0);
+});
 test('dashboard deduplicates identical stock, excludes ambiguous IDs across archives, and separates answer measures', async t => {
   const f = await fixture(t), doc = createDocument(canary);
   addQuestions(doc, doc.rootId, [{ question: canary, category: 'Scope' }, { question: 'Scope?', category: 'Scope' }]);

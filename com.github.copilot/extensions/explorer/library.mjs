@@ -15,6 +15,15 @@ const validKey = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(val
 const entryKey = (name, id) => hash(`${name}\0${id}`);
 const emptyMetadata = () => ({ version: 1, revision: 0, entries: {}, bindings: {} });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+export function validateLibraryMetadata(value) {
+  if (value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0 || !value.entries || !value.bindings || typeof value.entries !== 'object' || typeof value.bindings !== 'object' || Array.isArray(value.entries) || Array.isArray(value.bindings)) throw new Error('Invalid metadata.');
+  for (const [key, entry] of Object.entries(value.entries)) {
+    if (!validKey(key) || !entry || typeof entry.pinned !== 'boolean' || typeof entry.archived !== 'boolean' || (entry.lastOpenedAt !== null && (typeof entry.lastOpenedAt !== 'string' || !Number.isFinite(Date.parse(entry.lastOpenedAt))))) throw new Error('Invalid metadata.');
+    value.entries[key] = { pinned: entry.pinned, archived: entry.archived, lastOpenedAt: entry.lastOpenedAt };
+  }
+  for (const [key, entry] of Object.entries(value.bindings)) if (!validKey(key) || !validKey(entry)) throw new Error('Invalid binding.');
+  return value;
+}
 function ambiguousIds(records) {
   const groups = new Map();
   for (const { document } of records) {
@@ -56,13 +65,7 @@ export class Library {
   async metadata() {
     try {
       const file = await this.safeFile('library.json', MAX_DOCUMENT_BYTES), value = JSON.parse(await readFile(file, 'utf8'));
-      if (value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0 || !value.entries || !value.bindings || typeof value.entries !== 'object' || typeof value.bindings !== 'object' || Array.isArray(value.entries) || Array.isArray(value.bindings)) throw new Error('Invalid metadata.');
-      for (const [key, entry] of Object.entries(value.entries)) {
-        if (!validKey(key) || !entry || typeof entry.pinned !== 'boolean' || typeof entry.archived !== 'boolean' || (entry.lastOpenedAt !== null && (typeof entry.lastOpenedAt !== 'string' || !Number.isFinite(Date.parse(entry.lastOpenedAt))))) throw new Error('Invalid metadata.');
-        value.entries[key] = { pinned: entry.pinned, archived: entry.archived, lastOpenedAt: entry.lastOpenedAt };
-      }
-      for (const [key, entry] of Object.entries(value.bindings)) if (!validKey(key) || !validKey(entry)) throw new Error('Invalid binding.');
-      return value;
+      return validateLibraryMetadata(value);
     } catch (error) {
       if (error.code === 'ENOENT') return emptyMetadata();
       throw new Error('Library metadata could not be read. It has been preserved; restore library.json before changing the library.');

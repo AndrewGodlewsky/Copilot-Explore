@@ -268,6 +268,10 @@ try {
   assert.equal(reloadedProject.status, 200); const reconciledState = await reloadedProject.json();
   assert.equal(reconciledState.projectChange, null); assert.equal(reconciledState.document.objective, 'External teammate change');
   assert.equal(await readFile(join(project, copyPreview.path), 'utf8'), incomingCopyBytes); assert.equal(requests.length, copyRequests);
+  const gitStatusResponse = await fetch(projectReopen.url + 'api/project-git-status', { method: 'POST', headers: reconcileHeaders, body: JSON.stringify({ journey: reconciledState.activeKey }) });
+  assert.equal(gitStatusResponse.status, 200); const gitStatus = await gitStatusResponse.json();
+  assert.equal(gitStatus.source, 'saved'); assert.equal(gitStatus.git.file, 'untracked'); assert.equal(gitStatus.git.remoteFreshness, 'unknown');
+  assert.equal(await readFile(join(project, copyPreview.path), 'utf8'), incomingCopyBytes); assert.equal(requests.length, copyRequests);
   await session.rpc.canvas.close({ instanceId: 'project-storage-fixture' });
   console.log('Project storage: fresh installed metadata controls create/reopen; artifact workspace is excluded and changed cwd rejects saves without altering shared content.');
   console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, preview staging/explicit acceptance/native exclusion/close discard, no-answer direction seed/preview acceptance, answers, research access guard, exports, stale-response rejection, close/reopen, duplicate import, cross-session library reopen and shared-writer protection. Local fixture only; no paid model or UI automation.`);

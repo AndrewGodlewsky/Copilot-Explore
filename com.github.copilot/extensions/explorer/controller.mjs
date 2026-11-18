@@ -5,6 +5,7 @@ import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
+import { ProjectGitStatus } from './project-git-status.mjs';
 import { projectDocumentAccess } from './storage-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
@@ -595,6 +596,12 @@ export class Explorer {
     try { await this.readCurrent(); } catch { this.markProjectChanged(); }
   }
   observeProject() { return !this.projectStore ? Promise.resolve() : this.transact(() => this.checkProjectFreshness()); }
+  projectGitStatusRequest(input) {
+    return this.transact(async () => {
+      if (this.closed || !this.projectStore || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).join(',') !== 'journey' || input.journey !== this.activeKey) throw Error('The selected project journey changed. Refresh the current journey.');
+      return { ...await new ProjectGitStatus(this.projectRepository, this.projectStore).read(), revision: this.doc.revision };
+    });
+  }
   projectReconciliationRequest(input) {
     return this.transact(async () => {
       if (this.closed || !this.projectStore || !input || typeof input !== 'object' || Array.isArray(input) || !['inspect', 'preserve'].includes(input.action) || Object.keys(input).sort().join(',') !== 'action,journey,revision' || input.journey !== this.activeKey || input.revision !== this.doc.revision) throw Error('The project reconciliation selection changed. Refresh the current journey.');

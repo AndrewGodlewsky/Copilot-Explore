@@ -1,5 +1,7 @@
 # Saving journeys in a project
 
+Use **Journey details → Save and Git status** for a [read-only local status check](project-git-status.md). Private drafts, saved files, staged changes and local commits are separate states; remote freshness remains unknown.
+
 Choose **Project repository** under Save location when starting an exploration. The default folder is `.explorer/journeys`; another repository-relative folder is allowed. Explorer generates a filename from the journey ID. Journey details shows **Project**, the relative path, and the sharing reminder. **Personal library** remains the default.
 
 Project saves are local filesystem writes. Commit the shared `.explore.json` file through your normal Git workflow so another person receives it when they pull. Explorer does not stage, commit, push, pull or change sessions. Only committed exploration content goes into the file. Drafts, local history/recovery, visual references, preferences, observations, usage receipts and helper recovery records remain private.

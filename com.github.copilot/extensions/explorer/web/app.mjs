@@ -36,6 +36,7 @@ function stopPolling() {
 }
 function connectionStatus(message = '') { $('connection-status').textContent = message; $('connection-status').hidden = !message; }
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
+let projectGitEpoch = 0, projectGitFlight = null, projectGitResult = null, projectGitError = '';
 let librarySearchTimer, librarySearchFlight = false, librarySearchQueued = false, librarySearchNext = null;
 let outlinePage = 0, outlineFilterStamp = '', outlineMode = false, outlineNavigated = false;
 let revisitDay = localDate();
@@ -58,7 +59,7 @@ let previewEdits = null, acceptedIds = new Set(), acceptedParentId = null;
 let references = { journey: null, revision: 0, nodeIds: [], error: '', loading: false, saving: false, retryIds: null, open: false, epoch: 0 };
 const drafts = new Map(), nodeUi = new Map();
 const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
-  changed: () => { cleanup.sync(); const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); renderCleanup(); renderOutline(); } },
+  changed: () => { cleanup.sync(); renderProjectGitStatus(); const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); renderCleanup(); renderOutline(); } },
   restored: (id, value) => { if (id === selected && $('answer') && !composing) { $('answer').value = value; if ($('answer-state')) $('answer-state').value = draftClient.state(id); } } });
 const cleanup = new CleanupClient({ fetch: (...args) => fetch(...args),
   context: () => {
@@ -350,6 +351,7 @@ function apply(next, reset = false) {
   const compactFocused = $('nodes').contains(document.activeElement);
   const previousSelection = selected;
   const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
+  if (!!state.projectChange !== !!next.projectChange) { cancelProjectGitStatus(); projectGitResult = null; projectGitError = ''; }
   if (viewerTarget && (changedDocument || viewerTarget.journey !== (next.activeKey ?? next.document?.id) || viewerTarget.revision !== next.document?.revision)) {
     invalidateViewer('The journey changed. Reopen Export maps and preview again.');
     viewerTarget = null; $('viewer-preview').disabled = true;
@@ -358,6 +360,7 @@ function apply(next, reset = false) {
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
     if ($('project-reconcile-dialog').open) closeProjectReconciliation();
+    cancelProjectGitStatus(); projectGitResult = null; projectGitError = '';
     if ($('project-copy-dialog').open) closeProjectCopy();
     outlineNavigated = false;
     minimap.reset();
@@ -421,6 +424,7 @@ function apply(next, reset = false) {
   if (firstQuestions && selected === doc.rootId) expanded = false;
   $('map-title').textContent = doc.topic;
   $('journey-storage').textContent = state.storage?.scope === 'project' ? `Project: ${state.storage.path}. Saved locally; commit and share through Git for teammates to receive changes. Drafts, history and usage stay private.` : 'Personal library: Saved on this computer.';
+  renderProjectGitStatus();
   $('current-mode').textContent = `Mode: ${MODES[effectiveMode(doc)].label}`;
   const { answered, resolved, deferred, unresolved } = questionCounts(doc);
   $('progress').textContent = `${answered} answered · ${resolved} resolved · ${deferred} deferred · ${unresolved} unresolved · Saved locally`;
@@ -696,6 +700,42 @@ function switchAllowed() {
   if ([...nodeUi.values()].some(ui => ui.revisitDraft)) { notice('Save your reminder edits or choose Use saved reminder before opening another journey.'); return false; }
   return true;
 }
+function cancelProjectGitStatus() { projectGitEpoch++; projectGitFlight?.abort(); projectGitFlight = null; }
+function renderProjectGitStatus() {
+  $('project-git-panel').hidden = state.storage?.scope !== 'project';
+  $('project-editor-status').textContent = draftClient.uncommitted() ? 'Private answer drafts are not in the project file. Save answers when ready; recovered conflicts need review.' : 'No unsaved answer drafts in this canvas.';
+  $('project-git-refresh').disabled = !!projectGitFlight;
+  const result = $('project-git-result');
+  if (projectGitFlight) { result.textContent = 'Reading selected-file and branch status locally…'; return; }
+  if (projectGitError) { result.textContent = projectGitError; return; }
+  if (!projectGitResult) { result.textContent = 'Refresh to inspect this journey’s saved file and Git state.'; return; }
+  const status = projectGitResult, git = status.git, lines = [];
+  lines.push(`Observed ${new Date(status.checkedAt).toLocaleTimeString()}. This is a snapshot; refresh after Git or file changes.`);
+  if (status.revision !== state.document?.revision || state.projectChange) lines.push('The map or checkout changed since this observation. Review project changes and refresh.');
+  lines.push({ saved: 'Saved file matches the displayed map at the time of this observation.', review: 'File or checkout differs from the displayed base. Review project changes before editing.', missing: 'The selected project file is missing. Preserve the displayed version or recover through Git.', unavailable: 'Saved-file status is unknown.' }[status.source]);
+  if (git.state !== 'available') lines.push(status.message);
+  else {
+    lines.push(`Selected file: ${ { untracked: 'Untracked — add it through your Git workflow to share it.', ignored: 'Ignored — review repository ignore rules if this file should be shared.', committed: 'Committed in the current local HEAD; selected file has no staged or unstaged changes.', modified: 'Has local Git changes; review them before committing.', conflicted: 'Unresolved Git conflict; resolve it before reopening.', missing: 'Missing and not reported as tracked by Git.' }[git.file] }`);
+    const labels = { '.': 'none', M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', U: 'unmerged', T: 'type changed' };
+    lines.push(`Staged: ${labels[git.index]}. Unstaged: ${labels[git.worktree]}. Other repository files are outside this view.`);
+    lines.push(git.detached ? `Repository: detached HEAD ${git.head.slice(0, 12)}. Choose a branch in Git before sharing.` : `Repository branch: ${git.branch}${git.unborn ? ' (no commits yet)' : ''}.`);
+    lines.push(!git.upstream ? 'No upstream configured. Configure one in your Git workflow to compare branches.' : git.ahead === null ? `Upstream ${git.upstream}: comparison unavailable from local refs.` : `Local comparison with ${git.upstream}: ${git.ahead} ahead, ${git.behind} behind. Counts describe the whole branch, not just this file.`);
+  }
+  lines.push('Remote freshness is unknown. Local tracking refs may be stale; Explorer does not fetch or verify GitHub. Use your Git workflow to fetch, review, commit and share.');
+  result.replaceChildren(...lines.filter(Boolean).map(line => el('p', {}, line)));
+}
+$('project-git-refresh').addEventListener('click', async () => {
+  cancelProjectGitStatus(); const epoch = projectGitEpoch, page = pageEpoch, journey = state.activeKey, abort = new AbortController();
+  projectGitFlight = abort; projectGitError = ''; renderProjectGitStatus();
+  const current = () => !closed && !suspended && epoch === projectGitEpoch && page === pageEpoch && journey === state.activeKey;
+  const timeout = setTimeout(() => abort.abort(), 20000);
+  try {
+    const response = await fetch('api/project-git-status', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ journey }) });
+    const result = await response.json(); if (!response.ok) throw Error(result.error ?? 'Status unavailable.');
+    if (current()) projectGitResult = result;
+  } catch (error) { if (current()) { projectGitResult = null; projectGitError = abort.signal.aborted ? 'Status check timed out. Refresh to retry.' : error.message; } }
+  finally { clearTimeout(timeout); if (current()) { projectGitFlight = null; renderProjectGitStatus(); } }
+});
 let projectReconcileEpoch = 0, projectReconcilePreview = null, projectReconcileFlight = null;
 function closeProjectReconciliation() {
   projectReconcileEpoch++; projectReconcileFlight?.abort(); projectReconcileFlight = null; projectReconcilePreview = null;
@@ -2779,6 +2819,7 @@ window.addEventListener('pagehide', event => {
   if (viewerTarget) { invalidateViewer('The page was suspended. Reopen Export maps and preview again.'); viewerTarget = null; $('viewer-preview').disabled = true; }
   closeResearchReview();
   suspended = true; pageEpoch++; actionEpoch++; stopPolling(); actionAbort?.abort(); actionAbort = null; busy = false;
+  cancelProjectGitStatus(); renderProjectGitStatus();
   minimap.reset();
   if ($('diagnostics-dialog').open) closeDiagnostics();
   cleanup.cancel();

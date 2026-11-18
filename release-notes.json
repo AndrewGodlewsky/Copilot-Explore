@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.74",
+    "summary": "Inspect a project journey’s local save and Git status without changing it. See private drafts separately from untracked, ignored, staged, modified and committed files, plus branch and local upstream counts. Remote freshness stays explicitly unknown; refresh preserves your editor and pending work."
+  },
+  {
     "version": "0.1.73",
     "summary": "Review project files changed by Git or another writer before continuing. Reload keeps incoming files untouched, preserves prior local history and exact private drafts, and rejects stale AI results. You can also preserve the displayed version privately when a project file is missing or conflicted."
   },

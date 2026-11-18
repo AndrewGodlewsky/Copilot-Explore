@@ -211,6 +211,10 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
   window.addEventListener('pagehide', () => window.clearInterval(timer));
   return {
     cancel,
+    allowsShortcut(event) {
+      const current = recording?.settings || settings;
+      return !!current?.shortcut && !checking && !optionsBusy && !matchesShortcut(event, current.shortcut);
+    },
     bind(answer, root) {
       if (recording && !sameContext(recording)) cancel();
       buildControls(answer, root);

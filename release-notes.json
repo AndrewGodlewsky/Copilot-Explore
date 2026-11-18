@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.58",
+    "summary": "Open Commands for existing actions and bounded local journey or node search. Keyboard navigation, private draft opt-in and an optional conflict-aware shortcut preserve your editor. Helper actions keep their review steps; stale results cannot bypass draft or source checks. Matching snippets now retain hits after long whitespace."
+  },
+  {
     "version": "0.1.57",
     "summary": "Combine saved state, research, review, answer drafts, importance and reminders in Outline or local library node search. See bounded matching snippets and result pages, with explicit archived scope and private draft-text opt-in. Search preserves editors and rejects stale source navigation; incomplete library coverage is shown."
   },

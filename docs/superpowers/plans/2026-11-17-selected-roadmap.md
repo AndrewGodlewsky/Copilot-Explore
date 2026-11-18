@@ -1317,6 +1317,30 @@ Read issue-16.md, task-47-design-notes.md, AGENTS.md and the current library/Out
 - Test Unicode/whitespace/long maps, mixed filters, missing/legacy data, draft canaries, source changes, archived/imported/duplicate journeys, corrupt indexes, no-results, repeat polling and one-action navigation. Use disposable roots and actual HTTP/jsdom flows; no model calls or native UI automation.
 - Run npm test/check/package and relevant focused performance/HTTP tests. Synchronize patch metadata/README/release note, self-review and commit; no nested agents, publication or issue closure. Write task-47-report.md with search/index/filter/privacy contracts, bounds, evidence, SHA and pending manual checks. Controller reviews and publishes.
 
+Published task 47: **v0.1.57**, `9460cbe`, required checks recorded in the task report; independent review approved and remote main verified.
+
+## Task 48: Open actions from a command palette (#15 / original17)
+
+Read issue-17.md, task-48-design-notes.md, AGENTS.md and current search/action/voice contracts. BASE is `9460cbe4d66ca24de70f7110bb40a6bc5b4416c5`; ship version **0.1.58**. Reconcile the published interfaces against the current implementation before editing. Propose concrete bounds, ownership, freshness and verification seams before broad edits; record the accepted contract in this task and its brief.
+
+- Add a compact visible palette button and a conflict-aware optional shortcut. Show applicable existing actions and bounded local journey/node search results. Reuse existing handlers and eligibility checks; never create a parallel route around pending requests, source preview, draft flush, history or user-commit safeguards.
+- Resolve each activation against current identity/state at execution. Disabled actions explain why; stale captured nodes/commands cannot mutate the wrong journey. AI-start and destructive actions keep their established explicit review/confirmation flows rather than executing invisibly from search.
+- Inspect configured voice shortcut before intercepting any combination. Never steal that shortcut, IME composition or native editing keys; no OS global hook or host preference mutation. The visible button remains usable when a safe host shortcut cannot be established.
+- Provide keyboard list selection, Enter activation, Escape dismissal, visible focus and sensible return focus. Handle the originating node/control disappearing while open. Opening or operating the palette must honor the current explicit dictation cancellation boundary and never redirect late audio.
+- Reuse local search privacy/limits and keep result DOM/listener lifetimes bounded. No automatic model work, remote indexing or document/history edits for palette navigation.
+- Test shortcut conflicts/composition, keyboard focus, stale state/removed nodes/journey switch while open, pending helpers, repeated open/close, one action per activation and draft preservation through actual HTTP/jsdom. Native host shortcut conflicts remain owner checks. Run npm test/check/package.
+- Synchronize patch metadata/README/release note, self-review and commit; no nested agents, publication, issue closure or native UI automation. Write task-48-report.md with command/shortcut/lifecycle contracts, evidence, SHA and pending checks. Controller reviews and publishes.
+
+### Accepted implementation contract (Task48)
+
+Commands route to existing live controls only: `library-toggle`, `outline-toggle`, `fit`, `center-question`, `minimap-toggle`, `navigation-open`, `edit-guidance`, `history-open`, `recovery-open`, `visual-export-open`, `decision-brief`, `implementation-handoff`, `check-answers`, `challenge-decisions`, `research-request`. Live visibility/disabled state and busy/save guards determine eligibility; safe navigation remains available during helper work. Helper commands open existing review dialogs; no raw save, accept, delete or generation action is added.
+
+The visible Commands button opens a modal. Optional Ctrl+Shift+P is off by default and page-local; it fails closed with unknown/checking voice settings, compares the current or recording-captured shortcut through the voice owner, and never intercepts editable targets, IME, repeats or another dialog. No host settings or global hook change. Native host/OS conflicts remain manual.
+
+Current journey search uses the shared matcher; saved-library search uses the published search endpoint, exact key/source-hash/node identities and validated cursors. Saved question/answer/category/topic only; private answer text requires a fresh opt-in, while research/reminder/project/history content is excluded. At most 200 result rows plus 15 commands are mounted. Library pages retain the 16-file/32MiB/2,000-discovery-entry bounds, incomplete-coverage messages and explicit continuation. No hidden polling scans or persisted index. Task47M1 is fixed in the shared matcher with original-grapheme excerpts capped at 180 code points that include the actual hit after long whitespace.
+
+Query/scope/page/close/pagehide and identity changes invalidate results and pending flush activations. Search is debounced, single-flight, latest-request-only. Library activation invokes existing switchJourney with a post-flush identity/revision/request/eligibility predicate, followed by existing locked source validation; successful deliberate dispatch selects its validated result once. Command targets are looked up again at activation. Modal keyboard selection/Enter/Escape/Tab and fallback focus do not rebuild the editor. Opening explicitly cancels dictation and late audio cannot move to the query. Actual HTTP/jsdom regression coverage retains drafts, state, reminder conflicts/orphans, IME/editor identity, stale sources, pending/preview safety and repeated lifetimes. No host integration changes or installed-SDK fixture are anticipated.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

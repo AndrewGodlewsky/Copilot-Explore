@@ -35,6 +35,170 @@ const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', op
   { title: 'Whole neighborhood', description: 'Invite everyone nearby.', pros: ['More tools'], cons: ['More coordination'] },
 ], recommendation: 'Try a small pilot.', uncertainty: 'No external sources consulted.', sources: [] };
 
+test('command palette keeps the same drafts and editor, traps focus and activates a command once', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'PRIVATE_PALETTE'); f.type('revisit-condition', 'Keep reminder'); f.type('manual-question', 'Keep direction');
+  const answer = $('answer'), reminder = $('revisit-condition'), manual = $('manual-question'), saved = JSON.stringify(f.explorer.doc), actions = f.actions.length;
+  answer.focus(); answer.setSelectionRange(2, 5);
+  assert.ok($('palette-open'), 'visible palette entry'); $('palette-open').click();
+  assert.equal($('palette-dialog').open, true); assert.equal(f.document.activeElement, $('palette-query'));
+  paletteKey(f, $('palette-query'), { key: 'ArrowUp', code: 'ArrowUp', ctrlKey: false, shiftKey: false }); assert.equal(f.document.activeElement, $('palette-results').lastChild);
+  f.type('palette-query', 'PRIVATE_PALETTE'); assert.equal($('palette-results').children.length, 0);
+  $('palette-draft-text').click(); assert.equal($('palette-results').children.length, 1); assert.match($('palette-results').textContent, /PRIVATE_PALETTE/);
+  await f.poll(); assert.equal($('answer'), answer); assert.equal($('revisit-condition'), reminder); assert.equal($('manual-question'), manual);
+  $('palette-close').focus(); $('palette-close').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })); assert.equal(f.document.activeElement, $('palette-query'));
+  $('palette-query').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal(f.document.activeElement, answer); assert.equal(answer.selectionStart, 2); assert.equal(answer.selectionEnd, 5);
+  assert.equal(JSON.stringify(f.explorer.doc), saved); assert.equal(f.actions.length, actions);
+  for (let i = 0; i < 5; i++) { $('palette-open').click(); $('palette-close').click(); }
+  $('palette-open').click(); f.type('palette-query', 'Show minimap');
+  $('palette-query').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+  $('palette-query').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  assert.equal($('minimap').hidden, false); assert.equal($('palette-dialog').open, false); assert.equal($('answer'), answer);
+  $('palette-open').click(); f.type('palette-query', 'Hide minimap'); assert.equal($('palette-commands').children.length, 1); $('palette-commands').firstChild.click(); assert.equal($('minimap').hidden, true);
+});
+
+test('command palette saved search rejects a closed selection after awaited draft flush', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  await f.explorer.library.import(createDocument('Palette target')); const original = f.explorer.activeKey;
+  f.open(f.explorer.doc.nodes[1].id); let release; const held = new Promise(resolve => { release = resolve; }); f.pauseDraftWrite(() => held);
+  f.type('answer', 'KEEP_PALETTE_DRAFT'); assert.ok($('palette-open')); $('palette-open').click();
+  $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'Palette target');
+  await until(() => $('palette-results').querySelector('[data-node-id]'), 'palette target');
+  const row = $('palette-results').querySelector('[data-node-id]'); row.click(); row.click(); $('palette-close').click(); release();
+  await until(() => !$('workspace').inert, 'flush finished'); assert.equal(f.explorer.activeKey, original);
+  assert.equal(f.actions.filter(a => a.action === 'open').length, 0); assert.equal($('answer').value, 'KEEP_PALETTE_DRAFT');
+});
+
+const paletteKey = (f, target, props = {}) => {
+  const event = new f.window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, ...props }); target.dispatchEvent(event); return event;
+};
+test('command palette shortcut is opt-in, fails closed on unknown or conflicting voice settings and skips editors and composition', async t => {
+  const voice = voiceFixture(); let configured = { ...(await voice.status()) };
+  voice.status = async () => configured;
+  const f = await fixture(t, 340, voice), $ = id => f.document.getElementById(id);
+  assert.equal(paletteKey(f, $('palette-open')).defaultPrevented, false);
+  $('palette-open').click(); $('palette-shortcut').click(); $('palette-close').click();
+  assert.equal(paletteKey(f, $('palette-open')).defaultPrevented, false, 'voice settings are unknown before binding an editor');
+  f.open(f.explorer.doc.nodes[1].id); await until(() => !$('voice-record').disabled, 'voice settings known');
+  assert.equal(paletteKey(f, $('answer')).defaultPrevented, false, 'editing is never intercepted');
+  assert.equal(paletteKey(f, $('palette-open'), { isComposing: true }).defaultPrevented, false);
+  assert.equal(paletteKey(f, $('palette-open'), { repeat: true }).defaultPrevented, false);
+  $('answer').dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  assert.equal(paletteKey(f, $('palette-open')).defaultPrevented, false); $('palette-open').click(); assert.equal($('palette-dialog').open, false);
+  $('answer').dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  assert.equal(paletteKey(f, $('palette-open')).defaultPrevented, true); assert.equal($('palette-dialog').open, true); $('palette-close').click();
+  configured = { ...configured, shortcut: { code: 'KeyP', ctrl: true, shift: true, meta: false, alt: false }, label: 'Ctrl + Shift + P' };
+  $('answer').focus(); await until(() => /Shift/.test($('voice-status').textContent), 'new configured shortcut');
+  $('palette-open').focus(); assert.equal(paletteKey(f, $('palette-open')).defaultPrevented, false); assert.equal($('palette-dialog').open, false);
+  $('answer').focus(); paletteKey(f, $('answer')); await until(() => voice.counts().starts === 1, 'configured voice shortcut still owns answer');
+  $('palette-open').click(); await until(() => voice.counts().cancels === 1, 'opening cancels dictation'); assert.equal($('palette-dialog').open, true);
+});
+
+test('command palette cancels owned voice and ignores its late response without changing editor state', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 340, voice), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep exact text'); const answer = $('answer');
+  await until(() => !$('voice-record').disabled, 'voice ready'); answer.focus(); key(f, 'keydown'); await until(() => voice.counts().starts === 1, 'recording');
+  let release; f.pauseVoicePoll(() => new Promise(resolve => { release = resolve; })); await until(() => release, 'late poll held');
+  $('palette-open').click(); await until(() => voice.counts().cancels === 1, 'cancelled once'); voice.finish(); f.pauseVoicePoll(null); release(); await delay(240);
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep exact text'); assert.equal($('palette-query').value, '');
+  $('palette-close').click(); assert.equal(f.document.activeElement, answer); assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
+
+test('command palette shows current eligibility, preserves previews and opens helper review without inference', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  $('palette-open').click(); f.type('palette-query', 'Research options'); const research = $('palette-commands').firstChild;
+  research.click(); research.click(); assert.equal($('palette-dialog').open, false); await until(() => !$('research-review-start').disabled, 'explicit review');
+  assert.equal(f.actions.filter(a => a.action === 'research').length, 0); $('research-review-close').click();
+  await f.explorer.command('questions', { nodeId: f.explorer.doc.rootId, revision: f.explorer.doc.revision }); await f.poll();
+  $('palette-open').click();
+  const unavailable = $('palette-commands').querySelector('[data-command="research-request"]'); assert.equal(unavailable.getAttribute('aria-disabled'), 'true'); assert.match(unavailable.textContent, /request/);
+  assert.equal($('palette-commands').querySelector('[data-command="minimap-toggle"]').getAttribute('aria-disabled'), 'false');
+  unavailable.focus(); unavailable.click(); assert.equal(f.document.activeElement.dataset.command, 'research-request'); assert.equal($('palette-dialog').open, true); assert.equal(f.actions.filter(a => a.action === 'research').length, 0);
+  $('palette-close').click(); await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [{ category: 'Next', question: 'Preview still here?' }] }); await f.poll();
+  $('palette-open').click(); f.type('palette-query', 'Check answers'); $('palette-commands').firstChild.click();
+  await until(() => $('check-dialog').open, 'check dialog'); assert.ok(f.explorer.preview); assert.equal(f.explorer.pending, null);
+});
+
+test('command palette falls back to its button when its origin is removed and stale rows never retarget', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id); $('answer').focus(); $('palette-open').click();
+  const stale = $('palette-commands').querySelector('[data-command="research-request"]');
+  const next = structuredClone(f.explorer.snapshot()); next.document.nodes = next.document.nodes.filter(n => n.id !== node.id); next.document.revision++;
+  f.window.__updates.apply(next); assert.equal($('palette-dialog').open, false); assert.equal(f.document.activeElement, $('palette-open'));
+  stale.click(); assert.equal($('research-review-dialog').open, false);
+});
+
+test('command palette saved result rechecks pending eligibility after its delayed draft flush', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id); await f.explorer.library.import(createDocument('Pending target'));
+  const original = f.explorer.activeKey, node = f.explorer.doc.nodes[1]; f.open(node.id);
+  let release; const held = new Promise(resolve => { release = resolve; }); f.pauseDraftWrite(() => held); f.type('answer', 'Pending keeps draft');
+  $('palette-open').click(); $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'Pending target');
+  await until(() => $('palette-results').firstChild, 'target found'); $('palette-results').firstChild.click();
+  await f.explorer.command('questions', { nodeId: f.explorer.doc.rootId, revision: f.explorer.doc.revision }); await f.poll(); release();
+  await until(() => !$('workspace').inert, 'flush completed'); assert.equal(f.explorer.activeKey, original); assert.equal(f.actions.filter(a => a.action === 'open').length, 0);
+  assert.match($('notice').textContent, /Cancel the current/); assert.equal($('answer').value, 'Pending keeps draft');
+});
+
+test('command palette search bounds DOM, renders source text safely and leaves hidden scans stopped', async t => {
+  const f = await fixture(t, 340, undefined, true, { before: async e => { const { document } = makeFixture(fixtureSpecs.find(spec => spec.name === 'medium-wide')); await e.command('import', { revision: e.doc.revision, document }); } }), $ = id => f.document.getElementById(id);
+  $('palette-open').click(); assert.equal($('palette-results').children.length, 200); assert.match($('palette-status').textContent, /640 matching nodes/);
+  $('palette-next').click(); assert.equal($('palette-results').children.length, 200);
+  $('palette-next').click(); $('palette-next').click(); assert.equal($('palette-results').children.length, 40); assert.equal($('palette-next').disabled, true);
+  let scans = 0, release; const originalFetch = f.window.fetch, held = new Promise(resolve => { release = resolve; });
+  f.window.fetch = async (...args) => { const response = await originalFetch(...args); if (args[0] === 'api/search') { scans++; await held; } return response; };
+  $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); await until(() => scans === 1, 'held search');
+  f.type('palette-query', 'replacement'); await delay(300); $('palette-close').click(); release(); await delay(320);
+  assert.equal(scans, 1); assert.equal($('palette-results').children.length, 0); await f.poll(); assert.equal(scans, 1);
+  $('palette-open').click(); $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); $('palette-close').click(); await delay(300); assert.equal(scans, 1, 'close cancels debounce');
+});
+
+test('command palette shares faithful excerpts, source validation and one guarded successful activation', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), original = f.explorer.activeKey;
+  const doc = structuredClone(f.explorer.doc); doc.id = 'palette-exact-source'; doc.topic = doc.nodes[0].question = 'Destination';
+  doc.nodes[1].answer = 'Context' + ' '.repeat(300) + 'TaRGeT <img src=x onerror=alert(1)>';
+  const target = await f.explorer.library.import(doc); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Private preserved');
+  $('palette-open').click(); $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'target');
+  await until(() => $('palette-results').firstChild, 'source found'); assert.match($('palette-results').textContent, /TaRGeT <img/); assert.equal($('palette-results').querySelector('img'), null);
+  let stale = $('palette-results').firstChild; doc.nodes[1].answer += ' changed'; await writeFile(target.file, JSON.stringify(doc)); stale.click();
+  await until(() => /search result changed/.test($('notice').textContent), 'source identity rejected'); assert.equal(f.explorer.activeKey, original); assert.equal($('answer').value, 'Private preserved');
+  $('palette-refresh').click(); await until(() => $('palette-results').firstChild && $('palette-results').firstChild !== stale, 'refreshed exact source');
+  const opens = f.actions.filter(a => a.action === 'open').length, row = $('palette-results').firstChild;
+  row.focus(); paletteKey(f, row, { key: 'Enter', code: 'Enter', ctrlKey: false, shiftKey: false }); row.click();
+  await until(() => f.explorer.activeKey === target.key && !$('palette-dialog').open, 'one deliberate navigation');
+  assert.equal(f.actions.filter(a => a.action === 'open').length - opens, 1); assert.equal(f.window.__updates.scene().selected, doc.nodes[1].id);
+  assert.equal($('answer').value, doc.nodes[1].answer);
+});
+
+for (const change of ['query', 'journey']) test(`command palette invalidates awaited navigation after ${change} changes`, async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id); await f.explorer.library.import(createDocument('Other destination'));
+  const original = f.explorer.activeKey; f.open(f.explorer.doc.nodes[1].id);
+  let release; const held = new Promise(resolve => { release = resolve; }); f.pauseDraftWrite(() => held); f.type('answer', 'Do not lose draft');
+  $('palette-open').click(); $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'Other destination');
+  await until(() => $('palette-results').firstChild, 'destination found'); $('palette-results').firstChild.click();
+  if (change === 'query') f.type('palette-query', 'Invalidated');
+  else { const next = f.explorer.snapshot(); next.activeKey = 'replacement-identity'; f.window.__updates.apply(next); }
+  release(); await until(() => !$('workspace').inert, 'flush finishes'); assert.equal(f.actions.filter(a => a.action === 'open').length, 0); assert.equal(f.explorer.activeKey, original);
+  if (change === 'query') { $('palette-scope').value = 'current'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'Show minimap'); $('palette-commands').firstChild.click(); assert.equal($('palette-dialog').open, false); assert.equal($('minimap').hidden, false); assert.equal($('answer').value, 'Do not lose draft'); }
+  else assert.equal($('palette-dialog').open, false);
+});
+
+test('command palette respects missing directions, reminder conflicts and removed reminders without rebuilding controls', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id); await f.explorer.library.import(createDocument('Guarded destination'));
+  const node = f.explorer.doc.nodes[1], original = f.explorer.activeKey; f.open(node.id); f.type('revisit-condition', 'Keep reminder'); f.type('manual-question', 'Keep direction');
+  const reminder = $('revisit-condition'), manual = $('manual-question'), answer = $('answer');
+  const edited = f.explorer.snapshot(); edited.document.nodes[1].revisit = { date: '2030-01-01', condition: 'Saved replacement', acknowledgedAt: null }; edited.document.revision++;
+  f.window.__updates.apply(edited); const conflict = $('keep-revisit'); assert.ok(conflict && !conflict.hidden);
+  $('palette-open').click(); $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'Guarded destination');
+  await until(() => $('palette-results').firstChild, 'guarded destination'); $('palette-results').firstChild.click(); assert.match($('notice').textContent, /missing-direction drafts/);
+  $('palette-close').click(); assert.equal($('answer'), answer); assert.equal($('revisit-condition'), reminder); assert.equal($('manual-question'), manual); assert.equal($('keep-revisit'), conflict);
+  f.type('manual-question', ''); $('palette-open').click(); $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'Guarded destination');
+  await until(() => $('palette-results').firstChild, 'reminder destination'); $('palette-results').firstChild.click(); assert.match($('notice').textContent, /reminder edits/); $('palette-close').click();
+  const removed = structuredClone(edited); removed.document.nodes = removed.document.nodes.filter(n => n.id !== node.id); removed.document.revision++; f.window.__updates.apply(removed);
+  $('palette-open').click(); $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'Guarded destination');
+  await until(() => $('palette-results').firstChild, 'orphan destination'); $('palette-results').firstChild.click(); assert.match($('notice').textContent, /removed-question reminder drafts/);
+  assert.equal(f.explorer.activeKey, original); assert.equal(f.actions.filter(a => a.action === 'open').length, 0);
+});
+
 test('combined Outline search is private by default and preserves editor and query across polling', async t => {
   const f = await fixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
   f.open(node.id); f.type('answer', 'PRIVATE_SEARCH_CANARY 🌱');
@@ -696,6 +860,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const navigationDialog = document.getElementById('navigation-dialog');
   navigationDialog.showModal = () => { navigationDialog.open = true; };
   navigationDialog.close = () => { navigationDialog.open = false; };
+  const paletteDialog = document.getElementById('palette-dialog');
+  if (paletteDialog) { paletteDialog.showModal = () => { paletteDialog.open = true; }; paletteDialog.close = () => { paletteDialog.open = false; }; }
   const requests = new Set(), actions = [];
   t.after(async () => {
     window.dispatchEvent(new window.Event('pagehide'));

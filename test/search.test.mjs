@@ -116,6 +116,14 @@ test('shared matcher handles legacy states, Unicode normalization, all filters a
   assert.throws(() => searchFilters({ draftText: 'true' }), /Invalid/);
 });
 
+test('matching snippets retain the actual hit after long original whitespace', () => {
+  const source = 'Context' + ' '.repeat(300) + 'TaRGeT Cafe\u0301 🌱';
+  const result = matchSearch({ parentId: 'root', question: 'Other', answer: source }, searchFilters({ query: 'target café' }));
+  assert.match(result.snippet, /TaRGeT Cafe\u0301 🌱/);
+  const excerpt = result.snippet.replace(/^Saved answer: …?/, '').replace(/…$/, '');
+  assert.ok(source.includes(excerpt)); assert.ok(Array.from(excerpt).length <= 180);
+});
+
 test('matching snippets preserve original case and Unicode while searching normalized text', () => {
   const source = 'Lea\u0301d 👩‍🌾 İ '.repeat(30) + 'US_API Cafe\u0301 🌱\n  MiXeD_Case <tag>';
   const node = { parentId: 'root', question: 'Question', answer: source, category: 'People' };

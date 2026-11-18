@@ -1,7 +1,12 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.57.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.58.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+
+**Commands** opens a keyboard-accessible palette for existing map, history, export and review actions, plus current-journey or saved-library node search. Use Arrow Up/Down, Enter and Escape; unavailable actions explain why. Search covers saved questions, answers, categories and journey topics. Private answer draft text requires opt-in on each opening; research, reminder edits, files and history are excluded. Current results and library pages mount at most 200 rows. Saved-library pages retain the local search limits (16 files, 32 MiB, discovery capped at 2,000 directory entries); coverage and continuation are shown. Refresh after files change. Existing draft, preview, request and source checks still apply when opening a result.
+
+The optional **Ctrl+Shift+P** shortcut is off by default and lasts only for this canvas. It works outside text fields only after Explorer knows a different configured voice shortcut, and ignores IME, repeats and other dialogs. Copilot or the OS may reserve it; the Commands button always remains available. Opening the palette cancels active dictation while retaining inserted draft text. Palette navigation does not save answers or start model work; helper entries open their existing review screens.
+
 <!-- explorer-current-version:end -->
 
 Save a local-calendar **review date** and/or **manual revisit condition** on a question. Filter reminders in the question list or Library, including archived journeys, and use **Revisit** to return to a source. Acknowledge, reschedule/reactivate or clear with History while keeping answer certainty and ancestor review separate. Conditions are evaluated by you; no monitoring, notifications or calendar writes run. See [reminder semantics and export coverage](docs/revisit-reminders.md).
@@ -280,7 +285,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.57, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.57**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.58, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.58**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Map settings** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

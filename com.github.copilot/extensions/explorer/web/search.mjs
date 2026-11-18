@@ -6,7 +6,7 @@ export const searchText = value => String(value ?? '').normalize('NFC').toLowerC
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 function excerpt(text, matchAt) {
   const source = String(text ?? ''), target = Math.max(0, matchAt - 48);
-  let normalizedOffset = 0, start = 0, whitespace = true;
+  let normalizedOffset = 0, start = null, hit = 0, whitespace = true;
   // Map a normalized context offset to an original grapheme boundary. Only the
   // offset is normalized: displayed case, combining marks and whitespace stay exact.
   for (const { segment, index } of graphemes.segment(source)) {
@@ -14,9 +14,17 @@ function excerpt(text, matchAt) {
       if (/\s/u.test(char)) { if (!whitespace) normalizedOffset++; whitespace = true; }
       else { normalizedOffset += char.length; whitespace = false; }
     }
-    if (normalizedOffset > target) { start = index; break; }
+    if (start === null && normalizedOffset > target) start = index;
+    if (normalizedOffset > matchAt) { hit = index; break; }
   }
-  const value = Array.from(source.slice(start)).slice(0, 180).join('');
+  start ??= 0;
+  // Collapsed whitespace can put the actual hit far beyond the preferred context.
+  if (Array.from(source.slice(start, hit)).length > 48) start = hit;
+  let value = '';
+  for (const { segment } of graphemes.segment(source.slice(start))) {
+    if (Array.from(value).length + Array.from(segment).length > 180) break;
+    value += segment;
+  }
   return `${start ? '…' : ''}${value}${start + value.length < source.length ? '…' : ''}`;
 }
 export function searchFilters(input = {}) {

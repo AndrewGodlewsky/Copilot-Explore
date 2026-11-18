@@ -167,6 +167,139 @@ async function refreshLibrarySearch(cursor = null) {
   } catch (error) { if (current()) { $('library-search-results').replaceChildren(); $('library-search-status').textContent = `Search could not complete: ${error.message}`; } }
   finally { librarySearchFlight = false; if (librarySearchQueued && !closed && !suspended && (libraryView || !state.document) && $('library-search-scope').value === 'nodes') void refreshLibrarySearch(); }
 }
+// The palette routes through mounted controls: it never owns a mutation handler.
+const paletteCommands = [
+  ['library-toggle', 'Library'], ['outline-toggle', 'Outline'], ['fit', 'Fit visible map'],
+  ['center-question', 'Center question'], ['minimap-toggle', 'Show minimap'], ['navigation-open', 'Map settings'],
+  ['edit-guidance', 'Edit guidance'], ['history-open', 'History'], ['recovery-open', 'Recovery'],
+  ['visual-export-open', 'Export maps'], ['decision-brief', 'Decision brief'], ['implementation-handoff', 'Implementation handoff'],
+  ['check-answers', 'Check answers'], ['challenge-decisions', 'Challenge decisions'], ['research-request', 'Research options'],
+];
+let paletteEpoch = 0, paletteTimer, paletteFlight = false, paletteQueued = false, paletteNext = null;
+let palettePage = 0, paletteReturn = null, paletteOrigin = '', paletteActing = false;
+const paletteIdentity = () => JSON.stringify([state.activeKey ?? state.document?.id, selected]);
+const paletteOpen = () => $('palette-dialog').open && !closed && !suspended;
+function paletteReason(id) {
+  const target = $(id);
+  if (!target || target.closest('[hidden]')) return 'Unavailable in this view. Open the relevant journey or question.';
+  if (busy || draftClient.savingAnswer) return 'Wait for the current save or action to finish.';
+  if (target.disabled) return state.pending ? 'Wait for or cancel the current request.' : state.preview ? 'Review or dismiss the unsaved questions first.' : 'Unavailable for the current selection.';
+  return '';
+}
+function closePalette(restore = true) {
+  paletteEpoch++; clearTimeout(paletteTimer); paletteQueued = false; paletteNext = null; paletteActing = false;
+  $('palette-dialog').close(); $('palette-results').replaceChildren(); $('palette-commands').replaceChildren();
+  if (restore) {
+    const target = paletteReturn?.isConnected && !paletteReturn.disabled && !paletteReturn.closest('[hidden]') ? paletteReturn : $('palette-open');
+    target.focus({ preventScroll: true });
+  }
+  paletteReturn = null;
+}
+function paletteCommandRows() {
+  const focused = $('palette-commands').contains(document.activeElement) ? document.activeElement.dataset.command : null;
+  const query = searchFilters({ query: $('palette-query').value }).query;
+  const commands = paletteCommands.map(([id, label]) => [id, id === 'minimap-toggle' ? $(id).textContent : label]);
+  $('palette-commands').replaceChildren(...commands.filter(([, label]) => label.toLowerCase().includes(query)).map(([id, label]) => {
+    const reason = paletteReason(id);
+    return button([el('strong', {}, label), ...(reason ? [el('small', {}, reason)] : [])], () => {
+      if (!paletteOpen() || paletteActing || paletteOrigin !== paletteIdentity()) return;
+      const currentReason = paletteReason(id);
+      if (currentReason) { $('palette-status').textContent = currentReason; paletteCommandRows(); return; }
+      paletteActing = true; const target = $(id);
+      closePalette(false); target.focus({ preventScroll: true }); target.click();
+    }, { 'data-command': id, 'aria-disabled': String(!!reason) });
+  }));
+  if (focused) [...$('palette-commands').children].find(row => row.dataset.command === focused)?.focus({ preventScroll: true });
+}
+function paletteFilters() {
+  return searchFilters({ query: $('palette-query').value, draftText: $('palette-draft-text').checked, archived: $('palette-archived').checked });
+}
+function refreshPalette(cursor = null) {
+  paletteActing = false; clearTimeout(paletteTimer); const epoch = ++paletteEpoch, page = pageEpoch, identity = paletteIdentity();
+  $('palette-results').replaceChildren(); $('palette-next').disabled = true; paletteNext = null;
+  if (!paletteOpen()) return;
+  paletteCommandRows();
+  const current = () => paletteOpen() && epoch === paletteEpoch && page === pageEpoch && identity === paletteIdentity();
+  if ($('palette-scope').value === 'library') {
+    paletteTimer = setTimeout(() => { if (current()) void searchPaletteLibrary(cursor, current); }, 250); return;
+  }
+  const doc = state.document, filters = paletteFilters(), rows = [];
+  let count = 0;
+  for (const node of doc?.nodes ?? []) {
+    const draft = drafts.has(node.id) ? drafts.get(node.id) : draftClient.entries.get(node.id)?.conflict?.text;
+    const match = matchSearch(node, filters, { topic: doc.topic, draft });
+    if (!match) continue;
+    if (count >= palettePage * SEARCH_PAGE_SIZE && rows.length < SEARCH_PAGE_SIZE) rows.push({ node, match });
+    count++;
+  }
+  const revision = doc?.revision;
+  $('palette-results').replaceChildren(...rows.map(({ node, match }) => button([el('strong', {}, node.question), el('small', {}, match.snippet)], () => {
+    if (!current() || paletteActing || revision !== state.document?.revision || !state.document.nodes.some(n => n.id === node.id)) return;
+    paletteActing = true; closePalette(false); select(node.id);
+  }, { 'data-node-id': node.id })));
+  $('palette-status').textContent = `${count} matching nodes; page ${palettePage + 1}. At most ${SEARCH_PAGE_SIZE} results are displayed.`;
+  paletteNext = count > (palettePage + 1) * SEARCH_PAGE_SIZE ? true : null; $('palette-next').disabled = !paletteNext;
+}
+async function searchPaletteLibrary(cursor, current) {
+  if (paletteFlight) { paletteQueued = true; return; }
+  paletteFlight = true; paletteQueued = false; $('palette-status').textContent = 'Searching a bounded local page...';
+  try {
+    const response = await fetch('api/search', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ ...paletteFilters(), cursor }) });
+    const result = await response.json(); if (!current()) return;
+    if (!response.ok) throw Error(result.error);
+    paletteNext = result.next; $('palette-next').disabled = !result.next;
+    $('palette-results').replaceChildren(...result.results.map(item => button([el('strong', {}, item.question), el('small', {}, item.topic), el('small', {}, item.snippet)], async () => {
+      if (!current() || paletteActing) return;
+      paletteActing = true;
+      const activationEpoch = paletteEpoch, sourceJourney = state.activeKey ?? state.document?.id, revision = state.document?.revision;
+      const valid = () => current() && sourceJourney === (state.activeKey ?? state.document?.id) && revision === state.document?.revision && switchAllowed();
+      try {
+        const opened = await switchJourney('open', { key: item.key, searchResult: { key: item.key, source: item.source, nodeId: item.nodeId } }, valid);
+        if (opened && state.activeKey === item.key) { closePalette(false); select(item.nodeId); }
+      } finally { if (activationEpoch === paletteEpoch) paletteActing = false; }
+    }, { 'data-node-id': item.nodeId, 'data-search-key': item.key })));
+    $('palette-status').textContent = `${result.results.length} matching nodes on this page; ${result.examined} files examined. ${result.next ? 'More pages available.' : 'End of discovered set.'} Refresh after files change. ${result.truncated ? 'Incomplete discovery: only the first 2,000 directory entries were considered; this is NOT the whole library. ' : ''}${result.errors.map(e => e.message).join(' ')}`;
+  } catch (error) { if (current()) $('palette-status').textContent = `Search could not complete: ${error.message}`; }
+  finally { paletteFlight = false; if (paletteQueued && paletteOpen() && $('palette-scope').value === 'library') { paletteQueued = false; refreshPalette(); } }
+}
+function openPalette() {
+  if (closed || suspended || composing || document.querySelector('dialog[open]')) return;
+  voice.cancel(); paletteReturn = document.activeElement; paletteOrigin = paletteIdentity(); palettePage = 0; paletteActing = false;
+  $('palette-query').value = ''; $('palette-draft-text').checked = false; $('palette-archived').checked = false;
+  $('palette-scope').value = state.document ? 'current' : 'library';
+  $('palette-dialog').showModal(); refreshPalette(); $('palette-query').focus({ preventScroll: true });
+}
+$('palette-open').addEventListener('click', openPalette);
+$('palette-close').addEventListener('click', () => closePalette());
+$('palette-dialog').addEventListener('cancel', event => { event.preventDefault(); closePalette(); });
+for (const id of ['palette-query', 'palette-scope', 'palette-draft-text', 'palette-archived']) $(id).addEventListener(id === 'palette-query' ? 'input' : 'change', () => { palettePage = 0; refreshPalette(); });
+$('palette-refresh').addEventListener('click', () => { palettePage = 0; refreshPalette(); });
+$('palette-next').addEventListener('click', () => { const cursor = paletteNext; if (!cursor) return; palettePage++; refreshPalette($('palette-scope').value === 'library' ? cursor : null); });
+$('palette-dialog').addEventListener('keydown', event => {
+  if (!paletteOpen() || event.isComposing || event.defaultPrevented) return;
+  if (event.key === 'Escape') { event.preventDefault(); closePalette(); return; }
+  const rows = [...$('palette-dialog').querySelectorAll('#palette-commands button, #palette-results button')];
+  if (['ArrowDown', 'ArrowUp'].includes(event.key) && (event.target === $('palette-query') || rows.includes(event.target))) {
+    event.preventDefault(); const index = rows.indexOf(document.activeElement);
+    rows[index < 0 ? (event.key === 'ArrowDown' ? 0 : rows.length - 1) : (index + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length]?.focus({ preventScroll: true }); return;
+  }
+  if (event.key === 'Enter' && (event.target === $('palette-query') || rows.includes(event.target))) {
+    event.preventDefault(); if (!event.repeat) (rows.includes(event.target) ? event.target : rows[0])?.click(); return;
+  }
+  if (event.key === 'Tab') {
+    const controls = [...$('palette-dialog').querySelectorAll('input,select,button')].filter(e => !e.disabled && !e.closest('[hidden]'));
+    const first = controls[0], last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+});
+document.addEventListener('keydown', event => {
+  if (!$('palette-shortcut').checked || event.defaultPrevented || event.repeat || event.isComposing || composing || !event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey || event.code !== 'KeyP' ||
+      event.target.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"])') || document.querySelector('dialog[open]') || !voice.allowsShortcut(event)) return;
+  event.preventDefault(); openPalette();
+});
+window.addEventListener('pagehide', () => { if ($('palette-dialog').open) closePalette(false); });
+
 async function api(action, input = {}) {
   if (busy || closed || suspended) return null;
   busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort();
@@ -236,6 +369,7 @@ function apply(next, reset = false) {
     acceptedIds.clear(); acceptedParentId = null;
   }
   signature = stamp; state = next;
+  if (paletteOpen() && (changedDocument || !state.document?.nodes.some(n => n.id === selected))) { closePalette(false); $('palette-open').focus({ preventScroll: true }); }
   for (const [id, ui] of nodeUi) {
     if (ui.comparison && ui.researchKey !== JSON.stringify(state.document?.nodes.find(node => node.id === id)?.research)) {
       ui.comparison = null; ui.researchKey = null; ui.selectedDetails = new Set();
@@ -521,6 +655,7 @@ function focusTop(id, height) {
   return Math.max(16, Math.min(parent ? (parent.answer ? 150 : 110) + 72 + 24 : 24, height - 320));
 }
 function select(id) {
+  if (paletteOpen() && id !== selected) closePalette(false);
   if (!state.document?.nodes.some(n => n.id === id)) return;
   endDrag();
   voice.cancel();

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.87",
+    "summary": "Compare Personal or Project scenarios using recorded origins, exact answers, states and retained evidence. Paged comparisons preserve both maps and private drafts; changed sources require a fresh comparison. Library metadata saves now retry brief Windows sharing denials while rejecting changed sources."
+  },
+  {
     "version": "0.1.86",
     "summary": "Revisit this answer now brings three choices into one drawer workflow: retain affected descendants for review, fork an alternative, or restart the branch. Your editor stays intact through choices and cancellation. Confirmations name the target journey, and stale context or unavailable actions explain how to continue."
   },

@@ -18,6 +18,7 @@ import { parseBrief } from '../com.github.copilot/extensions/explorer/decision-b
 import { parseHandoff } from '../com.github.copilot/extensions/explorer/implementation-handoff.mjs';
 import { parseAnswerCheck } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
+import { buildScenario } from '../com.github.copilot/extensions/explorer/scenario-fork.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
 import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
 import { createDocument, contextFor, addDependency, answerNode } from '../com.github.copilot/extensions/explorer/model.mjs';
@@ -1118,6 +1119,21 @@ async function until(read, label, attempts = 250) {
   assert.fail('Timed out: ' + label);
 }
 
+// Git requests have their own bounded HTTP timeout; DOM rendering is separate.
+async function uiResponse(f, route, action, invoke) {
+  const original = f.window.fetch; let pending;
+  f.window.fetch = (path, options) => {
+    const response = original(path, options);
+    if (path === route && options?.body && JSON.parse(options.body).action === action) pending = response.then(value => value.clone());
+    return response;
+  };
+  try {
+    invoke(); await until(() => pending, `${action} request sent`);
+    const response = await pending;
+    assert.equal(response.status, 200, `${action}: ${await response.text()}`);
+  } finally { f.window.fetch = original; }
+}
+
 test('project storage controls create and explicitly reopen a repository journey with a relative location', async t => {
   const project = await mkdtemp(join(tmpdir(), 'explorer-project-controls-')); t.after(() => rm(project, { recursive: true, force: true }));
   await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
@@ -1128,7 +1144,7 @@ test('project storage controls create and explicitly reopen a repository journey
   $('start-storage').value = 'project'; $('start-storage').dispatchEvent(new f.window.Event('change'));
   assert.equal($('project-folder-fields').hidden, false);
   f.type('topic', 'Project journey'); f.type('project-folder', 'decisions/maps');
-  $('start-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await uiResponse(f, 'api/action', 'start', () => $('start-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true })));
   await until(() => $('journey-storage').textContent.includes('Project: decisions/maps/'), 'project creation response rendered');
   const path = f.explorer.snapshot().storage.path;
   assert.match($('journey-storage').textContent, /Project.*decisions\/maps/);
@@ -1136,7 +1152,7 @@ test('project storage controls create and explicitly reopen a repository journey
   await f.explorer.command('cancel');
   await f.explorer.command('open', { revision: f.explorer.doc.revision, key: personalKey }); await f.poll();
   $('project-open').click(); assert.equal(f.document.activeElement, $('project-open-path'));
-  f.type('project-open-path', path); $('project-open-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  f.type('project-open-path', path); await uiResponse(f, 'api/action', 'open-project', () => $('project-open-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true })));
   await until(() => !$('workspace').hidden && $('journey-storage').textContent.includes('Project: decisions/maps/'), 'project reopening response rendered');
   assert.equal(f.explorer.doc.topic, 'Project journey');
   assert.equal($('workspace').hidden, false); assert.match($('journey-storage').textContent, /Project/);
@@ -1147,18 +1163,87 @@ test('project library refresh and pin preserve an answer draft, and listed openi
   const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => { await e.projectRepository.create(createDocument('Shared from teammate')); } });
   const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
   f.open(node.id); f.type('answer', 'Keep my personal draft'); const editor = $('answer');
-  $('library-toggle').click(); $('library-scope').value = 'project'; $('library-scope').dispatchEvent(new f.window.Event('change'));
+  $('library-toggle').click(); $('library-scope').value = 'project'; await uiResponse(f, 'api/project-library', 'refresh', () => $('library-scope').dispatchEvent(new f.window.Event('change')));
   await until(() => $('project-library-list').querySelector('[data-action="open"]'), 'shared listing');
   assert.match($('project-library-status').textContent, /direct shared files/); assert.match($('project-library-list').textContent, /Shared from teammate/);
-  $('project-library-list').querySelector('[data-action="pin"]').focus(); $('project-library-list').querySelector('[data-action="pin"]').click();
+  $('project-library-list').querySelector('[data-action="pin"]').focus(); await uiResponse(f, 'api/project-library', 'pin', () => $('project-library-list').querySelector('[data-action="pin"]').click());
   await until(() => $('project-library-list').querySelector('[data-action="pin"]')?.textContent === 'Unpin', 'private pin');
   assert.equal(f.document.activeElement, $('project-library-list').querySelector('[data-action="pin"]'));
   $('library-return').click(); assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep my personal draft');
-  $('library-toggle').click(); $('library-scope').value = 'project'; $('library-scope').dispatchEvent(new f.window.Event('change'));
+  $('library-toggle').click(); $('library-scope').value = 'project'; await uiResponse(f, 'api/project-library', 'refresh', () => $('library-scope').dispatchEvent(new f.window.Event('change')));
   await until(() => $('project-library-list').querySelector('[data-action="open"]') && !$('project-library-refresh').disabled, 'fresh project listing');
-  $('project-library-list').querySelector('[data-action="open"]').click();
+  await uiResponse(f, 'api/action', 'open-project-entry', () => $('project-library-list').querySelector('[data-action="open"]').click());
   await until(() => !$('workspace').hidden && $('map-title').textContent === 'Shared from teammate', 'listed opening response rendered');
   assert.equal(f.explorer.pending, null); assert.equal($('workspace').hidden, false);
+});
+
+test('scenario comparison is explicitly selected, read-only, paged and preserves the existing editor on cancel', async t => {
+  let target;
+  const f = await fixture(t, 340, undefined, true, { before: async e => {
+    const doc = structuredClone(e.doc); for (let i=0;i<30;i++) doc.nodes.push({ id:`comparison-${i}`, parentId:doc.rootId, question:`Independent ${i}`, category:'Scope', answer:'', research:null, review:false });
+    await e.command('import', { revision:e.doc.revision, document:doc, asCopy:true }); target = await e.library.import(buildScenario(e.doc, { nodeId:e.doc.nodes[1].id, answer:'Alternative <script>🌱</script>', answerState:'assumption' }).document);
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer','Exact draft 🌱\nkept'); const editor=$('answer'); editor.focus(); editor.setSelectionRange(2,7);
+  const before=structuredClone(f.explorer.doc), key=f.explorer.activeKey;
+  $('library-toggle').click(); await until(()=>f.document.querySelector(`[data-key="${target.key}"] [data-action="compare"]`),'comparison target');
+  f.document.querySelector(`[data-key="${target.key}"] [data-action="compare"]`).click(); assert.equal($('comparison-dialog').open,true); assert.equal($('comparison-results').hidden,true);
+  assert.match($('comparison-identities').textContent,new RegExp(before.id)); $('comparison-start').click(); await until(()=>!$('comparison-results').hidden || $('comparison-status').textContent.includes('retry;'),'compared'); assert.equal($('comparison-results').hidden,false,$('comparison-status').textContent);
+  assert.equal($('comparison-rows').options.length,25); assert.match($('comparison-coverage').textContent,/absence.*deletion/i); assert.match($('scenario-comparison-summary').textContent,/2 comparable nodes/);
+  $('comparison-rows').value='1'; $('comparison-rows').dispatchEvent(new f.window.Event('change')); await until(()=>$('comparison-detail').textContent.includes('Alternative <script>'),'selected pair');
+  assert.equal($('comparison-detail').querySelector('script'),null); assert.match($('comparison-detail').textContent,/Assumption|assumption/);
+  $('comparison-next').click(); await until(()=>$('comparison-page').textContent.includes('Page 2'),'second page'); assert.equal($('comparison-rows').options.length,8);
+  $('comparison-close').click(); assert.equal($('comparison-dialog').open,false); assert.equal(f.explorer.activeKey,key); assert.deepEqual(f.explorer.doc,before);
+  $('library-return').click(); assert.equal($('answer'),editor); assert.equal(editor.value,'Exact draft 🌱\nkept'); assert.equal(editor.selectionStart,2); assert.equal(editor.selectionEnd,7);
+  await until(()=>$('answer-status').textContent==='Draft saved locally','draft settled'); assert.equal(f.actions.filter(a=>['answer','research','questions'].includes(a.action)).length,0);
+});
+
+test('scenario comparison navigates only by choice and keeps source drafts recoverable', async t => {
+  let target;
+  const f=await fixture(t,340,undefined,true,{before:async e=>{target=await e.library.import(buildScenario(e.doc,{nodeId:e.doc.nodes[1].id,answer:'Other direction',answerState:'tentative'}).document);}}), $=id=>f.document.getElementById(id), original=f.explorer.activeKey, node=f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer','Source draft'); $('library-toggle').click(); await until(()=>f.document.querySelector(`[data-key="${target.key}"] [data-action="compare"]`),'target');
+  f.document.querySelector(`[data-key="${target.key}"] [data-action="compare"]`).click(); $('comparison-start').click(); await until(()=>!$('comparison-results').hidden,'comparison');
+  $('comparison-rows').value='1'; $('comparison-rows').dispatchEvent(new f.window.Event('change')); await until(()=>$('comparison-detail').textContent.includes('Other direction'),'selected alternative');
+  $('comparison-open-right').click(); await until(()=>f.explorer.activeKey===target.key&&!$('comparison-dialog').open,'explicit source open');
+  assert.equal($('node-workspace').dataset.nodeId,target.document.forkOrigin.forkNodeId); assert.equal((await f.explorer.library.resolve(original)).document.nodes[1].answer,'');
+  await f.explorer.command('open',{key:original,revision:f.explorer.doc.revision}); assert.equal((await f.explorer.readDrafts(original)).entries.find(e=>e.nodeId===node.id).text,'Source draft');
+});
+
+test('scenario comparison rejects stale selected content and ignores a response after page suspension', async t => {
+  let target;
+  const f=await fixture(t,340,undefined,true,{before:async e=>{target=await e.library.import(buildScenario(e.doc,{nodeId:e.doc.nodes[1].id,answer:'Other',answerState:'tentative'}).document);}}), $=id=>f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer','Keep proposed'); $('library-toggle').click(); await until(()=>f.document.querySelector(`[data-key="${target.key}"] [data-action="compare"]`),'target');
+  const open=()=>f.document.querySelector(`[data-key="${target.key}"] [data-action="compare"]`).click(); open(); $('comparison-start').click(); await until(()=>!$('comparison-results').hidden,'comparison');
+  const changed=structuredClone(target.document); changed.nodes[1].answer='Changed'; changed.revision++; await writeFile(target.file,JSON.stringify(changed));
+  $('comparison-rows').value='1'; $('comparison-rows').dispatchEvent(new f.window.Event('change')); await until(()=>$('comparison-status').textContent.includes('changed'),'stale selected source'); assert.equal($('comparison-open-right').disabled,true);
+  $('comparison-close').click(); open(); const originalFetch=f.window.fetch; let release;
+  f.window.fetch=async (...args)=>{const response=await originalFetch(...args); if(args[0]==='api/scenario-compare'&&JSON.parse(args[1].body).action==='preview') return new Promise(resolve=>{release=()=>resolve(response);}); return response;};
+  $('comparison-start').click(); await until(()=>release,'held comparison'); f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide',{persisted:true})); release(); f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow',{persisted:true})); await delay(40);
+  assert.equal($('comparison-dialog').open,false); $('library-return').click(); assert.equal($('answer').value,'Keep proposed');
+});
+
+test('scenario comparison explains pending work, rejects changed current context and ignores detached row controls', async t => {
+  let target;
+  const f=await fixture(t,340,undefined,true,{before:async e=>{target=await e.library.import(buildScenario(e.doc,{nodeId:e.doc.nodes[1].id,answer:'Other',answerState:'tentative'}).document);}}), $=id=>f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer','Keep pending draft');
+  await f.explorer.command('questions',{revision:f.explorer.doc.revision,nodeId:f.explorer.doc.rootId}); await f.poll();
+  $('library-toggle').click(); await until(()=>f.document.querySelector(`[data-key="${target.key}"] [data-action="compare"]`),'target');
+  const button=f.document.querySelector(`[data-key="${target.key}"] [data-action="compare"]`); button.click(); $('comparison-start').click(); await until(()=>!$('comparison-results').hidden,'read-only pending comparison');
+  assert.equal($('comparison-open-right').disabled,true); assert.match($('comparison-status').textContent,/pending work/i);
+  await f.explorer.command('cancel'); await f.poll(); assert.equal($('comparison-open-right').disabled,false);
+  await f.explorer.command('guidance',{revision:f.explorer.doc.revision,objective:'Changed now',successCriteria:''}); await f.poll(); assert.equal($('comparison-start').disabled,true); assert.match($('comparison-status').textContent,/changed/);
+  $('comparison-close').click(); $('library-return').click(); const old=button; old.remove(); old.click(); assert.equal($('comparison-dialog').open,false); assert.equal($('answer').value,'Keep pending draft');
+});
+
+test('scenario comparison selects a project library source without rebinding or replacing the existing draft', async t => {
+  const root=await mkdtemp(join(tmpdir(),'comparison-dom-project-')); t.after(()=>rm(root,{recursive:true,force:true}));
+  await promisify(execFile)('git',['-C',root,'init','-q'],{windowsHide:true});
+  let project;
+  const f=await fixture(t,340,undefined,true,{projectRoot:async()=>root,before:async e=>{project=await e.projectRepository.create(buildScenario(e.doc,{nodeId:e.doc.nodes[1].id,answer:'Shared alternative',answerState:'assumption'}).document);}}), $=id=>f.document.getElementById(id), key=f.explorer.activeKey;
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer','Private project comparison draft'); $('library-toggle').click(); $('library-scope').value='project'; $('library-scope').dispatchEvent(new f.window.Event('change'));
+  await until(()=>f.document.querySelector('#project-library-list [data-action="compare"]'),'project comparison entry',1000); f.document.querySelector('#project-library-list [data-action="compare"]').click(); assert.match($('comparison-identities').textContent,/project file/);
+  $('comparison-start').click(); await until(()=>!$('comparison-results').hidden,'project compared',1000); assert.equal(f.explorer.activeKey,key);
+  $('comparison-rows').value='1'; $('comparison-rows').dispatchEvent(new f.window.Event('change')); await until(()=>$('comparison-detail').textContent.includes('Shared alternative'),'shared answer',1000);
+  $('comparison-close').click(); $('library-return').click(); assert.equal($('answer').value,'Private project comparison draft'); assert.equal(f.explorer.snapshot().storage.scope,'personal'); assert.ok((await readFile(project.context.file,'utf8')).includes('Shared alternative'));
 });
 
 test('revisit chooser is available through Commands and preserves editor state through choices and Escape', async t => {
@@ -1587,7 +1672,8 @@ test('orphan revisit drafts survive external History removal until explicit disc
   f.document.querySelector(`[data-history-revision="${addedRevision}"]`).click(); await until(() => !$('history-restore').disabled, 'restoration after discard'); $('history-restore').click();
   await until(() => !$('history-dialog').open && f.explorer.doc.nodes.some(n => n.id === node.id), 'restore permitted');
   $('library-toggle').click(); await until(() => f.document.querySelector(`[data-key="${destination.key}"] [data-action="open"]`), 'switch target after discard');
-  f.document.querySelector(`[data-key="${destination.key}"] [data-action="open"]`).click(); await until(() => f.explorer.activeKey === destination.key && $('welcome').hidden, 'switch permitted');
+  f.document.querySelector(`[data-key="${destination.key}"] [data-action="open"]`).click();
+  await until(() => f.explorer.activeKey === destination.key && $('welcome').hidden, 'switch permitted');
 });
 
 test('visual export UI explicitly captures full or selected scope despite folding/focus and excludes answer drafts', async t => {
@@ -1821,6 +1907,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const copyDialog = document.getElementById('project-copy-dialog');
   const forkDialog = document.getElementById('scenario-fork-dialog');
   if (forkDialog) { forkDialog.showModal = () => { forkDialog.open = true; }; forkDialog.close = () => { forkDialog.open = false; }; }
+  const comparisonDialog = document.getElementById('comparison-dialog');
+  if (comparisonDialog) { comparisonDialog.showModal = () => { comparisonDialog.open = true; }; comparisonDialog.close = () => { comparisonDialog.open = false; }; }
   const reconcileDialog = document.getElementById('project-reconcile-dialog');
   const mergeDialog = document.getElementById('project-merge-dialog');
   mergeDialog.showModal = () => { mergeDialog.open = true; };

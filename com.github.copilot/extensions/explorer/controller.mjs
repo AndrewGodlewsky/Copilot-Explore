@@ -5,6 +5,8 @@ import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
 import { ScenarioFork } from './scenario-fork.mjs';
+import { ScenarioComparison } from './scenario-compare.mjs';
+import { savedDigest } from './review-causes.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
 import { ProjectMerge } from './project-merge.mjs';
@@ -23,7 +25,7 @@ import { prepareAnswerCheck, captureCheck, checkFreshness, validateCheck } from 
 import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createDocument, validateDocument, importedDocument, findNode, addQuestions, addDirection, acknowledgeDirection, candidateQuestions, acceptQuestions, answerNode, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA, pinnedConstraints } from './model.mjs';
+import { FORMAT, createDocument, validateDocument, importedDocument, findNode, addQuestions, addDirection, acknowledgeDirection, candidateQuestions, acceptQuestions, answerNode, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA, pinnedConstraints } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
 import { History } from './history.mjs';
 import { StorageManagement } from './storage-management.mjs';
@@ -67,6 +69,7 @@ export class Explorer {
   auxiliaryDirectory() { return this.projectStore?.context.directory ?? this.library?.directory ?? dirname(this.file); }
   async changeStorage(store) {
     this.projectCopy = null;
+    this.scenarioComparison?.clear();
     if (this.projectStore === store) return;
     await this.analytics?.flush();
     this.projectStore = store;
@@ -685,6 +688,41 @@ export class Explorer {
       });
     });
   }
+  scenarioCompareRequest(input) {
+    return this.transact(async () => {
+      const fields = { preview: 'action,journey,revision,target', page: 'action,id,journey,page,revision,selected', discard: 'action,id,journey,revision' };
+      if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(fields, input.action) || Object.keys(input).sort().join(',') !== fields[input.action]) throw Error('Invalid scenario comparison request.');
+      const valid = () => {
+        if (this.closed || !this.doc || !this.library || input.journey !== this.activeKey || input.revision !== this.doc.revision) throw Error('The selected journey changed. Reopen comparison from the current map.');
+      };
+      valid();
+      if (input.action === 'preview') {
+        this.scenarioComparison = null;
+        const target = input.target;
+        if (!target || typeof target !== 'object' || Array.isArray(target) || !['personal', 'project'].includes(target.scope) || Object.keys(target).sort().join(',') !== (target.scope === 'personal' ? 'key,scope' : 'key,listing,scope')) throw Error('Choose a listed comparison journey.');
+        const file = this.file, store = this.projectStore, listing = this.projectLibrary;
+        const compare = new ScenarioComparison(async () => {
+          valid(); if (this.file !== file || this.projectStore !== store) throw Error('Comparison source changed. Select both journeys again.');
+          const left = await this.readCurrent();
+          if (left.revision !== input.revision) throw Error('The current saved journey changed. Reopen it before comparing.');
+          let right;
+          if (target.scope === 'personal') right = (await this.library.resolve(target.key)).document;
+          else {
+            if (!listing || this.projectLibrary !== listing || listing.listing !== target.listing) throw Error('Project comparison selection expired. Refresh the project folder.');
+            const record = await listing.resolve(target.key);
+            right = { format: FORMAT, version: 1, revision: 0, ...record.document };
+          }
+          valid(); return { left, right };
+        });
+        compare.target = structuredClone(target); compare.projectListing = listing;
+        const result = await compare.preview(); this.scenarioComparison = compare; return result;
+      }
+      const compare = this.scenarioComparison;
+      if (!compare) throw Error('Comparison expired. Compare the selected sources again.');
+      if (input.action === 'discard') { compare.get(input.id); compare.clear(); return { discarded: true }; }
+      return compare.page(input.id, input.page, input.selected);
+    });
+  }
   projectLibraryRequest(input) {
     return this.transact(async () => {
       if (this.closed || !this.projectRepository || !input || typeof input !== 'object' || Array.isArray(input) ||
@@ -896,6 +934,21 @@ export class Explorer {
   }
   command(action, input = {}) {
     return this.transact(async () => {
+      if (action === 'open-compared-source') {
+        if (this.closed || !this.scenarioComparison || input.journey !== this.activeKey || input.revision !== this.doc?.revision || this.pending || this.preview || Object.keys(input).filter(key => !['action', 'scope'].includes(key)).sort().join(',') !== 'id,journey,nodeId,revision,side') throw Error('Comparison navigation changed or work is active. Finish pending work and compare again.');
+        const compare = this.scenarioComparison, selected = await compare.source(input.id, input.side, input.nodeId);
+        if (input.side === 'right') {
+          const target = compare.target;
+          if (target.scope === 'personal') await this.attach(target.key, { key: target.key, source: selected.digest, nodeId: selected.nodeId });
+          else {
+            if (this.projectLibrary !== compare.projectListing) throw Error('Project comparison selection expired. Refresh the folder.');
+            const store = await compare.projectListing.open(target.key, this.binding);
+            if (savedDigest({ ...store.document, revision: 0 }) !== selected.digest) throw Error('The compared project source changed. Refresh the folder.');
+            await this.attachProject(store);
+          }
+        }
+        compare.clear(); return { ...this.uiSnapshot(), comparedNodeId: selected.nodeId };
+      }
       if (action === 'project-merge-accept') {
         if (this.closed || !this.projectStore || this.projectMerge?.store !== this.projectStore || input.journey !== this.activeKey || input.revision !== this.doc.revision || this.pending || this.preview || Object.keys(input).filter(key => !['action', 'scope'].includes(key)).sort().join(',') !== 'acknowledged,id,journey,revision,token') throw Error('Merge selection changed. Preview again after finishing pending work.');
         const before = this.doc;

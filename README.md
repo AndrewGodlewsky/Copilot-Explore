@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.86.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.87.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 
 **Usage dashboard** compares current maps, saved answer states and structure, newly observed canvas visits/committed question growth, and retained owned-helper outcomes and usage. UTC date filters apply to observations and receipts, not current stock. Scans are bounded and explicitly refreshed; missing usage and incomplete coverage stay visible. It preserves your editor and drafts. See [metric definitions, inventory, privacy and retention](docs/usage-dashboard.md).
 
@@ -144,6 +144,8 @@ New generated questions may also carry **Low**, **Medium** or **High importance*
 **Fork alternative**, in the Explore drawer, saves a separate scenario with the ancestor path and a different answer. Preview copied context and omitted dependencies, save to the personal library, then explicitly open it. The original answers, descendants and private drafts stay intact. Origin mappings survive exports and project copies. See [alternative scenarios](docs/scenario-forks.md).
 
 **Revisit this answer**, in Explore or Commands, brings those choices together: change and retain descendants for review, fork an alternative, or restart below the question. The chooser keeps your editor intact, names the target journey, and routes through the existing consequence/copy confirmations. See [revisiting answers](docs/revisiting-answers.md).
+
+**Compare with current**, on Personal or Project library entries, compares two explicitly selected saved journeys using recorded origins. Page through matched or unpaired nodes and inspect complete selected answers, states and retained evidence. Comparison preserves both maps and drafts; source navigation is a separate choice. See [scenario comparison](docs/scenario-comparison.md).
 
 **Suggest next question** offers one optional existing question using a local heuristic. Computed downstream impact band comes first, then assumptions needing review, other questions needing review, distinct constraint-word matches, objective/success-criteria matches, historical High/Medium/Low/Unranked importance and stable question ID. The explanation shows exact affected-question counts, tree exposure versus explicit dependencies, unanswered/review counts, matched words and separately labeled historical AI reasons. Counts explain the winner; they do not rank questions within the same band. Medium/high impact or a review flag can justify a recommendation without an objective or literal match. Ordinary low-impact maps retain the objective and literal-word fallback. This is not semantic analysis or a claim about the optimal next action. Unicode words are case-normalized; short words and common English stop words are excluded, with no stemming or synonym matching.
 
@@ -301,7 +303,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.86, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.86**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.87, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.87**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Settings > Map and motion** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

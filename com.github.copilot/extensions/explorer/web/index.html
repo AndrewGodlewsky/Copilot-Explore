@@ -174,6 +174,21 @@
     <p class="quiet">Off by default. Works outside text fields only when the configured voice shortcut is known and different. Copilot or the OS may reserve it; use Commands if it conflicts.</p>
     <button id="palette-close">Close</button>
   </dialog>
+  <dialog id="comparison-dialog" aria-labelledby="comparison-title">
+    <h2 id="comparison-title">Compare saved scenarios</h2>
+    <p id="comparison-identities"></p>
+    <p>Compare the current saved journey (Left) with the selected library journey (Right). Private drafts stay outside this read-only comparison. No answer is merged, preferred or confirmed.</p>
+    <button id="comparison-start">Compare these saved journeys</button>
+    <p id="comparison-status" role="status" aria-live="polite"></p>
+    <section id="comparison-results" hidden>
+      <p id="scenario-comparison-summary"></p><p id="comparison-coverage" class="quiet"></p>
+      <details><summary>Current shared and different context</summary><div id="comparison-context"></div></details>
+      <label for="comparison-rows">Compared nodes (summary labels may be abbreviated)</label><select id="comparison-rows"></select>
+      <p id="comparison-page"></p><div class="actions"><button id="comparison-prev">Previous nodes</button><button id="comparison-next">Next nodes</button></div>
+      <div id="comparison-detail"></div>
+      <div class="actions"><button id="comparison-open-left">Open Left source question</button><button id="comparison-open-right">Open Right source question</button></div>
+    </section><button id="comparison-close">Close comparison</button>
+  </dialog>
   <dialog id="scenario-fork-dialog" aria-labelledby="scenario-fork-title">
     <h2 id="scenario-fork-title">Fork an alternative answer</h2>
     <p id="scenario-fork-question"></p>

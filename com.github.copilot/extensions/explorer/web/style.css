@@ -425,4 +425,8 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #review-queue-dialog { max-width: min(680px, calc(100vw - 24px)); overflow-wrap: anywhere; }
 #review-queue-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 #review-queue-dialog select { max-width: 100%; min-width: 0; }
+#comparison-dialog { max-width: min(680px, calc(100vw - 24px)); overflow-wrap: anywhere; }
+#comparison-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+#comparison-dialog select { max-width: 100%; min-width: 0; }
+#comparison-detail article { border-top: 1px solid var(--line); padding-block: 12px; }
 @media(forced-colors:active) { .node[data-critical="context"] { border-top-color: CanvasText; } }

@@ -6,6 +6,7 @@ import { Drafts } from './drafts.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './web/search.mjs';
 import { join, resolve, dirname, basename } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { validateDocument, importedDocument, MAX_DOCUMENT_BYTES } from './model.mjs';
 import { atomicWrite, atomicCreate } from './storage.mjs';
 
@@ -160,10 +161,31 @@ export class Library {
     const lock = await acquireLock(join(await this.root(), 'library.json.lock'), { attempts: 50 });
     try { return await fn(); } finally { await lock.release(); }
   }
-  async writeMetadata(metadata) {
-    metadata.revision++;
-    try { await atomicWrite(join(await this.root(), 'library.json'), JSON.stringify(metadata, null, 2)); }
-    catch { throw new Error('Could not save library metadata. Your saved journeys are preserved.'); }
+  async writeMetadata(metadata, write = atomicWrite) {
+    try {
+      const root = await this.root(), file = join(root, 'library.json');
+      const read = async () => {
+        try {
+          const bytes = await readFile(await this.safeFile('library.json'));
+          if (bytes.length > MAX_DOCUMENT_BYTES) throw Error('Metadata exceeds its size limit.');
+          return bytes.toString('utf8');
+        } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+      };
+      const baseline = await read(), current = baseline === null ? emptyMetadata() : validateLibraryMetadata(JSON.parse(baseline));
+      if (current.revision !== metadata.revision || !Number.isSafeInteger(metadata.revision + 1)) throw Error('Metadata revision changed.');
+      const next = { ...metadata, revision: metadata.revision + 1 }, content = JSON.stringify(next, null, 2);
+      // Windows readers can briefly deny replacement. Keep the writer lock and
+      // recheck the exact original bytes before each bounded atomic attempt.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (await this.root() !== root || await read() !== baseline) throw Error('Metadata changed before replacement.');
+        try { await write(file, content); metadata.revision = next.revision; return; }
+        catch (error) {
+          if (attempt === 3 || error.syscall !== 'rename' || !['EPERM', 'EBUSY'].includes(error.code)) throw error;
+          await delay(20 * (attempt + 1));
+        }
+      }
+    }
+    catch (error) { throw new Error('Could not save library metadata. Your saved journeys are preserved.', { cause: error }); }
   }
   async update(key, patch, revision) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch) || !Object.keys(patch).length || Object.entries(patch).some(([name, value]) => !['pinned', 'archived'].includes(name) || typeof value !== 'boolean')) throw new Error('Invalid library metadata change.');

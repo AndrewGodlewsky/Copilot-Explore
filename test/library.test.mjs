@@ -7,6 +7,7 @@ import { createDocument, MAX_DOCUMENT_BYTES } from '../com.github.copilot/extens
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
+import { atomicWrite } from '../com.github.copilot/extensions/explorer/storage.mjs';
 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-library-'));
@@ -18,6 +19,42 @@ async function fixture(t) {
   };
   return { dir, library, explorer };
 }
+
+test('metadata replacement retries transient sharing denial without publishing a partial revision', async t => {
+  const { dir, library } = await fixture(t), file = join(dir, 'library.json');
+  const before = { version: 1, revision: 3, entries: {}, bindings: {} };
+  await writeFile(file, JSON.stringify(before)); let attempts = 0;
+  await library.locked(() => library.writeMetadata(structuredClone(before), async (path, content) => {
+    attempts++; assert.equal(await readFile(file, 'utf8'), JSON.stringify(before));
+    if (attempts < 3) throw Object.assign(Error('sharing denial'), { code: 'EPERM', syscall: 'rename' });
+    await atomicWrite(path, content);
+  }));
+  assert.equal(attempts, 3); assert.equal((await library.metadata()).revision, 4);
+});
+
+test('metadata retry rejects an external replacement or a stale revision and preserves the newer bytes', async t => {
+  const { dir, library } = await fixture(t), file = join(dir, 'library.json');
+  const before = { version: 1, revision: 3, entries: {}, bindings: {} }, newer = JSON.stringify({ ...before, revision: 4 });
+  await writeFile(file, JSON.stringify(before)); let attempts = 0;
+  await assert.rejects(library.locked(() => library.writeMetadata(structuredClone(before), async () => {
+    attempts++; await writeFile(file, newer); throw Object.assign(Error('sharing denial'), { code: 'EPERM', syscall: 'rename' });
+  })), /metadata/);
+  assert.equal(attempts, 1); assert.equal(await readFile(file, 'utf8'), newer);
+  await assert.rejects(library.locked(() => library.writeMetadata(structuredClone(before))), /metadata/);
+  assert.equal(await readFile(file, 'utf8'), newer);
+});
+
+test('metadata replacement bounds sharing retries and does not retry unrelated I/O errors', async t => {
+  const { dir, library } = await fixture(t), file = join(dir, 'library.json');
+  const before = { version: 1, revision: 3, entries: {}, bindings: {} }, raw = JSON.stringify(before); await writeFile(file, raw);
+  for (const [code, expected] of [['EPERM', 4], ['ENOSPC', 1]]) {
+    let attempts = 0;
+    await assert.rejects(library.locked(() => library.writeMetadata(structuredClone(before), async () => {
+      attempts++; throw Object.assign(Error('write rejected'), { code, syscall: 'rename' });
+    })), /metadata/);
+    assert.equal(attempts, expected); assert.equal(await readFile(file, 'utf8'), raw);
+  }
+});
 test('legacy files are discovered intact; corrupt, oversized and symlink entries do not hide good maps', async t => {
   const { dir, library } = await fixture(t), doc = createDocument('Legacy 🌿');
   const raw = JSON.stringify(doc); await writeFile(join(dir, 'legacy.explore.json'), raw);

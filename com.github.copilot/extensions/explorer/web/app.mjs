@@ -33,6 +33,7 @@ let suppressClick = false, restoringFocus = false, composing = null;
 let actionEpoch = 0, closed = false, pollTimer;
 let viewerTarget = null, viewerEpoch = 0, viewerPreview = null;
 let scenarioFork = null, scenarioFlight = null;
+let comparison = null;
 let stateCursor = null, pollFlight = null, pollFailures = 0, pageEpoch = 0, suspended = false, actionAbort = null;
 function stopPolling() {
   clearTimeout(pollTimer); pollFlight?.abort.abort(); pollFlight = null; stateCursor = null;
@@ -562,7 +563,7 @@ async function api(action, input = {}) {
     const result = await response.json();
     if (closed || suspended || page !== pageEpoch || epoch !== actionEpoch) return null;
     if (!response.ok) throw new Error(result.error);
-    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'import'].includes(action)); return result;
+    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'open-compared-source', 'import'].includes(action)); return result;
   } catch (error) {
     if (!closed && !suspended && page === pageEpoch && epoch === actionEpoch) notice(abort.signal.aborted ? 'The action response timed out. Refresh the saved map before retrying; it may have been saved. Your draft is still here.' : error.message);
     return null;
@@ -634,6 +635,7 @@ function apply(next, reset = false) {
   }
   signature = stamp; state = next;
   syncReviewQueue();
+  syncComparison();
   if (answerChange && !answerChange.current()) closeAnswerChange(false, 'Saved sources changed. Review the answer change again; your draft is retained.');
   if (paletteOpen() && (changedDocument || !state.document?.nodes.some(n => n.id === selected))) { closePalette(false); $('palette-open').focus({ preventScroll: true }); }
   for (const [id, ui] of nodeUi) {
@@ -873,6 +875,7 @@ async function refreshLibrary() {
           }
         };
         row.append(el('div', { class: 'library-actions' }, button('Open', () => switchJourney('open', { key: row.entry.key }), { 'data-action': 'open' }),
+          button('Compare with current', () => openComparison({ scope: 'personal', key: row.entry.key }, `${row.entry.topic} (${row.entry.id}), personal storage`), { 'data-action': 'compare' }),
           button('Revisit', async () => {
             const filter = $('library-reminder').value === 'all' ? 'any' : $('library-reminder').value;
             if (await switchJourney('open', { key: row.entry.key })) {
@@ -885,6 +888,7 @@ async function refreshLibrary() {
           button('', () => change('pinned'), { 'data-action': 'pin' }), button('', () => change('archived'), { 'data-action': 'archive' })));
       }
       row.entry = entry;
+      row.querySelector('[data-action="compare"]').disabled = !state.document;
       row.querySelector('h2').textContent = entry.scenario ? `Alternative scenario: ${entry.topic}` : entry.topic;
       row.querySelector('.library-meta').textContent = `${entry.pinned ? 'Pinned · ' : ''}${entry.questionCount} questions · ${entry.lastOpenedAt ? 'Opened' : 'Edited'} ${new Date(entry.lastOpenedAt ?? entry.updatedAt).toLocaleString()}${entry.scenario ? ` · Scenario ID: ${entry.id}` : ''}`;
       const reminders = entry.revisit;
@@ -929,6 +933,7 @@ async function refreshProjectLibrary(input = { action: 'refresh', folder: $('pro
         el('p', { class: 'quiet' }, `${entry.questionCount} questions. ${entry.lastOpenedAt ? `Opened ${new Date(entry.lastOpenedAt).toLocaleString()}` : 'Not opened on this checkout.'}`),
         ...(entry.duplicate ? [el('p', { class: 'notice' }, 'Duplicate journey identity. Resolve the duplicate files and refresh before opening.')] : []),
         el('div', { class: 'library-actions' }, button('Open', () => { if (current()) void switchJourney('open-project-entry', { listing: result.listing, key: entry.key }, current); }, { 'data-action': 'open', disabled }),
+          button('Compare with current', () => { if (current()) openComparison({ scope: 'project', listing: result.listing, key: entry.key }, `${entry.topic} (${entry.id}), project file ${entry.path}`); }, { 'data-action': 'compare', disabled: disabled || !state.document }),
           button(entry.pinned ? 'Unpin' : 'Pin', () => { if (current()) void refreshProjectLibrary({ action: 'pin', listing: result.listing, key: entry.key, pinned: !entry.pinned, revision: result.revision }); }, { 'data-action': 'pin', 'aria-pressed': String(entry.pinned), disabled })));
     }));
     if (!result.entries.length && !result.errors.length) $('project-library-list').append(el('p', { class: 'quiet' }, 'No shared journeys in this folder. Start a Project exploration below or choose another relative folder.'));
@@ -957,6 +962,90 @@ function switchAllowed(reason = 'opening another journey') {
   if ([...nodeUi.values()].some(ui => ui.revisitDraft)) { notice(`Save your reminder edits or choose Use saved reminder before ${reason}.`); return false; }
   return true;
 }
+function syncComparison() {
+  const c = comparison; if (!c || c.navigating) return;
+  if (c.observed !== state.document) { c.stale ||= c.base !== JSON.stringify(state.document); c.observed = state.document; }
+  c.stale ||= c.page !== pageEpoch || c.journey !== state.activeKey;
+  const unavailable = !!c.flight || c.stale || busy;
+  $('comparison-start').disabled = unavailable;
+  $('comparison-rows').disabled = unavailable;
+  $('comparison-prev').disabled = unavailable || !c.value || c.value.page === 0;
+  $('comparison-next').disabled = unavailable || !c.value || c.value.page + 1 >= c.value.pages;
+  for (const side of ['left', 'right']) $(`comparison-open-${side}`).disabled = unavailable || !c.value?.selected[side] || !!state.pending || !!state.preview || draftClient.savingAnswer;
+  if (c.stale) $('comparison-status').textContent = c.error || 'Saved context changed. Close comparison, refresh the sources and select them again. Your draft is retained.';
+  else if (!c.flight && (state.pending || state.preview)) $('comparison-status').textContent = 'Comparison is read-only. Finish or cancel pending work and accept or dismiss staged questions before source navigation.';
+}
+function closeComparison(force = false) {
+  const c = comparison; if (c?.navigating && !force) return;
+  comparison = null; c?.flight?.abort();
+  if ($('comparison-dialog').open) $('comparison-dialog').close();
+  if (c?.value) void fetch('api/scenario-compare', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'discard', journey: c.journey, revision: c.revision, id: c.value.id }) }).catch(() => {});
+  if (!force && c?.focus?.isConnected) c.focus.focus({ preventScroll: true });
+}
+function openComparison(target, label) {
+  if (!state.document || busy || closed || suspended) return;
+  closeComparison(); voice.cancel();
+  comparison = { target, journey: state.activeKey, revision: state.document.revision, base: JSON.stringify(state.document), observed: state.document, page: pageEpoch, focus: document.activeElement, value: null, stale: false };
+  $('comparison-identities').textContent = `Left: ${journeyDescription()}. Right: ${label}.`;
+  $('comparison-status').textContent = 'Review both source identities, then compare their saved content.';
+  $('comparison-results').hidden = true; $('comparison-detail').replaceChildren(); $('comparison-rows').replaceChildren();
+  $('comparison-close').disabled = false; syncComparison(); $('comparison-dialog').showModal(); $('comparison-start').focus({ preventScroll: true });
+}
+function renderScenarioComparison(value) {
+  const counts = value.counts;
+  $('scenario-comparison-summary').textContent = `${counts.paired} comparable nodes (${counts.changed} with differences), ${counts.onlyLeft} only on Left, ${counts.onlyRight} only on Right; ${counts.ambiguous} unpaired nodes have ambiguous identity claims. Ordinary questions: ${counts.questionsLeft} Left / ${counts.questionsRight} Right. Review warnings: ${counts.reviewLeft} Left / ${counts.reviewRight} Right.`;
+  $('comparison-coverage').textContent = value.coverage;
+  $('comparison-context').replaceChildren(...Object.entries(value.context).map(([field, content]) => el('section', {}, el('h3', {}, `${field}: ${content.same ? 'same recorded context' : 'different recorded context'}`), el('pre', {}, `Left: ${typeof content.left === 'string' ? content.left : JSON.stringify(content.left, null, 2)}\nRight: ${typeof content.right === 'string' ? content.right : JSON.stringify(content.right, null, 2)}`))));
+  $('comparison-rows').replaceChildren(...value.items.map(row => el('option', { value: row.index }, `${row.index + 1}. ${row.relation}${row.ambiguous ? ' (ambiguous)' : ''}: ${row.label}`)));
+  $('comparison-rows').value = String(value.selectedIndex); $('comparison-page').textContent = `Page ${value.page + 1} of ${value.pages}; ${value.total} saved-node rows.`;
+  const row = value.selected;
+  $('comparison-detail').replaceChildren(el('h3', {}, row.relation === 'paired' ? `Observed differences: ${row.differences.join(', ') || 'none in compared fields'}` : `${row.relation === 'only-left' ? 'Left only' : 'Right only'}: no unique matching origin${row.ambiguous ? ' (ambiguous claims)' : ''}`));
+  for (const side of ['left', 'right']) {
+    const node = row[side], title = side === 'left' ? 'Left' : 'Right';
+    if (!node) { $('comparison-detail').append(el('p', {}, `${title}: no comparable saved node. This does not establish when or why it is absent.`)); continue; }
+    const article = el('article', {}, el('h4', {}, `${title}: ${node.question}`), el('p', { class: 'quiet' }, `${node.id} · ${node.kind} · ${node.category}`),
+      el('p', {}, `Answer state: ${ANSWER_STATES[node.answerState]}. ${node.review ? 'Needs review; retained reasoning is unresolved.' : 'No recorded review warning.'}`), el('pre', {}, node.answer || '(No saved answer)'),
+      el('p', {}, node.parent ? `Parent: ${node.parent.question} (${node.parent.id})` : 'Root context'),
+      el('p', {}, `Research: ${node.research ? node.research.basis === 'sources' ? 'sourced evidence' : 'model reasoning' : 'none retained'}. ${node.researchStale ? 'Marked stale; revisit before relying on it.' : 'No stale marker; this does not verify freshness.'}`));
+    if (node.research) article.append(el('details', {}, el('summary', {}, 'Complete recorded research and source provenance'), el('pre', {}, JSON.stringify(node.research, null, 2))));
+    if (node.reviewCauses) article.append(el('details', {}, el('summary', {}, 'Recorded review causes'), el('pre', {}, JSON.stringify(node.reviewCauses, null, 2))));
+    article.append(el('p', {}, `${node.dependencies.length} of ${node.dependencyCount} upstream dependency details shown.`), el('ul', {}, ...node.dependencies.map(link => el('li', {}, `${link.prerequisite.question} (${link.prerequisite.id})${link.explanation ? `: ${link.explanation}` : ''}`))));
+    $('comparison-detail').append(article);
+  }
+  $('comparison-results').hidden = false;
+}
+async function requestComparison(action, page = 0, selected = page * 25) {
+  const c = comparison; if (!c || c.flight || c.navigating) return; syncComparison(); if (c.stale || busy) return;
+  const abort = new AbortController(); c.flight = abort; syncComparison(); $('comparison-status').textContent = 'Reading and comparing saved sources…';
+  const timer = setTimeout(() => abort.abort(), 20000);
+  try {
+    const response = await fetch('api/scenario-compare', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, journey: c.journey, revision: c.revision, ...(action === 'preview' ? { target: c.target } : { id: c.value.id, page, selected }) }) });
+    const value = await response.json(); if (comparison !== c || c.page !== pageEpoch || closed || suspended) return;
+    syncComparison(); if (c.stale) return;
+    if (!response.ok) throw Error(value.error);
+    c.value = value; renderScenarioComparison(value); $('comparison-status').textContent = 'Recorded differences only. No scenario has been selected as a winner.';
+  } catch (error) {
+    if (comparison === c && c.page === pageEpoch) { c.stale = true; c.error = `${abort.signal.aborted ? 'Comparison timed out.' : error.message} Close and select refreshed sources to retry; your draft is retained.`; }
+  } finally { clearTimeout(timer); c.flight = null; if (comparison === c) syncComparison(); }
+}
+async function openComparedSource(side) {
+  const c = comparison; if (!c || c.flight || c.navigating) return; syncComparison();
+  const node = c.value?.selected[side]; if (!node || $(`comparison-open-${side}`).disabled) return;
+  c.navigating = true; $('comparison-close').disabled = true;
+  try {
+    const result = await switchJourney('open-compared-source', { journey: c.journey, revision: c.revision, id: c.value.id, side, nodeId: node.id }, () => comparison === c && c.page === pageEpoch && c.base === JSON.stringify(state.document));
+    if (comparison !== c || c.page !== pageEpoch) return;
+    if (result) { closeComparison(true); select(result.comparedNodeId); }
+    else $('comparison-status').textContent = $('notice').textContent || 'Source navigation could not finish. Your current map and draft remain available.';
+  } finally { c.navigating = false; if (comparison === c) { $('comparison-close').disabled = false; syncComparison(); } }
+}
+$('comparison-start').addEventListener('click', () => void requestComparison('preview'));
+$('comparison-prev').addEventListener('click', () => { if (comparison?.value) void requestComparison('page', comparison.value.page - 1); });
+$('comparison-next').addEventListener('click', () => { if (comparison?.value) void requestComparison('page', comparison.value.page + 1); });
+$('comparison-rows').addEventListener('change', () => { if (comparison?.value) void requestComparison('page', comparison.value.page, Number($('comparison-rows').value)); });
+for (const side of ['left', 'right']) $(`comparison-open-${side}`).addEventListener('click', () => void openComparedSource(side));
+$('comparison-close').addEventListener('click', () => closeComparison());
+$('comparison-dialog').addEventListener('cancel', event => { event.preventDefault(); closeComparison(); });
 function closeScenarioFork(force = false) {
   if (scenarioFlight && !force) return;
   const prior = scenarioFork; scenarioFork = null;
@@ -3429,6 +3518,7 @@ window.addEventListener('pagehide', event => {
   closeAnswerChange();
   closeReviewQueue(true);
   closeScenarioFork(true);
+  closeComparison(true);
   if ($('project-merge-dialog').open) closeProjectMerge();
   if ($('project-reconcile-dialog').open) closeProjectReconciliation();
   if ($('project-copy-dialog').open) closeProjectCopy();

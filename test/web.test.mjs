@@ -979,6 +979,30 @@ test('reviewed project copy shows exact content, excludes drafts, saves once and
   const denied = await fetch(new URL('api/project-copy', f.window.location.href), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: '{}' }); assert.equal(denied.status, 403);
 });
 
+test('project reconciliation reload keeps exact draft text and source bases while preserving incoming bytes', async t => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-reconcile-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
+  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
+    const store = await e.projectRepository.create(e.doc); await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
+  } }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1], key = f.explorer.activeKey;
+  f.open(node.id); f.type('answer', '  Keep my unsent 日本語 draft  '); const editor = $('answer');
+  const incoming = JSON.parse(await readFile(f.explorer.file)); incoming.journey.nodes[1].answer = 'Teammate answer'; const text = JSON.stringify(incoming);
+  await writeFile(f.explorer.file, text); f.explorer.projectObservedAt = 0; await f.poll();
+  assert.equal($('project-change').hidden, false); assert.equal($('answer'), editor); assert.equal(editor.value, '  Keep my unsent 日本語 draft  ');
+  $('project-change-review').click(); await until(() => !$('project-reconcile-reload').hidden, 'reconciliation preview');
+  assert.equal($('project-reconcile-content').value, text); $('project-reconcile-reload').click();
+  await until(() => !$('project-reconcile-dialog').open && f.explorer.doc.nodes[1].answer === 'Teammate answer', 'reconciliation reload');
+  assert.equal($('project-change').hidden, true); assert.equal($('answer'), editor); assert.equal(editor.value, '  Keep my unsent 日本語 draft  ');
+  const record = (await f.explorer.readDrafts(key)).entries.find(entry => entry.nodeId === node.id);
+  assert.equal(record.text, '  Keep my unsent 日本語 draft  '); assert.equal(record.stale, true); assert.equal(await readFile(f.explorer.file, 'utf8'), text);
+  const removed = JSON.parse(text); removed.journey.nodes = removed.journey.nodes.filter(item => item.id !== node.id);
+  await writeFile(f.explorer.file, JSON.stringify(removed)); f.explorer.projectObservedAt = 0; await f.poll();
+  $('project-change-review').click(); await until(() => !$('project-reconcile-reload').hidden, 'removed-node preview'); $('project-reconcile-reload').click();
+  await until(() => !$('project-reconcile-dialog').open && !f.explorer.doc.nodes.some(item => item.id === node.id), 'removed-node reload');
+  const orphan = (await f.explorer.readDrafts(key)).entries.find(entry => entry.nodeId === node.id); assert.equal(orphan.orphaned, true); assert.equal(orphan.text, record.text);
+  const denied = await fetch(new URL('api/project-reconciliation', f.window.location.href), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: '{}' }); assert.equal(denied.status, 403);
+});
+
 async function startReviewedResearch(f) {
   await until(() => !f.document.getElementById('research-review-start').disabled, 'review ready');
   f.document.getElementById('research-review-start').click();
@@ -1372,6 +1396,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   exportDialog.close = () => { exportDialog.open = false; };
   const storageDialog = document.getElementById('storage-dialog');
   const copyDialog = document.getElementById('project-copy-dialog');
+  const reconcileDialog = document.getElementById('project-reconcile-dialog');
+  reconcileDialog.showModal = () => { reconcileDialog.open = true; };
+  reconcileDialog.close = () => { reconcileDialog.open = false; };
   copyDialog.showModal = () => { copyDialog.open = true; };
   copyDialog.close = () => { copyDialog.open = false; };
   storageDialog.showModal = () => { storageDialog.open = true; };

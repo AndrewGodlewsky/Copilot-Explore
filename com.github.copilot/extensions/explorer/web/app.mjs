@@ -357,6 +357,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    if ($('project-reconcile-dialog').open) closeProjectReconciliation();
     if ($('project-copy-dialog').open) closeProjectCopy();
     outlineNavigated = false;
     minimap.reset();
@@ -411,6 +412,8 @@ function apply(next, reset = false) {
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('visual-export-open').hidden = !doc;
   $('project-copy-open').hidden = !doc || !state.library || state.storage?.scope === 'project';
+  $('project-reconcile-open').hidden = !doc || state.storage?.scope !== 'project';
+  $('project-change').hidden = !state.projectChange; $('project-change-text').textContent = state.projectChange?.message ?? '';
   $('edit-guidance').disabled = !!state.pending;
   if (state.contextCoverage && JSON.stringify(state.contextCoverage) !== lastCoverage) { lastCoverage = JSON.stringify(state.contextCoverage); showCoverage(state.contextCoverage, 'Prepared'); }
   notice(state.error || state.recoveryNotice?.message || (['failed', 'interrupted'].includes(state.exportObservation?.status) ? 'Export did not finish. Open Recovery to explicitly retry. Browser file saving is unknown.' : ''));
@@ -693,6 +696,52 @@ function switchAllowed() {
   if ([...nodeUi.values()].some(ui => ui.revisitDraft)) { notice('Save your reminder edits or choose Use saved reminder before opening another journey.'); return false; }
   return true;
 }
+let projectReconcileEpoch = 0, projectReconcilePreview = null, projectReconcileFlight = null;
+function closeProjectReconciliation() {
+  projectReconcileEpoch++; projectReconcileFlight?.abort(); projectReconcileFlight = null; projectReconcilePreview = null;
+  $('project-reconcile-dialog').close(); $('project-reconcile-content').value = ''; $('project-reconcile-review').hidden = true; $('project-reconcile-reload').hidden = true;
+  $($('project-reconcile-open').hidden ? 'library-toggle' : 'project-reconcile-open').focus({ preventScroll: true });
+}
+async function requestProjectReconciliation(action = 'inspect') {
+  projectReconcileFlight?.abort(); const abort = new AbortController(); projectReconcileFlight = abort;
+  const epoch = ++projectReconcileEpoch, page = pageEpoch, journey = state.activeKey, revision = state.document?.revision;
+  const current = () => !closed && !suspended && page === pageEpoch && epoch === projectReconcileEpoch && $('project-reconcile-dialog').open && journey === state.activeKey;
+  projectReconcilePreview = null; $('project-reconcile-review').hidden = true; $('project-reconcile-reload').hidden = true; $('project-reconcile-content').value = '';
+  $('project-reconcile-status').textContent = action === 'inspect' ? 'Checking current project content and checkout…' : 'Preserving the displayed committed version privately…';
+  const timer = setTimeout(() => abort.abort(), 20000);
+  try {
+    const response = await fetch('api/project-reconciliation', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, journey, revision }) });
+    const result = await response.json(); if (!current()) return;
+    if (!response.ok) throw Error(result.error);
+    if (action === 'preserve') $('project-reconcile-status').textContent = 'Displayed committed version preserved privately. Use File → Recovery to inspect it. Your drafts remain separate and unchanged.';
+    else if (result.status === 'current') $('project-reconcile-status').textContent = 'The project file and checkout still match the displayed base. No reload is needed.';
+    else {
+      projectReconcilePreview = result; $('project-reconcile-review').hidden = false; $('project-reconcile-reload').hidden = false;
+      $('project-reconcile-path').textContent = `${result.path} · ${result.nodes} nodes`; $('project-reconcile-content').value = result.content;
+      $('project-reconcile-status').textContent = result.changed ? 'Incoming content differs. Review it before reloading. Your previous map and draft bases will be retained.' : 'File content is unchanged, but file identity or checkout context changed. Review before attaching to this current source.';
+      $('project-reconcile-content').focus();
+    }
+  } catch (error) { if (current()) $('project-reconcile-status').textContent = abort.signal.aborted ? 'Review timed out. Retry explicitly; no project file was rewritten.' : `${error.message} The displayed map and private drafts remain available. You can preserve the displayed version or resolve the file through Git, then refresh.`; }
+  finally { clearTimeout(timer); if (projectReconcileFlight === abort) projectReconcileFlight = null; }
+}
+for (const id of ['project-reconcile-open', 'project-change-review']) $(id).addEventListener('click', () => { voice.cancel(); $('project-reconcile-dialog').showModal(); $('project-reconcile-close').focus(); void requestProjectReconciliation(); });
+$('project-reconcile-refresh').addEventListener('click', () => { void requestProjectReconciliation(); });
+$('project-reconcile-preserve').addEventListener('click', () => { void requestProjectReconciliation('preserve'); });
+$('project-reconcile-reload').addEventListener('click', async () => {
+  const preview = projectReconcilePreview, epoch = projectReconcileEpoch;
+  if (!preview || busy) return;
+  voice.cancel(); $('workspace').inert = true;
+  try {
+    await draftClient.flush();
+    if (preview === projectReconcilePreview && epoch === projectReconcileEpoch && $('project-reconcile-dialog').open) {
+      const result = await api('project-reload', { id: preview.id, journey: state.activeKey });
+      if (result) closeProjectReconciliation(); else $('project-reconcile-status').textContent = 'Reload did not complete. Refresh this preview to inspect the current source; your original map and drafts are retained.';
+    }
+  } catch (error) { $('project-reconcile-status').textContent = `Draft persistence failed: ${error.message}. Retry or recover the draft before reloading.`; }
+  finally { $('workspace').inert = false; }
+});
+$('project-reconcile-close').addEventListener('click', closeProjectReconciliation);
+$('project-reconcile-dialog').addEventListener('cancel', event => { event.preventDefault(); closeProjectReconciliation(); });
 let projectCopyEpoch = 0, projectCopyPreview = null, projectCopyFlight = null;
 function clearProjectCopy(message = '') {
   projectCopyEpoch++; projectCopyFlight?.abort(); projectCopyFlight = null; projectCopyPreview = null;
@@ -2724,6 +2773,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  if ($('project-reconcile-dialog').open) closeProjectReconciliation();
   if ($('project-copy-dialog').open) closeProjectCopy();
   clearProjectListing('Page suspended. Refresh project journeys before selecting.');
   if (viewerTarget) { invalidateViewer('The page was suspended. Reopen Export maps and preview again.'); viewerTarget = null; $('viewer-preview').disabled = true; }

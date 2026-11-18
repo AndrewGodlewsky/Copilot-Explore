@@ -4,6 +4,7 @@ import { ProjectContext } from './project-context.mjs';
 import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
+import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { projectDocumentAccess } from './storage-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
@@ -57,13 +58,14 @@ export class Explorer {
     catch (error) { if (error.code !== 'ENOENT') this.error = 'Could not load the saved map. The file is preserved. Open Recovery to retry reading.'; }
     return this;
   }
-  snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, storage: this.projectStore ? { scope: 'project', path: this.projectStore.context.relativePath } : { scope: 'personal' }, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
+  snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, projectChange: this.projectChange ?? null, storage: this.projectStore ? { scope: 'project', path: this.projectStore.context.relativePath } : { scope: 'personal' }, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
   auxiliaryDirectory() { return this.projectStore?.context.directory ?? this.library?.directory ?? dirname(this.file); }
   async changeStorage(store) {
     this.projectCopy = null;
     if (this.projectStore === store) return;
     await this.analytics?.flush();
     this.projectStore = store;
+    this.projectChange = null; this.projectReconciliation = null; this.projectObservedAt = 0;
     this.draftStore = this.referenceStore = this.historyStore = this.storageManager = this.dashboard = null;
     this.dashboardHelperStatus = undefined;
     if (this.analytics) { this.analytics = null; this.startObservation(); }
@@ -353,7 +355,7 @@ export class Explorer {
   pollSnapshot(cursor) {
     // Documents, candidate batches, captured sources and coverage are replaced, never edited.
     // The only in-place public mutations are pending.progress and preview.stale.
-    const stamp = [this.doc, this.activeKey, !!this.library, this.error,
+    const stamp = [this.doc, this.activeKey, !!this.library, this.error, this.projectChange,
       JSON.stringify(this.pending), this.preview, this.preview?.stale,
       this.questionSource, this.contextCoverage, this.recoveryNotice, this.exportObservation, this.followup];
     if (!this.pollStamp || stamp.some((value, index) => value !== this.pollStamp[index])) {
@@ -442,9 +444,12 @@ export class Explorer {
   }
   async readCurrent() {
     if (this.projectStore) {
-      const current = await this.projectStore.current();
-      if (current.baseDigest !== this.projectStore.baseDigest) throw Error('The project document changed on disk. Reopen it before continuing; drafts are preserved.');
-      return current.working;
+      if (this.projectChange) throw Error(this.projectChange.message);
+      try {
+        const current = await this.projectStore.current();
+        if (current.baseDigest !== this.projectStore.baseDigest || current.stamp !== this.projectStore.fileStamp || current.working.revision !== this.doc.revision) throw Error('Project source changed.');
+        return current.working;
+      } catch { this.markProjectChanged(); throw Error(this.projectChange.message); }
     }
     let saved;
     try { saved = this.library ? await this.library.resolve(this.activeKey) :
@@ -551,7 +556,7 @@ export class Explorer {
   }
   async history(journey) {
     const key = await this.draftIdentity(journey);
-    if (this.projectStore) return this.projectStore.history;
+    if (this.projectStore) return this.projectStore.selectHistory();
     if (this.historyStore?.key !== key) this.historyStore = new History(this.auxiliaryDirectory(), key, this.doc.id);
     return this.historyStore;
   }
@@ -559,6 +564,7 @@ export class Explorer {
     return this.transact(async () => {
       if (this.closed || !input || typeof input !== 'object' || Array.isArray(input) || !['inspect', 'settings', 'preview', 'clean'].includes(input.action) ||
         Object.keys(input).sort().join(',') !== ({ inspect: 'action', settings: 'action,keepHistory,revision', preview: 'action,keepHistory', clean: 'action,id' })[input.action]) throw new Error('Invalid storage request.');
+      if (this.projectStore && input.action !== 'clean') { await this.projectStore.selectHistory(); this.storageManager = this.projectStore.retention(); }
       this.storageManager ??= this.projectStore?.retention() ?? new StorageManagement(this.auxiliaryDirectory());
       const storage = this.storageManager;
       if (input.action === 'settings') return storage.saveSettings(input.keepHistory, input.revision);
@@ -572,6 +578,32 @@ export class Explorer {
       const found = await storage.records(this.library && !this.projectStore ? inventory.journeyNames : [], direct);
       const preview = await storage.preview(found.records, input.keepHistory);
       return { ...preview, issues: [...(inventory.partial ? ['Inventory is partial; unscanned and unknown data remain protected.'] : []), ...found.issues, ...preview.issues].slice(0, 100) };
+    });
+  }
+  markProjectChanged() {
+    if (this.projectChange || !this.projectStore) return;
+    this.projectChange = { path: this.projectStore.context.relativePath, message: 'The project file or Git checkout changed or became unavailable. Review project changes before editing. The displayed map and private drafts are preserved.' };
+    this.projectReconciliation = new ProjectReconciliation(this.projectRepository, this.projectStore);
+    this.researchReview.clear(); this.followup = null; this.clearPending();
+    if (this.preview) this.preview.stale = true;
+    for (const work of [this.cleanup, this.help, this.briefWork, this.checkWork]) if (work) { work.abort.abort(); work.status = 'stale'; work.error = 'Project inputs changed. Review the project file, then explicitly retry.'; }
+    this.helpContexts.clear();
+  }
+  async checkProjectFreshness(force = false) {
+    if (!this.projectStore || this.closed || this.projectChange || !force && Date.now() - (this.projectObservedAt ?? 0) < 5000) return;
+    this.projectObservedAt = Date.now();
+    try { await this.readCurrent(); } catch { this.markProjectChanged(); }
+  }
+  observeProject() { return !this.projectStore ? Promise.resolve() : this.transact(() => this.checkProjectFreshness()); }
+  projectReconciliationRequest(input) {
+    return this.transact(async () => {
+      if (this.closed || !this.projectStore || !input || typeof input !== 'object' || Array.isArray(input) || !['inspect', 'preserve'].includes(input.action) || Object.keys(input).sort().join(',') !== 'action,journey,revision' || input.journey !== this.activeKey || input.revision !== this.doc.revision) throw Error('The project reconciliation selection changed. Refresh the current journey.');
+      await this.checkProjectFreshness(true);
+      if (!this.projectChange || !this.projectReconciliation) this.projectReconciliation = new ProjectReconciliation(this.projectRepository, this.projectStore);
+      if (input.action === 'preserve') return this.projectReconciliation.preserve();
+      if (!this.projectChange) return { status: 'current', path: this.projectStore.context.relativePath };
+      const { document, ...preview } = await this.projectReconciliation.preview();
+      return { ...preview, status: 'review', nodes: document.nodes.length };
     });
   }
   projectCopyRequest(input) {
@@ -667,6 +699,7 @@ export class Explorer {
         this.recoveryNotice = null; return changed;
       } catch (error) {
         const committed = this.projectStore.document !== this.doc;
+        if (!committed) await this.checkProjectFreshness(true);
         this.recoveryNotice = { kind: 'save', status: committed ? 'committed' : 'failed', message: committed ? 'Map saved. History finalization needs a retry; newer saved content is retained.' : 'Save did not commit. Previous saved content and drafts are retained. Retry reading before saving again.' };
         throw error;
       } finally {
@@ -806,10 +839,17 @@ export class Explorer {
   }
   command(action, input = {}) {
     return this.transact(async () => {
+      if (action === 'project-reload') {
+        if (!this.projectStore || !this.projectChange || !this.projectReconciliation || input.journey !== this.activeKey || input.revision !== this.doc.revision) throw Error('Project reload selection expired. Review project changes again.');
+        const store = await this.projectReconciliation.reload(input.id);
+        await this.attachProject(store); this.preview = null; this.questionSource = null; this.error = '';
+        return this.uiSnapshot();
+      }
       if (['recover-copy', 'recovery-retry'].includes(action)) {
         try { return await this.recover(action, input); }
         catch (error) { throw new Error(error.message === 'The recovery journey changed. Refresh recovery.' ? error.message : 'Recovery could not complete. Refresh recovery and retry when storage is available; originals, drafts and receipts are preserved.'); }
       }
+      if (this.projectStore && !['start', 'open', 'open-project', 'open-project-entry', 'import', 'cancel', 'dismiss-questions', 'library-update', 'context-coverage'].includes(action)) await this.readCurrent();
       if (action === 'context-coverage') {
         if (!['questions', 'research'].includes(input.kind)) throw new Error('Invalid request kind.');
         const prepared = this.prepareRequest(input.kind, input.nodeId, undefined, contextScope(input.scope));

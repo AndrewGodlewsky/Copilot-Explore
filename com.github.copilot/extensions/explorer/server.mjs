@@ -121,6 +121,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         return json(200, voice[input.action](input.id, input.sequence));
       }
       if (req.method === 'GET' && route === 'api/state') {
+        await explorer.observeProject();
         const cursor = req.headers['x-explorer-state'];
         const state = explorer.pollSnapshot(typeof cursor === 'string' && /^[0-9a-f-]{36}$/.test(cursor) ? cursor : undefined);
         res.setHeader('X-Explorer-State', state.cursor);
@@ -175,6 +176,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/project-copy') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.projectCopyRequest(await body(req, 4096)));
+      }
+      if (req.method === 'POST' && route === 'api/project-reconciliation') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.projectReconciliationRequest(await body(req, 4096)));
       }
       if (req.method === 'GET' && route === 'api/library') {
         if (!explorer.library) return json(200, { revision: 0, entries: [], errors: [] });

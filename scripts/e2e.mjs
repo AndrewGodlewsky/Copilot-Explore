@@ -257,6 +257,17 @@ try {
   const continueCopy = await fetch(projectReopen.url + 'api/action', { method: 'POST', headers: copyHeaders, body: JSON.stringify({ action: 'open-project-copy', id: copyPreview.id, revision: copySource.document.revision }) });
   assert.equal(continueCopy.status, 200); const copiedState = await continueCopy.json();
   assert.equal(copiedState.storage.scope, 'project'); assert.equal(copiedState.document.copyOrigin.sourceId, copySource.document.id); assert.equal(requests.length, copyRequests);
+  const incomingCopy = JSON.parse(await readFile(join(project, copyPreview.path), 'utf8'));
+  incomingCopy.journey.objective = 'External teammate change'; const incomingCopyBytes = JSON.stringify(incomingCopy);
+  await writeFile(join(project, copyPreview.path), incomingCopyBytes);
+  const reconcileHeaders = copyHeaders;
+  const reconcileResponse = await fetch(projectReopen.url + 'api/project-reconciliation', { method: 'POST', headers: reconcileHeaders, body: JSON.stringify({ action: 'inspect', journey: copiedState.activeKey, revision: copiedState.document.revision }) });
+  assert.equal(reconcileResponse.status, 200); const reconciliation = await reconcileResponse.json(); assert.equal(reconciliation.status, 'review');
+  const changedProjectState = await (await fetch(projectReopen.url + 'api/state')).json(); assert.ok(changedProjectState.projectChange);
+  const reloadedProject = await fetch(projectReopen.url + 'api/action', { method: 'POST', headers: reconcileHeaders, body: JSON.stringify({ action: 'project-reload', id: reconciliation.id, journey: copiedState.activeKey, revision: copiedState.document.revision }) });
+  assert.equal(reloadedProject.status, 200); const reconciledState = await reloadedProject.json();
+  assert.equal(reconciledState.projectChange, null); assert.equal(reconciledState.document.objective, 'External teammate change');
+  assert.equal(await readFile(join(project, copyPreview.path), 'utf8'), incomingCopyBytes); assert.equal(requests.length, copyRequests);
   await session.rpc.canvas.close({ instanceId: 'project-storage-fixture' });
   console.log('Project storage: fresh installed metadata controls create/reopen; artifact workspace is excluded and changed cwd rejects saves without altering shared content.');
   console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, preview staging/explicit acceptance/native exclusion/close discard, no-answer direction seed/preview acceptance, answers, research access guard, exports, stale-response rejection, close/reopen, duplicate import, cross-session library reopen and shared-writer protection. Local fixture only; no paid model or UI automation.`);

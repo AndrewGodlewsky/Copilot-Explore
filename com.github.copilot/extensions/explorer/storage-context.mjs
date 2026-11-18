@@ -79,16 +79,16 @@ export async function projectStorageContext({ checkoutDirectory, file, localDire
   if (inside(checkout.path, directory)) throw Error('Private storage must be outside the checkout.');
   const auxiliary = await directoryState(directory, true), lockFile = join(auxiliary.path, 'document.lock');
   const creationLockFile = join(local.path, 'projects', checkoutKey, 'create.lock');
-  const assertCurrent = async () => {
-    await document.assertCurrent();
+  const assertPrivate = async () => {
     for (const captured of [local, auxiliary]) if ((await directoryState(captured.path)).identity !== captured.identity) throw Error('Private storage identity changed. Reopen the journey.');
   };
+  const assertCurrent = async () => { await document.assertCurrent(); await assertPrivate(); };
   const read = async () => { await assertCurrent(); return document.read(); };
-  const locked = async (path, work) => {
-    await assertCurrent(); const lock = await acquireLock(path, { attempts: 50 });
-    try { await assertCurrent(); return await work(); } finally { await lock.release(); }
+  const locked = async (path, work, check = assertCurrent) => {
+    await check(); const lock = await acquireLock(path, { attempts: 50 });
+    try { await check(); return await work(); } finally { await lock.release(); }
   };
-  return Object.freeze({ scope: 'project', file: document.file, checkoutDirectory: checkout.path, journeyId, key,
-    directory: auxiliary.path, usageDirectory: join(auxiliary.path, 'usage'), lockFile, creationLockFile, assertCurrent, read,
-    withLock: work => locked(lockFile, work), withCreationLock: work => locked(creationLockFile, work) });
+  return Object.freeze({ scope: 'project', file: document.file, checkoutDirectory: checkout.path, checkoutIdentity: checkout.identity, journeyId, key,
+    directory: auxiliary.path, usageDirectory: join(auxiliary.path, 'usage'), lockFile, creationLockFile, assertCurrent, assertPrivate, read,
+    withLock: work => locked(lockFile, work), withPrivateLock: work => locked(lockFile, work, assertPrivate), withCreationLock: work => locked(creationLockFile, work) });
 }

@@ -5,7 +5,7 @@
   <header class="topbar">
     <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 16 5 6M16 16 27 6M16 16 5 27M16 16 27 27"/><circle cx="16" cy="16" r="5"/><circle cx="5" cy="6" r="2"/><circle cx="27" cy="6" r="2"/><circle cx="5" cy="27" r="2"/><circle cx="27" cy="27" r="2"/></svg><strong>Explorer</strong><span class="poc">Preview</span></div>
     <nav aria-label="Exploration actions">
-      <details id="file-menu" class="app-menu"><summary>File</summary><div class="menu-items"><button id="library-toggle" hidden>Library</button><button id="import">Open file</button><button id="project-open" hidden>Open project journey</button><button id="recovery-open">Recovery</button><button id="storage-home" hidden>Local storage</button><a id="save-file" href="export.json" download hidden>Save file</a><button id="visual-export-open" hidden>Export maps</button><button id="project-copy-open" hidden>Save a project copy</button><button id="finish" hidden>Finish exploration</button></div></details>
+      <details id="file-menu" class="app-menu"><summary>File</summary><div class="menu-items"><button id="library-toggle" hidden>Library</button><button id="import">Open file</button><button id="project-open" hidden>Open project journey</button><button id="recovery-open">Recovery</button><button id="storage-home" hidden>Local storage</button><a id="save-file" href="export.json" download hidden>Save file</a><button id="visual-export-open" hidden>Export maps</button><button id="project-copy-open" hidden>Save a project copy</button><button id="project-reconcile-open" hidden>Review project changes</button><button id="finish" hidden>Finish exploration</button></div></details>
       <details id="tools-menu" class="app-menu"><summary>Tools</summary><div class="menu-items"><button id="decision-brief" hidden>Decision brief</button><button id="implementation-handoff" hidden>Implementation handoff</button><button id="check-answers" hidden>Check answers</button><button id="challenge-decisions" hidden>Challenge decisions</button><button id="dashboard-open" type="button" aria-haspopup="dialog">Usage dashboard</button></div></details>
       <button id="palette-open" type="button" aria-haspopup="dialog">Commands</button>
       <button id="navigation-open" class="settings-gear" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m9 3-.5 2-2 1.2-2-.6-2 3.4L4 10.5v3L2.5 15l2 3.4 2-.6 2 1.2.5 2h4l.5-2 2-1.2 2 .6 2-3.4-1.5-1.5v-3L20 9l-2-3.4-2 .6-2-1.2-.5-2Z"/><circle cx="11.25" cy="12" r="3"/></svg></button>
@@ -14,6 +14,7 @@
   </header>
   <div id="connection-status" class="notice" role="status" aria-live="polite" hidden></div>
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+  <div id="project-change" class="notice" role="alert" hidden><span id="project-change-text"></span> <button id="project-change-review">Review project changes</button></div>
   <section id="welcome" class="welcome">
     <section id="library-home" aria-labelledby="library-title" hidden>
       <div class="library-heading"><h1 id="library-title">Your explorations</h1><button id="library-return" hidden>Back to current map</button></div>
@@ -84,6 +85,14 @@
     <button id="project-copy-preview">Preview exact file</button><p id="project-copy-status" role="status" aria-live="polite"></p>
     <div id="project-copy-review" hidden><p id="project-copy-path"></p><label for="project-copy-content">Exact shared JSON</label><textarea id="project-copy-content" readonly rows="12" spellcheck="false"></textarea></div>
     <div class="guidance-actions"><button id="project-copy-confirm" hidden>Save reviewed copy</button><button id="project-copy-continue" hidden>Continue in project copy</button><button id="project-copy-close">Close</button></div>
+  </dialog>
+  <dialog id="project-reconcile-dialog" aria-labelledby="project-reconcile-title"><h2 id="project-reconcile-title">Review project changes</h2>
+    <p>The displayed map stays open until you choose to reload. Reload preserves its committed content and previous local history for Recovery, keeps private drafts against their original answers, and never rewrites the incoming repository file. Changed or removed questions require an explicit draft recovery choice.</p>
+    <p>Git operations and conflict resolution stay in your normal Git workflow. Pending AI results are invalidated when changes are detected; no AI work is replayed and the attached chat turn is not stopped.</p>
+    <p id="project-reconcile-status" role="status" aria-live="polite"></p>
+    <div id="project-reconcile-review" hidden><p id="project-reconcile-path"></p><label for="project-reconcile-content">Exact incoming shared JSON</label><textarea id="project-reconcile-content" readonly rows="12" spellcheck="false"></textarea></div>
+    <div class="guidance-actions"><button id="project-reconcile-refresh">Refresh preview</button><button id="project-reconcile-preserve">Preserve displayed version</button><button id="project-reconcile-reload" hidden>Reload reviewed file</button><button id="project-reconcile-close">Close</button></div>
+    <p class="quiet">Preservation writes a private recoverable copy, including when the project file is missing or conflicted. Use File → Recovery to inspect it. Recovery scans are bounded; older histories remain protected even when omitted from a partial list.</p>
   </dialog>
   <dialog id="storage-dialog" aria-labelledby="storage-title"><h2 id="storage-title">Local storage</h2>
     <p>Inspect Explorer-owned files on this device. Only old unnamed history versions are eligible for cleanup. Opening this panel or saving a preference never deletes anything.</p>

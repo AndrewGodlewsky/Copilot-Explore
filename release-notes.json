@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.73",
+    "summary": "Review project files changed by Git or another writer before continuing. Reload keeps incoming files untouched, preserves prior local history and exact private drafts, and rejects stale AI results. You can also preserve the displayed version privately when a project file is missing or conflicted."
+  },
+  {
     "version": "0.1.72",
     "summary": "Save a reviewed project copy of a personal exploration. Preview the exact file, choose whether to include question research, and continue in the copy only when ready. Originals and private drafts stay put; retries recognize identical copies and changed destinations are never overwritten."
   },

@@ -25,3 +25,5 @@ Repository/controller tests exercise subdirectory and worktree resolution, diffe
 Owner-performed native narrow-pane layout, keyboard flow and actual filesystem permission-denial checks remain pending. Tests inject write failure; running as the owner on Windows is not a reliable simulation of every read-only ACL. No desktop/browser automation or paid provider was used.
 
 Existing personal journeys can use the reviewed [Save a project copy](project-copy.md) flow. It preserves the original and private state and offers an explicit continuation in the shared copy.
+
+Use [Review project changes](project-reconciliation.md) to reconcile an external edit, replacement or Git branch change without overwriting incoming content. Private drafts retain their original source bases.

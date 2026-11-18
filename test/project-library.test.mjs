@@ -1,0 +1,77 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, readFile, writeFile, rm, symlink, copyFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { ProjectLibrary, PROJECT_LIBRARY_LIMITS } from '../com.github.copilot/extensions/explorer/project-library.mjs';
+import { ProjectRepository } from '../com.github.copilot/extensions/explorer/project-repository.mjs';
+import { createDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { MAX_SHARED_BYTES } from '../com.github.copilot/extensions/explorer/shared-document.mjs';
+import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
+import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
+const exec = promisify(execFile);
+async function fixture(t) {
+  const root = await mkdtemp(join(tmpdir(), 'explorer-project-library-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const checkout = join(root, 'checkout'), local = join(root, 'local'); await mkdir(checkout); await exec('git', ['-C', checkout, 'init', '-q'], { windowsHide: true });
+  let cwd = checkout; const repository = new ProjectRepository({ readRoot: async () => cwd, localDirectory: local });
+  const store = await repository.create(createDocument('Shared topic'));
+  return { root, checkout, local, repository, store, folder: dirname(store.context.file), cwd: value => { cwd = value; } };
+}
+test('project discovery preserves valid entries among malformed, oversized, future and duplicate files', async t => {
+  const f = await fixture(t), raw = await readFile(f.store.context.file), future = JSON.parse(raw); future.version = 999;
+  await writeFile(join(f.folder, 'broken.explore.json'), '{'); await writeFile(join(f.folder, 'future.explore.json'), JSON.stringify(future));
+  await writeFile(join(f.folder, 'large.explore.json'), 'x'.repeat(MAX_SHARED_BYTES + 1));
+  const second = await f.repository.create(createDocument('Duplicated topic')); await copyFile(second.context.file, join(f.folder, 'duplicate.explore.json'));
+  await mkdir(join(f.folder, 'nested')); await writeFile(join(f.folder, 'nested', 'ignored.explore.json'), raw);
+  const library = await ProjectLibrary.capture(f.repository), result = await library.list();
+  assert.equal(result.entries.length, 3); assert.equal(result.errors.length, 3);
+  const unique = result.entries.find(e => e.topic === 'Shared topic'); assert.equal(unique.duplicate, false);
+  const duplicates = result.entries.filter(e => e.duplicate); assert.equal(duplicates.length, 2);
+  assert.ok(result.errors.some(e => /unsupported/i.test(e.message))); assert.ok(result.errors.some(e => /size/i.test(e.message)));
+  await assert.rejects(library.open(duplicates[0].key, 'current-user'), /duplicate/i);
+  const opened = await library.open(unique.key, 'current-user'); assert.equal(opened.document.id, f.store.document.id);
+  assert.ok(!JSON.stringify(result).includes(f.root));
+});
+test('project recents and pins are private; stale content and checkout changes require refresh', async t => {
+  const f = await fixture(t), library = await ProjectLibrary.capture(f.repository), before = await readFile(f.store.context.file);
+  let result = await library.list(), entry = result.entries[0];
+  await library.update(entry.key, { pinned: true }, result.revision); await library.open(entry.key, 'current-user');
+  result = await library.list(); assert.equal(result.entries[0].pinned, true); assert.ok(result.entries[0].lastOpenedAt);
+  assert.deepEqual(await readFile(f.store.context.file), before);
+  assert.ok(!library.directory.startsWith(f.checkout)); assert.equal(Object.keys((await library.metadata()).bindings).length, 1);
+  const changed = JSON.parse(before); changed.journey.topic = 'Changed outside'; await writeFile(f.store.context.file, JSON.stringify(changed));
+  await assert.rejects(library.open(entry.key, 'current-user'), /changed|refresh/i);
+  await writeFile(f.store.context.file, before); f.cwd(f.root); await assert.rejects(library.list(), /repository|project/i);
+});
+test('configured folders are bounded, do not recurse or follow links, and missing folders are empty', async t => {
+  const f = await fixture(t), missing = await ProjectLibrary.capture(f.repository, 'missing/maps');
+  assert.deepEqual((await missing.list()).entries, []); assert.equal((await missing.list()).missing, true);
+  const outside = join(f.root, 'outside'); await mkdir(outside); await symlink(outside, join(f.checkout, 'linked'), 'junction');
+  await assert.rejects(ProjectLibrary.capture(f.repository, 'linked'), /linked|identity/i);
+  await assert.rejects(ProjectLibrary.capture(f.repository, '../outside'), /relative|path/i);
+  for (const folder of [null, {}, 42]) await assert.rejects(ProjectLibrary.capture(f.repository, folder), /folder|path/i);
+  for (let i = 0; i < PROJECT_LIBRARY_LIMITS.files + 1; i++) await writeFile(join(f.folder, `invalid-${String(i).padStart(4, '0')}.explore.json`), '{');
+  const library = await ProjectLibrary.capture(f.repository), result = await library.list();
+  assert.equal(result.partial, true); assert.equal(result.examined, PROJECT_LIBRARY_LIMITS.files); assert.match(result.coverage, /limit|partial/i);
+});
+test('clean-clone discovery needs no private metadata; controller refresh preserves drafts and open never starts a model', async t => {
+  const f = await fixture(t), clone = join(f.root, 'clone'); await mkdir(clone); await exec('git', ['-C', clone, 'init', '-q'], { windowsHide: true });
+  const path = join(clone, f.store.context.relativePath); await mkdir(dirname(path), { recursive: true }); await copyFile(f.store.context.file, path);
+  let sends = 0;
+  const explorer = await new Explorer({ library: new Library(f.local), binding: 'current-canvas', projectRoot: async () => clone, send: async () => { sends++; } }).load(); t.after(() => explorer.close());
+  let listing = await explorer.projectLibraryRequest({ action: 'refresh', folder: '.explorer/journeys' });
+  assert.equal(listing.entries[0].pinned, false); assert.equal(listing.entries[0].lastOpenedAt, null);
+  await explorer.command('open-project-entry', { listing: listing.listing, key: listing.entries[0].key });
+  assert.equal(sends, 0); assert.equal(explorer.doc.id, f.store.document.id);
+  await explorer.command('add', { revision: explorer.doc.revision, nodeId: explorer.doc.rootId, question: 'Question?', category: 'Scope' });
+  const node = explorer.doc.nodes[1], key = explorer.activeKey;
+  await explorer.writeDraft({ journey: key, nodeId: node.id, base: node, text: 'Private clone draft', revision: 0 });
+  const before = structuredClone(explorer.doc);
+  listing = await explorer.projectLibraryRequest({ action: 'refresh', folder: '.explorer/journeys' });
+  assert.deepEqual(explorer.doc, before); assert.equal((await explorer.readDrafts(key)).entries[0].text, 'Private clone draft');
+  assert.equal(sends, 0); assert.equal(JSON.parse(await readFile(f.store.context.file)).journey.nodes.length, 1);
+  const old = listing.listing; await explorer.projectLibraryRequest({ action: 'refresh', folder: '.explorer/journeys' });
+  await assert.rejects(explorer.command('open-project-entry', { revision: explorer.doc.revision, listing: old, key: listing.entries[0].key }), /expired|refresh/i);
+});

@@ -168,6 +168,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (!explorer.library) throw new Error('Library search is unavailable.');
         return json(200, await explorer.library.search(await body(req, 24 * 1024)));
       }
+      if (req.method === 'POST' && route === 'api/project-library') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.projectLibraryRequest(await body(req, 4096)));
+      }
       if (req.method === 'GET' && route === 'api/library') {
         if (!explorer.library) return json(200, { revision: 0, entries: [], errors: [] });
         return json(200, await explorer.library.list({ search: url.searchParams.get('search') ?? '', archived: url.searchParams.get('archived') === 'true', reminder: url.searchParams.get('reminder') ?? 'all', ...(url.searchParams.has('today') ? { today: url.searchParams.get('today') } : {}) }));

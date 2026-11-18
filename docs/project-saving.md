@@ -4,7 +4,7 @@ Choose **Project repository** under Save location when starting an exploration. 
 
 Project saves are local filesystem writes. Commit the shared `.explore.json` file through your normal Git workflow so another person receives it when they pull. Explorer does not stage, commit, push, pull or change sessions. Only committed exploration content goes into the file. Drafts, local history/recovery, visual references, preferences, observations, usage receipts and helper recovery records remain private.
 
-Use **File → Open project journey** and enter its repository-relative path to reopen a shared file, including in another checkout. This first version does not discover shared journeys automatically or restore a project selection when the native canvas reopens; personal library bindings still restore their personal journey. Project discovery and recent-project selection are tracked in #56. Personal imports stay personal; publishing an existing personal journey is #57. Finishing a project journey saves its finished state; Markdown remains an explicit download, rather than writing a second project file.
+Use **Library → Current project** to [find and reopen shared journeys](project-library.md), including in another checkout. **File → Open project journey** also offers explicit relative-path opening. Project selection is not automatically restored when the native canvas reopens; personal library bindings still restore their personal journey. Personal imports stay personal; publishing an existing personal journey is #57. Finishing a project journey saves its finished state; Markdown remains an explicit download, rather than writing a second project file.
 
 ## Destination and persistence
 

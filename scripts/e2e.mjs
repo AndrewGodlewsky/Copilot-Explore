@@ -236,6 +236,13 @@ try {
   const projectReopen = await session.rpc.canvas.open({ canvasId: 'explorer', instanceId: 'project-storage-fixture', input: {} });
   const reopenedShared = await fetch(projectReopen.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'open-project', path: sharedPath }) });
   assert.equal(reopenedShared.status, 200); assert.equal((await reopenedShared.json()).document.nodes[1].question, 'Shared question');
+  const requestsBeforeDiscovery = requests.length;
+  const projectListResponse = await fetch(projectReopen.url + 'api/project-library', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(projectReopen.url).origin }, body: JSON.stringify({ action: 'refresh', folder: '.explorer/journeys' }) });
+  assert.equal(projectListResponse.status, 200); const projectList = await projectListResponse.json();
+  assert.equal(projectList.entries.length, 1); assert.equal(projectList.entries[0].path, sharedPath);
+  const listedState = await (await fetch(projectReopen.url + 'api/state')).json();
+  const listedOpen = await fetch(projectReopen.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'open-project-entry', revision: listedState.document.revision, listing: projectList.listing, key: projectList.entries[0].key }) });
+  assert.equal(listedOpen.status, 200); assert.equal((await listedOpen.json()).pending, null); assert.equal(requests.length, requestsBeforeDiscovery);
   await session.rpc.canvas.close({ instanceId: 'project-storage-fixture' });
   console.log('Project storage: fresh installed metadata controls create/reopen; artifact workspace is excluded and changed cwd rejects saves without altering shared content.');
   console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, preview staging/explicit acceptance/native exclusion/close discard, no-answer direction seed/preview acceptance, answers, research access guard, exports, stale-response rejection, close/reopen, duplicate import, cross-session library reopen and shared-writer protection. Local fixture only; no paid model or UI automation.`);

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.71",
+    "summary": "Find shared journeys in the new Current project library. Refresh a selected folder, see individual file errors and duplicate warnings, and reopen journeys in your current canvas. Pins and recent openings stay private, with stale selections and incomplete scans clearly identified."
+  },
+  {
     "version": "0.1.70",
     "summary": "Create explorations in your project repository or personal library. Reopen shared files by relative path, with private drafts, history and AI usage kept separate. Project saves verify the active checkout; Journey details shows where the file lives and how to share it through Git."
   },

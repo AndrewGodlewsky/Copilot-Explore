@@ -2,6 +2,7 @@ import { captureHandoff, handoffFreshness, acceptHandoff, validateHandoff } from
 import { followupResult, retainExchanges, sameFollowup } from './research-followup.mjs';
 import { ProjectContext } from './project-context.mjs';
 import { ProjectRepository } from './project-repository.mjs';
+import { ProjectLibrary } from './project-library.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
 import { Library } from './library.mjs';
@@ -570,6 +571,20 @@ export class Explorer {
       return { ...preview, issues: [...(inventory.partial ? ['Inventory is partial; unscanned and unknown data remain protected.'] : []), ...found.issues, ...preview.issues].slice(0, 100) };
     });
   }
+  projectLibraryRequest(input) {
+    return this.transact(async () => {
+      if (this.closed || !this.projectRepository || !input || typeof input !== 'object' || Array.isArray(input) ||
+        !['refresh', 'pin'].includes(input.action) || Object.keys(input).sort().join(',') !== (input.action === 'refresh' ? 'action,folder' : 'action,key,listing,pinned,revision')) throw Error('Invalid project library request.');
+      if (input.action === 'refresh') {
+        this.projectLibrary = null;
+        const listing = await ProjectLibrary.capture(this.projectRepository, input.folder), result = await listing.list();
+        this.projectLibrary = listing; return result;
+      }
+      const listing = this.projectLibrary;
+      if (!listing || input.listing !== listing.listing || typeof input.pinned !== 'boolean') throw Error('Project library selection expired. Refresh the folder.');
+      await listing.update(input.key, { pinned: input.pinned }, input.revision); return listing.list();
+    });
+  }
   dashboardRequest(input) {
     return this.transact(async () => {
       if (this.closed) throw new Error('Dashboard is closed.');
@@ -793,7 +808,7 @@ export class Explorer {
         await this.library.update(input.key, input.patch, input.metadataRevision); this.dashboard?.invalidate(); return this.uiSnapshot();
       }
       if (this.pending && !(['research', 'research-follow-up'].includes(this.pending.kind) && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
-      if (this.preview && (['start', 'open', 'open-project', 'import', 'restore', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
+      if (this.preview && (['start', 'open', 'open-project', 'open-project-entry', 'import', 'restore', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
       if (this.doc && input.revision !== this.doc.revision) throw new Error('The map changed. Refresh and try again; your draft is still here.');
       const next = structuredClone(this.doc);
       this.error = '';
@@ -853,6 +868,10 @@ export class Explorer {
             await this.attach(record.key); break;
           }
           await this.save(importedDocument(input.document), 'Imported saved map');
+          break;
+        case 'open-project-entry':
+          if (!this.projectLibrary || input.listing !== this.projectLibrary.listing) throw Error('Project library selection expired. Refresh the folder.');
+          await this.attachProject(await this.projectLibrary.open(input.key, this.binding));
           break;
         case 'open-project':
           if (!this.projectRepository) throw Error('Project storage requires the installed Explorer library.');

@@ -922,7 +922,7 @@ test('project storage controls create and explicitly reopen a repository journey
   assert.equal($('project-folder-fields').hidden, false);
   f.type('topic', 'Project journey'); f.type('project-folder', 'decisions/maps');
   $('start-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
-  await until(() => f.explorer.snapshot().storage.scope === 'project', 'project creation'); await f.poll();
+  await until(() => $('journey-storage').textContent.includes('Project: decisions/maps/'), 'project creation response rendered');
   const path = f.explorer.snapshot().storage.path;
   assert.match($('journey-storage').textContent, /Project.*decisions\/maps/);
   assert.ok(!$('journey-storage').textContent.includes(project)); assert.match($('journey-storage').textContent, /Git/);
@@ -930,9 +930,28 @@ test('project storage controls create and explicitly reopen a repository journey
   await f.explorer.command('open', { revision: f.explorer.doc.revision, key: personalKey }); await f.poll();
   $('project-open').click(); assert.equal(f.document.activeElement, $('project-open-path'));
   f.type('project-open-path', path); $('project-open-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
-  await until(() => f.explorer.snapshot().storage.scope === 'project', 'project reopening'); await f.poll();
+  await until(() => !$('workspace').hidden && $('journey-storage').textContent.includes('Project: decisions/maps/'), 'project reopening response rendered');
   assert.equal(f.explorer.doc.topic, 'Project journey');
   assert.equal($('workspace').hidden, false); assert.match($('journey-storage').textContent, /Project/);
+});
+test('project library refresh and pin preserve an answer draft, and listed opening uses the current canvas', async t => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-project-list-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
+  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => { await e.projectRepository.create(createDocument('Shared from teammate')); } });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Keep my personal draft'); const editor = $('answer');
+  $('library-toggle').click(); $('library-scope').value = 'project'; $('library-scope').dispatchEvent(new f.window.Event('change'));
+  await until(() => $('project-library-list').querySelector('[data-action="open"]'), 'shared listing');
+  assert.match($('project-library-status').textContent, /direct shared files/); assert.match($('project-library-list').textContent, /Shared from teammate/);
+  $('project-library-list').querySelector('[data-action="pin"]').focus(); $('project-library-list').querySelector('[data-action="pin"]').click();
+  await until(() => $('project-library-list').querySelector('[data-action="pin"]')?.textContent === 'Unpin', 'private pin');
+  assert.equal(f.document.activeElement, $('project-library-list').querySelector('[data-action="pin"]'));
+  $('library-return').click(); assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep my personal draft');
+  $('library-toggle').click(); $('library-scope').value = 'project'; $('library-scope').dispatchEvent(new f.window.Event('change'));
+  await until(() => $('project-library-list').querySelector('[data-action="open"]') && !$('project-library-refresh').disabled, 'fresh project listing');
+  $('project-library-list').querySelector('[data-action="open"]').click();
+  await until(() => !$('workspace').hidden && $('map-title').textContent === 'Shared from teammate', 'listed opening response rendered');
+  assert.equal(f.explorer.pending, null); assert.equal($('workspace').hidden, false);
 });
 
 async function startReviewedResearch(f) {

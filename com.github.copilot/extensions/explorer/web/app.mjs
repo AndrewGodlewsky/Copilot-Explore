@@ -315,7 +315,7 @@ async function api(action, input = {}) {
     const result = await response.json();
     if (closed || suspended || page !== pageEpoch || epoch !== actionEpoch) return null;
     if (!response.ok) throw new Error(result.error);
-    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'open-project', 'import'].includes(action)); return result;
+    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'open-project', 'open-project-entry', 'import'].includes(action)); return result;
   } catch (error) {
     if (!closed && !suspended && page === pageEpoch && epoch === actionEpoch) notice(abort.signal.aborted ? 'The action response timed out. Refresh the saved map before retrying; it may have been saved. Your draft is still here.' : error.message);
     return null;
@@ -575,6 +575,10 @@ function showView() {
   document.body.classList.toggle('has-library', !!state.library);
 }
 async function refreshLibrary() {
+  const project = $('library-scope').value === 'project';
+  $('personal-library').hidden = project; $('project-library').hidden = !project;
+  if (project) { libraryEpoch++; return refreshProjectLibrary(); }
+  clearProjectListing();
   const nodeSearch = $('library-search-scope').value === 'nodes';
   $('library-node-search').hidden = !nodeSearch; $('library-list').hidden = nodeSearch;
   if (nodeSearch) return refreshLibrarySearch();
@@ -634,6 +638,46 @@ async function refreshLibrary() {
     $('welcome').scrollTop = scroll;
     if (!result.entries.length) $('library-list').append(el('p', { class: 'quiet' }, $('library-search').value ? 'No journeys match this search.' : $('library-archived').checked ? 'No archived journeys.' : 'No saved journeys yet. Start an exploration below, or open a saved file.'));
   } catch (error) { if (epoch === libraryEpoch && !closed) $('library-errors').textContent = `Could not load the library: ${error.message}`; }
+}
+let projectListingEpoch = 0, projectListingFlight = null;
+function clearProjectListing(message = '') {
+  projectListingEpoch++; projectListingFlight?.abort(); projectListingFlight = null;
+  $('project-library-refresh').disabled = false; $('project-library-list').replaceChildren(); $('project-library-errors').replaceChildren();
+  $('project-library-status').textContent = message;
+}
+async function refreshProjectLibrary(input = { action: 'refresh', folder: $('project-library-folder').value }) {
+  const active = document.activeElement, focusedKey = active.closest('#project-library-list .library-entry')?.dataset.key, focusedAction = active.dataset.action;
+  clearProjectListing('Reading the selected project folder...');
+  const epoch = projectListingEpoch, page = pageEpoch, abort = new AbortController(); projectListingFlight = abort;
+  const current = () => !closed && !suspended && (libraryView || !state.document) && pageEpoch === page && epoch === projectListingEpoch && $('library-scope').value === 'project';
+  const timer = setTimeout(() => abort.abort(), 20000); $('project-library-refresh').disabled = true;
+  try {
+    const response = await fetch('api/project-library', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+    const result = await response.json(); if (!current()) return;
+    if (!response.ok) throw Error(result.error);
+    $('project-library-status').textContent = `${result.missing ? 'Folder not created yet. ' : ''}${result.examined}/${result.discovered} shared files examined. Limits: ${result.limits.entries} folder entries, ${result.limits.files} files, ${result.limits.bytes / 1024 / 1024} MiB per refresh. ${result.coverage}`;
+    $('project-library-errors').replaceChildren(...result.errors.map(error => el('p', { class: 'notice' }, `${error.path ? `${error.path}: ` : ''}${error.message}`)));
+    $('project-library-list').replaceChildren(...result.entries.map(entry => {
+      const disabled = result.partial || entry.duplicate || result.metadataUnavailable;
+      return el('article', { class: 'library-entry', 'data-key': entry.key }, el('h2', {}, entry.topic), el('p', { class: 'quiet' }, `Project: ${entry.path}`),
+        el('p', { class: 'quiet' }, `${entry.questionCount} questions. ${entry.lastOpenedAt ? `Opened ${new Date(entry.lastOpenedAt).toLocaleString()}` : 'Not opened on this checkout.'}`),
+        ...(entry.duplicate ? [el('p', { class: 'notice' }, 'Duplicate journey identity. Resolve the duplicate files and refresh before opening.')] : []),
+        el('div', { class: 'library-actions' }, button('Open', () => { if (current()) void switchJourney('open-project-entry', { listing: result.listing, key: entry.key }, current); }, { 'data-action': 'open', disabled }),
+          button(entry.pinned ? 'Unpin' : 'Pin', () => { if (current()) void refreshProjectLibrary({ action: 'pin', listing: result.listing, key: entry.key, pinned: !entry.pinned, revision: result.revision }); }, { 'data-action': 'pin', 'aria-pressed': String(entry.pinned), disabled })));
+    }));
+    if (!result.entries.length && !result.errors.length) $('project-library-list').append(el('p', { class: 'quiet' }, 'No shared journeys in this folder. Start a Project exploration below or choose another relative folder.'));
+    if (focusedKey && document.activeElement === document.body) {
+      const row = [...$('project-library-list').children].find(item => item.dataset.key === focusedKey);
+      const control = [...row?.querySelectorAll('button') ?? []].find(item => item.dataset.action === focusedAction && !item.disabled);
+      (control ?? $('project-library-folder')).focus({ preventScroll: true });
+    }
+  } catch (error) {
+    if (current()) {
+      $('project-library-status').textContent = `${abort.signal.aborted ? 'Project refresh timed out.' : error.message} Current map and drafts are preserved; refresh from the intended checkout.`;
+      if (focusedKey && document.activeElement === document.body) $('project-library-folder').focus({ preventScroll: true });
+    }
+  }
+  finally { clearTimeout(timer); if (projectListingFlight === abort) { projectListingFlight = null; $('project-library-refresh').disabled = false; } }
 }
 function switchAllowed() {
   if (busy || closed || draftClient.savingAnswer) return false;
@@ -2072,7 +2116,7 @@ $('history-restore').addEventListener('click', async () => {
 function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) || draftClient.entries.get(n.id)?.conflict) ?? []; }
 $('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value, objective: $('start-objective').value, successCriteria: $('start-criteria').value, mode: $('start-mode').value, storageScope: $('start-storage').value, projectFolder: $('project-folder').value }); });
 $('start-storage').addEventListener('change', () => { $('project-folder-fields').hidden = $('start-storage').value !== 'project'; });
-$('project-open').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); $('project-open-path').focus(); });
+$('project-open').addEventListener('click', () => { voice.cancel(); libraryView = true; $('library-scope').value = 'project'; showView(); void refreshLibrary(); $('project-open-path').focus(); });
 $('project-open-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('open-project', { path: $('project-open-path').value }); });
 $('start-mode').addEventListener('change', () => showModeDescription('start-mode'));
 $('edit-mode').addEventListener('change', () => showModeDescription('edit-mode'));
@@ -2162,8 +2206,11 @@ $('guidance-form').addEventListener('submit', async event => {
     if (modeChanged && hadHelp) notice('Exploration mode saved. Question help from the earlier mode was cleared. Choose a help action to try again.');
   } finally { $('save-guidance').disabled = guidanceNeedsChoice || guidanceNeedsRefresh; }
 });
-$('library-toggle').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); void refreshLibrary(); $('library-search').focus(); });
-$('library-return').addEventListener('click', () => { libraryEpoch++; libraryView = false; showView(); refreshScene(); $('map').focus({ preventScroll: true }); });
+$('library-toggle').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); void refreshLibrary(); $($('library-scope').value === 'project' ? 'project-library-folder' : 'library-search').focus(); });
+$('library-scope').addEventListener('change', () => { void refreshLibrary(); });
+$('project-library-refresh').addEventListener('click', () => { void refreshProjectLibrary(); });
+$('project-library-folder').addEventListener('input', () => clearProjectListing('Folder changed. Refresh to inspect it.'));
+$('library-return').addEventListener('click', () => { libraryEpoch++; clearProjectListing(); libraryView = false; showView(); refreshScene(); $('map').focus({ preventScroll: true }); });
 $('library-search').addEventListener('input', scheduleLibrarySearch);
 $('library-search-scope').addEventListener('change', () => { libraryEpoch++; void refreshLibrary(); });
 $('library-search-next').addEventListener('click', () => { if (librarySearchNext) void refreshLibrarySearch(librarySearchNext); });
@@ -2625,6 +2672,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  clearProjectListing('Page suspended. Refresh project journeys before selecting.');
   if (viewerTarget) { invalidateViewer('The page was suspended. Reopen Export maps and preview again.'); viewerTarget = null; $('viewer-preview').disabled = true; }
   closeResearchReview();
   suspended = true; pageEpoch++; actionEpoch++; stopPolling(); actionAbort?.abort(); actionAbort = null; busy = false;

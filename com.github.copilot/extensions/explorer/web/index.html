@@ -17,6 +17,8 @@
   <section id="welcome" class="welcome">
     <section id="library-home" aria-labelledby="library-title" hidden>
       <div class="library-heading"><h1 id="library-title">Your explorations</h1><button id="library-return" hidden>Back to current map</button></div>
+      <label for="library-scope">Library location</label><select id="library-scope"><option value="personal">Personal</option><option value="project">Current project</option></select>
+      <div id="personal-library">
       <p class="quiet">Pinned journeys first, then recently opened. Older journeys use their last edited date.</p>
       <label for="library-search">Search journeys</label><input id="library-search" type="search" maxlength="4000" placeholder="Search by topic">
       <label for="library-search-scope">Search scope</label><select id="library-search-scope"><option value="topics">Journey topics</option><option value="nodes">Saved questions and answers</option></select>
@@ -24,6 +26,13 @@
       <label for="library-reminder">Reminder status</label><select id="library-reminder"></select><p class="quiet">Needs attention means overdue, due today or a manual condition to check. Conditions are not monitored; status counts overlap.</p>
       <div class="library-filters"><label for="library-archived"><input id="library-archived" type="checkbox"> Archived journeys</label><button id="library-refresh">Refresh</button><button id="library-new">New exploration</button></div>
       <div id="library-errors" role="status"></div><div id="library-list" aria-live="polite"></div>
+      </div>
+      <section id="project-library" aria-label="Current project journeys" hidden>
+        <label for="project-library-folder">Repository-relative exploration folder</label><input id="project-library-folder" value=".explorer/journeys" maxlength="180" autocomplete="off">
+        <button id="project-library-refresh" type="button">Refresh project journeys</button>
+        <p class="quiet">Open shared files already in this checkout. Pins and recent openings are private. Refresh after changing the attached session's project; a stale selection cannot open another checkout.</p>
+        <p id="project-library-status" role="status"></p><div id="project-library-errors"></div><div id="project-library-list" aria-live="polite"></div>
+      </section>
     </section>
     <div class="intro-map" aria-hidden="true"><span>Who is it for?</span><i></i><b>Your idea</b><i></i><span>What could work?</span></div>
     <h1>Make room for the questions.</h1>

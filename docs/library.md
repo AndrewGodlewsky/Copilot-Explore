@@ -1,6 +1,6 @@
 # Explorer library storage
 
-Personal library behavior is described below. See [project saving](project-saving.md) for shared repository files, explicit reopening, and the private auxiliary-data boundary.
+Personal library behavior is described below. See [project saving](project-saving.md) for shared repository files and the private auxiliary-data boundary, and [project library](project-library.md) for bounded discovery, pins, recents and explicit resume.
 
 `library.mjs` owns discovery, safe entry resolution, duplicate imports, and library metadata. `controller.mjs` still owns document revisions and the per-document exclusive writer lock. `Explorer({ file, ... })` remains available for tests and preview; production uses `Explorer({ library, binding, ... })`.
 

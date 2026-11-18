@@ -1,5 +1,10 @@
 [
   {
+    "version": "0.1.68",
+    "date": "2026-11-18",
+    "summary": "Added the shared exploration format foundation: exact text preservation, stable content identities, deterministic edits, and safe preparation of personal-file conversion. Repository storage remains a separate step."
+  },
+  {
     "version": "0.1.67",
     "summary": "Added a source-backed research architecture comparison and six reproducible decision scenarios. Documents existing-material explanations, approved URLs and web research as separate policy choices, with the owner decision still pending. Current research permissions and runtime remain unchanged."
   },

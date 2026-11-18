@@ -459,3 +459,9 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #scenario-preference-banner { overflow-wrap: anywhere; }
 #contributor-dialog, #workspace-contributors, #brief-contributors { overflow-wrap: anywhere; }
 #contributor-name { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; }
+#review-handoffs-dialog { box-sizing: border-box; width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; overflow-wrap: anywhere; }
+#review-handoffs-dialog label { display: block; margin-top: 12px; }
+#review-handoffs-dialog textarea, #review-handoffs-dialog select, #review-handoffs-dialog input:not([type="checkbox"]) { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; }
+#review-handoffs-dialog .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.review-handoff-event { border-top: 1px solid var(--line); padding-block: 8px; }
+.review-handoff-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }

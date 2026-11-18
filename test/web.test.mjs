@@ -28,6 +28,8 @@ import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
 import { attributeContributions } from '../com.github.copilot/extensions/explorer/contributors.mjs';
 import { changeComments } from '../com.github.copilot/extensions/explorer/comments.mjs';
 import { CommentsClient } from '../com.github.copilot/extensions/explorer/web/comments-client.mjs';
+import { ReviewHandoffsClient } from '../com.github.copilot/extensions/explorer/web/review-handoffs-client.mjs';
+import { changeReviewHandoffs } from '../com.github.copilot/extensions/explorer/review-handoffs.mjs';
 import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
 import { createDocument, contextFor, addDependency, answerNode } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
@@ -2109,6 +2111,51 @@ test('comments UI merge candidates show literal whole threads, messages and reso
   assert.match($('project-merge-local').value, /messagesDigest/); assert.equal($('project-merge-dialog').querySelector('script,b'), null); assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep private draft'); assert.equal(editor.selectionStart, 2);
 });
 
+test('review handoff UI creates, takes, completes and reassigns without replacing answer or comment drafts', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Private answer draft'); const editor = $('answer'); editor.setSelectionRange(2, 5);
+  $('comments-node-open').click(); f.type('comments-text', 'Private comment draft'); $('comments-close').click();
+  $('review-handoffs-node-open').click(); assert.equal($('review-handoffs-dialog').open, true);
+  f.type('review-handoffs-note', '<script>Review λ</script>'); f.type('review-handoffs-recipient', 'Reviewer <b>'); $('review-handoffs-create').click();
+  await until(() => f.explorer.doc.reviewHandoffs?.records.length === 1 && !$('review-handoffs-take').disabled, 'handoff saved');
+  assert.match($('review-handoffs-history').textContent, /Alice <script> λ/); assert.match($('review-handoffs-history').textContent, /<script>Review λ/); assert.equal($('review-handoffs-history').querySelector('script,b'), null);
+  $('review-handoffs-take').click(); await until(() => /taken handoff/i.test($('review-handoffs-context').textContent), 'responsibility taken');
+  $('review-handoffs-complete').click(); await until(() => /complete handoff/i.test($('review-handoffs-context').textContent), 'handoff complete');
+  f.type('review-handoffs-recipient', 'Next reviewer'); f.type('review-handoffs-note', 'More context needed'); $('review-handoffs-reassign').click(); await until(() => /Next reviewer/.test($('review-handoffs-context').textContent), 'handoff reassigned');
+  assert.equal(f.explorer.doc.reviewHandoffs.records[0].transitions.length, 4); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  $('review-handoffs-close').click(); assert.equal($('answer'), editor); assert.equal(editor.value, 'Private answer draft'); assert.equal(editor.selectionStart, 2);
+  $('comments-node-open').click(); assert.equal($('comments-text').value, 'Private comment draft');
+});
+
+test('review handoff UI retries a saved action after a lost reply and preserves newer composing text', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), original = f.window.fetch; let lose = true;
+  f.window.fetch = async (...args) => { const response = await original(...args); if (lose && args[0] === 'api/action' && JSON.parse(args[1].body).action === 'review-handoff-create') { lose = false; throw Error('Connection lost after saving'); } return response; };
+  f.open(f.explorer.doc.nodes[1].id); $('review-handoffs-open').click(); f.type('review-handoffs-note', 'Save once'); $('review-handoffs-create').click();
+  await until(() => /Connection lost/.test($('review-handoffs-status').textContent), 'ambiguous handoff'); f.type('review-handoffs-note', 'Keep newer text'); $('review-handoffs-retry').click();
+  await until(() => /Previous action saved/.test($('review-handoffs-status').textContent), 'handoff retry reconciled');
+  assert.equal($('review-handoffs-note').value, 'Keep newer text'); assert.equal(f.explorer.doc.reviewHandoffs.records.length, 1); assert.equal(f.explorer.doc.reviewHandoffs.records[0].transitions.length, 1);
+  const posts = f.actions.filter(row => row.action === 'review-handoff-create'); assert.equal(posts.length, 2); assert.equal(posts[0].transitionId, posts[1].transitionId);
+});
+
+test('review handoff UI suspends pending replies and keeps newer composing text on resume', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), original = f.window.fetch; let release;
+  f.window.fetch = async (...args) => { const response = await original(...args); if (args[0] === 'api/action' && JSON.parse(args[1].body).action === 'review-handoff-create') await new Promise(resolve => { release = resolve; }); return response; };
+  f.open(f.explorer.doc.nodes[1].id); $('review-handoffs-open').click(); f.type('review-handoffs-note', 'Submitted note'); $('review-handoffs-create').click(); await until(() => release, 'handoff reply held');
+  f.type('review-handoffs-note', 'Newer note'); const hide = new f.window.Event('pagehide'); Object.defineProperty(hide, 'persisted', { value: true }); f.window.dispatchEvent(hide);
+  const status = $('review-handoffs-status').textContent; release(); await delay(30); assert.equal($('review-handoffs-dialog').open, false); assert.equal($('review-handoffs-status').textContent, status);
+  const show = new f.window.Event('pageshow'); Object.defineProperty(show, 'persisted', { value: true }); f.window.dispatchEvent(show); await f.poll();
+  f.window.__updates.select(f.explorer.doc.nodes[1].id); $('review-handoffs-open').click(); assert.equal($('review-handoffs-note').value, 'Newer note');
+});
+
+test('review handoff UI merge review displays the complete literal responsibility candidates', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), event = { actor: null, at: '2026-11-18T12:00:00.000Z' }, id = randomUUID();
+  const local = { journey: changeReviewHandoffs(f.explorer.doc, 'create', { id, transitionId: randomUUID(), scope: { kind: 'journey' }, recipient: 'Local <script>', note: 'Original λ', unresolvedIds: [] }, event) };
+  const incoming = { journey: changeReviewHandoffs(local.journey, 'reassign', { id, transitionId: randomUUID(), recipient: 'Incoming <b>', note: 'Incoming 日本語' }, event) }, conflict = `handoff-record:${id}`;
+  f.explorer.projectMergeRequest = async () => ({ id: randomUUID(), sources: { local: JSON.stringify(local), incoming: JSON.stringify(incoming), base: JSON.stringify(local) }, plan: { conflicts: [{ id: conflict, label: 'Review responsibility' }], unresolved: [conflict], affected: [], content: null, error: null } });
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep private draft'); $('project-merge-open').click(); f.type('project-merge-ref', 'fixture'); $('project-merge-preview').click(); await until(() => $('project-merge-conflict').options.length === 1, 'handoff candidates');
+  assert.match($('project-merge-local').value, /Local <script>/); assert.match($('project-merge-incoming').value, /Incoming <b>/); assert.match($('project-merge-incoming').value, /Original λ/); assert.match($('project-merge-incoming').value, /digest/); assert.equal($('answer').value, 'Keep private draft');
+});
+
 async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
@@ -2192,6 +2239,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   if (contributorDialog) { contributorDialog.showModal = () => { contributorDialog.open = true; }; contributorDialog.close = () => { contributorDialog.open = false; }; }
   const commentsDialog = document.getElementById('comments-dialog');
   if (commentsDialog) { commentsDialog.showModal = () => { commentsDialog.open = true; }; commentsDialog.close = () => { commentsDialog.open = false; }; }
+  const handoffsDialog = document.getElementById('review-handoffs-dialog');
+  if (handoffsDialog) { handoffsDialog.showModal = () => { handoffsDialog.open = true; }; handoffsDialog.close = () => { handoffsDialog.open = false; }; }
   navigationDialog.showModal = () => { navigationDialog.open = true; };
   navigationDialog.close = () => { navigationDialog.open = false; };
   const paletteDialog = document.getElementById('palette-dialog');
@@ -2252,6 +2301,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.attachVoice = attachVoice;
   window.DraftClient = DraftClient;
   window.CommentsClient = CommentsClient;
+  window.ReviewHandoffsClient = ReviewHandoffsClient;
   window.CleanupClient = CleanupClient;
   window.QuestionHelpClient = QuestionHelpClient;
   window.ResearchReviewClient = ResearchReviewClient;
@@ -2267,7 +2317,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;

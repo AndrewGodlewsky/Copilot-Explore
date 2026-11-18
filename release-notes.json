@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.99",
+    "summary": "Request, take, reassign and complete branch reviews with shared notes, selected questions and contributor history. Show changed or removed sources and review competing ownership changes explicitly. Copy one handoff by choice; preserve private drafts and safe retries. Native map reads omit review notes. Completion never changes answers or sends notifications."
+  },
+  {
     "version": "0.1.98",
     "summary": "Share attributed node discussions through Project files. Reply, resolve or reopen, retain changed and removed sources, and merge concurrent replies with explicit conflict review. Proposed wording goes only into a private answer draft. Unposted comments remain in the current canvas; retrying an ambiguous post avoids duplicates."
   },

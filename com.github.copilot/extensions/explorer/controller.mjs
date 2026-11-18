@@ -9,6 +9,7 @@ import { ScenarioFork } from './scenario-fork.mjs';
 import { ContributorSettings } from './contributor-settings.mjs';
 import { attributeContributions, contributionStatus } from './contributors.mjs';
 import { changeComments, commentStatuses } from './comments.mjs';
+import { changeReviewHandoffs, handoffStatuses } from './review-handoffs.mjs';
 import { ScenarioComparison } from './scenario-compare.mjs';
 import { ScenarioPreferences } from './scenario-preference-workflow.mjs';
 import { BranchRestoration } from './branch-restoration.mjs';
@@ -476,7 +477,8 @@ export class Explorer {
     const questionRetry = !preview && !this.pending && /saved question context changed/.test(this.error) && source?.journey === (this.activeKey ?? this.doc?.id) ? { purpose: source.purpose ?? 'questions', nodeId: source.nodeId } : null;
     if (this.contributionView?.document !== this.doc) this.contributionView = { document: this.doc, value: contributionStatus(this.doc) };
     if (this.commentView?.document !== this.doc) this.commentView = { document: this.doc, value: commentStatuses(this.doc) };
-    return { ...this.snapshot(), comments: structuredClone(this.commentView.value), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
+    if (this.reviewHandoffView?.document !== this.doc) this.reviewHandoffView = { document: this.doc, value: handoffStatuses(this.doc) };
+    return { ...this.snapshot(), reviewHandoffs: structuredClone(this.reviewHandoffView.value), comments: structuredClone(this.commentView.value), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
   }
   async checkQuestionSource(nodeId) {
     const source = this.questionSource;
@@ -812,7 +814,9 @@ export class Explorer {
       if (!this.doc) return this.snapshot();
       const policy = await this.scenarioPolicy(), document = await this.readCurrent();
       await this.assertScenarioPolicy(policy);
-      return { ...this.snapshot(), document, scenario: policy.label };
+      const modelDocument = structuredClone(document);
+      delete modelDocument.comments; delete modelDocument.reviewHandoffs;
+      return { ...this.snapshot(), document: modelDocument, scenario: policy.label };
     });
   }
   scenarioCompareRequest(input) {
@@ -1198,6 +1202,33 @@ export class Explorer {
       const next = structuredClone(this.doc);
       this.error = '';
       switch (action) {
+        case 'review-handoff-create':
+        case 'review-handoff-take':
+        case 'review-handoff-reassign':
+        case 'review-handoff-complete': {
+          if (this.closed || !this.projectStore || !this.doc) throw Error('Open a shared Project journey to request or change review responsibility.');
+          if (input.journey !== (this.activeKey ?? this.doc.id) || !Number.isSafeInteger(input.revision)) throw Error('The handoff journey changed. Reopen review handoffs and retain your draft.');
+          const { action: requested, revision, journey, ...fields } = input;
+          if (requested !== undefined && requested !== action) throw Error('Invalid review handoff action.');
+          await this.withDocumentLock(async () => {
+            try {
+              const saved = await this.fresh(), settings = this.contributorSettings();
+              if (!settings) throw Error('Private contributor settings are unavailable. Reopen the shared journey.');
+              const kind = action.replace('review-handoff-', ''), changed = changeReviewHandoffs(saved, kind, fields, { actor: (await settings.read()).actor, at: new Date().toISOString() });
+              await this.commitCurrentLocked(saved, changed, ({ create: 'Review handoff requested', take: 'Review responsibility taken', reassign: 'Review handoff reassigned', complete: 'Review handoff completed' })[kind]);
+            } catch (error) {
+              if (typeof fields.transitionId === 'string') {
+                error.handoffSubmission = 'unknown';
+                try {
+                  const observed = await this.readCurrent();
+                  error.handoffSubmission = observed.reviewHandoffs?.records.some(record => record.transitions.some(transition => transition.id === fields.transitionId)) ? 'present' : 'absent';
+                } catch { /* An unavailable or changed source cannot prove non-commit. */ }
+              }
+              throw error;
+            }
+          });
+          break;
+        }
         case 'comment-create':
         case 'comment-reply':
         case 'comment-resolve':

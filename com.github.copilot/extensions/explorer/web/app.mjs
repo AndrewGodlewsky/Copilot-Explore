@@ -3,6 +3,7 @@ import { GeometryCache, viewportBounds, intersects, branchView, revealPath } fro
 import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
 import { CommentsClient } from './comments-client.mjs';
+import { ReviewHandoffsClient } from './review-handoffs-client.mjs';
 import { CleanupClient } from './cleanup.mjs';
 import { QuestionHelpClient } from './question-help-client.mjs';
 import { ResearchReviewClient } from './research-review-client.mjs';
@@ -259,6 +260,13 @@ const comments = new CommentsClient({ $, el, button, fetch: (...args) => fetch(.
     voice.cancel(); cleanup.cancel(); draftClient.edit(nodeId, text);
     if (selected !== nodeId || !expanded) select(nodeId);
     if ($('answer')) { $('answer').value = text; $('answer-state').value = draftClient.state(nodeId); answerStatus(node); }
+  } });
+const reviewHandoffs = new ReviewHandoffsClient({ $, el, button, fetch: (...args) => fetch(...args), state: () => state,
+  active: () => !closed && !suspended, canAct: () => !busy, apply, selected: () => selected, eventText: contributorEventText,
+  copyText: text => navigator.clipboard.writeText(text),
+  begin: () => {
+    busy = true; const epoch = ++actionEpoch; stateCursor = null; pollFlight?.abort.abort();
+    return () => { if (actionEpoch === epoch) { busy = false; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); } };
   } });
 function notice(message) { $('notice').textContent = message; $('notice').hidden = !message; }
 for (const id of ['library-reminder', 'revisit-filter']) $(id).append(...Object.entries(REVISIT_FILTERS).map(([value, label]) => el('option', { value }, label)));
@@ -690,6 +698,7 @@ function apply(next, reset = false) {
   if (changedDocument) {
     closeContributors(false);
     comments.close(false);
+    reviewHandoffs.close(false);
     closePreference(true);
     releaseCritical();
     if ($('project-reconcile-dialog').open) closeProjectReconciliation();
@@ -723,6 +732,7 @@ function apply(next, reset = false) {
   }
   signature = stamp; state = next;
   comments.update();
+  reviewHandoffs.update();
   if ($('adr-questions-dialog').open) renderAdrQuestions();
   syncReviewQueue();
   syncComparison();
@@ -1418,6 +1428,7 @@ function renderProjectMergeCandidate() {
     const doc = projectMergeData?.documents[side]; let value;
     if (doc && id.startsWith('node:')) value = doc.journey.nodes.find(node => node.id === id.slice(5));
     else if (doc && id.startsWith('field:')) value = doc.journey[id.slice(6)];
+    else if (doc && id.startsWith('handoff-record:')) value = doc.journey.reviewHandoffs?.records.find(row => row.id === id.slice('handoff-record:'.length));
     else if (doc && id.startsWith('comment-')) {
       const [kind, threadId, messageId] = id.split(':'), thread = doc.journey.comments?.threads.find(row => row.id === threadId);
       value = kind === 'comment-thread' ? thread : kind === 'comment-message' ? thread?.messages.find(row => row.id === messageId) : kind === 'comment-status' && thread ? { status: thread.status, messages: thread.messages } : undefined;
@@ -2042,6 +2053,7 @@ function renderWorkspace() {
   region('review', content);
   region('contributors', toolPanels.details);
   toolPanels.details.append(button('Review comments on this node', () => { if (current()) comments.open(node.id); }, { id: 'comments-node-open', 'aria-haspopup': 'dialog' }));
+  toolPanels.details.append(button('Review handoffs for this branch', () => { if (current()) reviewHandoffs.open(node.id); }, { id: 'review-handoffs-node-open', 'aria-haspopup': 'dialog' }));
   if (root) {
     content.append(el('p', { class: 'quiet' }, 'Pick a connected question to explore it. Each question opens into its own workspace on the map.'), button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
   } else if (!isQuestion(node)) {
@@ -4302,6 +4314,7 @@ document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
   closeContributors(false);
   comments.close(false);
+  reviewHandoffs.close(false);
   if ($('history-dialog').open) closeHistory(true);
   closeAnswerChange();
   closeReviewQueue(true);

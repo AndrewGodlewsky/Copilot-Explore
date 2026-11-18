@@ -3,6 +3,7 @@ import { validateAdrDraft } from './adr-draft.mjs';
 import { validateAdrFiles } from './adr-file.mjs';
 import { validateNodeAttribution } from './contributors.mjs';
 import { validateComments } from './comments.mjs';
+import { validateReviewHandoffs } from './review-handoffs.mjs';
 import { validateAdrScope, adrScopeMarkdown } from './adr-scope.mjs';
 import { validateAdrFormat } from './adr-format.mjs';
 import { scenarioOrigin } from './scenario-origin.mjs';
@@ -297,6 +298,7 @@ export function validateDocument(value) {
     ...(Object.hasOwn(value, 'adrDraft') ? { adrDraft: validateAdrDraft(value.adrDraft) } : {}),
     ...(Object.hasOwn(value, 'adrFiles') ? { adrFiles: validateAdrFiles(value.adrFiles) } : {}),
     ...(Object.hasOwn(value, 'comments') ? { comments: validateComments(value.comments) } : {}),
+    ...(Object.hasOwn(value, 'reviewHandoffs') ? { reviewHandoffs: validateReviewHandoffs(value.reviewHandoffs) } : {}),
     finishedAt: value.finishedAt === null ? null : date(value.finishedAt, 'finish date'), nodes };
   if (Buffer.byteLength(JSON.stringify(document, null, 2)) > MAX_DOCUMENT_BYTES) throw new Error('This map has reached the 9 MiB saved-data limit. Export it and continue in a new exploration.');
   return document;

@@ -10,7 +10,7 @@ The comment box and optional proposed wording are separate from saved answers. T
 
 Use **Add to answer draft** on proposed wording to append it to the ordinary private answer draft. Existing text is kept. Review a recovered/conflicting answer draft first; an addition beyond 20,000 characters is rejected without changing it. Saving that answer still uses the ordinary answer/state and consequence-review workflow. Copying wording never resolves discussion or accepts an AI suggestion, ADR or decision. A missing or non-question target cannot receive proposed answer wording.
 
-Posted comments are literal text: no HTML, Markdown execution or automatic links. Comments and names are omitted from current model/research prompts, decision Markdown and offline viewer projections. Native JSON, shared imports and history retain them. A comment is never an instruction to a helper. Explicitly copying proposed wording into an answer makes it ordinary user draft text; it enters future decision context only if the user saves the answer.
+Posted comments are literal text: no HTML, Markdown execution or automatic links. Comments and names are omitted from current model/research prompts, the native `get_exploration` tool, decision Markdown and offline viewer projections. Native JSON, shared imports and history retain them. A comment is never an instruction to a helper. Explicitly copying proposed wording into an answer makes it ordinary user draft text; it enters future decision context only if the user saves the answer.
 
 ## Context and resolution
 

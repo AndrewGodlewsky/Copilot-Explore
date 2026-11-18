@@ -2,6 +2,7 @@ import { isDeepStrictEqual as equal } from 'node:util';
 import { validateSharedDocument } from './shared-document.mjs';
 import { effectiveAnswerState } from './model.mjs';
 import { mergeComments } from './comment-merge.mjs';
+import { mergeReviewHandoffs } from './review-handoffs.mjs';
 
 const mapNodes = doc => new Map(doc.journey.nodes.map(node => [node.id, node]));
 const ordered = (...values) => [...new Set(values.flat())];
@@ -43,6 +44,7 @@ export function mergeSharedDocuments(base, local, incoming, choices = {}) {
   for (const key of ordered(...[base, local, incoming].map(doc => Object.keys(doc.journey)))) {
     if (['id', 'rootId', 'createdAt', 'updatedAt', 'nodes'].includes(key)) continue;
     const value = key === 'comments' ? mergeComments(base.journey.comments, local.journey.comments, incoming.journey.comments, pick)
+      : key === 'reviewHandoffs' ? mergeReviewHandoffs(base.journey.reviewHandoffs, local.journey.reviewHandoffs, incoming.journey.reviewHandoffs, pick)
       : pick(`field:${key}`, `Journey ${key}`, base.journey[key], local.journey[key], incoming.journey[key]);
     if (value !== undefined) journey[key] = structuredClone(value);
   }

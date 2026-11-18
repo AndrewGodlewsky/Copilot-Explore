@@ -8,6 +8,9 @@ import { fork, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { adrFileDocument, saveAdrFixture } from '../test/helpers/adr-file.mjs';
 import { scenarioIdentity } from '../com.github.copilot/extensions/explorer/scenario-preference.mjs';
+import { randomUUID } from 'node:crypto';
+import { changeReviewHandoffs } from '../com.github.copilot/extensions/explorer/review-handoffs.mjs';
+import { changeComments } from '../com.github.copilot/extensions/explorer/comments.mjs';
 
 const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_PATH;
 assert.ok(sdkDirectory && cli, 'Set COPILOT_SDK_DIR and COPILOT_CLI_PATH to the inspected installed desktop SDK/runtime.');
@@ -359,10 +362,17 @@ try {
     const response = await fetch(fileCanvas.url + route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(fileCanvas.url).origin }, body: JSON.stringify(input) });
     assert.equal(response.status, 200, await response.clone().text()); return response.json();
   };
-  const fileSeed = adrFileDocument(), fileIdentity = scenarioIdentity(fileSeed);
+  let fileSeed = adrFileDocument(); const fileIdentity = scenarioIdentity(fileSeed);
   saveAdrFixture(fileSeed, { source: fileIdentity, family: fileIdentity, scope: 'personal', classification: 'unselected', preferenceRevision: 0, selectionRationale: '' });
+  const reviewEvent = { actor: null, at: '2026-11-18T12:00:00.000Z' };
+  fileSeed = changeReviewHandoffs(fileSeed, 'create', { id: randomUUID(), transitionId: randomUUID(), scope: { kind: 'journey' }, note: 'RUNTIME_HANDOFF_NOTE_CANARY', recipient: 'RUNTIME_RECIPIENT_CANARY', unresolvedIds: [] }, reviewEvent);
+  fileSeed = changeComments(fileSeed, 'create', { nodeId: fileSeed.rootId, threadId: randomUUID(), messageId: randomUUID(), text: 'RUNTIME_COMMENT_NOTE_CANARY' }, reviewEvent);
   const fileInitial = await (await fetch(fileCanvas.url + 'api/state')).json();
   const fileImported = await fileRequest('api/action', { action: 'import', revision: fileInitial.document?.revision, document: fileSeed });
+  assert.equal(fileImported.document.reviewHandoffs.records.length, 1); assert.equal(fileImported.document.comments.threads.length, 1);
+  const reviewNative = await session.rpc.canvas.action.invoke({ instanceId: 'adr-file-fixture', actionName: 'get_exploration', input: {} });
+  assert.doesNotMatch(JSON.stringify(reviewNative), /RUNTIME_HANDOFF_NOTE_CANARY|RUNTIME_RECIPIENT_CANARY|RUNTIME_COMMENT_NOTE_CANARY/);
+  assert.match(await (await fetch(fileCanvas.url + 'export.json')).text(), /RUNTIME_HANDOFF_NOTE_CANARY/);
   const fileJourney = fileImported.activeKey, fileRequests = requests.length;
   const filePreviewInput = { action: 'prepare', journey: fileJourney, clientId: 'fixture-adr-file-00000001', sequence: 1, selection: { kind: 'new', number: 1 } };
   const filePreview = await fileRequest('api/adr-file', filePreviewInput);

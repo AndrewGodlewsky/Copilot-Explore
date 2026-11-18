@@ -23,6 +23,7 @@ const assets = new Map([
   ['review-queue.mjs', ['review-queue.mjs', 'text/javascript; charset=utf-8']],
   ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
   ['comments-client.mjs', ['comments-client.mjs', 'text/javascript; charset=utf-8']],
+  ['review-handoffs-client.mjs', ['review-handoffs-client.mjs', 'text/javascript; charset=utf-8']],
   ['cleanup.mjs', ['cleanup.mjs', 'text/javascript; charset=utf-8']],
   ['question-help-client.mjs', ['question-help-client.mjs', 'text/javascript; charset=utf-8']],
   ['research-review-client.mjs', ['research-review-client.mjs', 'text/javascript; charset=utf-8']],
@@ -241,7 +242,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req);
-        if ((input.answerPreview || ['research', 'research-follow-up', 'regenerate-questions', 'adr-questions', 'restore', 'restart-branch', 'reaffirm-review', 'clear-review-answer', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry', 'project-merge-accept', 'add-dependency', 'remove-dependency', 'comment-create', 'comment-reply', 'comment-resolve', 'comment-reopen'].includes(input.action)) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        if ((input.answerPreview || ['research', 'research-follow-up', 'regenerate-questions', 'adr-questions', 'restore', 'restart-branch', 'reaffirm-review', 'clear-review-answer', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry', 'project-merge-accept', 'add-dependency', 'remove-dependency', 'comment-create', 'comment-reply', 'comment-resolve', 'comment-reopen', 'review-handoff-create', 'review-handoff-take', 'review-handoff-reassign', 'review-handoff-complete'].includes(input.action)) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
       if (req.method === 'POST' && route === 'api/viewer-export') {
@@ -279,7 +280,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         res.writeHead(200, { 'Content-Type': type }); return res.end(content);
       }
       json(404, { error: 'Not found.' });
-    } catch (error) { json(400, { error: error.message || 'The action could not be completed.', ...(['absent', 'present', 'unknown'].includes(error.commentSubmission) ? { commentSubmission: error.commentSubmission } : {}) }); }
+    } catch (error) { json(400, { error: error.message || 'The action could not be completed.', ...(['absent', 'present', 'unknown'].includes(error.commentSubmission) ? { commentSubmission: error.commentSubmission } : {}), ...(['absent', 'present', 'unknown'].includes(error.handoffSubmission) ? { handoffSubmission: error.handoffSubmission } : {}) }); }
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   origin = `http://127.0.0.1:${server.address().port}`;

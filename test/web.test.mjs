@@ -35,6 +35,151 @@ const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', op
   { title: 'Whole neighborhood', description: 'Invite everyone nearby.', pros: ['More tools'], cons: ['More coordination'] },
 ], recommendation: 'Try a small pilot.', uncertainty: 'No external sources consulted.', sources: [] };
 
+test('full Outline keeps the same editor, composition and camera through extreme zoom switches', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id), ui = f.window.__updates;
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Exact ?? private draft'); f.type('revisit-condition', 'Reminder'); f.type('manual-question', 'Direction');
+  const answer = $('answer'), reminder = $('revisit-condition'), manual = $('manual-question'), panel = $('node-workspace'), parent = panel.parentNode;
+  answer.focus(); answer.setSelectionRange(2, 5); answer.scrollTop = 17;
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  ui.zoom(.1 / ui.scene().view.zoom); const camera = JSON.stringify(ui.scene().view), saved = JSON.stringify(f.explorer.doc), actions = f.actions.length;
+  for (let i = 0; i < 6; i++) {
+    const down = new f.window.MouseEvent('pointerdown', { bubbles: true, cancelable: true }); $('outline-toggle').dispatchEvent(down); assert.equal(down.defaultPrevented, true);
+    $('outline-toggle').click();
+    assert.equal($('working-view').classList.contains('outline-mode'), i % 2 === 0);
+    assert.equal($('answer'), answer); assert.equal(panel.parentNode, parent); assert.equal($('revisit-condition'), reminder); assert.equal($('manual-question'), manual);
+    assert.equal(f.document.activeElement, answer); assert.equal(answer.selectionStart, 2); assert.equal(answer.selectionEnd, 5); assert.equal(answer.scrollTop, 17);
+    assert.equal(JSON.stringify(ui.scene().view), camera);
+  }
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  assert.equal(JSON.stringify(f.explorer.doc), saved); assert.equal(f.actions.length, actions);
+});
+
+test('full Outline retains dictation through pointer switches and rejects late audio after keyboard departure', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 340, voice), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); const answer = $('answer'); answer.focus();
+  await until(() => $('voice-status').textContent.includes('Hold Ctrl'), 'voice ready');
+  key(f, 'keydown'); await until(() => voice.counts().starts === 1, 'voice start'); const before = voice.counts();
+  $('outline-toggle').click(); $('outline-toggle').click(); $('outline-toggle').click();
+  await delay(30); assert.deepEqual(voice.counts(), before); assert.equal(f.document.activeElement, answer);
+  key(f, 'keyup', { key: 'Control', code: 'ControlLeft', ctrlKey: false });
+  await until(() => answer.value.includes('our neighbors'), 'same dictation inserted');
+  await until(() => !$('voice-record').disabled, 'first recording fully saved');
+  const start = voice.start; let releaseLate; voice.start = id => { start(id); return new Promise(resolve => { releaseLate = () => resolve({ id, phase: 'done', text: 'LATE_OUTLINE_AUDIO' }); }); };
+  $('voice-record').click(); await until(() => voice.counts().starts === 2, 'second recording');
+  $('outline-toggle').focus(); await until(() => voice.counts().cancels > before.cancels, 'keyboard departure cancels');
+  $('outline-toggle').click(); releaseLate(); await delay(30); assert.equal(answer.value, 'our neighbors');
+});
+
+test('full Outline exposes all deep nodes through bounded hierarchy, filters, pages and selected-source reveal', async t => {
+  const f = await fixture(t, 280, undefined, false, { before: e => {
+    const base = e.doc.nodes[1]; let parentId = e.doc.rootId;
+    e.doc.nodes = [e.doc.nodes[0]];
+    for (let i = 1; i <= 620; i++) { const id = `deep-${i}`; e.doc.nodes.push({ ...base, id, parentId, question: `Depth ${i}?` }); parentId = id; }
+  } }), $ = id => f.document.getElementById(id), ui = f.window.__updates;
+  $('outline-toggle').click(); assert.equal($('outline-list').children.length, 200); assert.equal($('outline-list').getAttribute('role'), 'list');
+  assert.equal($('outline-list').lastChild.dataset.depth, '199'); assert.equal($('outline-list').lastChild.style.getPropertyValue('--depth'), '4');
+  $('outline-next').click(); assert.ok($('outline-count').textContent.includes('201\u2013400'));
+  assert.equal($('outline-list').firstChild.dataset.depth, '200');
+  $('outline-next').click(); $('outline-next').click(); assert.equal($('outline-list').children.length, 21);
+  $('outline-list').querySelector('[data-node-id="deep-620"]').click(); const answer = $('answer'); f.type('answer', 'DEEP_PRIVATE');
+  assert.equal($('outline').hidden, false); assert.equal($('node-workspace').dataset.nodeId, 'deep-620');
+  f.type('search', 'No match'); assert.equal($('outline-list').children.length, 0); assert.equal($('answer'), answer);
+  $('outline-toggle').click(); $('outline-toggle').click(); assert.equal($('search').value, 'No match');
+  $('outline-selected').click(); assert.equal($('search').value, ''); assert.equal(f.document.activeElement.dataset.nodeId, 'deep-620'); assert.equal($('outline-list').children.length, 21);
+  $('outline-previous').click(); $('outline-previous').click(); $('outline-previous').click();
+  const fold = $('outline-list').querySelector('[data-branch-id="deep-1"]'); fold.click(); assert.equal($('outline-list').children.length, 2); assert.equal(ui.scene().selected, 'deep-1');
+  f.type('search', 'Depth 620?'); assert.equal($('outline-list').children.length, 1); assert.match($('outline-mode-hint').textContent, /including folded/); assert.match($('outline-list').textContent, /Level 621.*Parent: Depth 619/);
+  $('outline-list').querySelector('[data-node-id]').click(); assert.equal($('answer').value, 'DEEP_PRIVATE'); assert.equal($('search').value, 'Depth 620?');
+  $('outline-selected').click(); assert.equal(f.document.activeElement.dataset.nodeId, 'deep-620');
+  $('palette-open').click(); f.type('palette-query', 'Depth 410?'); $('palette-results').querySelector('[data-node-id="deep-410"]').click();
+  await until(() => $('node-workspace').dataset.nodeId === 'deep-410', 'validated source in Outline');
+  assert.equal($('search').value, ''); assert.ok($('outline-list').querySelector('[data-node-id="deep-410"]')); assert.equal($('outline-list').children.length, 200);
+});
+
+test('full Outline suspends minimap gestures and hidden geometry while retaining current source and live palette commands', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id), ui = f.window.__updates;
+  f.open(f.explorer.doc.nodes[1].id); $('minimap-toggle').click();
+  const mini = $('minimap-map'), down = new f.window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, clientX: 30, clientY: 740 }); Object.defineProperty(down, 'pointerId', { value: 9 }); mini.dispatchEvent(down); assert.equal(mini.hasPointerCapture(9), true);
+  $('answer').focus(); $('outline-toggle').click(); assert.equal(mini.hasPointerCapture(9), false); assert.equal($('minimap').hidden, true); assert.equal($('minimap-toggle').getAttribute('aria-expanded'), 'true');
+  const camera = JSON.stringify(ui.scene().view), geometry = ui.scene().geometry, answer = $('answer'), records = [];
+  const observer = new f.window.MutationObserver(rows => records.push(...rows)); observer.observe($('world'), { attributes: true, childList: true, subtree: true }); observer.observe(mini, { attributes: true, childList: true, subtree: true });
+  let listeners = 0; const listen = f.window.EventTarget.prototype.addEventListener;
+  f.window.EventTarget.prototype.addEventListener = function (...args) { listeners++; return listen.apply(this, args); };
+  for (let i = 0; i < 10; i++) { ui.refresh(); f.observers.get('map')(); f.observers.get('minimap-map')(); ui.workspace(); }
+  f.window.EventTarget.prototype.addEventListener = listen;
+  $('map').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  $('map').dispatchEvent(new f.window.WheelEvent('wheel', { deltaY: 30, bubbles: true, cancelable: true }));
+  const move = new f.window.MouseEvent('pointermove', { buttons: 1, clientX: 150, clientY: 770 }); Object.defineProperty(move, 'pointerId', { value: 9 }); f.window.dispatchEvent(move);
+  const changes = [...records, ...observer.takeRecords()]; observer.disconnect();
+  assert.equal(listeners, 0); assert.equal(ui.scene().geometry, geometry); assert.equal(JSON.stringify(ui.scene().view), camera); assert.equal($('answer'), answer);
+  assert.equal(changes.filter(r => r.target.closest?.('#nodes,#edges,#minimap-map') || r.target.id === 'world').length, 0, 'ten hidden updates produce no map/minimap mutations');
+  $('palette-open').click(); assert.equal($('palette-commands').querySelector('[data-command="fit"]').getAttribute('aria-disabled'), 'true');
+  const toggle = $('palette-commands').querySelector('[data-command="outline-toggle"]'); assert.match(toggle.textContent, /Map view/); toggle.click(); assert.equal($('outline').hidden, true); assert.equal($('minimap').hidden, false); assert.ok($('minimap-nodes').getAttribute('d'));
+  assert.equal(JSON.stringify(ui.scene().view), camera);
+});
+
+test('full Outline keeps research and private cleanup previews on their captured source and saves through the same actions', async t => {
+  let resolveClean;
+  const f = await fixture(t, 340, undefined, false, { cleaner: { run: () => new Promise(resolve => { resolveClean = resolve; }), close() {} } }), $ = id => f.document.getElementById(id), id = f.explorer.doc.nodes[1].id;
+  f.open(id); f.type('answer', 'OUTLINE_PRIVATE'); $('clean-answer').click(); await until(() => resolveClean, 'private cleanup starts');
+  const answer = $('answer'); $('outline-toggle').click(); resolveClean('PRIVATE_PROPOSAL'); await until(() => $('apply-cleanup'), 'private proposal retained');
+  const proposal = $('apply-cleanup'); $('outline-toggle').click(); $('outline-toggle').click(); assert.equal($('apply-cleanup'), proposal); assert.equal($('answer'), answer); assert.equal(answer.value, 'OUTLINE_PRIVATE');
+  assert.doesNotMatch(await (await fetch(new URL('export.json', f.window.location.href))).text(), /OUTLINE_PRIVATE|PRIVATE_PROPOSAL/);
+  $('research-request').click(); await startReviewedResearch(f); await until(() => f.explorer.pending?.kind === 'research', 'research pending');
+  const request = f.explorer.pending.id; $('outline-toggle').click(); $('outline-toggle').click(); assert.equal(f.explorer.pending.id, request);
+  f.resolveResearch(findings); await until(() => f.explorer.doc.nodes[1].research, 'research completed'); await f.poll();
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'OUTLINE_PRIVATE'); assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.match($('outline-list').textContent, /Research available/);
+  chooseState(f, 'tentative'); const count = f.actions.filter(a => a.action === 'answer').length; f.click('Save answer');
+  await until(() => f.explorer.doc.nodes[1].answer === 'OUTLINE_PRIVATE', 'same save action'); assert.equal(f.explorer.doc.nodes[1].answerState, 'tentative'); assert.equal(f.actions.filter(a => a.action === 'answer').length, count + 1);
+  assert.equal(f.actions.filter(a => a.action === 'research').length, 1);
+});
+
+test('full Outline recovers a removed selected draft and moves focus to a reachable row', async t => {
+  const f = await fixture(t, 280), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'REMOVED_OUTLINE_DRAFT'); f.type('revisit-condition', 'REMOVED_REMINDER');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'durable draft'); $('answer').focus(); $('outline-toggle').click();
+  const next = structuredClone(f.explorer.doc); next.nodes = next.nodes.filter(n => n.id !== node.id); await f.explorer.save(next, 'Remove selected question'); await f.poll();
+  assert.equal($('answer'), null); assert.equal(f.document.activeElement.dataset.nodeId, next.rootId); assert.equal(f.document.activeElement.closest('#outline-list'), $('outline-list'));
+  await until(() => $('orphan-drafts').querySelector('textarea')?.value === 'REMOVED_OUTLINE_DRAFT', 'recoverable orphan'); assert.equal($('orphan-drafts').querySelector('[data-orphan-reminder] textarea').value, 'REMOVED_REMINDER');
+});
+
+test('full Outline layout rules neutralize the counter-scaled editor and keep narrow scroll owners', async t => {
+  const f = await fixture(t, 280), $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  const css = await (await fetch(new URL('style.css', f.window.location.href))).text(), style = f.document.createElement('style'); style.textContent = css; f.document.head.append(style);
+  f.window.__updates.zoom(.1); $('outline-toggle').click();
+  assert.equal(f.window.getComputedStyle($('map')).overflow, 'auto'); assert.equal(f.window.getComputedStyle($('map')).touchAction || 'auto', 'auto');
+  assert.equal(f.window.getComputedStyle($('world')).position, 'static');
+  assert.equal(f.window.getComputedStyle($('node-workspace')).position, 'relative');
+  assert.equal(f.window.getComputedStyle(f.document.querySelector('.node-content')).overflow, 'auto');
+  const rules = [...style.sheet.cssRules], world = rules.find(rule => rule.selectorText === '.outline-mode #world'), editor = rules.find(rule => rule.selectorText === '.outline-mode #node-workspace');
+  assert.equal(world.style.getPropertyValue('transform'), 'none'); assert.equal(world.style.getPropertyPriority('transform'), 'important');
+  for (const [property, expected] of [['transform', 'none'], ['left', 'auto'], ['top', 'auto'], ['width', '100%'], ['max-height', '100%']]) { assert.equal(editor.style.getPropertyValue(property), expected); assert.equal(editor.style.getPropertyPriority(property), 'important'); }
+  const narrow = rules.filter(rule => rule.conditionText === '(max-width:660px)').at(-1);
+  assert.ok(narrow.cssText.includes('minmax(150px,35%) minmax(240px,1fr)')); assert.equal($('map-controls').hidden, true); assert.equal($('nodes').hidden, true); assert.equal($('edges').style.display, 'none');
+  $('outline-toggle').click(); assert.equal(f.window.getComputedStyle($('map')).overflow, 'clip'); assert.equal($('map-controls').hidden, false);
+});
+
+test('full Outline falls back from a removed focused row without clearing the search or changing the editor', async t => {
+  const f = await fixture(t, 280), $ = id => f.document.getElementById(id), [removed, selected] = f.explorer.doc.nodes.slice(1);
+  f.open(selected.id); const answer = $('answer'); $('outline-toggle').click(); f.type('search', 'borrow');
+  $('outline-list').querySelector('[data-node-id]').focus();
+  const next = structuredClone(f.explorer.doc); next.nodes = next.nodes.filter(n => n.id !== removed.id); await f.explorer.save(next, 'Remove focused row'); await f.poll();
+  assert.equal($('outline-list').children.length, 0); assert.equal(f.document.activeElement, $('outline-selected'));
+  assert.equal($('search').value, 'borrow'); assert.equal($('answer'), answer); assert.equal($('node-workspace').dataset.nodeId, selected.id);
+});
+
+test('full Outline same-node navigation reveals the editor on Map return after extreme zoom', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id), ui = f.window.__updates, id = f.explorer.doc.nodes[1].id;
+  f.open(id); const answer = $('answer'); ui.zoom(.1 / ui.scene().view.zoom);
+  $('outline-toggle').click(); $('outline-list').querySelector(`[data-node-id="${id}"]`).click(); $('outline-toggle').click();
+  const { positions, view } = ui.scene(), box = positions.get(id);
+  assert.equal(view.zoom, 1); assert.equal($('answer'), answer);
+  assert.ok(view.x + box.x * view.zoom >= 15, 'same-node explicit selection reveals the editor left edge');
+  assert.ok(view.x + (box.x + box.width) * view.zoom <= 325, 'same-node explicit selection reveals the editor right edge');
+  assert.ok(view.y + box.y * view.zoom >= 15, 'same-node explicit selection reveals the heading');
+  const camera = JSON.stringify(view); $('outline-toggle').click(); $('outline-toggle').click(); assert.equal(JSON.stringify(ui.scene().view), camera, 'the marker resets on the next pure toggle');
+});
+
 test('command palette keeps the same drafts and editor, traps focus and activates a command once', async t => {
   const f = await fixture(t, 340), $ = id => f.document.getElementById(id);
   f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'PRIVATE_PALETTE'); f.type('revisit-condition', 'Keep reminder'); f.type('manual-question', 'Keep direction');
@@ -446,7 +591,7 @@ test('minimap uses extreme actual editor geometry with constant DOM and no path 
   assert.equal(mutations.filter(m => m.target.id === 'minimap-viewport').length, 40, 'only four viewport attributes per pan');
   for (const zoom of [.1, 1, 3]) { ui.zoom(zoom / ui.scene().view.zoom); assertOverview(f); assert.equal($('answer'), answer); }
   $('fit').click(); assert.equal(ui.scene().expanded, false); assertOverview(f); assert.equal(ui.scene().view.zoom, initialZoom);
-  $('outline-toggle').click(); f.type('search', 'Question 4949:'); f.document.querySelector('#outline-list [data-node-id="node-4949"]').click(); assert.equal($('answer'), answer); assertOverview(f);
+  $('outline-toggle').click(); f.type('search', 'Question 4949:'); f.document.querySelector('#outline-list [data-node-id="node-4949"]').click(); assert.equal($('answer'), answer); assert.equal($('minimap').hidden, true); $('outline-toggle').click(); assertOverview(f);
   $('minimap-toggle').click(); assert.equal($('minimap-nodes').getAttribute('d'), '');
   $('minimap-toggle').click(); assertOverview(f);
   f.resize(280, 420); f.observers.get('minimap-map')(); assertOverview(f); assert.equal($('answer'), answer);
@@ -1238,6 +1383,8 @@ test('importance labels and composed Outline filters preserve the full map and i
   assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 1);
   f.type('search', 'When'); assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 0);
   f.window.__updates.select(node.id); assert.equal($('node-workspace').dataset.nodeId, node.id, 'hidden result remains revealable');
+  assert.equal($('importance-filter').value, 'all', 'explicit source reveal resets filters');
+  $('importance-filter').value = 'high'; $('revisit-filter').value = 'manual-condition'; $('revisit-filter').dispatchEvent(new f.window.Event('change', { bubbles: true }));
   assert.match($('question-importance').textContent, /Historical model assessment/); assert.ok($('question-importance').textContent.includes(reason)); assert.equal($('question-importance').querySelector('img'), null);
   f.type('answer', 'Independent answer draft'); f.type('revisit-condition', 'Independent reminder draft');
   $('question-importance').open = true; const answer = $('answer'), reminder = $('revisit-condition'); reminder.focus(); reminder.setSelectionRange(2, 6);
@@ -2101,16 +2248,19 @@ test('branch controls hide only descendants, preserve active draft and reveal fr
   await delay(1350);
   assert.equal(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), null, 'poll retains fold');
   f.document.getElementById('outline-toggle').click();
+  f.type('search', grandchild.question);
   const row = [...f.document.querySelectorAll('#outline-list [data-node-id]')].find(e => e.dataset.nodeId === grandchild.id);
   assert.ok(row, 'hidden question is discoverable'); row.click();
   assert.equal(f.document.getElementById('expanded-title').textContent, grandchild.question);
   assert.equal(f.document.getElementById('answer').value, 'Private draft');
   assert.equal(f.document.getElementById('answer-state').value, 'assumption');
   assert.equal(f.document.getElementById('manual-question').value, 'Private follow-up');
-  assert.ok(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), 'ancestor path revealed');
+  f.document.getElementById('outline-toggle').click();
+  assert.ok(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), 'ancestor path revealed on return to map');
   assert.equal(f.explorer.doc.revision, revision);
   assert.equal(f.document.querySelector(`[data-branch-id="${b.id}"]`), null, 'unrelated leaf stays unchanged');
-  assert.ok(f.document.querySelector(`[data-branch-id="${root.id}"]`));
+  f.document.getElementById('fit').click();
+  assert.ok(f.document.querySelector(`#nodes [data-branch-id="${root.id}"]`), 'Fit provides a public route back to the root branch');
 });
 
 test('folded research completion and root folding keep saved content and full exports', async t => {
@@ -2151,6 +2301,8 @@ test('folding the expanded node keeps its editor while outline branch focus stay
   outlineToggle.focus(); outlineToggle.click();
   assert.equal(f.document.activeElement.closest('#outline-list')?.id, 'outline-list');
   assert.equal(f.document.activeElement.getAttribute('aria-expanded'), 'true');
+  assert.ok(f.document.querySelector(`#outline-list [data-node-id="${child.id}"]`), 'unfolded hierarchy remains available');
+  f.document.getElementById('outline-toggle').click();
   assert.ok(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`));
 });
 
@@ -3268,10 +3420,12 @@ test('outline selection exits focus and reveals only the selected path', async t
   f.open(a1.id); f.document.getElementById('focus-branch').click();
   assert.equal(f.document.querySelector(`#nodes [data-node-id="${b.id}"]`), null);
   f.document.getElementById('outline-toggle').click();
+  f.type('search', b1.question);
   const target = [...f.document.querySelectorAll('#outline-list [data-node-id]')].find(e => e.dataset.nodeId === b1.id);
   assert.ok(target); target.click();
   assert.equal(f.document.getElementById('show-whole-map').hidden, true);
   assert.equal(f.document.getElementById('expanded-title').textContent, b1.question);
+  f.document.getElementById('outline-toggle').click();
   assert.ok(f.document.querySelector(`#nodes [data-node-id="${a.id}"]`));
   assert.ok(f.document.querySelector(`#nodes [data-node-id="${a1.id}"]`));
   assert.equal(f.document.querySelector(`[data-branch-id="${b.id}"]`).getAttribute('aria-expanded'), 'true');
@@ -3301,7 +3455,9 @@ test('collapsing an ancestor exits focus safely and hidden research does not ret
   assert.equal(f.document.getElementById('show-whole-map').hidden, true);
   assert.equal(f.document.getElementById('node-workspace').hidden, true);
   assert.equal(f.document.activeElement.dataset.nodeId, root.id);
-  assert.equal(f.document.querySelectorAll('#nodes .node').length, 1);
+  assert.equal(f.document.querySelectorAll('#outline-list .outline-row').length, 1, 'visible hierarchy contains the folded root');
+  f.document.getElementById('outline-toggle').click();
+  assert.equal(f.document.querySelectorAll('#nodes .node').length, 1, 'map refreshes the fold on return');
   f.document.querySelector(`[data-branch-id="${root.id}"]`).click();
   f.open(a1.id);
   assert.equal(f.document.getElementById('answer').value, 'Keep this draft');
@@ -3766,18 +3922,20 @@ test('removed selected question disposes its editor and returns focus while reta
 });
 
 
-test('preview and manual composition editors remain connected when the current batch becomes stale', async t => {
+test('preview and manual composition editors remain connected across Outline switches when the current batch becomes stale', async t => {
   const f = await fixture(t, 340, undefined, false, { preview: true }), $ = id => f.document.getElementById(id);
   const candidate = $('candidate-question-0'), manual = $('manual-question');
   f.type(candidate.id, 'My adjusted wording'); candidate.focus(); candidate.setSelectionRange(3, 9, 'backward'); candidate.scrollTop = 24;
   candidate.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  $('outline-toggle').click(); $('outline-toggle').click(); $('outline-toggle').click();
+  assert.equal($('candidate-question-0'), candidate); assert.equal(f.document.activeElement, candidate);
   const mutations = [], observer = new f.window.MutationObserver(records => mutations.push(...records)); observer.observe($('node-workspace'), { childList: true, subtree: true });
   const next = structuredClone(f.explorer.doc); next.objective = 'Changed objective'; await f.explorer.save(next, 'Changed objective'); await f.poll();
   assert.equal($('candidate-question-0'), candidate); assert.equal(candidate.value, 'My adjusted wording'); assert.equal(candidate.selectionDirection, 'backward'); assert.equal(candidate.scrollTop, 24);
   assert.equal($('manual-question'), manual); assert.equal(f.document.activeElement, candidate); assert.equal($('accept-questions').disabled, true);
   candidate.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
   manual.focus(); manual.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true })); f.type('manual-question', 'Composed direction');
-  for (let i = 0; i < 3; i++) f.window.__updates.workspace();
+  for (let i = 0; i < 3; i++) { $('outline-toggle').click(); f.window.__updates.workspace(); }
   manual.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
   assert.equal($('manual-question'), manual); assert.equal(manual.value, 'Composed direction'); assert.equal(f.document.activeElement, manual);
   assert.equal([...mutations, ...observer.takeRecords()].some(record => [...record.removedNodes].some(node => [candidate, manual].some(editor => node === editor || node.contains?.(editor)))), false); observer.disconnect();
@@ -3956,17 +4114,14 @@ test('Outline folding an offscreen ancestor reveals and mounts the moved selecti
   d.getElementById('outline-toggle').click();
   const fold = d.querySelector(`#outline-list [data-branch-id="${ancestor.id}"]`);
   fold.focus(); fold.click();
-  const target = d.querySelector(`#nodes [data-node-id="${ancestor.id}"]`);
-  assert.ok(target?.isConnected, 'fold reveals and mounts the replacement compact selection');
-  assert.equal(d.activeElement, target, 'focus transfers to the revealed ancestor');
+  const target = d.querySelector(`#outline-list [data-node-id="${ancestor.id}"]`);
+  assert.ok(target?.isConnected, 'fold mounts the replacement selection in Outline');
+  assert.equal(d.activeElement, target, 'focus transfers to the revealed ancestor row');
   assert.equal(ui.scene().selected, ancestor.id);
   assert.equal(d.getElementById('node-workspace').hidden, true);
-  assert.equal(ui.scene().positions.has('chain-1-29'), true, 'other tall branch keeps the full vertical extent');
-  const after = ui.scene(), revealed = after.positions.get(ancestor.id);
-  assert.ok(after.view.x + revealed.x * after.view.zoom >= 15);
-  assert.ok(after.view.y + revealed.y * after.view.zoom >= 15);
-  assert.ok(after.view.y + (revealed.y + revealed.height) * after.view.zoom <= 705);
+  assert.equal(ui.scene().positions.has('chain-1-29'), true, 'hidden map geometry is retained without rebuilding');
   assert.equal(JSON.stringify(f.explorer.doc), logical, 'fold and reveal do not change logical data');
+  f.type('search', 'Branch 0, depth 29');
   d.querySelector(`#outline-list [data-node-id="${leaf}"]`).click();
   assert.equal(d.getElementById('answer').value, 'Keep this deep draft', 'unfolded path recovers the draft');
   assert.equal(d.getElementById('answer-state').value, 'assumption');

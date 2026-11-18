@@ -35,7 +35,7 @@ function stopPolling() {
 function connectionStatus(message = '') { $('connection-status').textContent = message; $('connection-status').hidden = !message; }
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
 let librarySearchTimer, librarySearchFlight = false, librarySearchQueued = false, librarySearchNext = null;
-let outlinePage = 0, outlineFilterStamp = '';
+let outlinePage = 0, outlineFilterStamp = '', outlineMode = false, outlineNavigated = false;
 let revisitDay = localDate();
 let nextQuestion = new NextQuestion(), nextQuestionOpen = false, nextQuestionStamp = '';
 const revisitLabel = node => revisitStatuses(node.revisit, revisitDay).map(status => REVISIT_FILTERS[status]).join(' · ');
@@ -85,7 +85,7 @@ const navigation = attachNavigation({ document, window, fetch: (...args) => fetc
   zoom: (factor, point) => zoom(factor, point),
   pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); } });
 const minimap = attachMinimap({ document, window,
-  scene: () => !closed && !suspended && !libraryView && state.document && geometryBranches === branches ?
+  scene: () => !closed && !suspended && !outlineMode && !libraryView && state.document && geometryBranches === branches ?
     { geometry: geometryCache.value, selected, collapsed, focusId, view, size: $('map').getBoundingClientRect() } : null,
   navigate: point => {
     endDrag();
@@ -123,7 +123,7 @@ function installSearchControls(prefix, host, changed) {
   }, { id: `${prefix}-reset` }));
   host.addEventListener('change', changed);
 }
-const outlineControls = el('div', { class: 'search-filters' }); $('outline-list').before(outlineControls);
+const outlineControls = el('div', { class: 'search-filters' }); $('outline').querySelector('details').append(outlineControls);
 installSearchControls('outline', outlineControls, renderOutline);
 installSearchControls('library', $('library-search-filters'), () => scheduleLibrarySearch());
 $('search').maxLength = 4000;
@@ -198,7 +198,7 @@ function closePalette(restore = true) {
 function paletteCommandRows() {
   const focused = $('palette-commands').contains(document.activeElement) ? document.activeElement.dataset.command : null;
   const query = searchFilters({ query: $('palette-query').value }).query;
-  const commands = paletteCommands.map(([id, label]) => [id, id === 'minimap-toggle' ? $(id).textContent : label]);
+  const commands = paletteCommands.map(([id, label]) => [id, ['minimap-toggle', 'outline-toggle'].includes(id) ? $(id).textContent : label]);
   $('palette-commands').replaceChildren(...commands.filter(([, label]) => label.toLowerCase().includes(query)).map(([id, label]) => {
     const reason = paletteReason(id);
     return button([el('strong', {}, label), ...(reason ? [el('small', {}, reason)] : [])], () => {
@@ -349,6 +349,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    outlineNavigated = false;
     minimap.reset();
     if (state.document?.id !== next.document?.id || state.activeKey !== next.activeKey) nextQuestion = new NextQuestion();
     nextQuestionOpen = false; nextQuestionStamp = ''; $('next-question').hidden = true;
@@ -417,11 +418,15 @@ function apply(next, reset = false) {
   }
   renderWorkspace(); refreshScene(anchor); renderOutline();
   if (compactFocused && changedDocument) $('map').focus({ preventScroll: true });
-  if (workspaceFocused && (changedDocument || previousSelection !== selected)) (expanded ? $('expanded-title') : [...$('nodes').children].find(e => e.dataset.nodeId === selected) ?? $('map')).focus({ preventScroll: true });
+  if (workspaceFocused && (changedDocument || previousSelection !== selected)) {
+    const target = expanded ? $('expanded-title') : outlineMode ? [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === selected) ?? $('outline-selected') : [...$('nodes').children].find(e => e.dataset.nodeId === selected) ?? $('map');
+    target.focus({ preventScroll: true });
+    if (outlineMode) target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
   renderQuestionFeedback();
   renderDraftSummary();
   renderNextQuestion();
-  if (firstFit || firstQuestions) {
+  if (!outlineMode && (firstFit || firstQuestions)) {
     const rect = $('map').getBoundingClientRect(); firstFit = !rect.width || !rect.height;
     if (!firstFit) expanded ? centerSelected() : fit();
   }
@@ -655,9 +660,10 @@ function focusTop(id, height) {
   const parent = state.document.nodes.find(n => n.id === node?.parentId);
   return Math.max(16, Math.min(parent ? (parent.answer ? 150 : 110) + 72 + 24 : 24, height - 320));
 }
-function select(id) {
+function select(id, { outlineRow = false } = {}) {
   if (paletteOpen() && id !== selected) closePalette(false);
   if (!state.document?.nodes.some(n => n.id === id)) return;
+  if (outlineMode) outlineNavigated = true;
   endDrag();
   voice.cancel();
   if (focusId && !withinFocus(id)) { focusId = null; wholeView = null; }
@@ -667,11 +673,12 @@ function select(id) {
   const rect = $('map').getBoundingClientRect(), width = Math.min(560, rect.width - 32), old = anchorPoint(id);
   const anchor = { id, x: Math.max(width / 2 + 16, Math.min(rect.width - width / 2 - 16, old?.x ?? rect.width / 2)), y: focusTop(id, rect.height) };
   captureWorkspace(); selected = id; expanded = true; view.zoom = 1;
-  renderWorkspace(); refreshScene(anchor); renderOutline(); $('expanded-title').focus({ preventScroll: true });
+  renderWorkspace(); refreshScene(anchor); if (outlineMode && !outlineRow) revealOutlineSelection(false); else renderOutline(); $('expanded-title').focus({ preventScroll: true });
 }
 function toggleBranch(id, source) {
   const node = state.document?.nodes.find(n => n.id === id);
   if (!node || !branches.parentIds.has(id)) return;
+  if (outlineMode) outlineNavigated = true;
   endDrag();
   const folding = !collapsed.has(id), anchor = anchorPoint(id);
   if (folding && focusId && id !== focusId && focusAncestor(id)) { focusId = null; wholeView = null; updateFocusStatus(); }
@@ -687,11 +694,12 @@ function toggleBranch(id, source) {
   branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
   renderWorkspace(); refreshScene(anchor); renderOutline();
   if (moved) revealNode(id);
-  const focus = moved ? [...$('nodes').children].find(e => e.dataset.nodeId === id) :
+  const focus = moved && outlineMode ? [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === id) : moved ? [...$('nodes').children].find(e => e.dataset.nodeId === id) :
     source === 'outline' ? [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === id) :
     expanded && selected === id ? $('branch-workspace') :
       [...$('nodes').children].find(e => e.dataset.branchId === id);
   focus?.focus({ preventScroll: true });
+  if (outlineMode) focus?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 function hiddenSummary(id) {
   const count = branches.nodeCounts.get(id), questions = branches.descendants.get(id);
@@ -724,6 +732,7 @@ function updateFocusStatus() {
 }
 function showWholeMap() {
   if (!focusId) return;
+  if (outlineMode) outlineNavigated = true;
   endDrag();
   focusId = null;
   collapsed = revealPath(state.document.nodes, collapsed, selected);
@@ -737,6 +746,7 @@ function showWholeMap() {
 }
 function focusBranch(id) {
   if (id === state.document.rootId) { showWholeMap(); return; }
+  if (outlineMode) outlineNavigated = true;
   if (!wholeView) wholeView = { ...view };
   focusId = id;
   branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
@@ -744,12 +754,14 @@ function focusBranch(id) {
   refreshScene(anchorPoint(id));
 }
 function collapseNode(focus = true) {
+  if (outlineMode) outlineNavigated = true;
   endDrag();
   voice.cancel();
   const anchor = anchorPoint(); captureWorkspace(); expanded = false;
   renderWorkspace(); refreshScene(anchor);
   if (focus) revealNode(selected);
-  if (focus) [...$('nodes').children].find(e => e.dataset.nodeId === selected)?.focus({ preventScroll: true });
+  if (focus && outlineMode) revealOutlineSelection();
+  else if (focus) [...$('nodes').children].find(e => e.dataset.nodeId === selected)?.focus({ preventScroll: true });
 }
 function zoomDetail(zoom, previous) {
   if (zoom < .35 || previous === 'schematic' && zoom < .4) return 'schematic';
@@ -762,7 +774,7 @@ function compactSize(node) {
     { width: 220, height: detailTier === 'question' ? 128 : node.answer ? 150 : 110 };
 }
 function refreshScene(anchor = anchorPoint()) {
-  if (closed || !state.document) return;
+  if (closed || outlineMode || !state.document) return;
   const panel = $('node-workspace'), rect = $('map').getBoundingClientRect();
   if (!rect.width || !rect.height) return;
   viewportSize ??= { width: rect.width, height: rect.height };
@@ -795,10 +807,10 @@ function refreshScene(anchor = anchorPoint()) {
   if (expanded) { const p = positions.get(selected); panel.style.left = `${p.x}px`; panel.style.top = `${p.y}px`; }
   transform();
 }
-function scheduleLayout() { if (!closed) { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(() => refreshScene()); } }
+function scheduleLayout() { if (!closed && !outlineMode) { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(() => refreshScene()); } }
 function renderMap() {
   // Workspace focus can fire between visibility replacement and its synchronous scene refresh.
-  if (closed || !geometryCache.value || geometryBranches !== branches) return;
+  if (closed || outlineMode || !geometryCache.value || geometryBranches !== branches) return;
   const viewport = viewportBounds(view, $('map').getBoundingClientRect());
   const active = document.activeElement, owner = $('nodes').contains(active) ? active.closest('[data-node-id],[data-branch-id]') : null;
   const activeId = owner?.dataset.nodeId ?? owner?.dataset.branchId;
@@ -859,7 +871,7 @@ function fitScale() {
   return Math.min(1, Math.max(1, rect.width - 60) / (b.right - b.left), Math.max(1, rect.height - 60) / (b.bottom - b.top));
 }
 function transform() {
-  if (!positions.size) return;
+  if (outlineMode || !positions.size) return;
   const rect = $('map').getBoundingClientRect(), b = bounds();
   if (!rect.width || !rect.height) return;
   const reachX = Math.min(64, rect.width / 2, (b.right - b.left) * view.zoom);
@@ -874,6 +886,7 @@ function transform() {
   minimap.update();
 }
 function fit() {
+  if (outlineMode) return;
   endDrag();
   if (!positions.size) return;
   const rect = $('map').getBoundingClientRect();
@@ -884,13 +897,13 @@ function fit() {
   view.x = rect.width / 2 - (b.left + b.right) / 2 * view.zoom; view.y = rect.height / 2 - (b.top + b.bottom) / 2 * view.zoom; transform();
 }
 function centerSelected() {
-  if (!selected || !positions.has(selected)) return;
+  if (outlineMode || !selected || !positions.has(selected)) return;
   endDrag();
   const rect = $('map').getBoundingClientRect(); view.zoom = 1;
   refreshScene({ id: selected, x: rect.width / 2, y: focusTop(selected, rect.height) });
 }
 function zoom(factor, point) {
-  if (!positions.size || drag) return;
+  if (outlineMode || !positions.size || drag) return;
   const rect = $('map').getBoundingClientRect(), next = Math.max(Math.min(.1, fitScale()), Math.min(3, view.zoom * factor)), ratio = next / view.zoom;
   const x = point?.x ?? rect.width / 2, y = point?.y ?? rect.height / 2;
   const worldX = (x - view.x) / view.zoom, worldY = (y - view.y) / view.zoom;
@@ -902,6 +915,7 @@ function zoom(factor, point) {
   refreshScene(anchor);
 }
 function revealNode(id) {
+  if (outlineMode) return;
   let p = positions.get(id); if (!p) return;
   const rect = $('map').getBoundingClientRect();
   if (!expanded || id !== selected) {
@@ -1559,29 +1573,85 @@ function renderResearch(node) {
   if (r.sources.length) section.append(el('div', { class: 'sources' }, el('h3', {}, 'Consulted sources'), el('p', { class: 'quiet' }, 'Reading a page does not establish claim support.'), r.sources.map((s, index) => el('div', { id: `source-${index}` }, sourceLink(s), el('p', { class: 'quiet' }, retrieval(s))))));
   return section;
 }
+function setOutlineMode(value) {
+  if (outlineMode === value) return;
+  const active = document.activeElement, editorFocus = $('node-workspace').contains(active);
+  endDrag(); suppressClick = false; cancelAnimationFrame(layoutFrame); if (value) outlineNavigated = false; outlineMode = value;
+  $('working-view').classList.toggle('outline-mode', value);
+  $('outline').hidden = !value;
+  $('outline-toggle').setAttribute('aria-expanded', String(value));
+  $('outline-toggle').textContent = value ? 'Map view' : 'Outline view';
+  for (const id of ['nodes', 'edges']) $(id).hidden = value;
+  $('edges').style.display = value ? 'none' : '';
+  $('map-controls').hidden = value;
+  $('map-hint').hidden = value;
+  $('map').setAttribute('aria-label', value ? 'Selected outline node' : 'Question map. Drag the background, a card, or a question heading to pan. Wheel or plus and minus keys zoom; zero resets zoom; Home fits the map. Arrow keys pan. Escape collapses a question.');
+  $('map').tabIndex = value ? -1 : 0;
+  if (value) { minimap.suspend(true); renderOutline(); }
+  else {
+    minimap.suspend(false); refreshScene(null);
+    if (firstFit) { expanded ? centerSelected() : fit(); firstFit = false; }
+    else if (outlineNavigated) expanded ? centerSelected() : revealNode(selected);
+  }
+  if (!editorFocus && active !== $('outline-toggle')) (value ? $('outline-selected') : $('outline-toggle')).focus({ preventScroll: true });
+}
+function outlineEntries() {
+  const filters = currentSearchFilters('outline');
+  const filtered = !!(filters.query || filters.state !== 'all' || filters.importance !== 'all' || filters.research || filters.review || filters.drafts || filters.reminder !== 'all');
+  const children = new Map(state.document.nodes.map(n => [n.id, []])), byId = new Map(state.document.nodes.map(n => [n.id, n]));
+  for (const n of state.document.nodes) if (n.parentId) children.get(n.parentId).push(n);
+  const entries = [], stack = [{ node: byId.get(state.document.rootId), depth: 0 }];
+  while (stack.length) {
+    const item = stack.pop(), n = item.node;
+    const draft = drafts.get(n.id) ?? draftClient.entries.get(n.id)?.conflict?.text ?? null;
+    const match = matchSearch(n, filters, { draft });
+    if (match) entries.push({ ...item, ...match, parent: byId.get(n.parentId)?.question });
+    if (filtered || !collapsed.has(n.id)) for (const node of children.get(n.id).toReversed()) stack.push({ node, depth: item.depth + 1 });
+  }
+  return { entries, filtered, filters };
+}
+function revealOutlineSelection(focus = true) {
+  if (!outlineMode || !selected) return;
+  outlineNavigated = true;
+  $('outline-reset').click();
+  collapsed = revealPath(state.document.nodes, collapsed, selected);
+  branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
+  outlinePage = Math.floor(Math.max(0, outlineEntries().entries.findIndex(item => item.node.id === selected)) / SEARCH_PAGE_SIZE);
+  renderOutline();
+  const row = [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === selected);
+  if (focus) row?.focus({ preventScroll: true });
+  row?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
 function renderOutline() {
   if (!state.document || $('outline').hidden) return;
-  const filters = currentSearchFilters('outline'), filterStamp = JSON.stringify([referenceJourney(), filters]);
+  const { entries: matches, filtered, filters } = outlineEntries(), filterStamp = JSON.stringify([referenceJourney(), filters]);
   if (outlineFilterStamp !== filterStamp) { outlinePage = 0; outlineFilterStamp = filterStamp; }
-  const draft = n => drafts.get(n.id) ?? draftClient.entries.get(n.id)?.conflict?.text ?? null;
-  const stamp = JSON.stringify([filterStamp, outlinePage, state.document.nodes.map(n => [n.id, n.parentId, n.question, n.answer, n.category, n.answerState, n.review, !!n.research, n.revisit, n.importance, filters.draftText ? draft(n) : typeof draft(n) === 'string', collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
+  outlinePage = Math.min(outlinePage, Math.max(0, Math.ceil(matches.length / SEARCH_PAGE_SIZE) - 1));
+  const stamp = JSON.stringify([filterStamp, outlinePage, selected, matches.map(({ node: n, parent, depth, snippet, hasDraft }) => [n.id, n.question, n.category, nodeStatus(n), n.review, !!n.research, n.revisit, n.importance, parent, depth, snippet, hasDraft, collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
   if ($('outline-list').renderStamp === stamp) return;
   $('outline-list').renderStamp = stamp;
   const scroll = $('outline-list').scrollTop;
   const focused = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
   const focusedBranch = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.branchId : null;
-  const matches = state.document.nodes.flatMap(n => { const match = matchSearch(n, filters, { draft: draft(n) }); return match ? [{ node: n, ...match }] : []; });
-  outlinePage = Math.min(outlinePage, Math.max(0, Math.ceil(matches.length / SEARCH_PAGE_SIZE) - 1));
-  const page = matches.slice(outlinePage * SEARCH_PAGE_SIZE, (outlinePage + 1) * SEARCH_PAGE_SIZE), nodes = page.map(item => item.node);
-  $('outline-count').textContent = `${matches.length} matching nodes${matches.length ? `; showing ${outlinePage * SEARCH_PAGE_SIZE + 1}–${outlinePage * SEARCH_PAGE_SIZE + page.length}` : '. No nodes match these filters.'}`;
+  const page = matches.slice(outlinePage * SEARCH_PAGE_SIZE, (outlinePage + 1) * SEARCH_PAGE_SIZE);
+  $('outline-mode-hint').textContent = filtered ? 'Filtered results across the full journey, including folded branches. Levels and parents show original ancestry.' : 'Journey hierarchy. Fold branches to hide descendants. Search includes folded nodes. The selected editor remains available even when its row is hidden.';
+  $('outline-count').textContent = `${matches.length} matching nodes${matches.length ? `; showing ${outlinePage * SEARCH_PAGE_SIZE + 1}\u2013${outlinePage * SEARCH_PAGE_SIZE + page.length}` : '. No nodes match these filters.'}`;
   $('outline-previous').disabled = outlinePage === 0; $('outline-next').disabled = (outlinePage + 1) * SEARCH_PAGE_SIZE >= matches.length;
-  $('outline-list').replaceChildren(...nodes.map((n, index) => el('div', { class: 'outline-row' },
-    button([n.question, el('small', {}, `${n.category} · ${nodeStatus(n)}${n.review ? '; needs review' : ''}${collapsed.has(n.id) ? ` · ${hiddenSummary(n.id)}` : ''}${n.revisit ? ` · Reminder: ${revisitLabel(n)}` : ''}`), ...(isQuestion(n) ? [importanceBadge(n)] : [])], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id }),
-    el('small', { class: 'search-snippet' }, page[index].snippet), branchButton(n))));
-  if (focused) [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
+  $('outline-list').replaceChildren(...page.map(item => {
+    const n = item.node;
+    return el('div', { class: 'outline-row', role: 'listitem', style: `--depth:${filtered ? 0 : Math.min(item.depth, 4)}`, 'data-depth': item.depth },
+      button([n.question, el('small', {}, `Level ${item.depth + 1}${item.parent ? ` \u00b7 Parent: ${item.parent}` : ' \u00b7 Journey root'}`), el('small', {}, `${n.category} \u00b7 ${nodeStatus(n)}${n.review ? '; needs review' : ''}${n.research ? ' \u00b7 Research available' : ''}${collapsed.has(n.id) ? ` \u00b7 ${hiddenSummary(n.id)}` : ''}${n.revisit ? ` \u00b7 Reminder: ${revisitLabel(n)}` : ''}`), ...(isQuestion(n) ? [importanceBadge(n)] : [])], () => select(n.id, { outlineRow: true }), { 'data-node-id': n.id, 'aria-current': String(n.id === selected) }),
+      ...(filtered ? [el('small', { class: 'search-snippet' }, item.snippet)] : []), branchButton(n));
+  }));
   $('outline-list').scrollTop = scroll;
-  if (focusedBranch) [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === focusedBranch)?.focus({ preventScroll: true });
+  if (focused || focusedBranch) {
+    const row = focused ? [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === focused) : [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === focusedBranch);
+    const target = row ?? $('outline-selected');
+    target.focus({ preventScroll: true });
+    if (!row) target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
 }
+
 let diagnosticsEpoch = 0, diagnosticsAbort = null;
 function closeDiagnostics() {
   diagnosticsEpoch++; diagnosticsAbort?.abort(); diagnosticsAbort = null;
@@ -2287,10 +2357,12 @@ $('finish').addEventListener('click', async () => {
 $('save-file').addEventListener('click', () => { notice('This download contains saved answers and states only. Local answer drafts are not included.'); });
 $('close-export').addEventListener('click', () => { visualExportEpoch++; invalidateViewer(); viewerTarget = null; $('export-dialog').close(); $('visual-export-open').focus(); });
 $('export-dialog').addEventListener('cancel', () => { visualExportEpoch++; invalidateViewer(); viewerTarget = null; });
-$('outline-toggle').addEventListener('click', () => { $('outline').hidden = !$('outline').hidden; $('outline-toggle').setAttribute('aria-expanded', String(!$('outline').hidden)); if (!$('outline').hidden) { renderOutline(); $('search').focus(); } });
+$('outline-toggle').addEventListener('pointerdown', event => { if ($('node-workspace').contains(document.activeElement)) event.preventDefault(); });
+$('outline-toggle').addEventListener('click', () => setOutlineMode(!outlineMode));
+$('outline-selected').addEventListener('click', () => revealOutlineSelection());
 $('outline').addEventListener('keydown', event => {
   if (event.key !== 'Escape' || event.isComposing) return;
-  event.preventDefault(); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); $('outline-toggle').focus({ preventScroll: true });
+  event.preventDefault(); setOutlineMode(false); $('outline-toggle').focus({ preventScroll: true });
 });
 $('search').addEventListener('input', renderOutline);
 $('revisit-filter').addEventListener('change', renderOutline);
@@ -2311,7 +2383,7 @@ function endDrag(event) {
   if ($('map').hasPointerCapture(id)) $('map').releasePointerCapture(id);
 }
 $('map').addEventListener('pointerdown', event => {
-  if (drag || event.isPrimary === false || ![0, 1].includes(event.button)) return;
+  if (outlineMode || drag || event.isPrimary === false || ![0, 1].includes(event.button)) return;
   suppressClick = false;
   const card = event.target.closest('.node'), control = event.target.closest('button,a,input,textarea,select,summary');
   if (event.button === 0 && ((control && control !== card) || (event.target.closest('.expanded-node') && !event.target.closest('.node-head')))) return;
@@ -2350,7 +2422,7 @@ $('node-workspace').addEventListener('compositionend', () => {
   renderCleanup();
 });
 $('map').addEventListener('keydown', event => {
-  if (event.isComposing || event.defaultPrevented || event.target.matches('select')) return;
+  if (outlineMode || event.isComposing || event.defaultPrevented || event.target.matches('select')) return;
   if (event.key === 'Escape' && expanded) { event.preventDefault(); collapseNode(); return; }
   if (event.target !== $('map')) return;
   const direction = { ArrowLeft: [40, 0], ArrowRight: [-40, 0], ArrowUp: [0, 40], ArrowDown: [0, -40] }[event.key];
@@ -2362,10 +2434,11 @@ $('map').addEventListener('keydown', event => {
   }
 });
 $('map').addEventListener('wheel', event => {
-  navigation.wheel(event, $('map').getBoundingClientRect());
+  if (!outlineMode) navigation.wheel(event, $('map').getBoundingClientRect());
 }, { passive: false });
 window.addEventListener('beforeunload', event => { if (draftClient.pending()) { void draftClient.flush(true).catch(() => {}); event.preventDefault(); event.returnValue = ''; } });
 const mapObserver = new ResizeObserver(() => {
+  if (outlineMode) return;
   const rect = $('map').getBoundingClientRect();
   if (!state.document || !rect.width || !rect.height) return;
   if (firstFit) { viewportSize = { width: rect.width, height: rect.height }; refreshScene(null); expanded ? centerSelected() : fit(); firstFit = false; return; }

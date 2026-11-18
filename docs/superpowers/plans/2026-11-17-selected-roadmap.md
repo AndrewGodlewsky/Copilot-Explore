@@ -1341,6 +1341,28 @@ Current journey search uses the shared matcher; saved-library search uses the pu
 
 Query/scope/page/close/pagehide and identity changes invalidate results and pending flush activations. Search is debounced, single-flight, latest-request-only. Library activation invokes existing switchJourney with a post-flush identity/revision/request/eligibility predicate, followed by existing locked source validation; successful deliberate dispatch selects its validated result once. Command targets are looked up again at activation. Modal keyboard selection/Enter/Escape/Tab and fallback focus do not rebuild the editor. Opening explicitly cancels dictation and late audio cannot move to the query. Actual HTTP/jsdom regression coverage retains drafts, state, reminder conflicts/orphans, IME/editor identity, stale sources, pending/preview safety and repeated lifetimes. No host integration changes or installed-SDK fixture are anticipated.
 
+Published task 48: **v0.1.58**, `7a9b9ee`, required checks recorded in the task report; independent review approved and remote main verified.
+
+## Task 49: Work fully in an optional Outline view (#18 / original20)
+
+Read issue-20.md, task-49-design-notes.md, AGENTS.md and current stable-editor/search/voice contracts. BASE is `7a9b9eea9200c343094edb7b4e32f1f8e6303c39`; ship version **0.1.59**. Reconcile the published interfaces against the current implementation before editing. Propose concrete bounds, ownership, freshness and verification seams before broad edits; record the accepted contract in this task and its brief.
+
+- Extend the existing navigator into an optional full Outline working view with answer, research, status, importance and fold parity. Preserve the expanding-node map as the other view; do not reintroduce a mandatory detached question sidebar.
+- Share the selected-node editor/action/controller/draft implementation. Avoid duplicate forms, independent dirty copies, repeated SDK pathways or divergent answer semantics. Define editor hosting and mode-switch ownership before implementation.
+- Switch modes without losing text/state/caret/disclosures or source identity. During active dictation, preserve its exact lifecycle or require explicit Stop/Cancel; never silently move late audio to another node. Research may continue with the same captured source contract.
+- Provide semantic keyboard-accessible hierarchy, integrated search/filters, manageable indentation for deep maps and usable narrow layouts. If rows are culled, retain an accessible route to every logical node and mount/reveal before focus. No document revision/history entry for view changes.
+- Preserve stable editor DOM where identity is unchanged, bounded listeners/caches, current private helper/proposal state, source reveal and removed-node handling. Repeated mode changes must not multiply actions or hidden Outline work.
+- Test map/Outline action parity, repeated switching, active composition/dictation/research, folds/filters, hidden/removed nodes, large/deep maps, focus restoration and privacy through actual HTTP/jsdom. Native readability/input quality remain manual. Run npm test/check/package and relevant benchmark counters without changing comparison procedures silently.
+- Synchronize patch metadata/README/release note, self-review and commit; no nested agents, publication, issue closure or native UI automation. Write task-49-report.md with shared editor/mode/lifecycle contracts, evidence, SHA and pending checks. Controller independently reviews and publishes.
+
+### Accepted Task49 contract
+
+Page-local optional Outline mode keeps the identical editor and map/world ancestors, with CSS neutralizing transform, placement and clipping. A pure toggle preserves camera, zoom, drafts, disclosures and selection; no duplicate form or document edit. Pointer activation preserves editor focus, caret, composition and active voice. Keyboard focus leaving the editor retains the existing cancellation boundary and late-audio rejection; native IME/mic behavior remains manual. Research and private helper/proposal state keep their source ownership.
+
+Unfiltered Outline uses iterative depth-first hierarchy respecting folds, native list/buttons with true level and parent context, and indentation capped for narrow panes. Active filters explicitly show flat logical matches ignoring folds. Both use exact counts and 200-row pages. Selected editor remains available when its row is excluded. Explicit Show selected resets filters, unfolds ancestors, mounts the page and reveals/focuses the row; explicit validated external navigation may do likewise. Passive updates and mode toggles preserve filters. Ancestor folding keeps existing draft capture/selection behavior; removed source recovery remains intact.
+
+Minimap suspension retains visibility preference, cancels captured gestures/cache once and skips hidden work. Hidden map rendering, geometry, keyboard/pointer and resize pathways are guarded. Returning restores current geometry and camera. Palette uses live Outline/Map labels and mounted-control eligibility. HTTP/jsdom tests cover parity, repeated transitions, composition/voice/research/private state, paging/folds/deep sources/removal and counters without claiming native rendering. Existing comparison procedures stay fixed; changed navigator expectations are explicitly identified. No SDK/host wiring change is planned.
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

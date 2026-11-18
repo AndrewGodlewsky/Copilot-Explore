@@ -28,7 +28,7 @@ export function overviewPaths(positions, projection, selected, collapsed, focusI
 
 export function attachMinimap({ document, window, scene, navigate, leaveEditor }) {
   const $ = id => document.getElementById(id), root = $('minimap'), svg = $('minimap-map'), toggle = $('minimap-toggle');
-  let cached = null, projection = null, pointer = null, disposed = false;
+  let cached = null, projection = null, pointer = null, disposed = false, suspended = false, wanted = false;
   const listeners = [];
   const on = (target, type, fn) => { target.addEventListener(type, fn); listeners.push(() => target.removeEventListener(type, fn)); };
   function cancel(event) {
@@ -43,7 +43,7 @@ export function attachMinimap({ document, window, scene, navigate, leaveEditor }
     $('minimap-status').textContent = '';
   }
   function update() {
-    if (disposed || root.hidden) return;
+    if (disposed || suspended || root.hidden) return;
     const current = scene(), rect = svg.getBoundingClientRect();
     if (!current?.geometry || !rect.width || !rect.height) { reset(); return; }
     const { geometry, selected, collapsed, focusId, view, size } = current;
@@ -59,14 +59,14 @@ export function attachMinimap({ document, window, scene, navigate, leaveEditor }
     }
     for (const [name, value] of Object.entries(projection.viewport(view, size))) $('minimap-viewport').setAttribute(name, value);
   }
-  function visible(show) {
+  function visible(show, refresh = true) {
     if (disposed) return;
-    root.hidden = !show; toggle.setAttribute('aria-expanded', String(show));
+    wanted = show; root.hidden = !show || suspended; toggle.setAttribute('aria-expanded', String(show));
     toggle.textContent = show ? 'Hide minimap' : 'Show minimap';
-    root.parentElement.classList.toggle('minimap-visible', show);
-    reset(); if (show) update();
+    root.parentElement.classList.toggle('minimap-visible', show && !suspended);
+    reset(); if (show && !suspended && refresh) update();
   }
-  function current() { return !disposed && !root.hidden && projection && scene(); }
+  function current() { return !disposed && !suspended && !root.hidden && projection && scene(); }
   function moveTo(event) {
     if (!current()) return;
     const rect = svg.getBoundingClientRect();
@@ -75,7 +75,7 @@ export function attachMinimap({ document, window, scene, navigate, leaveEditor }
     navigate(p);
   }
   on(toggle, 'focus', leaveEditor);
-  on(toggle, 'click', () => { leaveEditor(); visible(root.hidden); });
+  on(toggle, 'click', () => { leaveEditor(); visible(!wanted); });
   on(svg, 'focus', leaveEditor);
   on(svg, 'blur', () => cancel());
   on(svg, 'pointerdown', event => {
@@ -111,5 +111,5 @@ export function attachMinimap({ document, window, scene, navigate, leaveEditor }
       { x: (bounds.left + bounds.right) / 2, y: (bounds.top + bounds.bottom) / 2 });
   });
   const observer = new window.ResizeObserver(update); observer.observe(svg);
-  return { update, reset, dispose() { disposed = true; reset(); observer.disconnect(); for (const remove of listeners) remove(); } };
+  return { update, reset, suspend(value) { if (suspended === value) return; suspended = value; visible(wanted, false); }, dispose() { disposed = true; reset(); observer.disconnect(); for (const remove of listeners) remove(); } };
 }

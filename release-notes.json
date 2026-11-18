@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.59",
+    "summary": "Work in an optional Outline view using the same answer, research and status editor. Browse folded hierarchies or search all nodes in bounded pages, reveal selected sources, and return to the expanding map without losing drafts or camera. Minimap work pauses while hidden; pointer view switches retain active dictation."
+  },
+  {
     "version": "0.1.58",
     "summary": "Open Commands for existing actions and bounded local journey or node search. Keyboard navigation, private draft opt-in and an optional conflict-aware shortcut preserve your editor. Helper actions keep their review steps; stale results cannot bypass draft or source checks. Matching snippets now retain hits after long whitespace."
   },

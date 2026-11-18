@@ -603,7 +603,7 @@ function apply(next, reset = false) {
   const compactFocused = $('nodes').contains(document.activeElement);
   const previousSelection = selected;
   const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
-  if (briefOperation === 'adrDraft' && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) { adrDraftReview.close(); adrDraftReview.error = 'Saved inputs or scenario changed. Review current ADR input before generating.'; renderAdrDraftReview(); }
+  if (briefOperation === 'adrDraft' && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) { adrDraftReview.close(); adrDraftReview.error = 'Saved inputs or scenario changed. Review current ADR input before generating.'; invalidateAdrReadiness('Saved inputs changed. Check readiness again; manual wording is retained.'); renderAdrDraftReview(); }
   if ($('adr-questions-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) invalidateAdrQuestions('Saved inputs or scenario changed. Refresh and review again.');
   if (adrFormat && (adrFormat.value || adrFormat.action === 'prepare') && !changedDocument && JSON.stringify(state.document) !== JSON.stringify(next.document)) invalidateAdrFormat('Saved journey changed. Review the format again before saving.');
   if ($('adr-scope-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) {
@@ -3547,8 +3547,85 @@ const briefRoute = () => briefOperation === 'adrDraft' ? 'adr-draft' : briefOper
 const briefReview = () => briefOperation === 'adrDraft' ? adrDraftReview : handoffReview;
 const briefReviewReady = () => briefOperation === 'brief' || !!briefReview().value && !briefReview().loading && Date.now() < briefReview().value.expiresAt;
 let adrDraftProposal = null, adrDraftTitleEdit = null, adrDraftSavePending = false;
+let adrReadinessReport = null, adrReadinessBase = null, adrReadinessKey = null, adrReadinessEpoch = 0, adrReadinessFlight = null, adrReadinessMessage = '', adrReadinessStamp = '', adrReadinessAcks = new Set();
 let briefView = null, briefId = null, briefJourney = null, briefEpoch = 0, briefBusy = false, briefAbort = null, briefStamp = '', briefEdits = new Map();
+const adrWordingEdits = () => adrDraftProposal ? { title: adrDraftTitleEdit ?? adrDraftProposal.title, statements: [...briefEdits].map(([id, text]) => ({ id, text })) } : null;
+const adrWordingKey = () => JSON.stringify(adrWordingEdits());
+const currentAdrReadiness = () => adrReadinessReport && !adrReadinessFlight && adrReadinessKey === adrWordingKey();
+function invalidateAdrReadiness(message = 'Wording changed. Check readiness again before accepting.') {
+  adrReadinessEpoch++; adrReadinessFlight?.abort(); adrReadinessFlight = null;
+  adrReadinessReport = null; adrReadinessKey = null; adrReadinessAcks.clear(); adrReadinessMessage = message; adrReadinessStamp = '';
+  renderAdrReadiness();
+}
+function updateAdrReadiness(report) {
+  if (briefOperation !== 'adrDraft') return;
+  if ((report?.digest ?? null) !== adrReadinessBase) invalidateAdrReadiness('Draft inputs changed. Check edited wording again; manual edits are retained.');
+  adrReadinessBase = report?.digest ?? null;
+  if (report && !adrReadinessFlight && adrDraftTitleEdit === null && !briefEdits.size) {
+    if (adrReadinessReport?.digest !== report.digest) { adrReadinessAcks = new Set(report.acknowledged); adrReadinessStamp = ''; }
+    adrReadinessReport = report; adrReadinessKey = adrWordingKey(); adrReadinessMessage = '';
+  }
+  renderAdrReadiness();
+}
+function renderAdrReadiness() {
+  const adr = briefOperation === 'adrDraft', valid = !!currentAdrReadiness(), report = valid ? adrReadinessReport : null, editable = !!adrDraftProposal;
+  $('adr-readiness').hidden = !adr; $('adr-readiness').dataset.current = String(adr && valid);
+  const locked = briefBusy || adrDraftSavePending || !!adrReadinessFlight || briefView?.status === 'pending';
+  $('check-adr-readiness').disabled = !adr || locked || !(adrDraftProposal || briefView?.accepted);
+  if (adr) $('accept-brief').disabled = locked || briefView?.status !== 'proposal' || !valid || !!report.blockers;
+  const receipt = !editable ? briefView?.accepted?.readiness : null;
+  $('adr-readiness-status').textContent = adrReadinessFlight ? 'Checking exact wording and current saved sources…' : report ? `${report.blockers} correctness blockers; ${report.advisories} advisory gaps. ${report.blockers ? 'Stale or invalid references prevent acceptance.' : 'Proposed wording may retain honest unknowns; acknowledgments are optional.'}${receipt ? receipt.digest === report.digest ? ` Saved judgments checked against this wording and input (${receipt.reviewedAt}).` : ' Saved acknowledgment is historical: wording or inputs changed.' : ''}` : adrReadinessMessage || 'Readiness is unavailable until a draft is shown.';
+  const stamp = JSON.stringify([report?.digest, editable, receipt?.digest]);
+  if (stamp !== adrReadinessStamp) {
+    adrReadinessStamp = stamp; $('adr-readiness-items').replaceChildren();
+    for (const severity of ['blocker', 'advisory']) {
+      const rows = report?.items.filter(item => item.severity === severity) ?? []; if (!rows.length) continue;
+      const list = el('ul'); $('adr-readiness-items').append(el('h4', {}, severity === 'blocker' ? 'Correctness blockers' : 'Advisory gaps'), list);
+      for (const item of rows) {
+        const row = el('li', { 'data-adr-gap': item.code }, el('p', {}, item.reason)), epoch = adrReadinessEpoch;
+        const current = () => epoch === adrReadinessEpoch && adrReadinessReport?.digest === report.digest && row.isConnected && briefOperation === 'adrDraft' && $('brief-dialog').open;
+        const target = item.target;
+        if (target.kind === 'node') {
+          const node = state.document?.nodes.find(node => node.id === target.id);
+          const captured = (adrDraftProposal ?? briefView?.accepted)?.dependencies.records.find(source => source.id === target.id);
+          if (node) row.append(button(`Open saved question: ${node.question}`, () => { if (!current() || briefBusy || adrDraftSavePending) return; hideBrief(); select(target.id); }));
+          else row.append(el('p', { class: 'quiet' }, `Source unavailable: ${captured?.question ?? target.id}`));
+        } else if (target.kind === 'section') row.append(button('Go to draft section', () => {
+          if (!current() || adrDraftSavePending) return;
+          const area = [...$('brief-content').querySelectorAll('[data-adr-section]')].find(area => area.dataset.adrSection === target.section);
+          const input = target.statementId ? [...area?.querySelectorAll('[data-brief-statement]') ?? []].find(input => input.dataset.briefStatement === target.statementId) : area?.querySelector('textarea');
+          (input ?? area)?.focus(); (input ?? area)?.scrollIntoView({ block: 'nearest' });
+        }));
+        else if (['adr-scope-open', 'adr-format-open'].includes(target.id)) row.append(button(target.id === 'adr-scope-open' ? 'Open ADR scope' : 'Open ADR format', () => { if (!current() || adrDraftSavePending) return; hideBrief(); $(target.id).click(); }));
+        if (severity === 'advisory' && editable) {
+          const input = el('input', { type: 'checkbox' }); input.checked = adrReadinessAcks.has(item.id);
+          input.addEventListener('change', () => { if (!current() || briefBusy || adrDraftSavePending || adrReadinessFlight) return; input.checked ? adrReadinessAcks.add(item.id) : adrReadinessAcks.delete(item.id); });
+          row.append(el('label', {}, input, ' Acknowledge this gap for this wording and input'));
+        } else if (report.acknowledged.includes(item.id)) row.append(el('p', { class: 'quiet' }, 'Recorded acknowledgment; the source facts and gap are unchanged.'));
+        list.append(row);
+      }
+    }
+  }
+  for (const input of $('adr-readiness-items').querySelectorAll('input')) input.disabled = locked;
+}
+async function checkAdrReadiness() {
+  if (briefOperation !== 'adrDraft' || !briefId || briefBusy || adrDraftSavePending || adrReadinessFlight || briefView?.status === 'pending' || closed || suspended || !$('brief-dialog').open) return;
+  invalidateAdrReadiness();
+  const epoch = adrReadinessEpoch, brief = briefEpoch, id = briefId, journey = briefJourney, edits = adrWordingEdits(), key = JSON.stringify(edits), base = adrReadinessBase;
+  const abort = new AbortController(); adrReadinessFlight = abort;
+  const current = () => epoch === adrReadinessEpoch && brief === briefEpoch && id === briefId && base === adrReadinessBase && key === adrWordingKey() && !closed && !suspended && $('brief-dialog').open;
+  const timer = setTimeout(() => abort.abort(), 5000); renderAdrReadiness();
+  try {
+    const response = await fetch('api/adr-draft', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'readiness', id, journey, edits }) });
+    const result = await response.json(); if (!current()) return;
+    if (!response.ok) throw Error(result.error); if (result.id !== id) throw Error('Readiness response did not match this draft.');
+    adrReadinessReport = result.readiness; adrReadinessKey = key; adrReadinessAcks = new Set(result.readiness.acknowledged); adrReadinessMessage = ''; adrReadinessStamp = '';
+  } catch (error) { if (current()) adrReadinessMessage = `${error.message} Check again before accepting.`; }
+  finally { clearTimeout(timer); if (current()) { adrReadinessFlight = null; renderAdrReadiness(); } }
+}
+$('check-adr-readiness').addEventListener('click', () => void checkAdrReadiness());
 function closeBrief() {
+  invalidateAdrReadiness(''); adrReadinessBase = null;
   briefEpoch++; briefAbort?.abort(); briefAbort = null; handoffReview.close(); adrDraftReview.close();
   if (briefId && briefJourney) void fetch(`api/${briefRoute()}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'discard', id: briefId, journey: briefJourney }) }).catch(() => {});
   briefId = null; briefJourney = null; briefView = null; briefStamp = ''; briefEdits.clear(); briefBusy = false;
@@ -3558,12 +3635,16 @@ function closeBrief() {
 }
 async function requestBrief(action) {
   if (briefOperation === 'adrDraft' && adrDraftSavePending && ['start', 'accept'].includes(action)) return;
+  if (briefOperation === 'adrDraft' && action === 'accept' && (!currentAdrReadiness() || adrReadinessReport.blockers)) return;
   if (action === 'start' && !briefReviewReady()) { $(briefOperation === 'adrDraft' ? 'adr-draft-review-status' : 'handoff-preview-status').textContent = 'Review current saved input again before starting.'; return; }
   if (!briefId || briefBusy || closed || suspended || action === 'accept' && busy) return;
   const writesMap = action === 'accept';
+  const readiness = briefOperation === 'adrDraft' && writesMap ? { digest: adrReadinessReport.digest, acknowledged: [...adrReadinessAcks] } : null;
+  if (briefOperation === 'adrDraft' && ['start', 'accept', 'discard'].includes(action)) invalidateAdrReadiness('Check the resulting draft before accepting.');
   if (writesMap) { busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); }
   const mapEpoch = actionEpoch;
   const epoch = briefEpoch, id = briefId, journey = briefJourney, abort = new AbortController(); briefAbort = abort;
+  const readinessEpoch = adrReadinessEpoch;
   const timer = setTimeout(() => abort.abort(), 5000);
   briefBusy = true;
   if (briefOperation === 'adrDraft' && writesMap) {
@@ -3574,11 +3655,12 @@ async function requestBrief(action) {
   for (const name of ['generate-brief', 'accept-brief', 'discard-brief']) $(name).disabled = true;
   try {
     const response = await fetch(`api/${briefRoute()}`, { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
-      body: JSON.stringify({ action, id, journey, ...(briefOperation !== 'brief' && action === 'start' ? { token: briefReview().value.token } : {}), ...(action === 'accept' ? { revision: state.document.revision, edits: briefOperation === 'adrDraft' ? { title: adrDraftTitleEdit ?? adrDraftProposal.title, statements: [...briefEdits].map(([id, text]) => ({ id, text })) } : [...briefEdits].map(([id, text]) => ({ id, text })) } : {}) }) });
+      body: JSON.stringify({ action, id, journey, ...(briefOperation !== 'brief' && action === 'start' ? { token: briefReview().value.token } : {}), ...(action === 'accept' ? { revision: state.document.revision, edits: briefOperation === 'adrDraft' ? adrWordingEdits() : [...briefEdits].map(([id, text]) => ({ id, text })), ...(readiness ? { readiness } : {}) } : {}) }) });
     const result = await response.json();
     if (epoch !== briefEpoch || id !== briefId || closed || writesMap && mapEpoch !== actionEpoch) return;
     if (!response.ok) throw new Error(result.error);
     if (result.id !== id) throw new Error('Decision brief response did not match this request.');
+    const readinessCurrent = readinessEpoch === adrReadinessEpoch && !suspended && $('brief-dialog').open;
     if (result.snapshot) apply(result.snapshot);
     if (briefOperation === 'adrDraft') {
       adrDraftSavePending = false;
@@ -3591,6 +3673,7 @@ async function requestBrief(action) {
     if (briefOperation === 'adrDraft' && action === 'start') { adrDraftReview.close(); renderAdrDraftReview(); }
     if (action === 'discard') { briefStamp = ''; briefEdits.clear(); }
     renderBrief();
+    if (briefOperation === 'adrDraft' && readinessCurrent) updateAdrReadiness(result.readiness);
   } catch (error) {
     if (epoch === briefEpoch && !closed) { $('brief-status').textContent = `${error.message} Brief freshness is unknown until the saved journey can be checked.${adrDraftSavePending ? ' ADR wording remains read-only and copyable until its save outcome is checked; use Refresh to check again.' : ''}`; $('accept-brief').hidden = true; }
   } finally { clearTimeout(timer); if (writesMap && mapEpoch === actionEpoch) busy = false; if (epoch === briefEpoch) { briefBusy = false; $('generate-brief').disabled = briefView?.status === 'pending' || !briefReviewReady(); $('accept-brief').disabled = briefOperation === 'adrDraft' && (adrDraftSavePending || briefView?.status !== 'proposal'); $('discard-brief').disabled = false; renderAdrDraftReview(); } }
@@ -3612,24 +3695,26 @@ function renderBrief() {
   const stamp = JSON.stringify([proposal ? briefId : 'accepted', brief, adr ? [] : unavailable, adr ? [] : brief?.dependencies.records.filter(source => !state.document.nodes.some(node => node.id === source.id)).map(source => source.id)]);
   if (stamp === briefStamp) return;
   briefStamp = stamp; briefEdits.clear(); adrDraftTitleEdit = null; $('brief-content').replaceChildren();
+  if (adr) invalidateAdrReadiness('Check the current draft wording.');
   if (!brief) return;
   const titles = { goal: brief.format === 'prompt' ? 'Instructions to the implementer' : 'Goal', decisions: brief.format === 'specification' ? 'Selected requirements' : 'Decisions and rationale', constraints: 'Constraints', assumptions: 'Assumptions', unresolved: 'Unresolved questions and conflicts', nextSteps: brief.format === 'tasks' ? 'Proposed tasks (in order)' : brief.format === 'plan' ? 'Proposed sequence' : brief.format === 'specification' ? 'Suggested validation' : 'Next steps' };
   if (adr) {
     Object.assign(titles, { context: 'Context', drivers: 'Decision drivers', alternatives: 'Considered options', outcome: 'Decision and rationale', consequences: 'Consequences', confirmation: 'Confirmation', optionDetails: 'Pros and cons of options' }, Object.fromEntries(brief.format.layout.sections.map(section => [section.key, section.label])));
     if (proposal) {
       const input = el('input', { id: 'adr-draft-title', type: 'text', maxlength: '200' }); input.value = brief.title;
-      input.addEventListener('input', () => { adrDraftTitleEdit = input.value; });
+      input.addEventListener('input', () => { adrDraftTitleEdit = input.value; invalidateAdrReadiness(); });
       $('brief-content').append(el('label', { for: 'adr-draft-title' }, 'Draft title'), input);
     } else $('brief-content').append(el('h3', {}, brief.title), el('p', { class: 'quiet' }, brief.titleEdited ? 'Title edited by the user.' : 'Title is AI synthesis reviewed by the user.'));
   }
   for (const [key, statements] of Object.entries(brief.sections)) {
     const area = el('section', {}, el('h3', {}, titles[key]));
+    if (adr) { area.dataset.adrSection = key; area.tabIndex = -1; }
     if (!statements.length) area.append(el('p', { class: 'quiet' }, adr ? brief.format.layout.sections.some(section => section.key === key) ? 'Unspecified in this draft.' : 'Not in the selected template; remains unspecified.' : 'Unspecified in this brief.'));
     for (const statement of statements) {
       const label = el('p', { class: 'quiet' }, `${statement.certainty} · ${statement.edited ? 'User edited' : 'AI synthesis'}`);
       if (proposal) {
         const input = el('textarea', { rows: '3', 'aria-label': `${titles[key]} statement`, 'data-brief-statement': statement.id }); input.value = statement.text;
-        input.addEventListener('input', () => { briefEdits.set(statement.id, input.value); label.textContent = `${statement.certainty} · ${input.value === statement.text ? 'AI synthesis' : 'User edited; original source links not reverified'}`; });
+        input.addEventListener('input', () => { briefEdits.set(statement.id, input.value); label.textContent = `${statement.certainty} · ${input.value === statement.text ? 'AI synthesis' : 'User edited; original source links not reverified'}`; if (adr) invalidateAdrReadiness(); });
         area.append(label, input);
       } else area.append(label, el('p', { class: 'brief-text' }, statement.text));
       for (const ref of statement.sources) {
@@ -3661,10 +3746,10 @@ $('generate-brief').addEventListener('click', () => { voice.cancel(); void reque
 $('discard-brief').addEventListener('click', () => void requestBrief('discard'));
 $('accept-brief').addEventListener('click', () => void requestBrief('accept'));
 $('refresh-brief').addEventListener('click', async () => { if (await api('refresh-answer')) await requestBrief('poll'); });
-function hideBrief() { if (briefOperation === 'adrDraft') adrDraftReview.close(); $('brief-dialog').close(); $(briefOperation === 'adrDraft' ? 'adr-draft-open' : briefOperation === 'handoff' ? 'implementation-handoff' : 'decision-brief').focus(); }
+function hideBrief() { if (briefOperation === 'adrDraft') { adrDraftReview.close(); invalidateAdrReadiness('Recheck readiness when returning to edited wording.'); } $('brief-dialog').close(); $(briefOperation === 'adrDraft' ? 'adr-draft-open' : briefOperation === 'handoff' ? 'implementation-handoff' : 'decision-brief').focus(); }
 $('close-brief').addEventListener('click', hideBrief);
 $('brief-dialog').addEventListener('cancel', event => { if (briefOperation === 'adrDraft') { event.preventDefault(); hideBrief(); } });
-$('brief-dialog').addEventListener('close', () => { if (briefOperation === 'adrDraft') adrDraftReview.close(); });
+$('brief-dialog').addEventListener('close', () => { if (briefOperation === 'adrDraft' && !$('brief-dialog').open) { adrDraftReview.close(); invalidateAdrReadiness('Recheck readiness when returning to edited wording.'); } });
 function configureBriefDialog() {
   const handoff = briefOperation === 'handoff';
   $('brief-title').textContent = handoff ? 'Reviewed implementation handoff' : 'Reviewed decision brief';
@@ -3676,6 +3761,7 @@ function configureBriefDialog() {
   $('export-brief').href = handoff ? 'handoff.md' : 'brief.md';
   $('copy-handoff').hidden = true;
   $('adr-draft-review').hidden = briefOperation !== 'adrDraft';
+  $('adr-readiness').hidden = briefOperation !== 'adrDraft';
   if (briefOperation === 'adrDraft') {
     $('brief-title').textContent = 'Proposed ADR draft';
     $('brief-description').textContent = 'Review the current saved ADR scope and template layout, then generate an optional draft with an isolated helper that has no tools. Missing reasons and alternatives remain unspecified. Edit the wording and explicitly accept it into this exploration. The decision stays proposed; this does not approve it or write a project file. Close hides the draft; Discard proposal / cancel stops it. Native SDK journals may retain inputs and output.';
@@ -3692,6 +3778,7 @@ function renderAdrDraftReview() {
   if (briefOperation === 'adrDraft') {
     $('generate-brief').disabled = briefBusy || adrDraftSavePending || briefView?.status === 'pending' || !briefReviewReady();
     for (const input of $('brief-content').querySelectorAll('#adr-draft-title, [data-brief-statement]')) input.readOnly = adrDraftSavePending;
+    renderAdrReadiness();
   }
 }
 $('adr-draft-open').addEventListener('click', () => {

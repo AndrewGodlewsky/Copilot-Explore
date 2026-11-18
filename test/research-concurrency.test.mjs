@@ -22,7 +22,7 @@ async function fixture(t) {
   const runs = [], e = await new Explorer({ file, send: async () => {}, researcher: { run(context, options) { const d = deferred(); runs.push({ ...d, context, ...options }); return d.promise; } } }).load();
   t.after(async () => { for (const run of runs) run.resolve(result); await e.close(); await rm(dir, { recursive: true, force: true }); });
   const command = (action, input = {}) => e.command(action, { revision: e.doc.revision, ...input });
-  const begin = async () => { await startResearch(e, { nodeId: doc.nodes[1].id }); await new Promise(setImmediate); };
+  const begin = async ({ queued = false } = {}) => { const started = runs.length; await startResearch(e, { nodeId: doc.nodes[1].id }); if (!queued) await waitFor(() => runs.length > started, 'Research fixture helper did not start'); };
   const finish = async () => { runs.at(-1).resolve(result); await Promise.all([...e.researchTasks]); };
   return { dir, file, doc, e, runs, command, begin, finish };
 }
@@ -110,7 +110,7 @@ test('already sent external decisions invalidate by ID while a newly answered br
 
 test('research replacement queues behind actual release and ignores old completion/error', async t => {
   const f = await fixture(t); await f.begin(); const old = f.runs[0];
-  await f.command('cancel'); await f.begin(); assert.equal(f.runs.length, 1);
+  await f.command('cancel'); await f.begin({ queued: true }); assert.equal(f.runs.length, 1);
   const replacement = f.e.pending.id; old.resolve(result); await waitFor(() => f.runs.length === 2);
   assert.equal(f.runs.length, 2); assert.equal(f.e.pending.id, replacement); assert.equal(f.e.doc.nodes[1].research, null);
   old.reject(Error('Duplicate late error')); await f.finish(); assert.deepEqual(f.e.doc.nodes[1].research, { ...result, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });
@@ -118,8 +118,10 @@ test('research replacement queues behind actual release and ignores old completi
 
 test('failed or unconfirmed research shutdown blocks queued and new work until true and explicit retry', async t => {
   for (const confirmation of [false, true]) {
-    const f = await fixture(t); await f.begin(); const old = f.runs[0], released = deferred();
-    await f.command('cancel'); await f.begin();
+    const f = await fixture(t), assertPolicy = f.e.assertScenarioPolicy.bind(f.e);
+    f.e.assertScenarioPolicy = async policy => { await new Promise(resolve => setTimeout(resolve, 10)); return assertPolicy(policy); };
+    await f.begin(); const old = f.runs[0], released = deferred();
+    await f.command('cancel'); await f.begin({ queued: true });
     const error = Object.assign(Error('Shutdown incomplete'), { releaseConfirmed: released.promise }); old.reject(error);
     await Promise.all([...f.e.researchTasks]); assert.equal(f.runs.length, 1); assert.match(f.e.error, /shutdown/);
     await assert.rejects(f.begin(), /shutdown/); released.resolve(confirmation); await new Promise(setImmediate);

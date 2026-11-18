@@ -34,6 +34,60 @@ async function fixture(t, libraryMode = false) {
 }
 const edits = { title: 'Edited wording λ', statements: [{ id: 'choice', text: '  Exact wording λ\r\nStill provisional.  ' }] };
 
+test('ADR readiness workflow reviews exact edited wording without inference and saves optional current judgments', async t => {
+  const f = await fixture(t); await f.generate();
+  const before = await readFile(f.file, 'utf8'), nodes = structuredClone(f.e.doc.nodes), drafts = await f.e.readDrafts(f.journey);
+  const initial = await f.action('poll'); assert.equal(initial.readiness.blockers, 0);
+  const checked = await f.post('api/adr-draft', { ...f.request, action: 'readiness', edits }); assert.equal(checked.status, 200);
+  const r = checked.value.readiness; assert.notEqual(r.digest, initial.readiness.digest); assert.ok(r.items.some(item => item.code === 'edited-statement'));
+  assert.equal(await readFile(f.file, 'utf8'), before); assert.equal(f.calls.length, 1);
+  const acknowledged = [r.items.find(item => item.code === 'missing-alternatives').id];
+  await f.action('accept', { revision: f.e.doc.revision, edits, readiness: { digest: r.digest, acknowledged } });
+  assert.equal(f.e.doc.adrDraft.status, 'proposed'); assert.deepEqual(f.e.doc.adrDraft.readiness.acknowledged, acknowledged); assert.equal(f.e.doc.adrDraft.readiness.digest, r.digest);
+  const saved = await f.action('readiness', { edits: null }); assert.deepEqual(saved.readiness.acknowledged, acknowledged); assert.equal(saved.readiness.digest, r.digest);
+  assert.deepEqual(f.e.doc.nodes, nodes); assert.deepEqual(await f.e.readDrafts(f.journey), drafts); assert.equal(f.calls.length, 1);
+});
+
+test('ADR readiness workflow rejects obsolete wording judgments, unknown fields and nonadvisory IDs without saving', async t => {
+  const f = await fixture(t); await f.generate(); const r = (await f.action('readiness', { edits })).readiness, before = await readFile(f.file, 'utf8');
+  for (const readiness of [{ digest: 'a'.repeat(64), acknowledged: [] }, { digest: r.digest, acknowledged: ['b'.repeat(64)] }, { digest: r.digest, acknowledged: [], approve: true }]) await assert.rejects(f.action('accept', { revision: f.e.doc.revision, edits, readiness }), /readiness|advisory/i);
+  await assert.rejects(f.action('accept', { revision: f.e.doc.revision, edits: { ...edits, title: 'Changed after review' }, readiness: { digest: r.digest, acknowledged: [] } }), /readiness changed/i);
+  await assert.rejects(f.action('readiness', { edits, revision: f.e.doc.revision }), /Invalid/);
+  await assert.rejects(f.action('readiness', { edits }, { ...f.request, id: randomUUID() }), /proposal|unavailable/i);
+  await assert.rejects(f.e.briefRequest({ ...f.request, action: 'readiness', edits }, 'brief'), /Invalid/);
+  assert.equal(await readFile(f.file, 'utf8'), before);
+  await f.action('accept', { revision: f.e.doc.revision, edits }); assert.deepEqual(f.e.doc.adrDraft.readiness.acknowledged, [], 'older callers are rechecked without mandatory acknowledgments');
+});
+
+test('ADR readiness workflow explains corrected live sources without rebasing stale captured wording', async t => {
+  const f = await fixture(t); await f.generate(); const before = structuredClone(f.e.briefWork.proposal);
+  const changed = structuredClone(f.e.doc); changed.nodes[1].answer = 'Now B'; changed.nodes[1].answerState = 'decided'; await f.e.save(changed);
+  const r = (await f.action('readiness', { edits })).readiness;
+  assert.ok(r.items.some(item => item.code === 'changed-source' && item.target.id === f.focal.id));
+  assert.equal(r.items.some(item => item.code === 'unresolved-source' && item.target.id === f.focal.id), false);
+  assert.deepEqual(f.e.briefWork.proposal, before); const view = await f.action('poll'); assert.equal(view.status, 'stale'); assert.ok(view.readiness.blockers);
+  await assert.rejects(f.action('accept', { revision: f.e.doc.revision, edits, readiness: { digest: r.digest, acknowledged: r.items.filter(item => item.severity === 'blocker').map(item => item.id) } }), /stale|blocker/i);
+  assert.equal(f.e.doc.adrDraft, undefined); assert.equal(f.calls.length, 1);
+});
+
+test('ADR readiness workflow rejects generated receipts and rechecks disk after asynchronous scenario validation', async t => {
+  const f = await fixture(t), originalHelper = f.e.briefHelper.run;
+  f.e.briefHelper.run = async p => ({ ...await originalHelper(p), readiness: { version: 1, digest: 'a'.repeat(64), reviewedAt: new Date().toISOString(), acknowledged: [] } });
+  await f.generate(); assert.equal((await f.action('poll')).status, 'error');
+  f.e.briefHelper.run = originalHelper; await f.generate();
+  const originalPolicy = f.e.scenarioPolicy.bind(f.e); let changed = false;
+  f.e.scenarioPolicy = async () => { const policy = await originalPolicy(); if (!changed) { changed = true; const disk = structuredClone(f.e.doc); disk.adrFormat.digits = 6; disk.revision++; await writeFile(f.file, JSON.stringify(disk)); } return policy; };
+  const r = (await f.action('readiness', { edits })).readiness; assert.ok(r.items.some(item => item.code === 'changed-format')); assert.ok(r.blockers);
+});
+
+test('ADR readiness final acceptance recomputes scenario after the last asynchronous policy check', async t => {
+  const f = await fixture(t); await f.generate(); const r = (await f.action('readiness', { edits })).readiness, before = await readFile(f.file, 'utf8');
+  const original = f.e.assertScenarioPolicy.bind(f.e); let checks = 0;
+  f.e.assertScenarioPolicy = async policy => { await original(policy); if (++checks === 2) { const current = await f.e.scenarioPolicy(); f.e.scenarioPolicy = async () => ({ ...current, label: { changed: 'during final await' } }); } };
+  await assert.rejects(f.action('accept', { revision: f.e.doc.revision, edits, readiness: { digest: r.digest, acknowledged: [] } }), /blocker|changed|stale/i);
+  assert.equal(checks, 2); assert.equal(await readFile(f.file, 'utf8'), before); assert.equal(f.e.doc.adrDraft, undefined);
+});
+
 test('ADR workflow reviews exact input, keeps proposals private and explicitly saves wording with history and drafts intact', async t => {
   const f = await fixture(t), before = await readFile(f.file, 'utf8'), drafts = await f.e.readDrafts(f.journey), p = await f.review();
   assert.equal(f.calls.length, 0); assert.doesNotMatch(p.prepared.prompt, /CANARY/); assert.equal(p.prepared.operation, 'adr-draft');

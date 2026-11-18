@@ -13,6 +13,7 @@ import { savedDigest } from './review-causes.mjs';
 import { captureAdrScope, adrScopeFreshness } from './adr-scope.mjs';
 import { prepareAdrQuestions, validateAdrQuestions } from './adr-questions.mjs';
 import { captureAdrDraft, validateAdrDraft, acceptAdrDraft, adrDraftFreshness } from './adr-draft.mjs';
+import { adrReadiness, captureAdrReadiness } from './adr-readiness.mjs';
 import { AdrFormatReview } from './adr-format-review.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
@@ -260,8 +261,8 @@ export class Explorer {
     const freshness = adr ? adrDraftFreshness : handoff ? handoffFreshness : briefFreshness, validate = adr ? validateAdrDraft : handoff ? validateHandoff : validateBrief, accept = adr ? acceptAdrDraft : handoff ? acceptHandoff : acceptBrief;
     return this.transact(async () => {
       const action = input?.action;
-      if (this.closed || !input || !['view', 'start', 'poll', 'discard', 'accept'].includes(action) ||
-        !['brief', 'handoff', 'adrDraft'].includes(operation) || Object.keys(input).sort().join(',') !== (action === 'accept' ? 'action,edits,id,journey,revision' : reviewed && action === 'start' ? 'action,id,journey,token' : 'action,id,journey') ||
+      if (this.closed || !input || !['view', 'start', 'poll', 'discard', 'accept', ...(adr ? ['readiness'] : [])].includes(action) ||
+        !['brief', 'handoff', 'adrDraft'].includes(operation) || Object.keys(input).sort().join(',') !== (action === 'accept' ? `action,edits,id,journey,${adr && Object.hasOwn(input, 'readiness') ? 'readiness,' : ''}revision` : action === 'readiness' ? 'action,edits,id,journey' : reviewed && action === 'start' ? 'action,id,journey,token' : 'action,id,journey') ||
         typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || !this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw new Error('Invalid decision brief request.');
       const matches = () => this.briefWork?.id === input.id && this.briefWork.journey === input.journey && this.briefWork.operation === operation;
       if (action === 'discard') {
@@ -269,7 +270,7 @@ export class Explorer {
         return { id: input.id, status: 'discarded' };
       }
       let current = await this.readCurrent();
-      const scenario = adr ? (await this.scenarioPolicy()).label : undefined;
+      let scenario = adr ? (await this.scenarioPolicy()).label : undefined;
       const check = (work, disk = current) => work.journey === (this.activeKey ?? this.doc.id) && freshness(work, disk, scenario) === 'current' && freshness(work, this.doc, scenario) === 'current';
       if (action === 'start') {
         this.requireToolFreeRelease();
@@ -295,6 +296,7 @@ export class Explorer {
             if (!check(work, dispatch)) { work.status = 'stale'; work.error = 'Saved artifact inputs changed while queued. Refresh and review again.'; return; }
             const proposal = await this.briefHelper.run(prepared, { signal: work.abort.signal, onProgress: progress => { if (this.briefWork === work) work.progress = progress; } });
             // Revalidate even injected helper results and retain only server-owned provenance.
+            if (adr && Object.hasOwn(proposal ?? {}, 'readiness')) throw Error('An ADR helper cannot supply a user readiness receipt.');
             const trusted = validate({ ...proposal, ...artifact, dependencies, coverage: work.coverage, version: 1, acceptedAt: new Date().toISOString() });
             if (adr) { trusted.titleEdited = false; for (const statement of Object.values(trusted.sections).flat()) statement.edited = false; }
             delete trusted.version; delete trusted.acceptedAt;
@@ -316,33 +318,45 @@ export class Explorer {
       if (action === 'accept') {
         if (!matches() || this.briefWork.status !== 'proposal' || !check(this.briefWork)) throw new Error('This brief is stale or unavailable. Refresh and regenerate before accepting.');
         const work = this.briefWork;
+        let acceptedReadiness;
         await this.withDocumentLock(async () => {
           const disk = await this.readCurrent();
           if (!Number.isSafeInteger(input.revision) || input.revision !== disk.revision) throw new Error('Another canvas updated this file. Refresh before accepting the brief.');
           if (!check(work, disk)) throw new Error('This brief is stale. Refresh and regenerate.');
           await this.assertScenarioPolicy(work.scenarioPolicy);
           const next = structuredClone(disk); next[operation] = accept(work.proposal, input.edits);
+          if (adr) next.adrDraft.readiness = captureAdrReadiness(adrReadiness(next.adrDraft, disk, scenario), input.readiness);
           await this.commitCurrentLocked(disk, next, adr ? 'Accepted proposed ADR wording' : handoff ? 'Accepted reviewed implementation handoff' : 'Accepted reviewed decision brief', async () => {
             await this.assertScenarioPolicy(work.scenarioPolicy);
             if (adr) {
+              const latestScenario = (await this.scenarioPolicy()).label;
               const latest = await this.readCurrent();
               if (this.closed || this.briefWork !== work || work.abort.signal.aborted || savedDigest(latest) !== savedDigest(disk) || !check(work, latest)) throw Error('Saved ADR draft inputs or destination changed before acceptance. Refresh and review again.');
+              acceptedReadiness = adrReadiness(next.adrDraft, latest, latestScenario);
+              captureAdrReadiness(acceptedReadiness, { digest: next.adrDraft.readiness.digest, acknowledged: next.adrDraft.readiness.acknowledged });
             }
           });
           this.briefWork = null;
         });
-        return { id: input.id, status: 'accepted', snapshot: this.uiSnapshot() };
+        return { id: input.id, status: 'accepted', snapshot: this.uiSnapshot(), ...(adr ? { readiness: acceptedReadiness } : {}) };
       }
       const work = matches() ? this.briefWork : null;
       if (work) {
         try { await this.assertScenarioPolicy(work.scenarioPolicy); }
         catch (error) { work.abort.abort(); work.status = 'stale'; work.error = error.message; }
       }
-      if (adr) current = await this.readCurrent();
+      if (adr) { scenario = (await this.scenarioPolicy()).label; current = await this.readCurrent(); }
       if (work && !check(work)) { work.abort.abort(); work.status = 'stale'; work.error = 'Saved brief inputs changed. Refresh the journey and regenerate.'; }
+      if (action === 'readiness') {
+        const draft = input.edits === null ? current.adrDraft : work?.proposal;
+        if (!draft) throw Error('This ADR draft or proposal is unavailable. Refresh before checking readiness.');
+        return { id: input.id, readiness: adrReadiness(input.edits === null ? draft : acceptAdrDraft(draft, input.edits), current, scenario) };
+      }
+      const readinessDraft = adr ? work?.proposal ?? current.adrDraft : null;
       return structuredClone({ id: input.id, status: work?.status ?? 'idle', progress: work?.progress, error: work?.error,
         ...(work?.status === 'proposal' ? { proposal: work.proposal } : {}),
         ...(current[operation] ? { accepted: current[operation], freshness: freshness(current[operation], current, scenario), unavailableSources: current[operation].dependencies.records.filter(source => !current.nodes.some(node => node.id === source.id)).map(source => source.id) } : {}),
+        ...(readinessDraft ? { readiness: adrReadiness(readinessDraft, current, scenario) } : {}),
         ...(work ? { coverage: work.coverage } : {}) });
     });
   }

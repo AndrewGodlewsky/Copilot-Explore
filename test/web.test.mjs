@@ -5892,8 +5892,87 @@ async function adrDraftFixture(t, scoped = true) {
   const open = async () => { $('adr-draft-open').click(); await until(() => $('brief-dialog').open && !$('review-adr-draft').disabled, 'ADR draft dialog'); };
   const review = async () => { $('review-adr-draft').click(); await until(() => !$('generate-brief').disabled || /Save a current reviewed ADR scope/i.test($('adr-draft-review-status').textContent), 'ADR input reviewed'); };
   const generate = async () => { await open(); await review(); $('generate-brief').click(); await until(() => !$('accept-brief').hidden && !$('accept-brief').disabled, 'ADR draft proposal'); };
-  return { ...f, calls, openDraft: open, reviewDraft: review, generateDraft: generate };
+  const readiness = async () => { await until(() => $('check-adr-readiness') && !$('check-adr-readiness').disabled, 'readiness check available'); $('check-adr-readiness').click(); await until(() => $('adr-readiness').dataset.current === 'true', 'readiness checked'); };
+  return { ...f, calls, openDraft: open, reviewDraft: review, generateDraft: generate, checkReadiness: readiness };
 }
+
+test('ADR readiness UI explains gaps, invalidates edited wording and records optional judgments without approving a decision', async t => {
+  const f = await adrDraftFixture(t), $ = f.$; await f.generateDraft();
+  assert.match($('adr-readiness-status').textContent, /0 correctness blockers/); assert.match($('adr-readiness-items').textContent, /rationale|recorded reason/);
+  const title = $('adr-draft-title'), editor = $('brief-content').querySelector('[data-brief-statement="choice"]');
+  const oldAck = $('adr-readiness-items').querySelector('[data-adr-gap="missing-alternatives"] input'); oldAck.click();
+  f.type('adr-draft-title', 'Checked title λ'); editor.value = 'Manual λ <script> rationale'; editor.dispatchEvent(new f.window.Event('input', { bubbles: true })); editor.focus(); editor.setSelectionRange(2, 8);
+  assert.equal($('accept-brief').disabled, true); assert.equal($('adr-readiness').dataset.current, 'false'); oldAck.click();
+  await f.checkReadiness(); assert.equal($('adr-draft-title'), title); assert.equal($('brief-content').querySelector('[data-brief-statement="choice"]'), editor); assert.equal(editor.selectionStart, 2);
+  const ack = $('adr-readiness-items').querySelector('[data-adr-gap="missing-alternatives"] input'); assert.equal(ack.checked, false); ack.click();
+  assert.equal($('accept-brief').disabled, false); $('accept-brief').click(); await until(() => f.explorer.doc.adrDraft && $('accept-brief').hidden, 'checked wording saved');
+  assert.equal(f.explorer.doc.adrDraft.readiness.acknowledged.length, 1); assert.equal(f.explorer.doc.adrDraft.status, 'proposed'); assert.equal(f.explorer.doc.nodes[1].answerState, 'tentative');
+  assert.match($('adr-readiness-items').textContent, /Recorded acknowledgment/); assert.equal($('brief-content').querySelector('script'), null); assert.equal(f.calls.length, 1);
+});
+
+test('ADR readiness UI keeps initial report navigation usable after unchanged polling', async t => {
+  const f = await adrDraftFixture(t), $ = f.$; await f.generateDraft(); await f.poll();
+  $('adr-readiness-items').querySelector('[data-adr-gap="unresolved-source"] button').click();
+  assert.equal($('brief-dialog').open, false); assert.equal($('node-workspace').dataset.nodeId, f.explorer.doc.nodes[1].id);
+});
+
+test('ADR readiness UI navigates sections and saved questions, then retains manual wording after normal source correction', async t => {
+  const f = await adrDraftFixture(t), $ = f.$; await f.generateDraft(); const editor = $('brief-content').querySelector('[data-brief-statement="choice"]'), title = $('adr-draft-title');
+  f.type('adr-draft-title', 'Keep manual title'); editor.value = 'Keep manual rationale λ'; editor.dispatchEvent(new f.window.Event('input', { bubbles: true })); editor.setSelectionRange(1, 7); await f.checkReadiness();
+  $('adr-readiness-items').querySelector('[data-adr-gap="rationale-unconfirmed"] button').click(); assert.equal(f.document.activeElement, editor);
+  $('adr-readiness-items').querySelector('[data-adr-gap="unresolved-source"] button').click(); assert.equal($('brief-dialog').open, false); assert.equal($('node-workspace').dataset.nodeId, f.explorer.doc.nodes[1].id);
+  f.type('answer', 'Choose A because recovery matters'); chooseState(f, 'decided'); $('save-answer').click();
+  await until(() => $('answer-change-dialog').open, 'review stale ADR consequences'); $('answer-change-confirm').click();
+  await until(() => f.explorer.doc.nodes[1].answerState === 'decided' && /^Answer saved\./.test($('notice').textContent), 'source answer save response applied');
+  await f.openDraft(); await f.checkReadiness();
+  assert.equal($('adr-draft-title'), title); assert.equal(title.value, 'Keep manual title'); assert.equal($('brief-content').querySelector('[data-brief-statement="choice"]'), editor); assert.equal(editor.value, 'Keep manual rationale λ');
+  assert.equal($('adr-readiness-items').querySelector('[data-adr-gap="unresolved-source"]'), null); assert.ok($('adr-readiness-items').querySelector('[data-adr-gap="changed-source"]'));
+  assert.equal($('accept-brief').hidden || $('accept-brief').disabled, true); assert.equal(f.explorer.doc.adrDraft, undefined); assert.equal(f.calls.length, 1);
+});
+
+for (const change of ['edit', 'hide', 'source', 'switch', 'suspend']) test(`ADR readiness UI ignores a late check after ${change}`, async t => {
+  const f = await adrDraftFixture(t), $ = f.$; await f.generateDraft(); f.type('adr-draft-title', 'Before check');
+  const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-draft' && JSON.parse(options.body).action === 'readiness') await new Promise(resolve => { release = resolve; }); return response; };
+  try {
+    $('check-adr-readiness').click(); await until(() => release, 'readiness response held');
+    if (change === 'edit') f.type('adr-draft-title', 'After check');
+    else if (change === 'hide') $('close-brief').click();
+    else if (change === 'source') { const next = structuredClone(f.explorer.doc); next.nodes[1].answer = 'Changed source'; await f.explorer.save(next); await f.poll(); }
+    else if (change === 'switch') $('decision-brief').click();
+    else f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+    release(); f.window.fetch = fetch; await delay(20);
+    assert.notEqual($('adr-readiness').dataset.current, 'true'); assert.equal($('accept-brief').hidden || $('accept-brief').disabled, true);
+    if (change === 'edit') assert.equal($('adr-draft-title').value, 'After check');
+    assert.equal(f.explorer.doc.adrDraft, undefined); assert.match($('answer').value, /PRIVATE ADR QUESTION DRAFT/);
+  } finally { f.window.fetch = fetch; release?.(); }
+});
+
+for (const action of ['view', 'poll']) for (const change of ['hide', 'source']) test(`ADR readiness UI ignores a late ${action} report after ${change}`, async t => {
+  const f = await adrDraftFixture(t), $ = f.$; await f.generateDraft();
+  if (action === 'view') $('close-brief').click();
+  const fetch = f.window.fetch; let release, pending;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-draft' && JSON.parse(options.body).action === action) await new Promise(resolve => { release = resolve; }); return response; };
+  try {
+    if (action === 'poll') pending = f.poll(); else $('adr-draft-open').click();
+    await until(() => release, `${action} response held`);
+    if (change === 'hide') $('close-brief').click();
+    else { const next = structuredClone(f.explorer.doc); next.nodes[1].answer = 'Changed source'; await f.explorer.save(next); f.window.__updates.apply(f.explorer.snapshot()); }
+    assert.equal($('adr-readiness').dataset.current, 'false');
+    release(); f.window.fetch = fetch; await pending; await delay(20);
+    assert.equal($('adr-readiness').dataset.current, 'false'); assert.equal($('accept-brief').hidden || $('accept-brief').disabled, true);
+    assert.equal(f.explorer.doc.adrDraft, undefined); assert.match($('answer').value, /PRIVATE ADR QUESTION DRAFT/);
+  } finally { f.window.fetch = fetch; release?.(); await pending; }
+});
+
+test('ADR readiness UI shows saved acknowledgments as historical after source removal and cannot navigate an unavailable source', async t => {
+  const f = await adrDraftFixture(t), $ = f.$; await f.generateDraft(); $('adr-readiness-items').querySelector('[data-adr-gap="missing-alternatives"] input').click();
+  $('accept-brief').click(); await until(() => f.explorer.doc.adrDraft && $('accept-brief').hidden, 'saved acknowledgment');
+  const next = structuredClone(f.explorer.doc), focal = next.nodes[1].id; next.nodes = next.nodes.filter(node => node.id !== focal); await f.explorer.save(next); await f.poll();
+  await until(() => /historical/i.test($('adr-readiness-status').textContent), 'historical acknowledgment shown');
+  const missing = $('adr-readiness-items').querySelector('[data-adr-gap="missing-source"]'); assert.match(missing.textContent, /unavailable/i); assert.equal(missing.querySelector('button'), null);
+  assert.equal($('adr-readiness-items').querySelector('input'), null); assert.equal(f.explorer.doc.adrDraft.readiness.acknowledged.length, 1);
+});
 
 test('ADR draft UI reviews exact saved input, edits literal wording and accepts a proposed artifact while preserving answer drafts', async t => {
   const f = await adrDraftFixture(t), $ = f.$, before = structuredClone(f.explorer.doc.nodes); await f.openDraft();
@@ -5904,6 +5983,7 @@ test('ADR draft UI reviews exact saved input, edits literal wording and accepts 
   const title = $('adr-draft-title'), editor = $('brief-content').querySelector('[data-brief-statement="choice"]');
   f.type('adr-draft-title', 'Edited title λ'); editor.value = 'Exact λ <script>\nStill provisional'; editor.dispatchEvent(new f.window.Event('input', { bubbles: true })); editor.focus(); editor.setSelectionRange(2, 6);
   await f.poll(); assert.equal($('adr-draft-title'), title); assert.equal($('brief-content').querySelector('[data-brief-statement="choice"]'), editor); assert.equal(editor.selectionStart, 2);
+  await f.checkReadiness();
   $('accept-brief').click(); await until(() => f.explorer.doc.adrDraft && $('accept-brief').hidden, 'ADR wording accepted and response applied');
   assert.equal(f.explorer.doc.adrDraft.status, 'proposed'); assert.equal(f.explorer.doc.adrDraft.title, 'Edited title λ'); assert.equal(f.explorer.doc.adrDraft.sections.outcome[0].text, editor.value);
   assert.deepEqual(f.explorer.doc.nodes, before); assert.equal($('answer'), f.editor); assert.match(f.editor.value, /PRIVATE ADR QUESTION DRAFT/);
@@ -5914,6 +5994,7 @@ for (const outcome of ['success', 'lost response', 'rejected']) test(`ADR draft 
   const f = await adrDraftFixture(t), $ = f.$; await f.generateDraft();
   const title = $('adr-draft-title'), editor = $('brief-content').querySelector('[data-brief-statement="choice"]');
   f.type('adr-draft-title', 'Click-time title λ'); editor.value = 'Click-time rationale λ'; editor.dispatchEvent(new f.window.Event('input', { bubbles: true }));
+  await f.checkReadiness();
   const fetch = f.window.fetch; let releaseAccept, releasePoll;
   f.window.fetch = async (path, options) => {
     const action = path === 'api/adr-draft' ? JSON.parse(options.body).action : null;

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.95",
+    "summary": "Check ADR wording for stale references and advisory gaps before accepting it. Open the relevant source or draft section, preserve manual edits while correcting answers, and optionally record gap acknowledgments. Changed inputs invalidate prior checks. Acknowledgments never approve decisions, change answers or waive stale-source blockers."
+  },
+  {
     "version": "0.1.94",
     "summary": "Generate a proposed ADR from reviewed saved scope, template layout and optional recorded evidence. Edit its title and statements, then explicitly save the wording in the exploration. Source changes block stale acceptance while manual edits stay available. Accepting wording does not approve the decision or write a project file."
   },

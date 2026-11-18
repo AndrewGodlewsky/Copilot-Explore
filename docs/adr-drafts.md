@@ -2,7 +2,7 @@
 
 Choose **Tools → ADR draft** after saving a current ADR scope. **Review saved ADR input** shows the exact instructions and saved input. Generate only after reviewing it, edit the proposed title and statements, and choose **Accept draft wording** to retain the draft in the exploration.
 
-The ADR status stays **proposed**. Accepting generated wording records a review of that wording; it does not approve the architectural decision, change source answers or scenario preference, or write a repository file. Readiness checks, project Markdown writing, durable source navigation and formal lifecycle transitions are separate work.
+The ADR status stays **proposed**. Accepting generated wording records a review of that wording; it does not approve the architectural decision, change source answers or scenario preference, or write a repository file. [Readiness checks](adr-readiness.md) explain blockers and advisory gaps before wording acceptance. Project Markdown writing, durable source navigation and formal lifecycle transitions are separate work.
 
 ## Inputs and uncertainty
 

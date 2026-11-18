@@ -71,11 +71,17 @@ export function parseAdrDraft(content, prepared) {
   return { title: title(value.title), titleEdited: false, status: 'proposed', sections: sections(value.sections, capture, false), ...capture };
 }
 export function validateAdrDraft(value) {
-  if (!keys(value, 'version,acceptedAt,title,titleEdited,status,sections,format,scope,dependencies,coverage,guidance,includeEvidence,evidence') || value.version !== 1 || value.status !== 'proposed' || typeof value.titleEdited !== 'boolean' || typeof value.acceptedAt !== 'string' || value.acceptedAt.length > 40 || !Number.isFinite(Date.parse(value.acceptedAt))) invalid();
+  if (!keys(value, 'version,acceptedAt,title,titleEdited,status,sections,format,scope,dependencies,coverage,guidance,includeEvidence,evidence' + (Object.hasOwn(value ?? {}, 'readiness') ? ',readiness' : '')) || value.version !== 1 || value.status !== 'proposed' || typeof value.titleEdited !== 'boolean' || typeof value.acceptedAt !== 'string' || value.acceptedAt.length > 40 || !Number.isFinite(Date.parse(value.acceptedAt))) invalid();
   const capture = validateCapture(value);
   const result = { version: 1, acceptedAt: value.acceptedAt, title: title(value.title), titleEdited: value.titleEdited, status: 'proposed', sections: sections(value.sections, capture, true), ...capture };
+  if (Object.hasOwn(value, 'readiness')) result.readiness = validateAdrReadinessReceipt(value.readiness);
   if (Buffer.byteLength(JSON.stringify({ adrDraft: result }, null, 2)) > BRIEF_ARTIFACT_LIMIT) throw Error('The accepted ADR draft exceeds the 512 KiB saved-artifact limit.');
   return result;
+}
+export function validateAdrReadinessReceipt(value) {
+  const digest = text => typeof text === 'string' && /^[a-f0-9]{64}$/.test(text);
+  if (!keys(value, 'version,reviewedAt,digest,acknowledged') || value.version !== 1 || !digest(value.digest) || typeof value.reviewedAt !== 'string' || value.reviewedAt.length > 40 || !Number.isFinite(Date.parse(value.reviewedAt)) || !Array.isArray(value.acknowledged) || value.acknowledged.length > 640 || value.acknowledged.some(id => !digest(id)) || new Set(value.acknowledged).size !== value.acknowledged.length) throw Error('Invalid ADR readiness receipt.');
+  return { version: 1, reviewedAt: value.reviewedAt, digest: value.digest, acknowledged: [...value.acknowledged] };
 }
 export function acceptAdrDraft(proposal, edits) {
   if (!keys(edits, 'title,statements') || !Array.isArray(edits.statements) || edits.statements.length > 35) invalid();

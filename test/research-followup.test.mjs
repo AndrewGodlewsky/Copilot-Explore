@@ -79,7 +79,7 @@ async function fixture(t) {
 }
 test('follow-up history is transient, exact reviewed work and completion preserve saved document', async t => {
   const f = await fixture(t), before = await readFile(f.file, 'utf8'), review = await f.review('What if the budget doubles?');
-  await f.start(review); await new Promise(setImmediate);
+  await f.start(review); await waitFor(() => f.runs.length === 1);
   assert.equal(f.runs[0].prepared.prompt, review.prepared.prompt);
   f.runs[0].resolve(result); await f.settle();
   assert.equal(await readFile(f.file, 'utf8'), before); assert.equal(f.e.uiSnapshot().followup.exchanges.length, 1);
@@ -88,7 +88,7 @@ test('follow-up history is transient, exact reviewed work and completion preserv
   await assert.rejects(f.e.command('research', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, token: again.token }), /follow-up|purpose/i);
 });
 test('late cancelled work cannot enter a replacement, relevant changes mark existing exchanges historical', async t => {
-  const f = await fixture(t); await f.start(await f.review('Why?')); await new Promise(setImmediate);
+  const f = await fixture(t); await f.start(await f.review('Why?')); await waitFor(() => f.runs.length === 1);
   await f.e.command('cancel'); const replacement = await f.review('Why now?'); await f.start(replacement);
   f.runs[0].resolve(result); await waitFor(() => f.runs.length === 2);
   assert.equal(f.runs.length, 2); f.runs[1].resolve(result); await f.settle();
@@ -104,7 +104,7 @@ test('shared actual-release queue gates follow-up and research in both direction
       await f.e.command('research', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, token: review.token });
     };
     const followup = async () => f.start(await f.review('Why?'));
-    await (reverse ? ordinary() : followup()); await new Promise(setImmediate); await f.e.command('cancel');
+    await (reverse ? ordinary() : followup()); await waitFor(() => f.runs.length === 1); await f.e.command('cancel');
     await (reverse ? followup() : ordinary()); await new Promise(setImmediate); assert.equal(f.runs.length, 1);
     let release; f.runs[0].reject(Object.assign(Error('Shutdown incomplete'), { releaseConfirmed: new Promise(resolve => { release = resolve; }) }));
     await f.settle(); assert.equal(f.runs.length, 1); assert.match(f.e.error, /shutdown/);
@@ -114,7 +114,7 @@ test('shared actual-release queue gates follow-up and research in both direction
   }
 });
 test('earlier transmitted dependencies remain fresh across exclusions; metadata edits preserve history; replacement starts a new chain', async t => {
-  const f = await fixture(t); await f.start(await f.review('Why?')); await new Promise(setImmediate); f.runs[0].resolve(result); await f.settle();
+  const f = await fixture(t); await f.start(await f.review('Why?')); await waitFor(() => f.runs.length === 1); f.runs[0].resolve(result); await f.settle();
   const stableId = f.e.followup.id; const disk = JSON.parse(await readFile(f.file, 'utf8')); disk.revision++; disk.updatedAt = new Date().toISOString(); await writeFile(f.file, JSON.stringify(disk));
   const reviewed = await f.review('Again?'); assert.equal(reviewed.prepared.followup.exchanges.length, 1); assert.equal(f.e.followup.id, stableId);
   disk.nodes[0].answer = 'A changed ancestor'; disk.revision++; await writeFile(f.file, JSON.stringify(disk));
@@ -123,7 +123,7 @@ test('earlier transmitted dependencies remain fresh across exclusions; metadata 
   disk.nodes[1].research.recommendation = 'A replacement recommendation'; disk.revision++; await writeFile(f.file, JSON.stringify(disk));
   await assert.rejects(f.start(fresh), /research changed/);
   const replacement = await f.review('Why the replacement?'); assert.equal(replacement.prepared.followup.recommendation, 'A replacement recommendation'); assert.equal(replacement.prepared.followup.exchanges.length, 0);
-  await f.start(replacement); await new Promise(setImmediate); f.runs[1].resolve(result); await f.settle();
+  await f.start(replacement); await waitFor(() => f.runs.length === 2); f.runs[1].resolve(result); await f.settle();
   assert.equal(f.e.followup.exchanges.length, 1); assert.equal(f.e.followup.exchanges[0].question, 'Why the replacement?');
   const reopened = await new Explorer({ file: f.file }).load(); assert.equal(reopened.uiSnapshot().followup, null); await reopened.close();
 });
@@ -145,11 +145,11 @@ for (const boundary of ['review consumption', 'helper completion']) {
   for (const change of ['sent source', 'original research', 'unrelated metadata']) {
     test(`${boundary} reconciles retained follow-ups after disk changes to ${change}`, async t => {
       const f = await fixture(t);
-      await f.start(await f.review('First question')); await new Promise(setImmediate);
+      await f.start(await f.review('First question')); await waitFor(() => f.runs.length === 1);
       f.runs[0].resolve(result); await f.settle();
       const retained = structuredClone(f.e.uiSnapshot().followup.exchanges);
       const reviewed = await f.review('Second question');
-      if (boundary === 'helper completion') { await f.start(reviewed); await new Promise(setImmediate); }
+      if (boundary === 'helper completion') { await f.start(reviewed); await waitFor(() => f.runs.length === 2); }
       const originalDisk = JSON.parse(await readFile(f.file, 'utf8')), disk = structuredClone(originalDisk);
       disk.revision++; disk.updatedAt = '2026-11-17T23:00:00.000Z';
       if (change === 'sent source') disk.nodes[1].answer = 'A newly committed constraint';
@@ -158,7 +158,7 @@ for (const boundary of ['review consumption', 'helper completion']) {
       const relevant = change !== 'unrelated metadata';
       if (boundary === 'review consumption') {
         if (relevant) { await assert.rejects(f.start(reviewed), /changed/); assert.equal(f.runs.length, 1); }
-        else { await f.start(reviewed); await new Promise(setImmediate); }
+        else { await f.start(reviewed); await waitFor(() => f.runs.length === 2); }
       }
       if (boundary === 'helper completion' || !relevant) { f.runs[1].resolve(result); await f.settle(); }
       const snapshot = f.e.uiSnapshot();
@@ -198,7 +198,7 @@ test('source fingerprint union keeps earlier dependencies under its explicit cou
 });
 test('successful research rerun makes follow-ups historical even when the comparison is identical', async t => {
   const f = await fixture(t), initial = structuredClone(f.e.doc); initial.nodes[1].research.settings = { depth: 'standard', sourceFocus: 'balanced', recency: 'any' }; await f.e.save(initial);
-  await f.start(await f.review('Why?')); await new Promise(setImmediate); f.runs[0].resolve(result); await f.settle();
+  await f.start(await f.review('Why?')); await waitFor(() => f.runs.length === 1); f.runs[0].resolve(result); await f.settle();
   f.e.researcher.run = async () => original;
   const value = await f.e.reviewResearch({ action: 'prepare', journey: f.doc.id, nodeId: f.doc.nodes[1].id, scope: 'decisions', excluded: [], clientId: randomUUID(), sequence: 1 });
   await f.e.command('research', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, token: value.token }); await f.settle();

@@ -2279,6 +2279,83 @@ test('local storage stays reachable before a damaged bound journey loads', async
   $('storage-close').click(); assert.equal(f.document.activeElement, $('storage-home'));
 });
 
+async function regenerationFixture(t) {
+  const sent = [];
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    await e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, answer: 'Corrected saved direction', answerState: 'decided' });
+    const doc = structuredClone(e.doc), parentId = doc.nodes[1].id;
+    doc.nodes.push({ id: 'retained-regeneration', parentId, question: 'Useful existing follow-up?', category: 'Scope', answer: '', research: null, review: false });
+    doc.nodes.push({ id: 'stale-regeneration', parentId, question: 'Obsolete follow-up?', category: 'Scope', answer: 'OBSOLETE-CLAIM', research: null, review: true });
+    await e.save(doc); e.send = async input => sent.push(input);
+  } });
+  const target = f.explorer.doc.nodes[1]; f.open(target.id);
+  return { ...f, sent, target };
+}
+
+test('regeneration review explicitly selects retained questions and preserves private editor before candidate acceptance', async t => {
+  const f = await regenerationFixture(t), $ = id => f.document.getElementById(id);
+  f.type('answer', 'PRIVATE-REGENERATION-DRAFT'); const editor = $('answer'); editor.focus(); editor.setSelectionRange(2, 8);
+  assert.ok($('regenerate-followups')); $('regenerate-followups').click();
+  await until(() => !$('research-review-start').disabled, 'regeneration context ready');
+  assert.match($('research-review-title').textContent, /Regenerate follow-ups/);
+  assert.match($('research-review-prompt').textContent, /Corrected saved direction/);
+  assert.doesNotMatch($('research-review-prompt').textContent, /PRIVATE-REGENERATION-DRAFT|OBSOLETE-CLAIM/);
+  assert.equal($('research-depth'), null); assert.equal($('project-paths'), null); assert.equal(f.sent.length, 0);
+  const retained = $('regeneration-retained'); assert.equal(retained.options.length, 1); retained.options[0].selected = true; retained.dispatchEvent(new f.window.Event('change'));
+  await until(() => !$('research-review-start').disabled && $('research-review-prompt').textContent.includes('retained-regeneration'), 'selected coverage reviewed');
+  $('research-review-close').click(); assert.equal(f.sent.length, 0); assert.equal($('answer'), editor); assert.equal(editor.selectionStart, 2); assert.equal(editor.selectionEnd, 8);
+  $('regenerate-followups').click(); await until(() => !$('research-review-start').disabled, 'fresh regeneration context');
+  $('research-review-start').click(); await until(() => f.sent.length === 1 && !$('research-review-dialog').open, 'explicit queued generation');
+  const id = f.explorer.pending.id, before = f.explorer.doc.revision;
+  await f.explorer.receive('questions', { requestId: id, questions: [{ question: 'Replacement detail?', category: 'Scope' }] }); await f.poll();
+  assert.match($('preview-title').textContent, /new follow-up/i); assert.equal(f.explorer.doc.revision, before);
+  $('accept-questions').click(); await until(() => f.explorer.doc.nodes.some(n => n.question === 'Replacement detail?'), 'explicit acceptance');
+  await until(() => !$('question-preview'), 'acceptance response applied');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'private draft durable');
+  assert.ok(f.explorer.doc.nodes.some(n => n.id === 'retained-regeneration')); assert.ok(f.explorer.doc.nodes.some(n => n.id === 'stale-regeneration'));
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'PRIVATE-REGENERATION-DRAFT');
+});
+
+test('regeneration rejects stale context and its stale candidate retry returns to review without dispatch', async t => {
+  const f = await regenerationFixture(t), $ = id => f.document.getElementById(id);
+  $('regenerate-followups').click(); await until(() => !$('research-review-start').disabled, 'first regeneration context');
+  const changed = structuredClone(f.explorer.doc); changed.objective = 'Changed objective'; await f.explorer.save(changed); await f.poll();
+  $('research-review-start').click(); await until(() => $('research-review-status').textContent.includes('changed'), 'stale context blocked');
+  assert.equal(f.sent.length, 0);
+  $('research-review-refresh').click(); await until(() => !$('research-review-start').disabled, 'fresh context');
+  $('research-review-start').click(); await until(() => f.sent.length === 1, 'first actual send');
+  await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [{ question: 'Candidate?', category: 'Scope' }] }); await f.poll();
+  const changedAgain = structuredClone(f.explorer.doc); changedAgain.successCriteria = 'New criterion'; await f.explorer.save(changedAgain); await f.poll();
+  $('preview-retry').click(); await until(() => $('research-review-dialog').open && !$('research-review-start').disabled, 'retry reviews context');
+  assert.equal(f.sent.length, 1); assert.equal(f.explorer.preview, null); $('research-review-close').click();
+});
+
+test('regeneration ignores suspended preview responses and offers only a fresh review after resume', async t => {
+  const f = await regenerationFixture(t), $ = id => f.document.getElementById(id);
+  const original = f.window.fetch; let release, holding = true;
+  f.window.fetch = async (path, options) => { const response = await original(path, options); if (holding && path === 'api/research-review' && JSON.parse(options.body).action === 'prepare') await new Promise(resolve => { release = resolve; }); return response; };
+  t.after(() => release?.());
+  $('regenerate-followups').click(); await until(() => release, 'held regeneration context');
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true })); release(); holding = false;
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await f.poll();
+  assert.equal($('research-review-dialog').open, false); assert.equal(f.sent.length, 0);
+  $('regenerate-followups').click(); await until(() => !$('research-review-start').disabled, 'fresh resumed context');
+  assert.equal(f.sent.length, 0); $('research-review-close').click();
+});
+
+test('regeneration keeps retained selection editable after a limit error without sending a request', async t => {
+  const f = await regenerationFixture(t), $ = id => f.document.getElementById(id), doc = structuredClone(f.explorer.doc);
+  for (let i = 0; i < 51; i++) doc.nodes.push({ id: `coverage-${i}`, parentId: f.target.id, question: `Coverage ${i}?`, category: 'Scope', answer: '', research: null, review: false });
+  await f.explorer.save(doc); await f.poll(); $('regenerate-followups').click(); await until(() => !$('research-review-start').disabled, 'selection review');
+  for (const option of $('regeneration-retained').options) option.selected = true;
+  $('regeneration-retained').dispatchEvent(new f.window.Event('change'));
+  await until(() => $('research-review-status').textContent.includes('50'), 'selection limit explained');
+  assert.ok($('regeneration-retained')); assert.equal($('regeneration-retained').disabled, false); assert.equal($('research-review-start').disabled, true);
+  for (const option of $('regeneration-retained').options) option.selected = false;
+  $('regeneration-retained').dispatchEvent(new f.window.Event('change')); await until(() => !$('research-review-start').disabled, 'selection corrected');
+  assert.equal(f.sent.length, 0); $('research-review-close').click();
+});
+
 test('research review preserves draft state, caret and composition, sends only the explicitly reviewed context', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {
     await e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[2].id, answer: 'OPTIONAL-SECRET<script>\ud83c\udf3f' });

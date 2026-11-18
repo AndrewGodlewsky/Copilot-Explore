@@ -6,7 +6,7 @@ Both directions are visible: prerequisites under **This question depends on**, a
 
 The parent/child tree remains the navigation structure. Tree relationships suggest possible impact; they are never automatically confirmed dependencies. Private pinned references, project constraints, AI suggestions and research remain separate. Root ideas and structural directions cannot be endpoints. Dependencies are between questions in this map, including questions in separate branches. A dependency may point opposite a tree path; only the explicit dependency graph must be acyclic.
 
-Adding/removing relationships preserves question text, saved answers and answer states, research, parentage and review flags. The connected answer editor and private drafts are retained. [Downstream decision impact](decision-impact.md) now explains reachable questions from saved relationships. Edge colors and downstream review actions are subsequent work. Current AI context projections and reduced visual/offline exports do not include this new metadata. Native JSON export and Markdown include it.
+Adding/removing relationships preserves question text, saved answers and answer states, research, parentage and review flags. The connected answer editor and private drafts are retained. [Downstream decision impact](decision-impact.md) now explains reachable questions from saved relationships. Edge colors and downstream review actions are subsequent work. Regenerate follow-ups explicitly includes the current prerequisite closure in its reviewed input. Other AI context projections and reduced visual/offline exports do not include dependency metadata. Native JSON export and Markdown include it.
 
 ## Stored contract and compatibility
 

@@ -1989,7 +1989,7 @@ function renderWorkspace() {
         }, () => state.document.nodes.find(n => n.id === node.id))) {
           if (!current()) return;
           renderWorkspace(); refreshScene();
-          if (restart) notice(restartCheckpoint ? 'Branch restart completed. History preserves removed content; private drafts remain recoverable. Explore deeper explicitly when ready.' : 'The branch already matches this answer. Nothing changed; no checkpoint or revision was created.');
+          if (restart) notice(restartCheckpoint ? 'Branch restart completed. History preserves removed content; private drafts remain recoverable. Use Regenerate follow-ups to review corrected context when ready.' : 'The branch already matches this answer. Nothing changed; no checkpoint or revision was created.');
           else if (deepen) notice('Answer saved. Copilot will propose follow-up questions for your review.');
           else if (draftClient.entries.get(node.id)?.edits === generation && !draftClient.entries.get(node.id)?.conflict && !drafts.has(node.id)) {
             const result = nextQuestion.suggest(state.document, referenceJourney());
@@ -2016,6 +2016,13 @@ function renderWorkspace() {
     const savebar = el('div', { class: 'workspace-savebar' }, toolsToggle,
       button('Save & continue', () => { voice.cancel(); void save(false); }, { id: 'save-answer', class: 'primary', 'aria-label': 'Save & continue', title: 'Save and open an existing useful question; Ctrl/Command + Enter', disabled: pending && !['research', 'research-follow-up'].includes(state.pending.kind) }));
     toolPanels.explore.append(el('p', { class: 'quiet' }, 'Save this answer and ask Copilot for follow-up questions to review.'), button('Explore deeper', () => { voice.cancel(); void save(true); }, { id: 'save-deeper', title: 'Save this answer and ask Copilot for follow-up questions', 'aria-label': 'Save answer and explore deeper', disabled: pending }));
+    toolPanels.explore.append(button('Regenerate follow-ups', () => {
+      if (!current() || !switchAllowed('reviewing replacement questions')) return;
+      const saved = state.document.nodes.find(n => n.id === node.id);
+      if (state.pending || state.preview) return notice('Finish or dismiss the current request or question preview first.');
+      if (saved.review || effectiveAnswerState(saved) === 'unanswered') return notice('Review and save the corrected answer or state first. Your draft stays in the editor.');
+      openResearchReview(node.id, undefined, 'question-regeneration');
+    }, { id: 'regenerate-followups' }), el('p', { class: 'quiet' }, 'After correcting an answer, review its saved context and choose existing questions to reuse as coverage. This uses the committed answer; unsaved editor text stays private. Removed questions remain in History.'));
     const revisitChooser = el('section', { id: 'answer-revisit', class: 'answer-revisit', hidden: true, 'aria-labelledby': 'answer-revisit-title' });
     let revisitBase = null, revisitObserved = null, revisitStale = false, revisitPage = null, routing = false;
     const choice = () => ui.revisitChoice ?? 'retain';
@@ -2333,7 +2340,7 @@ function renderWorkspace() {
     });
     update('followup', !!node.research, () => node.research ? renderFollowup(node) : null);
     updateFollowupHistory(node);
-    for (const id of ['research-request', 'followup-review', 'save-deeper']) if ($(id)) $(id).disabled = pending;
+    for (const id of ['research-request', 'followup-review', 'save-deeper', 'regenerate-followups']) if ($(id)) $(id).disabled = pending;
     if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up'].includes(state.pending?.kind);
     if ($('save-answer')) $('save-answer').disabled = pending && !['research', 'research-follow-up'].includes(state.pending.kind);
     for (const id of ['generate-questions', 'add-direction', 'restart-branch', 'fork-scenario']) if ($(id)) $(id).disabled = pending || !!state.preview;
@@ -2401,7 +2408,7 @@ function renderQuestionFeedback() {
 function renderQuestionPreview() {
   const batch = state.preview, edits = previewEdits.questions;
   const section = el('section', { id: 'question-preview', class: 'question-preview', 'aria-labelledby': 'preview-title' },
-    el('h3', { id: 'preview-title' }, 'Review suggested questions'),
+    el('h3', { id: 'preview-title' }, batch.purpose === 'question-regeneration' ? 'Review new follow-up questions' : 'Review suggested questions'),
     el('p', { class: 'quiet' }, 'Not saved. Select questions and optionally adjust their wording. Closing or restarting this canvas discards this preview.'));
   const stale = el('p', { id: 'preview-stale', class: 'notice' }, 'Saved context changed. Dismiss and generate again.'); stale.hidden = !batch.stale; section.append(stale);
   edits.forEach((edit, index) => {
@@ -2435,8 +2442,14 @@ function renderQuestionPreview() {
   button('Dismiss all', () => api('dismiss-questions', { batchId: batch.id }), { id: 'dismiss-questions' })));
   const retry = button('Dismiss, refresh & generate again', async () => {
     if (!await api('dismiss-questions', { batchId: batch.id })) return;
-    if (await api('refresh-answer')) await api('questions', { nodeId: state.document.nodes.some(n => n.id === batch.nodeId) ? batch.nodeId : state.document.rootId });
+    if (await api('refresh-answer')) {
+      if (batch.purpose === 'question-regeneration') {
+        if (state.document.nodes.some(n => n.id === batch.nodeId)) openResearchReview(batch.nodeId, undefined, batch.purpose);
+        else notice('The corrected question is no longer saved. Select another question to review.');
+      } else await api('questions', { nodeId: state.document.nodes.some(n => n.id === batch.nodeId) ? batch.nodeId : state.document.rootId });
+    }
   }, { id: 'preview-retry' }); retry.hidden = !batch.stale; section.append(retry);
+  if (batch.purpose === 'question-regeneration') { retry.textContent = 'Dismiss, refresh & review context'; section.prepend(el('p', { class: 'quiet' }, 'These are new candidates. Existing questions remain saved; accepting adds selected candidates without replacing old branches.')); }
   return section;
 }
 function openResearchReview(nodeId, followup, purpose) {
@@ -2454,9 +2467,10 @@ function renderResearchReview() {
   const focusedId = area.contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
   const focusedSetting = area.contains(document.activeElement) ? document.activeElement.dataset.setting : null;
   const challenge = researchReview.context?.purpose === 'challenge-review';
-  $('research-review-title').textContent = challenge ? 'Challenge decisions: review selected inputs' : 'Review research context';
-  $('research-review-description').textContent = challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Review the Explorer-supplied input for the isolated research helper. Choices apply only to this request. Viewing or excluding context starts no inference.';
-  $('research-review-start').textContent = challenge ? 'Start reviewed challenge' : 'Start reviewed research';
+  const regeneration = researchReview.context?.purpose === 'question-regeneration';
+  $('research-review-title').textContent = regeneration ? 'Regenerate follow-ups: review saved context' : challenge ? 'Challenge decisions: review selected inputs' : 'Review research context';
+  $('research-review-description').textContent = regeneration ? 'Review the exact Explorer input for new questions from the corrected saved answer. Nothing runs until you choose Generate reviewed follow-ups. The attached chat retains its own history and can read the committed map; this preview shows only Explorer-supplied input.' : challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Review the Explorer-supplied input for the isolated research helper. Choices apply only to this request. Viewing or excluding context starts no inference.';
+  $('research-review-start').textContent = regeneration ? 'Generate reviewed follow-ups' : challenge ? 'Start reviewed challenge' : 'Start reviewed research';
   $('research-review-start').disabled = !value || researchReview.loading || reviewStarting || researchReview.projectDirty || (challenge && !value.prepared.canStart);
   $('research-review-refresh').disabled = researchReview.loading || reviewStarting;
   $('research-review-status').textContent = researchReview.loading ? 'Preparing context locally. No inference has started.' : researchReview.error || '';
@@ -2469,16 +2483,24 @@ function renderResearchReview() {
       button('Remove all files', () => { researchReview.projectDraft = ''; void researchReview.prepare({ action: 'refresh', paths: [] }); }, { id: 'project-clear', disabled: researchReview.loading || reviewStarting }),
       el('p', { class: 'quiet' }, 'Only this tool-free challenge receives the reviewed excerpts. Questions, web research, follow-ups, other helpers and exports omit them. File instructions are untrusted data, not decisions or verified evidence. Explorer retains them in this transient review/result; closing the preview, replacing/cancelling the result or closing the canvas clears them. Native helper journals/logs may retain model input; no zero-log guarantee is available.'));
   }
+  const retainedControls = () => {
+    const children = state.document.nodes.filter(node => node.parentId === researchReview.context.nodeId && isQuestion(node) && !node.review);
+    const select = el('select', { id: 'regeneration-retained', multiple: '', size: '6', 'data-setting': 'retained', disabled: reviewStarting || researchReview.loading });
+    for (const node of children) { const option = el('option', { value: node.id }, node.question); option.selected = researchReview.context.retained.includes(node.id); select.append(option); }
+    select.addEventListener('change', () => { if (!select.isConnected || researchReview.context?.purpose !== 'question-regeneration') return; researchReview.retain([...select.selectedOptions].map(option => option.value)); });
+    return el('section', { class: 'review-record' }, el('label', { for: 'regeneration-retained' }, 'Existing current questions to reuse as coverage (up to 50)'), select,
+      el('p', { class: 'quiet' }, `${children.length} current child questions available. Select none or several using your platform's multiple-selection keys. Selected and unselected questions both remain saved. Questions needing review cannot be reused. Removed questions stay in History; they are excluded from this request.`));
+  };
   if (!value) {
-    if (!researchReview.loading || !area.children.length) area.replaceChildren(...(challenge ? [projectControls] : []));
-    if (researchReview.loading) for (const id of ['project-paths', 'project-read', 'project-clear']) { const control = $(id); if (control) control.disabled = true; }
+    if (!researchReview.loading || !area.children.length) area.replaceChildren(...(challenge ? [projectControls] : regeneration ? [retainedControls()] : []));
+    if (researchReview.loading) for (const id of ['project-paths', 'project-read', 'project-clear', 'regeneration-retained']) { const control = $(id); if (control) control.disabled = true; }
     return;
   }
   const { context, coverage, bytes, limit, prompt, instructions, settings } = value.prepared;
   const display = (label, item) => el('section', { class: 'review-record' }, el('h3', {}, label), el('pre', {}, JSON.stringify(item, null, 2)));
   const { topic, objective, successCriteria, mode, pins } = context;
   const controls = el('section', { class: 'review-record research-preferences' }, el('h3', {}, 'Research preferences'));
-  for (const [key, label, choices] of (challenge ? [] : [
+  for (const [key, label, choices] of (challenge || regeneration ? [] : [
     ['depth', 'Depth', [['quick', 'Quick - 60 seconds / 8 tool attempts'], ['standard', 'Standard - 180 seconds / 24 tool attempts'], ['deeper', 'Deeper - 300 seconds / 40 tool attempts']]],
     ['sourceFocus', 'Source focus', [['balanced', 'Balanced evidence'], ['primary', 'Prefer primary sources']]],
     ['recency', 'Recency', [['any', 'No recency preference'], ['recent', 'Prefer recent sources when relevant']]],
@@ -2488,7 +2510,7 @@ function renderResearchReview() {
     select.addEventListener('change', () => researchReview.settings({ ...researchReview.context.settings, [key]: select.value }));
     controls.append(el('label', {}, label, select));
   }
-    const rows = [...(challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. Saved journey records are complete; project prefixes are labeled separately.`),
+    const rows = [...(challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : regeneration ? [el('p', {}, 'Question generation is queued in the attached chat. Cancellation rejects its result but does not stop the chat turn. No isolated research helper or web retrieval is started by this action.')] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. ${regeneration ? 'Needs-review answer text is withheld; required prerequisites and selected coverage are shown below.' : 'Saved journey records are complete; project prefixes are labeled separately.'}`),
     display('Required: committed journey guidance and mode', { topic, objective, successCriteria, mode, pins }),
       display(challenge ? 'Required: journey root' : 'Required: selected question and committed answer state', context.path.at(-1))];
   if (challenge) {
@@ -2496,7 +2518,11 @@ function renderResearchReview() {
     if (!context.projectSources?.length) rows.push(el('p', { id: 'project-empty' }, researchReview.projectDraft.trim() ? 'No files are attached to this preview. Read/refresh the entered paths or remove them before starting.' : 'No project files selected.'));
     if (!value.prepared.projectFresh) rows.push(el('p', { id: 'project-stale', class: 'notice' }, 'Project files or working root changed or are unavailable. These are the previously reviewed excerpts. Explicitly read/refresh files and review again before starting.'));
     for (const source of context.projectSources ?? []) rows.push(el('section', { class: 'review-record' }, el('h3', {}, `Project source: ${source.name}`), el('p', {}, `${source.excerptBytes} / ${source.bytes} UTF-8 bytes included${source.truncated ? ' (prefix excerpt)' : ' (complete file)'}. ${value.prepared.projectFresh ? 'Current at last check.' : 'Stale or unavailable.'} Source ${source.id}; SHA-256 ${source.fingerprint}`), el('pre', {}, source.excerpt)));
-  } else rows.unshift(el('p', { class: 'quiet' }, 'Project files are excluded from web research and follow-ups. Selected files are available only in an explicit Challenge decisions review.'));
+  } else if (!regeneration) rows.unshift(el('p', { class: 'quiet' }, 'Project files are excluded from web research and follow-ups. Selected files are available only in an explicit Challenge decisions review.'));
+  if (regeneration) {
+    rows.unshift(retainedControls());
+    rows.push(display('Required: current prerequisites and selected retained coverage', context.regeneration));
+  }
   if (value.prepared.followup) rows.push(display('Follow-up: exact question, hypothetical status, original recommendation, complete optional evidence and exchanges', value.prepared.followup), display('Bounded source tracking across this history', coverage.followupTracking));
   for (const [kind, records] of [['Ancestor', context.path.slice(0, -1)], ['Other answer', context.decisionsElsewhere]]) for (const record of records) {
     const input = el('input', { type: 'checkbox', 'data-node-id': record.id }); input.checked = true;
@@ -2529,7 +2555,7 @@ $('research-review-start').addEventListener('click', async () => {
     else { researchReview.value = null; researchReview.error = $('check-status').textContent; renderResearchReview(); }
     return;
   }
-  const result = await api(value.prepared.followup ? 'research-follow-up' : 'research', { journey: value.journey, nodeId: value.nodeId, token: value.token });
+  const result = await api(value.prepared.operation === 'question-regeneration' ? 'regenerate-questions' : value.prepared.followup ? 'research-follow-up' : 'research', { journey: value.journey, nodeId: value.nodeId, token: value.token });
   reviewStarting = false;
   if (sequence !== researchReview.sequence) { if (researchReview.context) renderResearchReview(); return; }
   if (result) { closeResearchReview(); $('cancel-request')?.focus({ preventScroll: true }); }

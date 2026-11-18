@@ -141,6 +141,17 @@ try {
   snapshot = await action('restore-branch', { journey: branchCurrent.activeKey, token: branchPreview.token, confirm: true });
   assert.equal(snapshot.document.nodes.find(node => node.id === nodeId).answer, '');
   snapshot = await action('answer', { nodeId, answer: 'Neighbors', expand: false });
+  const regenerationResponse = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin },
+    body: JSON.stringify({ action: 'prepare', purpose: 'question-regeneration', clientId: 'fixture-regeneration-00000001', sequence: 1, journey: snapshot.activeKey, nodeId, scope: 'decisions', excluded: [], retained: [] }) });
+  assert.equal(regenerationResponse.status, 200); const regeneration = await regenerationResponse.json();
+  snapshot = await action('regenerate-questions', { journey: snapshot.activeKey, nodeId, token: regeneration.token });
+  const regenerationId = snapshot.pending.id;
+  assert.ok(regeneration.prepared.prompt.includes(regenerationId));
+  await until(async () => requests, values => JSON.stringify(values).includes(regenerationId), 'reviewed regeneration queued in attached session');
+  const beforeRegeneration = snapshot.document.nodes.length;
+  await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_questions', input: { requestId: regenerationId, questions: [{ question: 'Which neighbors need access first?', category: 'People' }] } });
+  snapshot = await state(); assert.equal(snapshot.preview.purpose, 'question-regeneration'); assert.equal(snapshot.document.nodes.length, beforeRegeneration);
+  snapshot = await action('dismiss-questions', { batchId: regenerationId }); assert.equal(snapshot.document.nodes.length, beforeRegeneration);
   const metadata = await session.rpc.metadata.snapshot();
   assert.equal(await realpath(metadata.workingDirectory), await realpath(project));
   assert.notEqual(metadata.workingDirectory, metadata.workspacePath);

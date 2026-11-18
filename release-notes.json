@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.90",
+    "summary": "Regenerate follow-up questions after correcting an answer. Review the exact saved context, current prerequisites and selected existing questions before sending. Obsolete answer claims are withheld, private drafts stay intact, and new candidates require acceptance. Changed context or scenario preferences require a fresh review."
+  },
+  {
     "version": "0.1.89",
     "summary": "Restore one historical branch without reverting unrelated work. History previews exact node and dependency changes, blocks identity and dependency conflicts, and saves an undoable revision. Current private drafts remain recoverable; restored research stays historical and changed context requires review."
   },

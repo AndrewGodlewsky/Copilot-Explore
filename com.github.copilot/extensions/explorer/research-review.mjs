@@ -24,8 +24,9 @@ export class ResearchReview {
   async prepare(explorer, input) {
     const challenge = input?.purpose === 'challenge-review';
     const handoff = input?.purpose === 'implementation-handoff';
+    const regeneration = input?.purpose === 'question-regeneration';
     if (!input || typeof input !== 'object' || Array.isArray(input) || !['prepare', 'cancel'].includes(input.action) ||
-      (handoff ? Object.keys(input).sort().join(',') !== 'action,clientId,journey,nodeId,purpose,selection,sequence' : !['action,clientId,excluded,journey,nodeId,scope,sequence', 'action,clientId,excluded,journey,nodeId,scope,sequence,settings'].includes(Object.keys(input).filter(key => key !== 'followup' && !(challenge && ['purpose', 'project'].includes(key))).sort().join(','))) ||
+      (regeneration ? Object.keys(input).sort().join(',') !== 'action,clientId,excluded,journey,nodeId,purpose,retained,scope,sequence' : handoff ? Object.keys(input).sort().join(',') !== 'action,clientId,journey,nodeId,purpose,selection,sequence' : !['action,clientId,excluded,journey,nodeId,scope,sequence', 'action,clientId,excluded,journey,nodeId,scope,sequence,settings'].includes(Object.keys(input).filter(key => key !== 'followup' && !(challenge && ['purpose', 'project'].includes(key))).sort().join(','))) ||
       (challenge && (input.followup !== undefined || input.scope !== 'decisions')) ||
       typeof input.clientId !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.clientId) ||
       !Number.isSafeInteger(input.sequence) || input.sequence < 1 ||
@@ -40,8 +41,9 @@ export class ResearchReview {
     if (input.action === 'cancel') return { status: 'cancelled' };
     if (explorer.closed || !explorer.doc || input.journey !== (explorer.activeKey ?? explorer.doc.id)) obsolete();
     if (explorer.pending) throw new Error('Wait for research or cancel the current request first.');
+    if (regeneration && explorer.preview) throw Error('Accept or dismiss the existing question preview before regenerating.');
     const file = explorer.file, key = explorer.activeKey;
-    const current = await explorer.readCurrent();
+    const current = regeneration ? await explorer.fresh() : await explorer.readCurrent();
     if (explorer.closed || this.order !== order || explorer.file !== file || explorer.activeKey !== key) obsolete();
     if (challenge || handoff ? input.nodeId !== current.rootId : !isQuestion(findNode(current, input.nodeId))) throw new Error(challenge || handoff ? 'This review must use the journey root.' : 'Select a question to research.');
     if (challenge && input.project) {
@@ -56,12 +58,12 @@ export class ResearchReview {
     const projectFresh = observedFresh && !this.selection?.stale;
     if (explorer.closed || this.order !== order || explorer.file !== file || explorer.activeKey !== key) obsolete();
     const scenarioPolicy = await explorer.scenarioPolicy(), scenario = scenarioPolicy.label;
-    const content = handoff ? prepareHandoff(current, input.selection, { scenario }) : challenge ? Object.freeze({ ...prepareChallenge(current, input.excluded, projectCapture?.sources, { scenario }), projectCapture, projectFresh }) : input.followup !== undefined ? prepareFollowup(current, input.nodeId, input.followup, { settings, scenario, scope: input.scope, excluded: input.excluded, history: explorer.currentFollowup(current, input.nodeId) }) : Object.freeze({ ...prepareResearch(current, input.nodeId, { ...researchFraming(current, settings), scenario, scope: input.scope, excluded: input.excluded }), settings, limits: researchLimits(settings) });
+    const content = regeneration ? explorer.prepareRequest('questions', input.nodeId, randomUUID(), input.scope, scenario, { document: current, retained: input.retained, excluded: input.excluded }) : handoff ? prepareHandoff(current, input.selection, { scenario }) : challenge ? Object.freeze({ ...prepareChallenge(current, input.excluded, projectCapture?.sources, { scenario }), projectCapture, projectFresh }) : input.followup !== undefined ? prepareFollowup(current, input.nodeId, input.followup, { settings, scenario, scope: input.scope, excluded: input.excluded, history: explorer.currentFollowup(current, input.nodeId) }) : Object.freeze({ ...prepareResearch(current, input.nodeId, { ...researchFraming(current, settings), scenario, scope: input.scope, excluded: input.excluded }), settings, limits: researchLimits(settings) });
     await explorer.assertScenarioPolicy(scenarioPolicy);
     const prepared = Object.freeze({ ...content, scenarioPolicy });
     const token = randomUUID(), expiresAt = Date.now() + REVIEW_TTL;
     const response = { token, journey: input.journey, nodeId: input.nodeId, clientId: input.clientId, sequence: input.sequence, expiresAt,
-      excluded: [...input.excluded ?? []], prepared: { context: prepared.context, instructions: prepared.instructions, prompt: prepared.prompt, bytes: prepared.bytes, limit: prepared.limit, coverage: prepared.coverage, ...(handoff ? { operation: 'implementation-handoff', canStart: true } : challenge ? { operation: 'challenge-review', canStart: prepared.canStart && projectFresh, projectFresh } : { settings }), limits: prepared.limits, ...(prepared.followup ? { followup: prepared.followup } : {}) } };
+      excluded: [...input.excluded ?? []], prepared: { context: prepared.context, instructions: prepared.instructions, prompt: prepared.prompt, bytes: prepared.bytes, limit: prepared.limit, coverage: prepared.coverage, ...(regeneration ? { operation: 'question-regeneration', canStart: true } : handoff ? { operation: 'implementation-handoff', canStart: true } : challenge ? { operation: 'challenge-review', canStart: prepared.canStart && projectFresh, projectFresh } : { settings }), limits: prepared.limits, ...(prepared.followup ? { followup: prepared.followup } : {}) } };
     if (Buffer.byteLength(JSON.stringify(response), 'utf8') > REVIEW_RESPONSE_LIMIT) throw new Error('The research review exceeds its 1 MiB response limit. Reduce optional exclusions or choose a narrower scope.');
     this.current = { token, journey: input.journey, nodeId: input.nodeId, file, key, prepared, expiresAt };
     clearTimeout(this.timer); this.timer = setTimeout(() => this.clear(), REVIEW_TTL); this.timer.unref?.();
@@ -74,13 +76,15 @@ export class ResearchReview {
     if ((review.prepared.operation ?? (review.prepared.followup ? 'research-follow-up' : 'research')) !== (input.purpose ?? 'research')) throw new Error('This review has a different purpose.');
     const challenge = review.prepared.operation === 'challenge-review';
     const handoff = review.prepared.operation === 'implementation-handoff';
+    const regeneration = review.prepared.operation === 'question-regeneration';
+    if (regeneration && (explorer.pending || explorer.preview)) throw Error('Finish or dismiss the current questions before regenerating.');
     if (challenge && !review.prepared.canStart) throw new Error('Select at least one saved nonempty answer to challenge. Tentative answers remain tentative.');
     this.clear(true);
     const current = await explorer.readCurrent();
     await explorer.assertScenarioPolicy(review.prepared.scenarioPolicy);
     if (review.prepared.projectCapture && (!review.prepared.projectFresh || !await explorer.projectContext.fresh(review.prepared.projectCapture))) throw new Error('Reviewed project files or working root changed or are unavailable. Explicitly refresh files and review before starting.');
     explorer.currentFollowup(current);
-    if (explorer.closed || !sameResearchSources(review.prepared.dependencies, current) || (!challenge && !handoff && !sameResearchDestination(review.prepared.dependencies, current))) throw new Error('Reviewed sources or saved research changed. Refresh and review context before starting.');
+    if (explorer.closed || !sameResearchSources(review.prepared.dependencies, current) || (regeneration && !sameResearchSources(review.prepared.dependencies, explorer.doc)) || (!challenge && !handoff && !regeneration && !sameResearchDestination(review.prepared.dependencies, current))) throw new Error('Reviewed sources or saved research changed. Refresh and review context before starting.');
     if (handoff) {
       const captured = { dependencies: captureHandoff(review.prepared), formatFingerprint: review.prepared.formatFingerprint, ...review.prepared.context };
       if (handoffFreshness(captured, current) !== 'current' || handoffFreshness(captured, explorer.doc) !== 'current') throw Error('Reviewed handoff sources or evidence changed. Refresh and review again.');

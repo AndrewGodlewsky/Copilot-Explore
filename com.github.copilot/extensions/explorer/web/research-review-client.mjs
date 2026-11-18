@@ -5,7 +5,8 @@ export class ResearchReviewClient {
     this.context = null; this.value = null; this.loading = false; this.error = ''; this.abort = null;
     this.projectDraft = ''; this.projectDirty = false;
   }
-  open(context) { this.close(); this.context = context.purpose === 'implementation-handoff' ? { ...context } : { ...context, settings: researchSettings(), excluded: [] }; void this.prepare(); }
+  open(context) { this.close(); this.context = context.purpose === 'question-regeneration' ? { ...context, excluded: [], retained: [] } : context.purpose === 'implementation-handoff' ? { ...context } : { ...context, settings: researchSettings(), excluded: [] }; void this.prepare(); }
+  retain(ids) { if (this.context?.purpose === 'question-regeneration') { this.context = { ...this.context, retained: [...ids] }; void this.prepare(); } }
   settings(value) {
     if (!this.context) return;
     this.context = { ...this.context, settings: researchSettings(value) }; void this.prepare();

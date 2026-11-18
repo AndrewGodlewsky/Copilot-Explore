@@ -10,6 +10,7 @@ import { ScenarioComparison } from './scenario-compare.mjs';
 import { ScenarioPreferences } from './scenario-preference-workflow.mjs';
 import { BranchRestoration } from './branch-restoration.mjs';
 import { savedDigest } from './review-causes.mjs';
+import { captureAdrScope, adrScopeFreshness } from './adr-scope.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
 import { ProjectMerge } from './project-merge.mjs';
@@ -923,6 +924,32 @@ export class Explorer {
   }
   clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; }
   reviewResearch(input) { return this.transact(() => this.researchReview.prepare(this, input)); }
+  adrScopeRequest(input) {
+    return this.transact(async () => {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || !['status', 'save'].includes(input.action) ||
+        Object.keys(input).sort().join(',') !== (input.action === 'save' ? 'action,journey,revision,token' : 'action,journey') ||
+        this.closed || !this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw Error('Invalid ADR scope request. Refresh the saved journey.');
+      if (input.action === 'status') {
+        let policy, message;
+        try { policy = await this.scenarioPolicy(); } catch (error) { message = error.message; }
+        const current = await this.fresh(), scope = current.adrScope ?? null;
+        return { journey: input.journey, scope: structuredClone(scope), freshness: scope ? adrScopeFreshness(scope, current, policy?.label) : 'none', ...(message ? { message } : {}) };
+      }
+      return this.withDocumentLock(async () => {
+        if (!Number.isSafeInteger(input.revision) || input.revision !== this.doc.revision) throw Error('The saved journey revision changed. Refresh and review the ADR scope again.');
+        const prepared = await this.researchReview.consume(this, { token: input.token, journey: input.journey, nodeId: this.doc.rootId, purpose: 'adr-scope' });
+        const current = await this.fresh(), scope = captureAdrScope(prepared), base = savedDigest(current);
+        if (adrScopeFreshness(scope, current, prepared.context.scenario) !== 'current') throw Error('The reviewed ADR scope changed. Refresh and review again.');
+        const next = { ...structuredClone(current), adrScope: scope };
+        await this.commitCurrentLocked(current, next, 'Saved reviewed ADR scope', async () => {
+          await this.assertScenarioPolicy(prepared.scenarioPolicy);
+          const latest = await this.readCurrent();
+          if (this.closed || input.journey !== (this.activeKey ?? this.doc?.id) || savedDigest(latest) !== base || savedDigest(this.doc) !== base) throw Error('The saved context changed. Refresh and review the ADR scope again.');
+        });
+        return { journey: input.journey, scope: structuredClone(scope), freshness: 'current', snapshot: this.uiSnapshot() };
+      });
+    });
+  }
   async request(kind, nodeId, scope, reviewed) {
     this.dashboard?.invalidate();
     const id = reviewed?.requestId ?? randomUUID(), webResearch = kind === 'research' || kind === 'research-follow-up';

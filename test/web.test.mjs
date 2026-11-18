@@ -1138,7 +1138,7 @@ test('project storage controls create and explicitly reopen a repository journey
   const project = await mkdtemp(join(tmpdir(), 'explorer-project-controls-')); t.after(() => rm(project, { recursive: true, force: true }));
   await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
   const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project }), $ = id => f.document.getElementById(id);
-  const personalKey = f.explorer.activeKey;
+  const personalKey = f.explorer.activeKey, personalTopic = f.explorer.doc.topic;
   $('library-toggle').click();
   assert.equal($('start-storage').value, 'personal');
   $('start-storage').value = 'project'; $('start-storage').dispatchEvent(new f.window.Event('change'));
@@ -1149,8 +1149,13 @@ test('project storage controls create and explicitly reopen a repository journey
   const path = f.explorer.snapshot().storage.path;
   assert.match($('journey-storage').textContent, /Project.*decisions\/maps/);
   assert.ok(!$('journey-storage').textContent.includes(project)); assert.match($('journey-storage').textContent, /Git/);
+  let releaseState;
+  f.pauseState(() => new Promise(resolve => { releaseState = resolve; }));
+  const pendingState = f.poll(); await until(() => releaseState, 'earlier project poll held');
   await f.explorer.command('cancel');
   await f.explorer.command('open', { revision: f.explorer.doc.revision, key: personalKey }); await f.poll();
+  f.pauseState(null); releaseState(); await pendingState;
+  await f.poll(); await until(() => $('map-title').textContent === personalTopic, 'personal journey rendered after the earlier poll');
   $('project-open').click(); assert.equal(f.document.activeElement, $('project-open-path'));
   f.type('project-open-path', path); await uiResponse(f, 'api/action', 'open-project', () => $('project-open-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true })));
   await until(() => !$('workspace').hidden && $('journey-storage').textContent.includes('Project: decisions/maps/'), 'project reopening response rendered');
@@ -1986,6 +1991,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   answerChangeDialog.showModal = () => { answerChangeDialog.open = true; };
   answerChangeDialog.close = () => { answerChangeDialog.open = false; };
   const briefDialog = document.getElementById('brief-dialog');
+  const adrScopeDialog = document.getElementById('adr-scope-dialog');
+  if (adrScopeDialog) { adrScopeDialog.showModal = () => { adrScopeDialog.open = true; }; adrScopeDialog.close = () => { adrScopeDialog.open = false; }; }
   briefDialog.showModal = () => { briefDialog.open = true; };
   briefDialog.close = () => { briefDialog.open = false; };
   const checkDialog = document.getElementById('check-dialog');
@@ -5646,6 +5653,94 @@ test('cold damaged binding reaches recovery controls with no active map and open
   assert.equal(await readFile(originalFile, 'utf8'), '{truncated private'); assert.notEqual(f.explorer.file, originalFile);
 });
 
+
+async function adrScopeFixture(t) {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc);
+    doc.nodes.push({ id: 'adr-focal', parentId: doc.nodes[1].id, question: 'Choose durability?', category: 'Scope', answer: 'Saved tentative choice', answerState: 'tentative', research: null, review: true },
+      { id: 'adr-child', parentId: 'adr-focal', question: 'How to recover?', category: 'Scope', answer: '', research: null, review: false });
+    await e.save(doc);
+  } });
+  f.open('adr-focal'); f.type('answer', 'PRIVATE ADR DRAFT λ');
+  const editor = f.document.getElementById('answer'); editor.focus(); editor.setSelectionRange(2, 6);
+  let calls = 0; f.explorer.send = async () => { calls++; }; const $ = id => f.document.getElementById(id);
+  const open = async () => { $('adr-scope-open').click(); await until(() => $('adr-scope-dialog').open && !$('adr-scope-focal').disabled, 'ADR scope opened'); };
+  const focal = () => { $('adr-scope-focal').value = 'adr-focal'; $('adr-scope-focal').dispatchEvent(new f.window.Event('change', { bubbles: true })); };
+  const preview = async () => { $('adr-scope-review').click(); await until(() => !$('adr-scope-save').disabled, 'ADR scope exact input'); };
+  return { ...f, $, editor, openScope: open, focalScope: focal, previewScope: preview, scopeCalls: () => calls };
+}
+
+test('ADR scope UI selects branch and cross-branch context explicitly, saves a reference and preserves draft/caret', async t => {
+  const f = await adrScopeFixture(t), { $ } = f, before = structuredClone(f.explorer.doc);
+  await f.openScope(); assert.equal($('adr-scope-focal').value, ''); assert.equal($('adr-scope-sources').querySelectorAll('input:checked').length, 0); assert.equal($('adr-scope-save').disabled, true);
+  f.focalScope(); assert.equal($('adr-scope-sources').querySelectorAll('input:checked').length, 1);
+  $('adr-scope-ancestors').click(); $('adr-scope-branch').click();
+  $('adr-scope-sources').querySelector(`[data-adr-node="${before.nodes[2].id}"]`).click();
+  assert.equal($('adr-scope-sources').querySelectorAll('input:checked').length, 4); assert.equal($('adr-scope-evidence').checked, false);
+  assert.match($('adr-scope-description').textContent, /global guidance|all.*constraints/i); await f.previewScope();
+  const text = $('adr-scope-preview-text').textContent; assert.match(text, /Saved tentative choice/); assert.match(text, /needs-review|review/); assert.ok(text.includes(before.nodes[2].id)); assert.doesNotMatch(text, /PRIVATE ADR DRAFT/);
+  $('adr-scope-close').click(); assert.equal(f.explorer.doc.adrScope, undefined); assert.deepEqual(f.explorer.doc.nodes, before.nodes);
+  assert.equal($('answer'), f.editor); assert.equal(f.editor.selectionStart, 2); assert.equal(f.editor.selectionEnd, 6);
+  await f.openScope(); f.focalScope(); await f.previewScope(); $('adr-scope-save').click();
+  await until(() => f.explorer.doc.adrScope && /current/.test($('adr-scope-status').textContent) && !$('adr-scope-focal').disabled, 'scope saved');
+  assert.equal($('answer'), f.editor); assert.equal(f.editor.value, 'PRIVATE ADR DRAFT λ'); assert.equal(f.editor.selectionStart, 2); assert.deepEqual(f.explorer.doc.nodes, before.nodes); assert.equal(f.scopeCalls(), 0);
+  $('adr-scope-close').click(); await f.openScope(); assert.equal($('adr-scope-focal').value, 'adr-focal'); assert.equal($('adr-scope-sources').querySelectorAll('input:checked').length, 1); assert.equal($('adr-scope-save').disabled, true);
+  $('adr-scope-close').click();
+});
+
+test('ADR scope UI invalidates changed choices and saved sources and refreshes stale capture status', async t => {
+  const f = await adrScopeFixture(t), { $ } = f; await f.openScope(); f.focalScope(); await f.previewScope();
+  $('adr-scope-evidence').click(); assert.equal($('adr-scope-save').disabled, true); await f.previewScope();
+  const changed = structuredClone(f.explorer.doc); changed.objective = 'Changed saved guidance'; await f.explorer.save(changed); await f.poll();
+  assert.equal($('adr-scope-save').disabled, true); assert.match($('adr-scope-preview-status').textContent, /changed|review/i);
+  await f.previewScope(); $('adr-scope-save').click(); await until(() => f.explorer.doc.adrScope && !$('adr-scope-focal').disabled, 'saved scope');
+  const accepted = structuredClone(f.explorer.doc.adrScope), next = structuredClone(f.explorer.doc); next.nodes.find(n => n.id === 'adr-focal').answer = 'Another saved choice'; await f.explorer.save(next); await f.poll();
+  $('adr-scope-refresh').click(); await until(() => /stale/.test($('adr-scope-status').textContent), 'stale scope status');
+  assert.deepEqual(f.explorer.doc.adrScope, accepted); assert.equal(f.editor.value, 'PRIVATE ADR DRAFT λ'); assert.equal(f.scopeCalls(), 0); $('adr-scope-close').click();
+});
+
+test('ADR scope UI ignores a suspended exact-preview response and requires new review after resume', async t => {
+  const f = await adrScopeFixture(t), { $ } = f; await f.openScope(); f.focalScope();
+  const original = f.window.fetch; let release, holding = true;
+  f.window.fetch = async (path, options) => { const response = await original(path, options); if (holding && path === 'api/research-review' && JSON.parse(options.body).action === 'prepare') await new Promise(resolve => { release = resolve; }); return response; };
+  t.after(() => release?.()); $('adr-scope-review').click(); await until(() => release, 'held ADR preview');
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true })); release(); holding = false;
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await f.poll();
+  assert.equal($('adr-scope-dialog').open, false); assert.equal(f.explorer.doc.adrScope, undefined);
+  await f.openScope(); assert.equal($('adr-scope-save').disabled, true); f.focalScope(); await f.previewScope(); assert.equal(f.scopeCalls(), 0); $('adr-scope-close').click();
+});
+
+test('ADR scope UI ignores an old save response after suspension and reopens the actually saved reference', async t => {
+  const f = await adrScopeFixture(t), { $ } = f; await f.openScope(); f.focalScope(); await f.previewScope();
+  const original = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await original(path, options); if (path === 'api/adr-scope' && JSON.parse(options.body).action === 'save') await new Promise(resolve => { release = resolve; }); return response; };
+  t.after(() => release?.()); $('adr-scope-save').click(); await until(() => release, 'held ADR save response'); assert.ok(f.explorer.doc.adrScope);
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true })); release();
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await f.poll();
+  assert.equal($('adr-scope-dialog').open, false); await f.openScope(); assert.equal($('adr-scope-focal').value, 'adr-focal'); assert.match($('adr-scope-status').textContent, /current/);
+  assert.equal($('answer').value, 'PRIVATE ADR DRAFT λ'); assert.equal(f.scopeCalls(), 0); $('adr-scope-close').click();
+});
+
+test('ADR scope UI exposes missing captured sources for explicit removal and ignores detached controls', async t => {
+  const f = await adrScopeFixture(t), { $ } = f; await f.openScope(); f.focalScope(); $('adr-scope-branch').click(); await f.previewScope();
+  $('adr-scope-save').click(); await until(() => f.explorer.doc.adrScope && !$('adr-scope-focal').disabled, 'scope saved');
+  const oldInput = $('adr-scope-sources').querySelector('[data-adr-node="adr-child"]'); $('adr-scope-close').click();
+  const doc = structuredClone(f.explorer.doc); doc.nodes = doc.nodes.filter(node => node.id !== 'adr-child'); await f.explorer.save(doc); await f.poll();
+  await f.openScope(); assert.match($('adr-scope-status').textContent, /stale/); assert.match($('adr-scope-count').textContent, /1 unavailable/);
+  oldInput.checked = false; oldInput.dispatchEvent(new f.window.Event('change')); assert.equal($('adr-scope-sources').querySelector('[data-adr-node="adr-child"]').checked, true);
+  $('adr-scope-review').click(); await until(() => /Invalid|select/i.test($('adr-scope-preview-status').textContent) && !$('adr-scope-review').disabled, 'missing source rejected');
+  assert.equal($('adr-scope-save').disabled, true); $('adr-scope-sources').querySelector('[data-adr-node="adr-child"]').click(); await f.previewScope();
+  assert.equal(f.explorer.doc.adrScope.selection.nodeIds.includes('adr-child'), true); assert.equal(f.scopeCalls(), 0); $('adr-scope-close').click();
+});
+
+test('ADR scope UI rejects oversized exact input without disabling source correction', async t => {
+  const f = await adrScopeFixture(t), { $ } = f, doc = structuredClone(f.explorer.doc);
+  doc.nodes.find(n => n.id === 'adr-focal').answer = '\0'.repeat(20000); doc.nodes[1].answer = '\0'.repeat(20000); await f.explorer.save(doc); await f.poll();
+  await f.openScope(); f.focalScope(); $('adr-scope-ancestors').click(); $('adr-scope-review').click();
+  await until(() => /128 KiB/.test($('adr-scope-preview-status').textContent), 'scope budget error'); assert.equal($('adr-scope-save').disabled, true);
+  $('adr-scope-sources').querySelector(`[data-adr-node="${doc.nodes[1].id}"]`).click(); await f.previewScope();
+  assert.equal(f.scopeCalls(), 0); assert.equal($('answer').value, 'PRIVATE ADR DRAFT λ'); $('adr-scope-close').click();
+});
 
 test('implementation handoff HTTP UI requires exact selection review, preserves drafts and edits, and copies accepted portable text', async t => {
   let prepared, copied;

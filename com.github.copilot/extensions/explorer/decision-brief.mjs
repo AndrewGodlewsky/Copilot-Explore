@@ -67,13 +67,16 @@ export function parseBrief(content, prepared) {
     coverage: { scope: 'journey-summary', bytes: prepared.bytes, limit: prepared.limit, included: dependencies.records.length,
       omitted: Object.values(prepared.context.omitted).reduce((sum, n) => sum + n, 0) } };
 }
-export function validateBrief(value) {
-  if (!keys(value, 'version,acceptedAt,sections,dependencies,coverage') || value.version !== 1 || !string(value.acceptedAt, 40) || !Number.isFinite(Date.parse(value.acceptedAt))) invalid();
-  const dep = value.dependencies, coverage = value.coverage;
+export function validateBriefCapture(dep, coverage, scope = 'journey-summary') {
   if (!keys(dep, 'projection,identity,guidance,records') || !Number.isSafeInteger(dep.projection) || dep.projection < 1 || !digest(dep.identity) || !digest(dep.guidance) || !Array.isArray(dep.records) || dep.records.length > 5000) invalid();
   if (new Set(dep.records.map(source => source?.id)).size !== dep.records.length || dep.records.some(source => !keys(source, 'id,hash,question,state,review') || !string(source.id, 100) || !digest(source.hash) || !string(source.question, 4000) || ![...Object.keys(ANSWER_STATES), 'idea', 'direction'].includes(source.state) || typeof source.review !== 'boolean')) invalid();
-  if (!keys(coverage, 'scope,bytes,limit,included,omitted') || coverage.scope !== 'journey-summary' || coverage.limit !== 131072 || !['bytes', 'included', 'omitted'].every(key => Number.isSafeInteger(coverage[key]) && coverage[key] >= 0) || coverage.bytes > coverage.limit || coverage.included !== dep.records.length || coverage.included + coverage.omitted > 5000) invalid();
-  const result = { version: 1, acceptedAt: value.acceptedAt, sections: briefSections(value.sections, dep.records, true), dependencies: structuredClone(dep), coverage: structuredClone(coverage) };
+  if (!keys(coverage, 'scope,bytes,limit,included,omitted') || coverage.scope !== scope || coverage.limit !== 131072 || !['bytes', 'included', 'omitted'].every(key => Number.isSafeInteger(coverage[key]) && coverage[key] >= 0) || coverage.bytes > coverage.limit || coverage.included !== dep.records.length || coverage.included + coverage.omitted > 5000) invalid();
+  return { dependencies: structuredClone(dep), coverage: structuredClone(coverage) };
+}
+export function validateBrief(value) {
+  if (!keys(value, 'version,acceptedAt,sections,dependencies,coverage') || value.version !== 1 || !string(value.acceptedAt, 40) || !Number.isFinite(Date.parse(value.acceptedAt))) invalid();
+  const capture = validateBriefCapture(value.dependencies, value.coverage);
+  const result = { version: 1, acceptedAt: value.acceptedAt, sections: briefSections(value.sections, capture.dependencies.records, true), ...capture };
   if (Buffer.byteLength(JSON.stringify({ brief: result }, null, 2)) > BRIEF_ARTIFACT_LIMIT) throw new Error('The accepted brief exceeds the 512 KiB saved-artifact limit.');
   return result;
 }

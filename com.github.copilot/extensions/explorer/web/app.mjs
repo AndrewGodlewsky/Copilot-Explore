@@ -261,6 +261,7 @@ const paletteCommands = [
   ['center-question', 'Center question'], ['minimap-toggle', 'Show minimap'], ['navigation-open', 'Settings'],
   ['edit-guidance', 'Edit guidance'], ['history-open', 'History'], ['recovery-open', 'Recovery'],
   ['visual-export-open', 'Export maps'], ['decision-brief', 'Decision brief'], ['implementation-handoff', 'Implementation handoff'],
+  ['adr-scope-open', 'ADR scope'],
   ['check-answers', 'Check answers'], ['challenge-decisions', 'Challenge decisions'], ['research-request', 'Research options'],
   ['revisit-answer', 'Revisit this answer'], ['scenario-preference-open', 'Scenario preference'],
 ];
@@ -599,6 +600,10 @@ function apply(next, reset = false) {
   const compactFocused = $('nodes').contains(document.activeElement);
   const previousSelection = selected;
   const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
+  if ($('adr-scope-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) {
+    invalidateAdrPreview('Saved inputs or scenario changed. Review the current selection again.');
+    $('adr-scope-status').textContent = 'Saved inputs changed. Refresh scope status before relying on the previous check.';
+  }
   if ($('project-merge-dialog').open && (changedDocument || state.document?.revision !== next.document?.revision || next.projectChange)) closeProjectMerge();
   if (!!state.projectChange !== !!next.projectChange) { cancelProjectGitStatus(); projectGitResult = null; projectGitError = ''; }
   if (viewerTarget && (changedDocument || viewerTarget.journey !== (next.activeKey ?? next.document?.id) || viewerTarget.revision !== next.document?.revision)) {
@@ -620,6 +625,7 @@ function apply(next, reset = false) {
     nextQuestionOpen = false; nextQuestionStamp = ''; $('next-question').hidden = true;
     closeResearchReview();
     closeBrief();
+    closeAdrScope();
     closeCheck();
     lastCoverage = ''; $('context-coverage').textContent = 'Check the selected node or start a request to see coverage.';
     cleanup.cancel();
@@ -670,6 +676,7 @@ function apply(next, reset = false) {
   $('decision-brief').hidden = !doc;
   $('review-affected').hidden = !doc;
   $('implementation-handoff').hidden = !doc;
+  $('adr-scope-open').hidden = !doc;
   $('check-answers').hidden = !doc; $('challenge-decisions').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('visual-export-open').hidden = !doc;
@@ -3283,6 +3290,110 @@ $('file').addEventListener('change', async () => {
   try { const document = JSON.parse(await file.text()); await switchJourney('import', { document }); }
   catch (error) { notice(`Could not open that file: ${error.message}`); }
 });
+let adrEpoch = 0, adrJourney = null, adrBusy = false, adrAbort = null, adrSelected = new Set(), adrSaved = null, adrPreviewMessage = '';
+const adrReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: renderAdrPreview });
+const adrCurrent = (epoch = adrEpoch) => epoch === adrEpoch && !closed && !suspended && $('adr-scope-dialog').open && adrJourney === (state.activeKey ?? state.document?.id);
+function adrControls() {
+  const focal = $('adr-scope-focal').value;
+  for (const name of ['adr-scope-focal', 'adr-scope-evidence', 'adr-scope-refresh']) $(name).disabled = adrBusy;
+  for (const name of ['adr-scope-ancestors', 'adr-scope-branch']) $(name).disabled = adrBusy || !focal;
+  $('adr-scope-review').disabled = adrBusy || adrReview.loading || !focal || !adrSelected.size;
+  $('adr-scope-save').disabled = adrBusy || !adrReview.value || Date.now() >= adrReview.value.expiresAt;
+  for (const input of $('adr-scope-sources').querySelectorAll('input')) { input.checked = adrSelected.has(input.dataset.adrNode); input.disabled = adrBusy || input.dataset.adrNode === focal; }
+  const missing = [...adrSelected].filter(id => !state.document?.nodes.some(node => node.id === id)).length;
+  $('adr-scope-count').textContent = `${adrSelected.size}/100 records selected. The focal question is required. ${missing ? `${missing} unavailable saved sources: uncheck them or choose a new focal question before reviewing.` : 'Ancestors and other branches are included only when selected.'}`;
+}
+function renderAdrPreview() {
+  const value = adrReview.value;
+  $('adr-scope-preview').hidden = !value;
+  $('adr-scope-preview-text').textContent = value ? `${value.prepared.instructions}\n\n${value.prepared.prompt}` : '';
+  if (value) $('adr-scope-preview').open = true;
+  $('adr-scope-preview-status').textContent = adrReview.error || (adrReview.loading ? 'Preparing exact saved input…' : value ? `${value.prepared.coverage.included} explicit records; ${value.prepared.coverage.omitted} omitted. All global guidance is included. ${value.prepared.bytes}/${value.prepared.limit} UTF-8 bytes. Saving records a scope reference only.` : adrPreviewMessage || 'Choose the context, then preview its exact saved input.');
+  adrControls();
+}
+function invalidateAdrPreview(message = 'Selection changed. Preview exact input again before saving.') {
+  adrReview.close(); adrReview.error = ''; adrPreviewMessage = message; renderAdrPreview();
+}
+function closeAdrScope(focus = false) {
+  adrEpoch++; adrAbort?.abort(); adrAbort = null; adrJourney = null; adrBusy = false; adrReview.close();
+  if ($('adr-scope-dialog').open) $('adr-scope-dialog').close();
+  if (focus) $('adr-scope-open').focus();
+}
+function adrChoices(chosen) {
+  const epoch = adrEpoch, nodes = state.document.nodes.filter(node => isQuestion(node) || node.kind === 'direction'), byId = new Map(nodes.map(node => [node.id, node]));
+  adrSelected = new Set(chosen?.nodeIds ?? []);
+  $('adr-scope-focal').replaceChildren(el('option', { value: '' }, 'Choose a focal question'), ...nodes.filter(isQuestion).map(node => el('option', { value: node.id }, node.question)));
+  if (chosen?.focalId && !byId.has(chosen.focalId)) $('adr-scope-focal').append(el('option', { value: chosen.focalId }, 'Unavailable saved focal question — choose a current question'));
+  $('adr-scope-focal').value = chosen?.focalId ?? ''; $('adr-scope-evidence').checked = chosen?.includeEvidence ?? false;
+  $('adr-scope-sources').replaceChildren();
+  const unavailable = [...adrSelected].filter(id => !byId.has(id)).map(id => ({ id, missing: true, question: adrSaved?.dependencies.records.find(node => node.id === id)?.question ?? id }));
+  for (const node of [...nodes, ...unavailable]) {
+    const input = el('input', { type: 'checkbox', 'data-adr-node': node.id });
+    input.addEventListener('change', () => {
+      if (!adrCurrent(epoch) || adrBusy || !input.isConnected) return;
+      input.checked ? adrSelected.add(node.id) : adrSelected.delete(node.id); invalidateAdrPreview();
+    });
+    $('adr-scope-sources').append(el('label', {}, input, `${node.question} · ${node.missing ? 'unavailable saved source' : node.kind === 'direction' ? 'user direction' : effectiveAnswerState(node)}${node.review ? '; needs review' : ''}`));
+  }
+  adrControls();
+}
+async function requestAdrScope(action, initialize = false) {
+  if (!adrCurrent() || adrBusy || action === 'save' && busy) return;
+  const reviewed = adrReview.value;
+  if (action === 'save' && (!reviewed || Date.now() >= reviewed.expiresAt)) return invalidateAdrPreview('Review the current selection again before saving.');
+  const epoch = adrEpoch, journey = adrJourney, writes = action === 'save', abort = new AbortController(); adrAbort = abort;
+  if (writes) { busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); }
+  const mapEpoch = actionEpoch, timer = setTimeout(() => abort.abort(), 10000);
+  adrBusy = true; adrControls(); $('adr-scope-status').textContent = writes ? 'Saving reviewed scope…' : 'Checking saved scope and scenario…';
+  try {
+    const response = await fetch('api/adr-scope', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
+      body: JSON.stringify({ action, journey, ...(writes ? { token: reviewed.token, revision: state.document.revision } : {}) }) });
+    const result = await response.json();
+    if (!adrCurrent(epoch) || writes && mapEpoch !== actionEpoch) return;
+    if (!response.ok) throw Error(result.error);
+    if (result.journey !== journey) throw Error('ADR scope response belongs to a different journey.');
+    if (result.snapshot) apply(result.snapshot);
+    adrSaved = result.scope;
+    if (initialize) adrChoices(result.scope?.selection);
+    else if (!writes) adrChoices({ focalId: $('adr-scope-focal').value, nodeIds: [...adrSelected], includeEvidence: $('adr-scope-evidence').checked });
+    $('adr-scope-status').textContent = result.scope ? `Saved scope is ${result.freshness} at this check. Selected ${result.scope.selectedAt}. ${result.message ?? ''}` : `No saved ADR scope. ${result.message ?? ''}`;
+    if (writes) invalidateAdrPreview('Scope saved. A new exact review is required before replacing it or later drafting.');
+  } catch (error) {
+    if (adrCurrent(epoch)) { $('adr-scope-status').textContent = `${abort.signal.aborted ? 'Request timed out; refresh to check whether the scope saved.' : error.message} Scope freshness is unknown until checked.`; if (writes) invalidateAdrPreview(); }
+  } finally {
+    clearTimeout(timer); if (writes && mapEpoch === actionEpoch) busy = false;
+    if (adrCurrent(epoch)) { adrBusy = false; adrAbort = null; adrControls(); }
+  }
+}
+$('adr-scope-open').addEventListener('click', () => {
+  if (!state.document || !switchAllowed('selecting ADR scope')) return;
+  closeAdrScope(); adrJourney = state.activeKey ?? state.document.id; adrSaved = null; adrPreviewMessage = ''; adrReview.error = '';
+  adrChoices(); renderAdrPreview(); $('adr-scope-dialog').showModal(); void requestAdrScope('status', true);
+});
+$('adr-scope-focal').addEventListener('change', () => { if (adrCurrent() && !adrBusy) { if ($('adr-scope-focal').value) adrSelected.add($('adr-scope-focal').value); invalidateAdrPreview(); } });
+$('adr-scope-evidence').addEventListener('change', () => { if (adrCurrent() && !adrBusy) invalidateAdrPreview(); });
+function addAdrRelated(branch) {
+  if (!adrCurrent() || adrBusy) return;
+  const nodes = state.document.nodes, byId = new Map(nodes.map(node => [node.id, node])), focal = byId.get($('adr-scope-focal').value), ids = new Set();
+  if (!focal) return;
+  if (branch) { ids.add(focal.id); const children = new Map(nodes.map(node => [node.id, []])); for (const node of nodes) children.get(node.parentId)?.push(node.id); const queue = [focal.id]; for (let i = 0; i < queue.length; i++) for (const id of children.get(queue[i]) ?? []) if (!ids.has(id)) { ids.add(id); queue.push(id); } }
+  else for (let node = byId.get(focal.parentId); node?.parentId !== null && node && !ids.has(node.id); node = byId.get(node.parentId)) ids.add(node.id);
+  const combined = new Set([...adrSelected, ...ids]);
+  if (combined.size > 100) { invalidateAdrPreview('This selection would exceed 100 records. Choose supporting questions individually.'); return; }
+  adrSelected = combined; invalidateAdrPreview();
+}
+$('adr-scope-ancestors').addEventListener('click', () => addAdrRelated(false));
+$('adr-scope-branch').addEventListener('click', () => addAdrRelated(true));
+$('adr-scope-review').addEventListener('click', () => {
+  if (!adrCurrent() || adrBusy) return;
+  adrReview.open({ purpose: 'adr-scope', journey: adrJourney, nodeId: state.document.rootId, selection: { focalId: $('adr-scope-focal').value, nodeIds: [...adrSelected], includeEvidence: $('adr-scope-evidence').checked } });
+});
+$('adr-scope-save').addEventListener('click', () => void requestAdrScope('save'));
+$('adr-scope-refresh').addEventListener('click', async () => { const epoch = adrEpoch; if (adrCurrent(epoch) && !adrBusy && await api('refresh-answer') && adrCurrent(epoch)) { invalidateAdrPreview(); await requestAdrScope('status'); } });
+$('adr-scope-close').addEventListener('click', () => closeAdrScope(true));
+$('adr-scope-dialog').addEventListener('cancel', event => { event.preventDefault(); closeAdrScope(true); });
+$('adr-scope-dialog').addEventListener('close', () => { if (adrJourney) closeAdrScope(); });
+
 let briefOperation = 'brief';
 const handoffReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: renderHandoffPreview });
 let briefView = null, briefId = null, briefJourney = null, briefEpoch = 0, briefBusy = false, briefAbort = null, briefStamp = '', briefEdits = new Map();
@@ -3744,6 +3855,7 @@ window.addEventListener('pagehide', event => {
   cleanup.cancel();
   closeBrief();
   closeCheck();
+  closeAdrScope();
   questionHelp.dispose();
   void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;

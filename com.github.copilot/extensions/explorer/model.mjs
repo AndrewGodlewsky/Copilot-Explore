@@ -1,4 +1,5 @@
 import { validateHandoff, handoffMarkdown } from './implementation-handoff.mjs';
+import { validateAdrScope, adrScopeMarkdown } from './adr-scope.mjs';
 import { scenarioOrigin } from './scenario-origin.mjs';
 import { validateBrief, briefMarkdown } from './decision-brief.mjs';
 import { randomUUID } from 'node:crypto';
@@ -284,6 +285,7 @@ export function validateDocument(value) {
     rootId: root.id, createdAt: date(value.createdAt, 'creation date'), updatedAt: date(value.updatedAt, 'update date'),
     ...(Object.hasOwn(value, 'brief') ? { brief: validateBrief(value.brief) } : {}),
     ...(Object.hasOwn(value, 'handoff') ? { handoff: validateHandoff(value.handoff) } : {}),
+    ...(Object.hasOwn(value, 'adrScope') ? { adrScope: validateAdrScope(value.adrScope) } : {}),
     finishedAt: value.finishedAt === null ? null : date(value.finishedAt, 'finish date'), nodes };
   if (Buffer.byteLength(JSON.stringify(document, null, 2)) > MAX_DOCUMENT_BYTES) throw new Error('This map has reached the 9 MiB saved-data limit. Export it and continue in a new exploration.');
   return document;
@@ -533,9 +535,9 @@ export function toMarkdown(doc) {
     }
   }
   // Only a fixed heading may precede the appendix, including when the topic is multiline.
-  if (doc.brief || doc.handoff) {
+  if (doc.brief || doc.handoff || doc.adrScope) {
     lines[0] = '# Exploration';
-    lines.splice(2, 0, ...(doc.brief ? [briefMarkdown(doc.brief, doc), ''] : []), ...(doc.handoff ? [handoffMarkdown(doc.handoff, doc), ''] : []), '## Topic', '', md(doc.topic), '');
+    lines.splice(2, 0, ...(doc.brief ? [briefMarkdown(doc.brief, doc), ''] : []), ...(doc.handoff ? [handoffMarkdown(doc.handoff, doc), ''] : []), ...(doc.adrScope ? [adrScopeMarkdown(doc.adrScope), ''] : []), '## Topic', '', md(doc.topic), '');
   }
   return lines.join('\n') + '\n';
 }

@@ -64,7 +64,7 @@ test('ordering combines independent additions but competing reorders require a c
 });
 
 test('invalid graphs, unknown families and different journey identities cannot merge', () => {
-  for (const mutate of [doc => { doc.version = 2; }, doc => { doc.journey.dependencies = []; }, doc => { doc.journey.nodes.push(doc.journey.nodes[0]); }, doc => { doc.journey.id = 'other'; }]) {
+  for (const mutate of [doc => { doc.version = 2; }, doc => { doc.journey.futureADR = []; }, doc => { doc.journey.nodes.push(doc.journey.nodes[0]); }, doc => { doc.journey.id = 'other'; }]) {
     const f = fixture(); mutate(f.incoming); assert.throws(() => merge(f));
   }
   const f = fixture(); node(f.local, f.a).parentId = f.b; node(f.incoming, f.b).parentId = f.a;

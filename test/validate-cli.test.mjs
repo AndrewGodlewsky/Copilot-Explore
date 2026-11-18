@@ -63,7 +63,7 @@ test('the opt-in workflow validation command checks a disposable sample reposito
 
 test('legacy compatibility does not silently accept unknown reference families or extensions', async t => {
   const f = await fixture(t);
-  for (const field of ['dependencies', 'scenarios', 'adr', 'extensions']) {
+  for (const field of ['scenarios', 'adr', 'extensions']) {
     const doc = { ...f.personal, [field]: [{ nodeId: 'missing-node' }] }, content = JSON.stringify(doc); await writeFile(join(f.cwd, `${field}.json`), content);
     const result = await f.run([`${field}.json`]); assert.equal(result.code, 1, `${field}: ${result.stdout}`); assert.match(result.stdout, /unsupported field/);
     assert.equal(await readFile(join(f.cwd, `${field}.json`), 'utf8'), content);

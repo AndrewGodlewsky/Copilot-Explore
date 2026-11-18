@@ -14,6 +14,36 @@ export const MAX_NODES = 5000;
 export const MAX_DOCUMENT_BYTES = 9 * 1024 * 1024;
 export const MAX_OBJECTIVE = 2000;
 export const MAX_SUCCESS_CRITERIA = 4000;
+export const MAX_DEPENDENCIES = 10000;
+function decisionDependencies(value, nodes) {
+  if (!Array.isArray(value) || value.length > MAX_DEPENDENCIES) throw Error('Dependencies must be a list of at most 10,000 relationships.');
+  const byId = new Map(nodes.map(node => [node.id, node])), seen = new Set(), children = new Map(nodes.map(node => [node.id, []])), incoming = new Map(nodes.map(node => [node.id, 0]));
+  const result = value.map(link => {
+    if (!link || typeof link !== 'object' || Array.isArray(link) || Object.keys(link).some(key => !['dependentId', 'prerequisiteId', 'explanation'].includes(key))) throw Error('Invalid dependency fields.');
+    const { dependentId, prerequisiteId } = link;
+    if (![dependentId, prerequisiteId].every(id => typeof id === 'string' && byId.has(id) && isQuestion(byId.get(id)))) throw Error('Dependencies must refer to two existing ordinary questions; a question is missing or is a structural node.');
+    if (dependentId === prerequisiteId) throw Error('A question cannot depend on itself.');
+    const key = JSON.stringify([dependentId, prerequisiteId]);
+    if (seen.has(key)) throw Error('This dependency already exists; duplicate pairs are not allowed.');
+    seen.add(key); children.get(prerequisiteId).push(dependentId); incoming.set(dependentId, incoming.get(dependentId) + 1);
+    return { dependentId, prerequisiteId, ...(Object.hasOwn(link, 'explanation') ? { explanation: guidanceText(link.explanation, 'Dependency explanation', 1000) } : {}) };
+  });
+  const queue = nodes.filter(node => incoming.get(node.id) === 0).map(node => node.id);
+  for (let i = 0; i < queue.length; i++) for (const id of children.get(queue[i])) { incoming.set(id, incoming.get(id) - 1); if (incoming.get(id) === 0) queue.push(id); }
+  if (queue.length !== nodes.length) throw Error('These dependencies create a directed cycle. Remove a relationship before adding this one.');
+  return result;
+}
+export function addDependency(doc, dependentId, prerequisiteId, explanation) {
+  const link = { dependentId, prerequisiteId, ...(explanation === undefined ? {} : { explanation }) };
+  const candidate = validateDocument({ ...doc, dependencies: [...doc.dependencies ?? [], link] });
+  doc.dependencies = candidate.dependencies;
+}
+export function removeDependency(doc, dependentId, prerequisiteId) {
+  const dependencies = (doc.dependencies ?? []).filter(link => link.dependentId !== dependentId || link.prerequisiteId !== prerequisiteId);
+  if (dependencies.length === (doc.dependencies ?? []).length) throw Error('That dependency no longer exists.');
+  validateDocument({ ...doc, dependencies });
+  if (dependencies.length) doc.dependencies = dependencies; else delete doc.dependencies;
+}
 export function pinnedConstraints(value) {
   const seen = new Set();
   return list(value, 'pinned constraints (at most 10)', 10, pin => {
@@ -232,6 +262,7 @@ export function validateDocument(value) {
     successCriteria: guidanceText(Object.hasOwn(value, 'successCriteria') ? value.successCriteria : '', 'Success criteria', MAX_SUCCESS_CRITERIA),
     ...(Object.hasOwn(value, 'mode') ? { mode: validMode(value.mode) } : {}),
     ...(Object.hasOwn(value, 'pins') ? { pins: pinnedConstraints(value.pins) } : {}),
+    ...(Object.hasOwn(value, 'dependencies') ? { dependencies: decisionDependencies(value.dependencies, nodes) } : {}),
     rootId: root.id, createdAt: date(value.createdAt, 'creation date'), updatedAt: date(value.updatedAt, 'update date'),
     ...(Object.hasOwn(value, 'brief') ? { brief: validateBrief(value.brief) } : {}),
     ...(Object.hasOwn(value, 'handoff') ? { handoff: validateHandoff(value.handoff) } : {}),
@@ -327,6 +358,10 @@ export function toMarkdown(doc) {
     '| ID | Parent | Category | Question | Status |', '| --- | --- | --- | --- | --- |'];
   const ids = new Map(doc.nodes.map((n, i) => [n.id, `N${i}`]));
   for (const n of doc.nodes) lines.push(`| ${ids.get(n.id)} | ${ids.get(n.parentId) ?? '—'} | ${md(n.category).replace(/\n/g, ' ')} | ${md(n.question).replace(/\n/g, ' ')} | ${nodeStatus(n)}${n.review ? '; needs review' : ''} |`);
+  if (doc.dependencies?.length) {
+    lines.push('', '## Confirmed decision dependencies', '', 'User assertions, separate from tree navigation and research evidence. B depends on A means changing A may affect B.', '');
+    for (const link of doc.dependencies) lines.push(`- ${ids.get(link.dependentId)} depends on ${ids.get(link.prerequisiteId)}${link.explanation ? `: ${md(link.explanation)}` : ''}`);
+  }
   for (const n of doc.nodes) {
     if (n.id === doc.rootId) continue;
     lines.push('', `## ${ids.get(n.id)}: ${md(n.question)}`, '', `Category: ${md(n.category)}. Parent: ${ids.get(n.parentId)}.`, '');

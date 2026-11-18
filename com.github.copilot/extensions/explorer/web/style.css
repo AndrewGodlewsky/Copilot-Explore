@@ -89,6 +89,10 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .reference-row button { font-size: 11px; margin: 6px 8px 0 0; }
 .reference-full { margin: 6px 0; }
 .reference-full p { white-space: pre-wrap; max-height: 180px; overflow: auto; }
+#decision-dependencies { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; overflow-wrap: anywhere; }
+#decision-dependencies button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; margin: 4px 4px 4px 0; }
+#decision-dependencies select, #decision-dependencies textarea { display: block; width: 100%; min-width: 0; margin: 6px 0 12px; }
+.dependency-explanation { white-space: pre-wrap; max-height: 12rem; overflow-y: auto; }
 :where(.cleanup-text) { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow-y: auto; }
 
 #context-controls{flex:none;margin:0 20px 10px;max-height:32vh;overflow:auto;padding:8px 0;border-top:1px solid var(--line)}#context-controls summary{cursor:pointer;margin-bottom:8px}#context-controls button{margin:4px 4px 4px 0;font-size:12px}#context-controls select{max-width:100%}#constraint-list>div{margin:12px 0}#constraint-list button{margin-top:6px}#guidance-form fieldset{min-width:0;margin:16px 0;border:1px solid var(--line);padding:12px}#start-scope{margin-bottom:8px}

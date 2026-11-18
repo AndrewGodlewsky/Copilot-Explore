@@ -7,6 +7,7 @@ import { ProjectCopy } from './project-copy.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
 import { ProjectMerge } from './project-merge.mjs';
+import { addDependency, removeDependency } from './model.mjs';
 import { projectDocumentAccess } from './storage-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
@@ -695,6 +696,7 @@ export class Explorer {
         const old = new Map(current.nodes.map(node => [node.id, node])), restored = new Map(result.document.nodes.map(node => [node.id, node]));
         result.preview = { matchesCurrent: JSON.stringify(restoreCandidate(result.document, current)) === JSON.stringify(current), removed: current.nodes.filter(node => !restored.has(node.id)).length, added: result.document.nodes.filter(node => !old.has(node.id)).length,
           changed: result.document.nodes.filter(node => old.has(node.id) && JSON.stringify(node) !== JSON.stringify(old.get(node.id))).length,
+          dependenciesChanged: JSON.stringify(current.dependencies ?? []) !== JSON.stringify(result.document.dependencies ?? []),
           guidanceChanged: current.objective !== result.document.objective || current.successCriteria !== result.document.successCriteria || effectiveMode(current) !== effectiveMode(result.document) || JSON.stringify(current.pins ?? []) !== JSON.stringify(result.document.pins ?? []) };
       }
       return { ...result, journey, pending: !!this.pending, revision: current.revision, ...(requested !== undefined ? { snapshotRevision: requested } : {}) };
@@ -916,6 +918,15 @@ export class Explorer {
       const next = structuredClone(this.doc);
       this.error = '';
       switch (action) {
+        case 'add-dependency':
+        case 'remove-dependency': {
+          const allowed = ['action', 'scope', 'revision', 'nodeId', 'prerequisiteId', ...(action === 'add-dependency' ? ['explanation'] : [])];
+          if (Object.keys(input).some(key => !allowed.includes(key))) throw Error('Invalid dependency action fields.');
+          if (action === 'add-dependency') addDependency(next, input.nodeId, input.prerequisiteId, input.explanation);
+          else removeDependency(next, input.nodeId, input.prerequisiteId);
+          await this.save(next, action === 'add-dependency' ? 'Dependency added' : 'Dependency removed');
+          break;
+        }
         case 'acknowledge-direction':
           acknowledgeDirection(next, input.nodeId);
           await this.save(next, 'Direction review acknowledged');

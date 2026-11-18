@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.77",
+    "summary": "Record confirmed dependencies between questions across branches. Add explanations, navigate both relationship directions and remove links through normal History. Shared files and exports retain them; invalid references and cycles are rejected while answers, research and private drafts stay intact."
+  },
+  {
     "version": "0.1.76",
     "summary": "Compare a shared journey with a local Git branch or commit. Combine independent edits, choose between conflicting answers, and review downstream effects before saving through normal history. Private drafts stay separate; missing common bases offer comparison and copying without an invented merge."
   },

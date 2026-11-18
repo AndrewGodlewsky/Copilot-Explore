@@ -33,6 +33,39 @@ import { draftHash, draftBase } from '../com.github.copilot/extensions/explorer/
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 
+test('confirmed dependencies add and remove across branches without replacing answer drafts, and navigate both directions', async t => {
+  const f = await fixture(t, 360), $ = id => f.document.getElementById(id), [a, b] = f.explorer.doc.nodes.slice(1); f.open(b.id);
+  $('question-tools-toggle').click(); $('question-tab-context').click();
+  assert.ok($('dependency-target')); assert.equal($('dependency-target').value, ''); assert.equal($('add-dependency').disabled, true);
+  assert.equal(f.explorer.doc.dependencies, undefined); assert.match($('decision-dependencies').textContent, /separate|only listed/i);
+  const editor = $('answer'); f.type('answer', '  Private answer 日本語\n'); editor.setSelectionRange(3, 7);
+  f.type('dependency-target', a.id); f.type('dependency-explanation', '  Uses this result 🌱\n');
+  const explanation = $('dependency-explanation'); explanation.focus(); explanation.setSelectionRange(2, 6); await f.poll();
+  assert.equal($('dependency-explanation'), explanation); assert.equal(explanation.value, '  Uses this result 🌱\n'); assert.equal(explanation.selectionStart, 2);
+  $('add-dependency').click(); await until(() => f.explorer.doc.dependencies?.length === 1 && $('dependency-target').value === '', 'dependency saved');
+  assert.deepEqual(f.explorer.doc.dependencies[0], { dependentId: b.id, prerequisiteId: a.id, explanation: '  Uses this result 🌱\n' });
+  assert.equal($('answer'), editor); assert.equal(editor.value, '  Private answer 日本語\n'); assert.equal(editor.selectionStart, 3); assert.equal(f.explorer.doc.nodes.find(n => n.id === b.id).answer, '');
+  assert.match($('dependency-prerequisites').textContent, /This question depends on/);
+  $('dependency-prerequisites').querySelector('[data-dependency-open]').click(); assert.equal($('node-workspace').dataset.nodeId, a.id); assert.equal(f.document.activeElement, $('expanded-title'));
+  $('question-tools-toggle').click(); $('question-tab-context').click();
+  assert.match($('dependency-dependents').textContent, /Questions that depend on this/);
+  $('dependency-dependents').querySelector('[data-dependency-open]').click(); assert.equal($('node-workspace').dataset.nodeId, b.id); assert.equal($('answer').value, '  Private answer 日本語\n');
+  $('dependency-prerequisites').querySelector('[data-dependency-remove]').click(); await until(() => !f.explorer.doc.dependencies && $('notice').textContent.includes('Dependency removed'), 'dependency removed');
+  assert.equal($('answer').value, '  Private answer 日本語\n'); assert.equal(f.explorer.pending, null);
+});
+
+test('dependency failures keep the proposed relationship, plain text and answer draft for review', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id), [a, b] = f.explorer.doc.nodes.slice(1); f.open(b.id);
+  f.type('answer', 'Keep draft'); f.type('dependency-target', a.id); f.type('dependency-explanation', '<img src=x onerror=alert(1)>');
+  await f.explorer.command('add-dependency', { revision: f.explorer.doc.revision, nodeId: a.id, prerequisiteId: b.id }); await f.poll();
+  $('add-dependency').click(); await until(() => $('notice').textContent.includes('cycle'), 'cycle surfaced');
+  assert.equal($('dependency-explanation').value, '<img src=x onerror=alert(1)>'); assert.equal($('answer').value, 'Keep draft');
+  assert.equal(f.explorer.doc.dependencies.length, 1); assert.equal($('decision-dependencies').querySelector('img'), null);
+  for (const action of ['add-dependency', 'remove-dependency']) {
+    const response = await fetch(new URL('api/action', f.window.location.href), { method: 'POST', headers: { 'X-Explorer-Client': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ action, revision: f.explorer.doc.revision, nodeId: a.id, prerequisiteId: b.id }) }); assert.equal(response.status, 403);
+  }
+});
+
 test('question drawer keeps secondary tools out of answering and preserves mounted drafts when toggled', async t => {
   const f = await fixture(t, 360), $ = id => f.document.getElementById(id);
   f.open(f.explorer.doc.nodes[1].id);

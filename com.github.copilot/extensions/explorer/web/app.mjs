@@ -1514,6 +1514,51 @@ function renderWorkspace() {
     toolPanels.details.append(answerDetails, revisit);
   }
   toolPanels.context.append(context);
+  let updateDependencies = () => {};
+  if (isQuestion(node)) {
+    const section = el('section', { id: 'decision-dependencies', 'aria-labelledby': 'dependency-title' }, el('h3', { id: 'dependency-title' }, 'Confirmed decision dependencies'),
+      el('p', { class: 'quiet' }, 'B depends on A means changing A may affect B. Tree ancestors and children show navigation and possible impact; only listed links are confirmed dependencies. Pinned references are separate.'));
+    toolPanels.context.append(section); region('dependencies', section);
+    const form = el('form'), target = el('select', { id: 'dependency-target', required: '' }), explanation = el('textarea', { id: 'dependency-explanation', maxlength: '1000', rows: '2' });
+    explanation.value = ui.dependencyExplanation ?? '';
+    const add = el('button', { type: 'submit', id: 'add-dependency' }, 'Add dependency');
+    form.append(el('label', { for: target.id }, 'This question depends on'), target, el('label', { for: explanation.id }, 'Why it depends on this question (optional)'), explanation, add); section.append(form);
+    let rosterStamp = '', busy = false;
+    target.addEventListener('input', () => { ui.dependencyTarget = target.value; updateDependencies(); });
+    explanation.addEventListener('input', () => { ui.dependencyExplanation = explanation.value; });
+    const change = async (action, dependentId, prerequisiteId) => {
+      if (!current() || pending || busy) return;
+      const proposed = explanation.value, selectedTarget = target.value; busy = true; updateDependencies();
+      try {
+        const result = await api(action, { nodeId: dependentId, prerequisiteId, ...(action === 'add-dependency' && proposed ? { explanation: proposed } : {}) });
+        if (result && current()) {
+          if (action === 'add-dependency' && target.value === selectedTarget && explanation.value === proposed) { ui.dependencyTarget = ''; ui.dependencyExplanation = ''; target.value = ''; explanation.value = ''; }
+          notice(action === 'add-dependency' ? 'Dependency saved. Answers and tree navigation are unchanged.' : 'Dependency removed. The earlier relationship remains in History.');
+        }
+      } finally { busy = false; if (current()) updateDependencies(); }
+    };
+    form.addEventListener('submit', event => { event.preventDefault(); if (target.value) void change('add-dependency', node.id, target.value); });
+    updateDependencies = () => {
+      const links = doc.dependencies ?? [], roster = doc.nodes.filter(n => isQuestion(n) && n.id !== node.id), stamp = JSON.stringify(roster.map(n => [n.id, n.question]));
+      if (stamp !== rosterStamp) { rosterStamp = stamp; target.replaceChildren(el('option', { value: '' }, 'Choose a saved question'), ...roster.map(n => el('option', { value: n.id }, n.question))); target.value = ui.dependencyTarget ?? ''; }
+      target.disabled = explanation.disabled = !!pending || busy;
+      add.disabled = !!pending || busy || !target.value || links.some(link => link.dependentId === node.id && link.prerequisiteId === target.value);
+      update('dependencies', [links, links.map(link => [byId.get(link.dependentId)?.question, byId.get(link.prerequisiteId)?.question]), !!pending, busy], () => {
+        return [['prerequisites', 'This question depends on', 'dependentId', 'prerequisiteId'], ['dependents', 'Questions that depend on this', 'prerequisiteId', 'dependentId']].map(([name, title, own, other]) => {
+          const group = el('div', { id: `dependency-${name}` }, el('h4', {}, title));
+          const matching = links.flatMap((link, index) => link[own] === node.id ? [{ link, index }] : []);
+          if (!matching.length) group.append(el('p', { class: 'quiet' }, 'None confirmed.'));
+          for (const { link, index } of matching) {
+            const question = byId.get(link[other]);
+            group.append(el('div', {}, button(question.question, () => { if (current()) select(question.id); }, { id: `dependency-open-${name}-${index}`, 'data-dependency-open': '', 'aria-label': `Open question: ${question.question}` }),
+              link.explanation ? el('p', { class: 'dependency-explanation' }, link.explanation) : null,
+              button('Remove dependency', () => void change('remove-dependency', link.dependentId, link.prerequisiteId), { id: `dependency-remove-${index}`, 'data-dependency-remove': '', disabled: !!pending || busy, 'aria-label': `Remove dependency: ${byId.get(link.dependentId).question} depends on ${byId.get(link.prerequisiteId).question}` })));
+          }
+          return group;
+        });
+      });
+    };
+  }
   region('research', toolPanels.research);
   region('followup', toolPanels.research);
   region('children', toolPanels.context);
@@ -1547,6 +1592,7 @@ function renderWorkspace() {
   workspace.update = () => {
     const focused = panel.contains(document.activeElement) || drawer.contains(document.activeElement) ? document.activeElement : null;
     refresh();
+    updateDependencies();
     $('question-drawer-context').textContent = node.question;
     const pendingParent = ['research', 'research-follow-up'].includes(state.pending?.kind) ? toolPanels.research : toolPanels.explore;
     if (state.pending && regions.get('pending').area.parentElement !== pendingParent) pendingParent.prepend(regions.get('pending').area);
@@ -2291,7 +2337,7 @@ async function previewHistory(revision) {
     const preview = result.preview;
     const content = el('textarea', { readonly: '', rows: '8', 'aria-label': 'Saved snapshot content' }); content.value = JSON.stringify(result.document, null, 2);
     $('history-preview').replaceChildren(el('h3', {}, `Restore revision ${revision}`), el('p', {}, `${result.label} | ${new Date(result.time).toLocaleString()}`),
-      el('p', {}, `Compared with current revision ${result.revision} (${result.current.label}): ${preview.changed} changed, ${preview.added} restored and ${preview.removed} removed nodes. ${preview.guidanceChanged ? 'Guidance will change.' : 'Guidance is unchanged.'} Answers, answer states and research will come from this version. Local drafts will be preserved for review.`),
+      el('p', {}, `Compared with current revision ${result.revision} (${result.current.label}): ${preview.changed} changed, ${preview.added} restored and ${preview.removed} removed nodes. ${preview.guidanceChanged ? 'Guidance will change.' : 'Guidance is unchanged.'} ${preview.dependenciesChanged ? 'Confirmed decision dependencies will change.' : 'Confirmed decision dependencies are unchanged.'} Answers, answer states and research will come from this version. Local drafts will be preserved for review.`),
       el('details', {}, el('summary', {}, 'Inspect saved content'), content));
     $('history-status').textContent = result.pending ? 'Cancel the current Copilot request before restoring.' : result.preview.matchesCurrent ? 'This version already matches the saved journey. No restore is needed.' : 'Review the preview, then explicitly restore this version.';
     $('history-restore').disabled = historySelection === null || result.pending;

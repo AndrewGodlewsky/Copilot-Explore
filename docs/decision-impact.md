@@ -36,15 +36,33 @@ The affected-question selector lists 50 questions per page in stable ID order. S
 
 Long paths show 30 steps per page. **Open affected question**, or a path step's button, reveals that question even if it was folded or outside the focused branch and places keyboard focus on its heading. The answer draft remains separate. Closing the panel, changing folds, panning, zooming or branch focus does not change the saved-map result.
 
+## Connection display
+
+Choose **Connections ? Downstream impact** above the map. **Normal connections** is the default and returns to the existing display. This is a local canvas choice; it does not change the shared file or historical importance.
+
+Each incoming tree connection represents its **child question's** recorded downstream band. It does not assert that the parent depends on that child. Direction connections remain neutral; root and direction nodes have no question impact band. Explicit dependencies contribute to the calculation but are not drawn as extra tree connectors.
+
+| Band | Light / dark color | Width | Pattern |
+| --- | --- | ---: | --- |
+| Low | Slate / pale slate | 2 | Short dash, 2 on / 4 off |
+| Medium | Teal / pale teal | 3 | Long dash, 10 on / 5 off |
+| High | Orange / pale orange | 4 | Solid |
+
+Widths and dash lengths use SVG units and scale with the map. The legend explains the bands and endpoint. Question outlines still show selection and keyboard focus, and question text still identifies review state. In impact mode, adjacent connections retain their band styling rather than taking the normal selection color. Forced-colors mode uses system text color with the same widths and patterns. The minimap remains a navigation overview, not an impact heatmap.
+
+The selected question displays its band above the answer editor. Compact cards include it in accessible labels, and visible Outline rows show the same band as text. Scores use the full saved map even when descendants are folded, outside branch focus, filtered or offscreen. Switching styles and incoming saved updates retain the connected answer editor, draft text and selection.
+
+Portable Mermaid, JSON Canvas, SVG and print maps explicitly say **Downstream impact unavailable in this export** and that their connections show tree structure. Offline viewers carry the same unavailable label. These reduced projections omit the complete dependency graph; no score is recomputed from a selected subset. Native/shared records retain relationships for reopening in a compatible Explorer version.
+
 ## Implementation and bounds
 
 `DecisionImpact` and `impactPath` are exported from `model.mjs` and the browser-safe `web/decision-impact.mjs`. The constructor snapshots the validated saved map into adjacency and lightweight state records. Callers must create a new index when saved content changes. `analyze(sourceId)` returns counts, band, affected records, compact predecessor maps and an actual edge-visit counter. `impactPath(result, targetId, kind)` materializes only one requested path. It returns an empty list when that relation cannot explain the target.
 
 Index construction sorts adjacency for deterministic paths; each analysis performs three iterative traversals bounded by nodes plus tree/dependency edges. Memory is linear in the map size. No per-question full path arrays or all-pairs reachability matrices are retained. A path is at most the number of saved nodes. Existing 5,000-node, 10,000-dependency and 9 MiB input bounds apply.
 
-The UI builds an index only when impact inspection is opened, retains at most one saved-map index, and analyzes only the selected question. Its result is keyed by the saved map identity, node relationships, question text, effective answer states, review flags and dependency pairs. A relevant change invalidates it even when a replacement keeps the same revision. Identical HTTP snapshots and status-only updates reuse the result and retain paging. `decisionImpactKey` produces this deterministic key; the UI weakly memoizes keys for immutable received snapshots. A closed panel does not compute impact. The same mounted panel does no additional analysis or DOM reconstruction for unchanged saved-document updates. Future map-color/focus features should reuse these semantics while measuring their wider workload; these selected-question measurements do not establish all-node scoring performance.
+The UI builds an index only when impact inspection or connection display is enabled and retains at most one saved-map index. Full analysis is used only for the inspected question. Its result is keyed by the saved map identity, node relationships, question text, effective answer states, review flags and dependency pairs. A relevant change invalidates it even when a replacement keeps the same revision. Identical HTTP snapshots and status-only updates reuse the result and retain paging. `decisionImpactKey` produces this deterministic key; the UI weakly memoizes keys for immutable received snapshots. A closed inspection panel does not run full analysis. The same mounted panel does no additional analysis or DOM reconstruction for unchanged saved-document updates. `bandFor(sourceId)` computes exactly the same band using early-stop traversals: 20 unique reachable questions prove high total impact, and 5 explicit dependents prove high confirmed impact. Otherwise complete relevant traversals establish the medium/low rules. It stores only a band per queried question in the current index, bounded by map size. The UI requests bands only for visible cards/connections, paged Outline rows and the selected workspace. No all-pairs matrix or full analysis per drawn connection is needed. Structural chains may still require a complete traversal; this is bounded traversal, not constant-time scoring.
 
-Derived impact is not stored in the shared file and is not included in existing visual/offline exports. Those presentation surfaces are addressed by the subsequent impact-display issue. This feature changes no schema or historical importance field.
+Derived impact is not stored in the shared file. Visual/offline exports label unavailable impact explicitly, as described above. This feature changes no schema or historical importance field.
 
 ## Verification
 
@@ -61,3 +79,14 @@ Measured on Windows 10.0.26300, Intel Core Ultra 9 285K, Node v24.22.1, v0.1.78 
 | Near 9 MiB wide | 4,950 / 0 | 0.94 ms | 0.63 ms | 5,103 | 6.13 ms |
 
 Each run passed the 50-option/30-path-row DOM bounds. These are two-sample observations, not latency guarantees or an all-node scoring benchmark. The deep combined explanation inspected 2,215 steps on demand in a 0.09 ms median.
+
+
+The v0.1.79 display benchmark adds cold-cache exact bands for every question and enabling the connection mode at full-map Fit, with all 4,949 connections rendered in jsdom. Same machine and fixtures, worktree based on `845f60c` (dirty during implementation), one warmup/two samples:
+
+| Fixture | Questions scored | All bands median | Enable display median (jsdom) |
+| --- | ---: | ---: | ---: |
+| Deep, 10,000 links | 4,658 | 6.49 ms | 294.20 ms |
+| Wide, 10,000 links | 4,658 | 9.14 ms | 344.81 ms |
+| Near 9 MiB wide, no links | 4,658 | 1.62 ms | 313.97 ms |
+
+The all-bands phase excludes index construction and starts from an empty band cache. Display mode includes the saved-content key/index, workspace refresh and visible map rendering. Full-map DOM work dominates this synthetic measurement; it is not a native responsiveness guarantee. Later renders reuse bands until relevant saved content changes. This fixture result does not establish constant-time behavior for every structural/dependency topology.

@@ -66,6 +66,7 @@ test('standalone viewer uses exact hash CSP, preserves hostile text and navigate
   } });
   const d = dom.window.document, $ = id => d.getElementById(id);
   try {
+    assert.match(d.querySelector('header').textContent, /Downstream impact unavailable/);
     const csp = d.querySelector('meta[http-equiv]').content;
     assert.ok(content.indexOf('Content-Security-Policy') < content.indexOf('<style>'));
     assert.match(csp, /default-src 'none'/); assert.match(csp, /connect-src 'none'/); assert.ok(!csp.includes('unsafe-inline')); assert.ok(!csp.includes('unsafe-eval'));

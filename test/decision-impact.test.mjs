@@ -63,8 +63,27 @@ test('documented bands follow raw total and confirmed counts at every boundary',
     const doc = model.createDocument('Band fixture'); doc.nodes.push({ id:'source', parentId:doc.rootId, question:'Source?', category:'Choice', answer:'', research:null, review:false });
     for(let i=0;i<count;i++) doc.nodes.push({ id:`q${i}`, parentId:'source', question:`Question ${i}`, category:'Choice', answer:'', research:null, review:false });
     if(confirmed) doc.dependencies = Array.from({length:confirmed}, (_,i)=>({dependentId:`q${i}`,prerequisiteId:'source'}));
-    const result = index(doc).analyze('source'); assert.equal(result.counts.total,count); assert.equal(result.counts.confirmed,confirmed); assert.equal(result.band,band);
+    const impact = index(doc), result = impact.analyze('source'); assert.equal(result.counts.total,count); assert.equal(result.counts.confirmed,confirmed); assert.equal(result.band,band);
+    assert.equal(impact.bandFor('source'), band);
   }
+});
+
+test('display bands exactly match full analysis across mixed cycles, direction chains and deterministic varied maps', () => {
+  let seed = 71; const random = max => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % max; };
+  for (let sample = 0; sample < 8; sample++) {
+    const doc = model.createDocument('Varied impact');
+    for (let i = 0; i < 80; i++) doc.nodes.push({ id: `q${i}`, parentId: i ? `q${random(i)}` : doc.rootId, question: `Q${i}`, category: 'Choice', answer: '', research: null, review: false });
+    doc.dependencies = [];
+    for (let i = 1; i < 80; i++) if (random(3)) doc.dependencies.push({ dependentId: `q${random(i)}`, prerequisiteId: `q${i}` });
+    model.validateDocument(doc); const impact = index(doc);
+    assert.equal(typeof impact.bandFor, 'function');
+    for (const node of doc.nodes.slice(1)) { const expected = impact.analyze(node.id).band; assert.equal(impact.bandFor(node.id), expected); assert.equal(impact.bandFor(node.id), expected); }
+    assert.throws(() => impact.bandFor(doc.rootId), /ordinary saved question/);
+  }
+  const doc = model.createDocument('Structural chain');
+  doc.nodes.push({ id:'source', parentId:doc.rootId, question:'Source', category:'Choice', answer:'', research:null, review:false });
+  for (let i=0; i<3000; i++) doc.nodes.push({ id:`d${i}`, parentId:i?`d${i-1}`:'source', kind:'direction', question:`Direction ${i}`, category:'Direction', answer:'', research:null, review:false });
+  const impact = index(doc); assert.equal(impact.bandFor('source'), 'low'); assert.equal(impact.analyze('source').counts.total, 0);
 });
 
 test('near-limit deep traversal stores linear predecessor evidence and constructs only the inspected path', () => {

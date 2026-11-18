@@ -14,12 +14,29 @@ export function decisionImpactKey(doc) {
 
 /** A snapshot index of a validated saved map. Rebuild when saved content changes. */
 export class DecisionImpact {
+  bands = new Map();
   constructor(doc) {
     this.nodes = new Map(doc.nodes.map(node => [node.id, { id: node.id, question: isQuestion(node), state: effectiveAnswerState(node), review: !!node.review }]));
     this.edges = new Map(doc.nodes.map(node => [node.id, []]));
     for (const node of doc.nodes) if (node.parentId !== null) this.edges.get(node.parentId).push({ id: node.id, via: 'tree' });
     for (const link of doc.dependencies ?? []) this.edges.get(link.prerequisiteId).push({ id: link.dependentId, via: 'dependency' });
     for (const edges of this.edges.values()) edges.sort(order);
+  }
+  /** Exact display band: stop as soon as a high threshold is proven. Cache only the band. */
+  bandFor(sourceId) {
+    if (!this.nodes.get(sourceId)?.question) throw Error('Choose an ordinary saved question to inspect decision impact.');
+    if (this.bands.has(sourceId)) return this.bands.get(sourceId);
+    const countUntil = (kind, limit) => {
+      const seen = new Set([sourceId]), queue = [sourceId]; let count = 0;
+      for (let i = 0; i < queue.length; i++) for (const edge of this.edges.get(queue[i])) {
+        if (kind !== 'combined' && edge.via !== kind || seen.has(edge.id)) continue;
+        seen.add(edge.id); queue.push(edge.id);
+        if (this.nodes.get(edge.id).question && ++count >= limit) return count;
+      }
+      return count;
+    };
+    const total = countUntil('combined', 20), confirmed = total >= 20 ? 0 : countUntil('dependency', 5);
+    const value = band({ total, confirmed }); this.bands.set(sourceId, value); return value;
   }
   analyze(sourceId) {
     if (!this.nodes.get(sourceId)?.question) throw Error('Choose an ordinary saved question to inspect decision impact.');

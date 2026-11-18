@@ -390,3 +390,21 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 }
 
 .map-section:has(#question-drawer:not([hidden])) .scroll-pane, .map-section:has(#question-drawer:not([hidden])) .node-content { overscroll-behavior-y: auto; }
+
+:root { --impact-low: #566976; --impact-medium: #157477; --impact-high: #a54d17; }
+.impact-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 20px 8px; font-size: 12px; }
+.impact-controls > label { margin: 0; }
+.impact-controls > select { min-width: 0; max-width: 100%; }
+#impact-legend { flex-basis: 100%; min-width: 0; }
+#impact-legend p { margin: 6px 0; overflow-wrap: anywhere; }
+.impact-samples { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 0; list-style: none; }
+.impact-samples li { display: flex; align-items: center; gap: 6px; }
+.impact-sample { width: 60px; height: 12px; flex: none; }
+.impact-sample path { fill: none; }
+#edges[data-impact="true"] path[data-impact="low"], .impact-sample[data-impact="low"] path { stroke: var(--impact-low); stroke-width: 2; stroke-dasharray: 2 4; }
+#edges[data-impact="true"] path[data-impact="medium"], .impact-sample[data-impact="medium"] path { stroke: var(--impact-medium); stroke-width: 3; stroke-dasharray: 10 5; }
+#edges[data-impact="true"] path[data-impact="high"], .impact-sample[data-impact="high"] path { stroke: var(--impact-high); stroke-width: 4; stroke-dasharray: none; }
+#edges[data-impact="true"] path[data-impact="structural"] { stroke: var(--muted); stroke-width: 1.6; stroke-dasharray: none; }
+#workspace-impact { margin: 0; padding: 0 16px 8px; flex: none; }
+@media(prefers-color-scheme:dark) { :root { --impact-low: #b3c2cd; --impact-medium: #72c9c6; --impact-high: #efad7d; } }
+@media(forced-colors:active) { :root { --impact-low: CanvasText; --impact-medium: CanvasText; --impact-high: CanvasText; } #edges[data-impact="true"] path, .impact-sample path { forced-color-adjust: none; } #edges[data-impact="true"] path[data-impact="structural"] { stroke: CanvasText; } }

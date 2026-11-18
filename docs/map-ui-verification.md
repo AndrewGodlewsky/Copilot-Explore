@@ -24,3 +24,9 @@ The sweep covered panning, pointer cancellation, text selection, zoom, viewport 
 The DOM harness supplies geometry because jsdom has no rendering engine. It cannot establish native pointer feel, actual text-selection painting, scrollbars or platform wheel behavior. No browser or desktop UI was automated, per the owner's instructions. Manual Copilot checks still needed: drag a partly hidden node back, select answer text, zoom with the mouse/trackpad, resize a narrow canvas, Tab through an expanded editor, and confirm dictation still feels right.
 
 Browser semantics checked against primary documentation: [MDN overflow](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/overflow) explains why `clip` avoids hidden programmatic scrolling; the [Pointer Events capture algorithm](https://www.w3.org/TR/pointerevents3/#process-pending-pointer-capture) defines capture-transfer events.
+
+## Downstream impact display (v0.1.79)
+
+Automated HTTP/jsdom checks cover child-endpoint bands, line widths/patterns, legend, folded/focused full-map scores, visible Outline text, selected-question labels, saved and same-revision dependency changes, and preserved answer editor/draft/caret. Styles define light/dark colors and forced-color system strokes with unchanged patterns. Export tests verify visible unavailable labels.
+
+Owner native verification pending: choose Connections > Downstream impact in light, dark and Windows high-contrast themes at a narrow width; distinguish short-dash low, long-dash medium and solid thick high connectors; select/review a question and tab through controls; fold descendants and compare the unchanged band; use Outline with a screen reader; switch back to Normal connections. Check legend wrapping, zoomed line legibility, focus visibility and retained answer typing/IME. No browser or desktop automation was used.

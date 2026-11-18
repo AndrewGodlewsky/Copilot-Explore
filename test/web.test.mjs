@@ -34,6 +34,45 @@ import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, 
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 import { DecisionImpact, impactPath, decisionImpactKey } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
 
+test('connection impact mode labels child bands across folds and saved changes without replacing the editor', async t => {
+  const f = await fixture(t, 360, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc), [high, medium] = doc.nodes.slice(1);
+    high.review = true;
+    for (let i=0; i<20; i++) doc.nodes.push({ id:`band-${i}`, parentId:high.id, question:`Child ${i}`, category:'Choice', answer:'', research:null, review:false });
+    doc.nodes.push({ id:'band-low', parentId:doc.rootId, question:'Leaf question', category:'Choice', answer:'', research:null, review:false }, { id:'band-direction', parentId:doc.rootId, kind:'direction', question:'Direction', category:'Direction', answer:'', research:null, review:false });
+    doc.dependencies = [{ dependentId:'band-low', prerequisiteId:medium.id }];
+    await e.command('import', { revision:e.doc.revision, document:doc });
+  } }), $ = id => f.document.getElementById(id), [high, medium] = f.explorer.doc.nodes.slice(1), edge = id => f.document.querySelector(`#edges [data-edge-id="${id}"]`);
+  f.open(high.id); f.type('answer', 'Private exact draft'); const editor=$('answer'); editor.setSelectionRange(2,8);
+  assert.equal($('impact-display').value, 'normal'); assert.equal($('impact-legend').hidden, true);
+  $('impact-display').value='impact'; $('impact-display').dispatchEvent(new f.window.Event('change'));
+  assert.equal($('impact-legend').hidden, false); assert.match($('impact-legend').textContent, /child question/i);
+  assert.match($('impact-legend').textContent, /full saved map/i); assert.match($('impact-legend').textContent, /short dash/i);
+  assert.match($('workspace-impact').textContent, /High downstream impact/); assert.equal($('answer'), editor); assert.equal(editor.selectionStart,2);
+  $('branch-workspace').click(); f.window.__updates.fit();
+  assert.equal(edge(high.id).dataset.impact,'high'); assert.ok(edge(high.id).classList.contains('current'));
+  assert.equal(edge(medium.id).dataset.impact,'medium'); assert.equal(edge('band-low').dataset.impact,'low'); assert.equal(edge('band-direction').dataset.impact,'structural');
+  const styles = f.document.createElement('style'); styles.textContent = await readFile(new URL('../com.github.copilot/extensions/explorer/web/style.css', import.meta.url), 'utf8'); f.document.head.append(styles);
+  assert.equal(f.window.getComputedStyle(edge(high.id)).strokeWidth, '4');
+  assert.equal(f.window.getComputedStyle(edge(medium.id)).strokeDasharray, '10 5');
+  assert.equal(f.window.getComputedStyle(edge('band-low')).strokeDasharray, '2 4');
+  assert.match(styles.textContent, /@media\(prefers-color-scheme:dark\) \{ :root \{ --impact-low:/);
+  assert.match(styles.textContent, /@media\(forced-colors:active\).*--impact-high: CanvasText/s);
+  assert.match(f.document.querySelector('#nodes [data-node-id="band-low"]').getAttribute('aria-label'), /Low downstream impact/);
+  $('focus-branch').click(); assert.match($('workspace-impact').textContent, /High downstream impact/);
+  $('outline-toggle').click();
+  const outline = id => f.document.querySelector(`#outline-list [data-node-id="${id}"]`);
+  assert.match(outline(high.id).textContent, /High downstream impact/); assert.match(outline(high.id).textContent, /needs review/);
+  assert.match(outline(medium.id).textContent, /Medium downstream impact/);
+  await f.explorer.command('remove-dependency', { revision:f.explorer.doc.revision, nodeId:'band-low', prerequisiteId:medium.id }); await f.poll();
+  assert.match(outline(medium.id).textContent, /Low downstream impact/); assert.equal($('answer'),editor); assert.equal(editor.value,'Private exact draft'); assert.equal(editor.selectionStart,2);
+  const replacement = f.explorer.snapshot(); replacement.document.dependencies = [{dependentId:'band-low', prerequisiteId:medium.id}]; f.window.__updates.apply(replacement);
+  assert.match(outline(medium.id).textContent, /Medium downstream impact/);
+  $('impact-display').value='normal'; $('impact-display').dispatchEvent(new f.window.Event('change'));
+  assert.equal($('impact-legend').hidden,true); assert.equal($('workspace-impact').hidden,true); assert.doesNotMatch(outline(medium.id).textContent,/downstream impact/);
+  assert.equal($('answer'),editor); assert.equal(editor.value,'Private exact draft'); assert.equal(f.explorer.pending,null);
+});
+
 test('impact uses saved full-map context across drafts and folds, explains mixed paths and refreshes after saved dependency changes', async t => {
   const f = await fixture(t, 360, undefined, false, { before: async e => {
     const doc = structuredClone(e.doc), [a, b] = doc.nodes.slice(1);

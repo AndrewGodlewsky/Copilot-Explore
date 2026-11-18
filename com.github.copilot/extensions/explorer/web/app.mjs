@@ -42,13 +42,29 @@ let librarySearchTimer, librarySearchFlight = false, librarySearchQueued = false
 let outlinePage = 0, outlineFilterStamp = '', outlineMode = false, outlineNavigated = false;
 let revisitDay = localDate();
 let nextQuestion = new NextQuestion(), nextQuestionOpen = false, nextQuestionStamp = '';
-let impactDocument = null, impactIndex = null;
+let impactDocument = null, impactIndex = null, impactDisplay = false;
 // Received saved snapshots are immutable. Memoize their content keys without retaining old documents.
 const impactKeys = new WeakMap();
 function impactKey(document) {
   if (!impactKeys.has(document)) impactKeys.set(document, decisionImpactKey(document));
   return impactKeys.get(document);
 }
+function currentImpact(doc = state.document) {
+  const key = impactKey(doc);
+  if (impactDocument !== key) { impactDocument = key; impactIndex = new DecisionImpact(doc); }
+  return impactIndex;
+}
+function impactLabel(node) {
+  if (!impactDisplay || !isQuestion(node)) return '';
+  const value = currentImpact().bandFor(node.id);
+  return `${value[0].toUpperCase()}${value.slice(1)} downstream impact`;
+}
+$('impact-display').addEventListener('change', () => {
+  const anchor = anchorPoint(); impactDisplay = $('impact-display').value === 'impact';
+  $('edges').dataset.impact = String(impactDisplay); $('impact-legend').hidden = !impactDisplay;
+  if (impactDisplay) $('impact-legend').open = true;
+  if (state.document) { renderWorkspace(); refreshScene(anchor); renderOutline(); }
+});
 const revisitLabel = node => revisitStatuses(node.revisit, revisitDay).map(status => REVISIT_FILTERS[status]).join(' · ');
 const importanceLabel = node => node.importance ? `${node.importance[0].toUpperCase()}${node.importance.slice(1)} importance` : 'Unranked';
 const importanceBadge = node => el('span', { class: `importance importance-${node.importance ?? 'unranked'}` }, importanceLabel(node));
@@ -1138,7 +1154,7 @@ function renderMap() {
       }
       card.className = `node ${acceptedIds.has(n.id) ? 'new-question' : ''} ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''} ${branches.parentIds.has(n.id) ? 'has-branch' : ''}`;
       card.title = n.question; card.dataset.state = effectiveAnswerState(n);
-      card.setAttribute('aria-label', `${n.category}: ${n.question}. ${nodeStatus(n)}${isQuestion(n) ? `; ${importanceLabel(n)}` : ''}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden}` : ''}${n.revisit ? `; reminder: ${revisitLabel(n)}` : ''}${n.answer ? `; Answer: ${n.answer}` : ''}; ${branches.nodeCounts.get(n.id)} descendant nodes`);
+      card.setAttribute('aria-label', `${n.category}: ${n.question}. ${nodeStatus(n)}${isQuestion(n) ? `; ${importanceLabel(n)}` : ''}${impactDisplay && isQuestion(n) ? `; ${impactLabel(n)}` : ''}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden}` : ''}${n.revisit ? `; reminder: ${revisitLabel(n)}` : ''}${n.answer ? `; Answer: ${n.answer}` : ''}; ${branches.nodeCounts.get(n.id)} descendant nodes`);
       card.style.left = `${p.x}px`; card.style.top = `${p.y}px`; card.style.width = `${p.width}px`; card.style.height = `${p.height}px`; card.style.setProperty('--branch', colors[p.branch % colors.length]);
       const summary = detailTier === 'overview' || detailTier === 'schematic';
       const status = (hidden || (root ? `${total} questions` : `${nodeStatus(n)}${n.review ? '; needs review' : ''}`)) + (summary && !hidden ? ` \u00b7 ${branches.nodeCounts.get(n.id)} below` : '') + (n.revisit ? ` · ${revisitLabel(n)}` : '');
@@ -1162,6 +1178,8 @@ function renderMap() {
       if (!path) { path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.dataset.edgeId = n.id; edges.append(path); }
       path.setAttribute('d', edge.path);
       path.setAttribute('class', n.id === selected || n.parentId === selected ? 'current' : '');
+      if (impactDisplay) path.dataset.impact = isQuestion(n) ? currentImpact(doc).bandFor(n.id) : 'structural';
+      else delete path.dataset.impact;
     }
   }
   for (const stale of [...cards.values(), ...toggles.values(), ...paths.values()]) {
@@ -1368,7 +1386,8 @@ function renderWorkspace() {
   refresh();
   panel.dataset.nodeId = node.id; panel.replaceChildren(); panel.scrollTop = 0;
   const headingArea = el('div', { class: 'workspace-region' }), content = el('div', { class: 'node-content' });
-  panel.append(headingArea, content);
+  const workspaceImpact = el('p', { id: 'workspace-impact', class: 'quiet', hidden: true });
+  panel.append(headingArea, workspaceImpact, content);
   const drawer = $('question-drawer'); drawer.replaceChildren(); drawer.dataset.expanded = String(!!ui.toolsExpanded);
   const toolsBody = el('div', { id: 'question-tools-body', class: 'question-tools-body' });
   const toolsToggle = button('More options', () => setQuestionTools(drawer.hidden), { id: 'question-tools-toggle', 'aria-expanded': String(!!ui.toolsOpen), 'aria-controls': 'question-drawer' });
@@ -1607,8 +1626,7 @@ function renderWorkspace() {
     updateImpact = () => {
       if (!section.open) return;
       const key = impactKey(doc); if (source === key) return;
-      source = key; if (impactDocument !== key) { impactDocument = key; impactIndex = new DecisionImpact(doc); }
-      result = impactIndex.analyze(node.id);
+      source = key; result = currentImpact(doc).analyze(node.id);
       const selectedIndex = result.affected.findIndex(item => item.id === target.value); page = selectedIndex < 0 ? 0 : Math.floor(selectedIndex / 50);
       summary.textContent = `${result.band[0].toUpperCase()}${result.band.slice(1)} recorded impact — ${result.counts.total} affected questions.`;
       counts.textContent = `${result.counts.structural} possible through tree paths; ${result.counts.confirmed} confirmed dependents; ${result.counts.mixedOnly} mixed-path-only. ${result.counts.assumptions} unverified assumptions; ${result.counts.review} need review.`;
@@ -1650,6 +1668,7 @@ function renderWorkspace() {
   workspace.update = () => {
     const focused = panel.contains(document.activeElement) || drawer.contains(document.activeElement) ? document.activeElement : null;
     refresh();
+    workspaceImpact.hidden = !impactDisplay || !isQuestion(node); workspaceImpact.textContent = impactLabel(node);
     updateDependencies();
     updateImpact();
     $('question-drawer-context').textContent = node.question;
@@ -2154,7 +2173,7 @@ function renderOutline() {
   const { entries: matches, filtered, filters } = outlineEntries(), filterStamp = JSON.stringify([referenceJourney(), filters]);
   if (outlineFilterStamp !== filterStamp) { outlinePage = 0; outlineFilterStamp = filterStamp; }
   outlinePage = Math.min(outlinePage, Math.max(0, Math.ceil(matches.length / SEARCH_PAGE_SIZE) - 1));
-  const stamp = JSON.stringify([filterStamp, outlinePage, selected, matches.map(({ node: n, parent, depth, snippet, hasDraft }) => [n.id, n.question, n.category, nodeStatus(n), n.review, !!n.research, n.revisit, n.importance, parent, depth, snippet, hasDraft, collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
+  const stamp = JSON.stringify([filterStamp, outlinePage, selected, impactDisplay ? impactKey(state.document) : null, matches.map(({ node: n, parent, depth, snippet, hasDraft }) => [n.id, n.question, n.category, nodeStatus(n), n.review, !!n.research, n.revisit, n.importance, parent, depth, snippet, hasDraft, collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
   if ($('outline-list').renderStamp === stamp) return;
   $('outline-list').renderStamp = stamp;
   const scroll = $('outline-list').scrollTop;
@@ -2167,7 +2186,7 @@ function renderOutline() {
   $('outline-list').replaceChildren(...page.map(item => {
     const n = item.node;
     return el('div', { class: 'outline-row', role: 'listitem', style: `--depth:${filtered ? 0 : Math.min(item.depth, 4)}`, 'data-depth': item.depth },
-      button([n.question, el('small', {}, `Level ${item.depth + 1}${item.parent ? ` \u00b7 Parent: ${item.parent}` : ' \u00b7 Journey root'}`), el('small', {}, `${n.category} \u00b7 ${nodeStatus(n)}${n.review ? '; needs review' : ''}${n.research ? ' \u00b7 Research available' : ''}${collapsed.has(n.id) ? ` \u00b7 ${hiddenSummary(n.id)}` : ''}${n.revisit ? ` \u00b7 Reminder: ${revisitLabel(n)}` : ''}`), ...(isQuestion(n) ? [importanceBadge(n)] : [])], () => select(n.id, { outlineRow: true }), { 'data-node-id': n.id, 'aria-current': String(n.id === selected) }),
+      button([n.question, el('small', {}, `Level ${item.depth + 1}${item.parent ? ` \u00b7 Parent: ${item.parent}` : ' \u00b7 Journey root'}`), el('small', {}, `${n.category} \u00b7 ${nodeStatus(n)}${n.review ? '; needs review' : ''}${n.research ? ' \u00b7 Research available' : ''}${collapsed.has(n.id) ? ` \u00b7 ${hiddenSummary(n.id)}` : ''}${n.revisit ? ` \u00b7 Reminder: ${revisitLabel(n)}` : ''}`), ...(isQuestion(n) ? [importanceBadge(n), ...(impactDisplay ? [el('small', { class: 'outline-impact' }, impactLabel(n))] : [])] : [])], () => select(n.id, { outlineRow: true }), { 'data-node-id': n.id, 'aria-current': String(n.id === selected) }),
       ...(filtered ? [el('small', { class: 'search-snippet' }, item.snippet)] : []), branchButton(n));
   }));
   $('outline-list').scrollTop = scroll;

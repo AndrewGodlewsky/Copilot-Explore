@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.79",
+    "summary": "Switch Connections to Downstream impact to see each child decision's full-map influence through color, line width and pattern. A legend, question labels and Outline text explain the bands while preserving drafts and review states. Portable maps and offline viewers clearly label unavailable impact information."
+  },
+  {
     "version": "0.1.78",
     "summary": "Inspect downstream decision impact from Question tools. See unique affected questions, answer states, unverified assumptions and explainable tree, dependency or mixed paths. Impact bands use saved-map counts; drafts and folding do not affect them. Historical AI importance remains separate."
   },

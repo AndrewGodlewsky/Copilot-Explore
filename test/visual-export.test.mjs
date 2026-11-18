@@ -35,6 +35,7 @@ test('visual HTTP exports include exact saved subtree roles/states without ances
     const r = await f.post({ ...f.input, format }); assert.equal(r.status, 200);
     assert.match(r.headers.get('content-disposition'), /^attachment; filename="exploration-branch\.(canvas|mmd|svg|html)"$/);
     const text = await r.text(); assert.ok(!/CANARY/.test(text));
+    assert.match(text, /Downstream impact unavailable/);
     assert.ok(!text.includes(f.a.id)); assert.ok(!text.includes(f.doc.id));
     assert.ok(!text.includes('http://127.0.0.1')); assert.ok(!text.includes(f.server.url));
     if (format === 'canvas') {
@@ -48,6 +49,7 @@ test('visual HTTP exports include exact saved subtree roles/states without ances
     }
     if (format === 'svg' || format === 'print') {
       const dom = new JSDOM(text, format === 'svg' ? { contentType: 'image/svg+xml' } : {});
+      assert.match(dom.window.document.documentElement.textContent, /Downstream impact unavailable/);
       assert.equal(dom.window.document.querySelector('script,foreignObject,image,a,link,iframe'), null);
       assert.match(dom.window.document.documentElement.textContent.replace(/\n/g, ''), /<script>alert\(1\)<\/script>/);
       assert.match(dom.window.document.documentElement.textContent, /Saved answer λ/);

@@ -24,6 +24,17 @@ for (const spec of fixtureSpecs.filter(spec => spec.name.startsWith('near'))) {
   await measure(phases, 'index', 'Build saved-map adjacency snapshot', () => { new DecisionImpact(doc); return { nodes: doc.nodes.length, edges: doc.nodes.length - 1 + (doc.dependencies?.length ?? 0) }; });
   await measure(phases, 'analysis', 'Inspect one influential saved question', () => index.analyze(source), { report: result => ({ affected: result.counts.total, visitedEdges: result.visitedEdges, band: result.band }) });
   await measure(phases, 'path', 'Materialize one requested explanation path', () => ({ steps: impactPath(result, target, 'combined').length }));
+  await measure(phases, 'allBands', 'Calculate exact display bands for every question with a cold cache', (_i, index) => {
+    const counts = { low: 0, medium: 0, high: 0 };
+    for (const question of questions) counts[index.bandFor(question.id)]++;
+    assert.equal(Object.values(counts).reduce((a,b) => a+b, 0), questions.length);
+    return { questions: questions.length, ...counts };
+  }, { setup: () => new DecisionImpact(doc) });
+  await measure(phases, 'displayMode', 'Enable impact connection display in the shipped UI (jsdom)', (_i, f) => {
+    const select = f.window.document.getElementById('impact-display'); select.value = 'impact'; select.dispatchEvent(new f.window.Event('change'));
+    const paths = f.window.document.querySelectorAll('#edges [data-impact]'); assert.ok(paths.length > 0);
+    return { renderedEdges: paths.length };
+  }, { setup: () => domFixture(doc), dispose: f => f.close() });
   await measure(phases, 'openPanel', 'Open impact inspection in the shipped UI (jsdom)', (_i, f) => {
     const panel = f.window.document.getElementById('decision-impact'); panel.open = true; panel.dispatchEvent(new f.window.Event('toggle'));
     const options = f.window.document.getElementById('impact-affected').options.length, pathRows = f.window.document.getElementById('impact-path').children.length;
@@ -35,6 +46,6 @@ for (const spec of fixtureSpecs.filter(spec => spec.name.startsWith('near'))) {
 await mkdir(output, { recursive: true }); await writeFile(join(output, 'impact.json'), JSON.stringify(report, null, 2) + '\n');
 const lines = [`# Explorer ${version} decision impact measurements`, '', `Commit: ${report.commit}; dirty: ${report.dirty}.`, `Node ${report.environment.node}; ${report.environment.platform} ${report.environment.release}; ${report.environment.cpu}.`, '', 'One warmup, two samples; median [min, max] milliseconds. Synthetic maps only; no provider or native browser.', '', '| Fixture | Nodes | Dependencies | Phase | Median [min, max] ms | Work |', '| --- | ---: | ---: | --- | ---: | --- |'];
 for (const { fixture, phases } of report.cases) for (const [name, phase] of Object.entries(phases)) lines.push(`| ${fixture.name} | ${fixture.nodes} | ${fixture.dependencies} | ${name} | ${phase.status === 'ok' ? `${phase.medianMs.toFixed(2)} [${phase.minMs.toFixed(2)}, ${phase.maxMs.toFixed(2)}]` : 'FAILED'} | ${JSON.stringify(phase.operations ?? phase.error)} |`);
-lines.push('', 'Setup and teardown excluded. The open-panel phase includes index, analysis and paged DOM updates; initial workspace construction is outside this phase. These timings do not establish native rendering or interaction latency. Derived paths use at most three predecessor maps; only one requested path is materialized.');
+lines.push('', 'Setup and teardown excluded. The open-panel phase includes index, analysis and paged DOM updates; initial workspace construction is outside this phase. allBands starts from a new index without cached bands; index construction is excluded. displayMode includes saved-content key/index and visible connection rendering. These timings do not establish native rendering or interaction latency. Derived paths use at most three predecessor maps; only one requested path is materialized.');
 await writeFile(join(output, 'impact.md'), lines.join('\n') + '\n'); console.log(lines.join('\n'));
 if (report.cases.some(item => Object.values(item.phases).some(phase => phase.status !== 'ok'))) process.exitCode = 1;

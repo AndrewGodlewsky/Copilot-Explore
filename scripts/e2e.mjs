@@ -6,6 +6,8 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { fork, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { adrFileDocument, saveAdrFixture } from '../test/helpers/adr-file.mjs';
+import { scenarioIdentity } from '../com.github.copilot/extensions/explorer/scenario-preference.mjs';
 
 const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_PATH;
 assert.ok(sdkDirectory && cli, 'Set COPILOT_SDK_DIR and COPILOT_CLI_PATH to the inspected installed desktop SDK/runtime.');
@@ -352,6 +354,35 @@ try {
   assert.equal(await readFile(join(project, copyPreview.path), 'utf8'), incomingCopyBytes); assert.equal(requests.length, copyRequests);
   await session.rpc.canvas.close({ instanceId: 'project-storage-fixture' });
   console.log('Project storage: fresh installed metadata controls create/reopen; artifact workspace is excluded and changed cwd rejects saves without altering shared content.');
+  const fileCanvas = await session.rpc.canvas.open({ canvasId: 'explorer', instanceId: 'adr-file-fixture', input: {} });
+  const fileRequest = async (route, input) => {
+    const response = await fetch(fileCanvas.url + route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(fileCanvas.url).origin }, body: JSON.stringify(input) });
+    assert.equal(response.status, 200, await response.clone().text()); return response.json();
+  };
+  const fileSeed = adrFileDocument(), fileIdentity = scenarioIdentity(fileSeed);
+  saveAdrFixture(fileSeed, { source: fileIdentity, family: fileIdentity, scope: 'personal', classification: 'unselected', preferenceRevision: 0, selectionRationale: '' });
+  const fileInitial = await (await fetch(fileCanvas.url + 'api/state')).json();
+  const fileImported = await fileRequest('api/action', { action: 'import', revision: fileInitial.document?.revision, document: fileSeed });
+  const fileJourney = fileImported.activeKey, fileRequests = requests.length;
+  const filePreviewInput = { action: 'prepare', journey: fileJourney, clientId: 'fixture-adr-file-00000001', sequence: 1, selection: { kind: 'new', number: 1 } };
+  const filePreview = await fileRequest('api/adr-file', filePreviewInput);
+  await assert.rejects(readFile(join(project, filePreview.path)), { code: 'ENOENT' });
+  await session.rpc.metadata.setWorkingDirectory({ workingDirectory: otherProject });
+  const changedCwd = await fileRequest('api/adr-file', { action: 'save', journey: fileJourney, token: filePreview.token, revision: fileImported.document.revision });
+  assert.ok(changedCwd.error); assert.notEqual(changedCwd.recovery?.fileSaved, true);
+  await assert.rejects(readFile(join(project, filePreview.path)), { code: 'ENOENT' }); await assert.rejects(readFile(join(otherProject, filePreview.path)), { code: 'ENOENT' });
+  await session.rpc.metadata.setWorkingDirectory({ workingDirectory: project });
+  const currentPreview = await fileRequest('api/adr-file', { ...filePreviewInput, sequence: 2 });
+  const fileSaved = await fileRequest('api/adr-file', { action: 'save', journey: fileJourney, token: currentPreview.token, revision: fileImported.document.revision });
+  assert.equal(fileSaved.recovery.phase, 'complete'); assert.equal(await readFile(join(project, currentPreview.path), 'utf8'), currentPreview.content);
+  await assert.rejects(readFile(join(metadata.workspacePath, currentPreview.path)), { code: 'ENOENT' });
+  assert.equal(requests.length, fileRequests, 'ADR file review/save never asks the local model fixture for inference.');
+  await session.rpc.canvas.close({ instanceId: 'adr-file-fixture' });
+  const fileReopened = await session.rpc.canvas.open({ canvasId: 'explorer', instanceId: 'adr-file-fixture', input: {} });
+  const fileRecovered = await fetch(fileReopened.url + 'api/adr-file', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(fileReopened.url).origin }, body: JSON.stringify({ action: 'status', journey: fileJourney }) });
+  assert.equal(fileRecovered.status, 200); assert.equal((await fileRecovered.json()).recovery.phase, 'complete');
+  await session.rpc.canvas.close({ instanceId: 'adr-file-fixture' });
+  console.log('ADR file: installed fresh metadata cwd rejected an obsolete destination, then saved exact reviewed Markdown and rediscovered its association after reopen; no model call or artifact-workspace write.');
   console.log(`PASS Explorer ${version}: real SDK discovery/open, queued chat delivery, preview staging/explicit acceptance/native exclusion/close discard, no-answer direction seed/preview acceptance, answers, research access guard, exports, stale-response rejection, close/reopen, duplicate import, cross-session library reopen and shared-writer protection. Local fixture only; no paid model or UI automation.`);
 } finally {
   clearTimeout(deadline);

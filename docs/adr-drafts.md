@@ -24,6 +24,8 @@ Polling retains connected title and statement editors. If inputs change, the pro
 
 ## Ownership, persistence and limits
 
+After saving draft wording, use **Preview saved ADR file** or **Tools → Save ADR file** for a separate explicit file review and write. See [ADR files and recovery](adr-files.md). Unsaved proposal edits remain independent of the file preview.
+
 Generation uses the existing owned, isolated tool-free helper and its shared artifact queue. It verifies account/model/workspace identity and exactly zero initialized tools, denies permission/tool requests, preserves actual-release cancellation checks, and retains **Explorer ADR Draft** usage receipts. The parent chat is not sent a draft-generation request or switched to another model. Native SDK journals may retain model input/output; this feature does not claim the unresolved native-log privacy or web-transport guarantees in #41/#42.
 
 Saved scope, selected records/evidence, global guidance, format and scenario are checked at review, start, dispatch, completion, polling and acceptance. ADR checks reread disk after asynchronous policy validation. Acceptance also checks the complete destination base under the existing writer lock so an unrelated external edit during the final await is not overwritten. Unselected answer edits do not by themselves invalidate a draft. A format or scope change requires another review even if answer text is unchanged.

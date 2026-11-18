@@ -3,6 +3,7 @@ import { attachMinimap, projectOverview, overviewPaths } from '../com.github.cop
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import test from 'node:test';
 import { confirmAnswer } from './helpers/answer-change.mjs';
+import { saveAdrFixture } from './helpers/adr-file.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
@@ -1997,6 +1998,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const adrScopeDialog = document.getElementById('adr-scope-dialog');
   if (adrScopeDialog) { adrScopeDialog.showModal = () => { adrScopeDialog.open = true; }; adrScopeDialog.close = () => { adrScopeDialog.open = false; }; }
   const adrFormatDialog = document.getElementById('adr-format-dialog');
+  const adrFileDialog = document.getElementById('adr-file-dialog');
+  if (adrFileDialog) { adrFileDialog.showModal = () => { adrFileDialog.open = true; }; adrFileDialog.close = () => { adrFileDialog.open = false; }; }
   if (adrFormatDialog) { adrFormatDialog.showModal = () => { adrFormatDialog.open = true; }; adrFormatDialog.close = () => { adrFormatDialog.open = false; }; }
   const adrQuestionsDialog = document.getElementById('adr-questions-dialog');
   if (adrQuestionsDialog) { adrQuestionsDialog.showModal = () => { adrQuestionsDialog.open = true; }; adrQuestionsDialog.close = () => { adrQuestionsDialog.open = false; }; }
@@ -5739,6 +5742,65 @@ test('ADR questions UI ignores closed or suspended review responses and requires
     if (suspend) { f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await f.poll(); }
     assert.equal($('adr-questions-dialog').open, false); assert.equal(f.sent.length, 0); await f.openAdrQuestions(); assert.equal($('adr-questions-start').disabled, false); assert.equal(f.editor.value, 'PRIVATE ADR QUESTION DRAFT λ');
   }
+});
+
+async function adrFileFixture(t) {
+  const root = await mkdtemp(join(tmpdir(), 'explorer-adr-write-ui-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const f = await fixture(t, 340, undefined, false, { projectRoot: async () => root, before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].answer = 'Use <script>literal</script> storage λ'; doc.nodes[1].answerState = 'decided';
+    await e.save(saveAdrFixture(doc, (await e.scenarioPolicy()).label));
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'PRIVATE ADR FILE ANSWER λ'); const editor = $('answer'); editor.setSelectionRange(2, 7);
+  const openFile = async () => { assert.ok($('adr-file-open')); $('adr-file-open').click(); await until(() => !$('adr-file-review').disabled, 'ADR file status'); };
+  const reviewFile = async () => { $('adr-file-review').click(); await until(() => !$('adr-file-save').disabled, 'ADR file preview'); };
+  return { ...f, root, $, editor, openFile, reviewFile };
+}
+test('ADR file UI previews exact literal Markdown before saving and shows complete update comparison', async t => {
+  const f = await adrFileFixture(t), $ = f.$; await f.openFile(); assert.equal($('adr-file-save').disabled, true); await f.reviewFile();
+  const path = $('adr-file-path').textContent, bytes = $('adr-file-content').textContent;
+  await assert.rejects(readFile(join(f.root, path)), { code: 'ENOENT' }); assert.ok(bytes.includes('Use \\<script\\>literal\\</script\\> storage λ')); assert.equal($('adr-file-dialog').querySelector('script'), null);
+  assert.match($('adr-file-readiness').textContent, /advisory/i); $('adr-file-save').click(); await until(() => /file and exploration association are saved/.test($('adr-file-status').textContent), 'ADR saved');
+  assert.equal(await readFile(join(f.root, path), 'utf8'), bytes); assert.equal($('answer'), f.editor); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ'); assert.equal(f.editor.selectionStart, 2); assert.equal(f.editor.selectionEnd, 7);
+  $('adr-file-selection').value = f.explorer.doc.adrFiles[0].id; $('adr-file-selection').dispatchEvent(new f.window.Event('change')); await f.reviewFile();
+  assert.equal($('adr-file-before').hidden, false); assert.equal($('adr-file-old').textContent, bytes); assert.equal($('adr-file-path').textContent, path);
+  f.type('adr-file-number', '2'); assert.equal($('adr-file-save').disabled, true);
+});
+test('ADR file UI reports collisions and explicitly reconciles a published file after association failure', async t => {
+  const f = await adrFileFixture(t), $ = f.$; await f.openFile(); await f.reviewFile();
+  f.explorer.adrWriter.fault = async phase => { if (phase === 'before-association') throw Error('Association interrupted'); };
+  $('adr-file-save').click(); await until(() => !$('adr-file-retry').disabled && !$('adr-file-retry').hidden, 'recovery offered');
+  assert.match($('adr-file-status').textContent, /file: saved/i); assert.match($('adr-file-status').textContent, /association: not saved/i); assert.equal($('adr-file-discard').hidden, true);
+  f.explorer.adrWriter.fault = async () => {}; $('adr-file-retry').click(); await until(() => /file and exploration association are saved/.test($('adr-file-status').textContent), 'reconciled');
+  $('adr-file-review').click(); await until(() => !$('adr-file-review').disabled && /exists|occupied|associated|association/i.test($('adr-file-status').textContent), 'collision shown'); assert.equal($('adr-file-save').disabled, true);
+  f.type('adr-file-number', '2'); await f.reviewFile(); assert.match($('adr-file-path').textContent, /0002/);
+});
+for (const action of ['prepare', 'status']) for (const leave of ['hide', 'source', 'switch', 'suspend']) test(`ADR file UI ignores late ${action} after ${leave}`, async t => {
+  const f = await adrFileFixture(t), $ = f.$; await f.openFile(); const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-file' && JSON.parse(options.body).action === action) await new Promise(resolve => { release = resolve; }); return response; };
+  $(action === 'prepare' ? 'adr-file-review' : 'adr-file-refresh').click(); await until(() => release, 'file response held');
+  if (leave === 'hide') $('adr-file-close').click();
+  else if (leave === 'switch') { const next = structuredClone(f.explorer.snapshot()); next.document = createDocument('Another map'); f.window.__updates.apply(next); }
+  else if (leave === 'suspend') f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  else { const doc = structuredClone(f.explorer.doc); doc.nodes[1].answer += ' correction'; await f.explorer.save(doc); f.window.__updates.apply(f.explorer.snapshot()); }
+  release(); f.window.fetch = fetch; await delay(30); assert.equal($('adr-file-save').disabled, true); assert.equal($('adr-file-preview').hidden, true); assert.equal(f.explorer.doc.adrFiles, undefined); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ');
+});
+test('ADR file UI can explicitly discard an unpublished write and keep manual ADR proposal edits connected', async t => {
+  const f = await adrFileFixture(t), $ = f.$; await f.openFile(); await f.reviewFile(); const store = await f.explorer.adrWriter.storage(f.explorer);
+  store.fault = async phase => { if (phase === 'before-publish') throw Error('Injected storage interruption'); };
+  $('adr-file-save').click(); await until(() => !$('adr-file-discard').hidden && !$('adr-file-discard').disabled, 'unpublished discard available');
+  $('adr-file-discard').click(); await until(() => /Unpublished operation discarded/.test($('adr-file-status').textContent), 'unpublished discarded');
+  assert.equal(f.explorer.doc.adrFiles, undefined); store.fault = async () => {}; await f.reviewFile();
+  const draft = await adrDraftFixture(t), d = draft.$; await draft.generateDraft();
+  await draft.explorer.save(saveAdrFixture(structuredClone(draft.explorer.doc), (await draft.explorer.scenarioPolicy()).label)); await draft.poll();
+  const wording = d('brief-content').querySelector('[data-brief-statement="choice"]'); wording.value = 'Unsaved ADR proposal λ'; wording.dispatchEvent(new draft.window.Event('input', { bubbles: true })); wording.setSelectionRange(2, 7);
+  d('adr-file-from-draft').click(); await until(() => d('adr-file-dialog').open && !d('adr-file-review').disabled, 'file entry from draft');
+  await draft.poll(); assert.equal(d('brief-content').querySelector('[data-brief-statement="choice"]'), wording); assert.equal(wording.value, 'Unsaved ADR proposal λ'); assert.equal(wording.selectionStart, 2);
+});
+test('ADR file UI rediscovers a completed save after its response is lost and the dialog reopens', async t => {
+  const f = await adrFileFixture(t), $ = f.$; await f.openFile(); await f.reviewFile(); const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-file' && JSON.parse(options.body).action === 'save') await new Promise(resolve => { release = resolve; }); return response; };
+  $('adr-file-save').click(); await until(() => release, 'saved response held'); $('adr-file-close').click(); release(); f.window.fetch = fetch; await delay(30); await f.poll(); await f.openFile();
+  assert.match($('adr-file-status').textContent, /file and exploration association are saved/); assert.equal(f.explorer.doc.adrFiles.length, 1); assert.equal($('adr-file-save').disabled, true);
 });
 
 async function adrFormatFixture(t) {

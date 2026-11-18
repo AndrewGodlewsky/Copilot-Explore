@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.96",
+    "summary": "Preview exact proposed ADR Markdown and its project path, then explicitly save it. Recorded updates show complete before/after text and reject changed files. Interrupted writes report file and exploration association separately, with explicit recovery. Saved decisions stay proposed; source uncertainty and private answer drafts are preserved."
+  },
+  {
     "version": "0.1.95",
     "summary": "Check ADR wording for stale references and advisory gaps before accepting it. Open the relevant source or draft section, preserve manual edits while correcting answers, and optionally record gap acknowledgments. Changed inputs invalidate prior checks. Acknowledgments never approve decisions, change answers or waive stale-source blockers."
   },

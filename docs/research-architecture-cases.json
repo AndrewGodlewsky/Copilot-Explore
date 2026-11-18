@@ -1,0 +1,93 @@
+{
+  "baseline": "b00dadc25f09ca61f330cdf5f6ab4e1d921a1770",
+  "date": "2026-11-18",
+  "method": "prepareContext(source, researchFraming(source)); 10 warmups, 100 measured iterations per case; fixed IDs, decided constraint ancestor, unanswered target, mode decide, no other decisions or pins. Local preparation only, no model or retrieval execution.",
+  "objective": "Make an informed choice",
+  "successCriteria": "Useful options with honest limits",
+  "cases": [
+    {
+      "id": "architecture",
+      "topic": "A team choosing storage",
+      "question": "Should we start with a relational database or a document database?",
+      "constraint": "Two maintainers, transactional orders, and a six-week delivery window.",
+      "kind": "Technical decision",
+      "need": "Compare transaction model and operational burden against confirmed constraints.",
+      "inputBytes": 7758,
+      "limitBytes": 131072,
+      "localPreparationMeanMs": 0.0189,
+      "helperCalls": 0,
+      "retrievalCalls": 0,
+      "quality": "unmeasured"
+    },
+    {
+      "id": "process",
+      "topic": "Volunteer onboarding",
+      "question": "Should a small volunteer group onboard people in cohorts or individually?",
+      "constraint": "Coordinator has two hours a week and new volunteers arrive unpredictably.",
+      "kind": "Nontechnical decision",
+      "need": "Use contextual reasoning; do not present preferences as externally proven facts.",
+      "inputBytes": 7765,
+      "limitBytes": 131072,
+      "localPreparationMeanMs": 0.0134,
+      "helperCalls": 0,
+      "retrievalCalls": 0,
+      "quality": "unmeasured"
+    },
+    {
+      "id": "freshness",
+      "topic": "Runtime upgrade planning",
+      "question": "Which supported runtime release should we target for the next year?",
+      "constraint": "Existing dependencies must remain compatible; the decision is being made today.",
+      "kind": "Changing fact",
+      "need": "Fresh official version/support evidence with dates; no current-version claim from memory.",
+      "inputBytes": 7769,
+      "limitBytes": 131072,
+      "localPreparationMeanMs": 0.014,
+      "helperCalls": 0,
+      "retrievalCalls": 0,
+      "quality": "unmeasured"
+    },
+    {
+      "id": "conflict",
+      "topic": "Choosing an evaluation method",
+      "question": "How should we decide when two studies recommend incompatible approaches?",
+      "constraint": "The studies cover different populations and outcomes.",
+      "kind": "Conflicting evidence",
+      "need": "Explain scope and methodology differences and what remains unresolved.",
+      "inputBytes": 7753,
+      "limitBytes": 131072,
+      "localPreparationMeanMs": 0.012,
+      "helperCalls": 0,
+      "retrievalCalls": 0,
+      "quality": "unmeasured"
+    },
+    {
+      "id": "sparse",
+      "topic": "An unfamiliar new component",
+      "question": "Should we adopt an unreleased component with no independent documentation?",
+      "constraint": "Reliability matters more than early access; no reliable evidence is available.",
+      "kind": "Sparse evidence",
+      "need": "Allow abstention/limited choices; identify the missing evidence instead of inventing support.",
+      "inputBytes": 7778,
+      "limitBytes": 131072,
+      "localPreparationMeanMs": 0.0143,
+      "helperCalls": 0,
+      "retrievalCalls": 0,
+      "quality": "unmeasured"
+    },
+    {
+      "id": "clarification",
+      "topic": "Understand existing findings",
+      "question": "What does reversible mean in the options you already gave me?",
+      "constraint": "Explain the existing comparison; do not retrieve new sources.",
+      "kind": "Clarification",
+      "need": "Use existing evidence and explanation; a web-enabled helper is unnecessary.",
+      "inputBytes": 7749,
+      "limitBytes": 131072,
+      "localPreparationMeanMs": 0.013,
+      "helperCalls": 0,
+      "retrievalCalls": 0,
+      "quality": "unmeasured"
+    }
+  ]
+}

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.67",
+    "summary": "Added a source-backed research architecture comparison and six reproducible decision scenarios. Documents existing-material explanations, approved URLs and web research as separate policy choices, with the owner decision still pending. Current research permissions and runtime remain unchanged."
+  },
+  {
     "version": "0.1.66",
     "summary": "Documented the current research experience, verified the installed plugin version, and mapped usability gaps to the redesign backlog. Includes a repeatable question-to-answer checklist and clearly separates automated evidence from pending native and live-research checks."
   },

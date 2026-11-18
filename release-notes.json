@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.98",
+    "summary": "Share attributed node discussions through Project files. Reply, resolve or reopen, retain changed and removed sources, and merge concurrent replies with explicit conflict review. Proposed wording goes only into a private answer draft. Unposted comments remain in the current canvas; retrying an ambiguous post avoids duplicates."
+  },
+  {
     "version": "0.1.97",
     "summary": "Choose a public contributor name for future shared questions, answers and accepted drafts. Preserve original authors and later editors across copies and merges; distinguish AI suggestions and wording acceptance from user decisions. Unknown legacy authors stay unknown, and changed text labels old attribution historical. Names remain optional and unverified."
   },

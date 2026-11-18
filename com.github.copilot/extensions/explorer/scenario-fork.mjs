@@ -30,6 +30,8 @@ export function buildScenario(source, input, now = new Date().toISOString()) {
       ...(n.attribution ? { attribution: structuredClone(n.attribution) } : {}) })),
   };
   const internal = (source.dependencies ?? []).filter(link => ids.has(link.dependentId) && ids.has(link.prerequisiteId));
+  const threads = source.comments?.threads.filter(thread => ids.has(thread.nodeId)).map(thread => ({ ...structuredClone(thread), nodeId: ids.get(thread.nodeId) }));
+  if (threads?.length) document.comments = { version: 1, threads };
   if (internal.length) document.dependencies = internal.map(link => ({ ...link, dependentId: ids.get(link.dependentId), prerequisiteId: ids.get(link.prerequisiteId) }));
   const omittedDependencies = (source.dependencies ?? []).filter(link => ids.has(link.dependentId) !== ids.has(link.prerequisiteId));
   const changed = new Set(new DecisionImpact(document).analyze(ids.get(selected.id)).predecessors.combined.keys());

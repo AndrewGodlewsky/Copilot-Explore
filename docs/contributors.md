@@ -16,6 +16,7 @@ Shared writes that record a contribution:
 - Explicitly accepting suggested questions, including adjusted wording and ADR questions.
 - Saving an answer or answer state, restarting a branch, reaffirming an individual review cause or clearing a reviewed answer. Only the directly targeted node receives the event; derived descendant review flags do not.
 - Explicitly accepting a synthesized decision brief, implementation handoff or proposed ADR draft. The artifact records its accepter separately from its AI synthesis. Accepting ADR wording does not approve the decision.
+- Posting a shared discussion message or explicitly resolving/reopening discussion. [Comments](comments.md) carry their own events and never attribute an answer or decision to the commenter.
 
 No event is inferred for opening, polling, imports, copies to Project storage, restores, semantic merges, background research, ADR-file association, reminders, dependencies or guidance updates. Personal mutations retain carried attribution but do not create new shared contribution records. No-op saves do not create events. Local settings changes do not rewrite a journey.
 

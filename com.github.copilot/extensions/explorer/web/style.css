@@ -112,6 +112,12 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #brief-dialog textarea { width: 100%; box-sizing: border-box; }
 #brief-dialog .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .brief-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+#comments-dialog { box-sizing: border-box; width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; overflow-wrap: anywhere; }
+#comments-dialog label { display: block; margin-top: 12px; }
+#comments-dialog textarea, #comments-dialog select { box-sizing: border-box; width: 100%; max-width: 100%; }
+#comments-dialog .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.comment-message { border-top: 1px solid var(--line); padding: 10px 0; }
+.comment-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .brief-source { max-width: 100%; overflow-wrap: anywhere; }
 #check-dialog { max-width: 580px; width: calc(100% - 32px); max-height: 85vh; overflow: auto; }
 #check-dialog .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }

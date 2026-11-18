@@ -2,6 +2,7 @@ import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/d
 import { attachMinimap, projectOverview, overviewPaths } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import test from 'node:test';
+import { randomUUID } from 'node:crypto';
 import { confirmAnswer } from './helpers/answer-change.mjs';
 import { saveAdrFixture } from './helpers/adr-file.mjs';
 import { execFile } from 'node:child_process';
@@ -25,6 +26,8 @@ import { Explorer } from '../com.github.copilot/extensions/explorer/controller.m
 import { buildScenario } from '../com.github.copilot/extensions/explorer/scenario-fork.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
 import { attributeContributions } from '../com.github.copilot/extensions/explorer/contributors.mjs';
+import { changeComments } from '../com.github.copilot/extensions/explorer/comments.mjs';
+import { CommentsClient } from '../com.github.copilot/extensions/explorer/web/comments-client.mjs';
 import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
 import { createDocument, contextFor, addDependency, answerNode } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
@@ -2012,6 +2015,100 @@ test('claim evidence disclosure shows literal support, source navigation and imp
   f.open(f.explorer.doc.nodes[2].id); f.open(f.explorer.doc.nodes[1].id); assert.ok(f.document.getElementById('claim-c1'));
 });
 
+async function commentFixture(t) {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-comment-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
+  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+  return fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
+    const store = await e.projectRepository.create(e.doc); await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
+    await e.contributorSettingsRequest({ action: 'save', revision: 0, displayName: 'Alice <script> λ' });
+  } });
+}
+
+test('comments UI posts literal discussions, replies, resolves and reopens without changing the answer editor', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Private draft'); const editor = $('answer'); editor.setSelectionRange(2, 5);
+  $('comments-node-open').click(); assert.equal($('comments-dialog').open, true);
+  f.type('comments-text', '<script>COMMENT λ</script> https://example.test'); f.type('comments-suggestion', 'Proposed answer'); $('comments-post').click();
+  await until(() => f.explorer.doc.comments?.threads.length === 1 && !$('comments-post').disabled, 'comment posted');
+  assert.match($('comments-messages').textContent, /Alice <script> λ/); assert.match($('comments-messages').textContent, /<script>COMMENT λ/); assert.equal($('comments-messages').querySelector('script,a'), null);
+  assert.equal(editor.value, 'Private draft'); assert.equal($('answer'), editor); assert.equal(editor.selectionStart, 2);
+  f.type('comments-text', 'A reply'); $('comments-post').click(); await until(() => f.explorer.doc.comments.threads[0].messages.length === 2 && !$('comments-post').disabled, 'reply posted');
+  $('comments-resolve').click(); await until(() => /Resolved/.test($('comments-context').textContent), 'resolved'); assert.equal($('comments-post').disabled, true);
+  $('comments-reopen').click(); await until(() => !$('comments-post').disabled, 'reopened');
+  $('comments-close').click(); assert.equal($('answer'), editor); assert.equal(editor.value, 'Private draft'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
+
+test('comments UI retains composing text and caret across polls, hide, navigation and failed saves', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), [a, b] = f.explorer.doc.nodes.slice(1);
+  f.open(a.id); $('comments-open').click(); f.type('comments-text', 'Unposted λ'); const editor = $('comments-text'); editor.focus(); editor.setSelectionRange(1, 4);
+  await f.explorer.command('add', { revision: f.explorer.doc.revision, nodeId: b.id, question: 'Another?', category: 'Scope' }); await f.poll();
+  await until(() => f.window.__updates.document()?.revision === f.explorer.doc.revision, 'new saved node observed', 2000);
+  assert.equal($('comments-text'), editor); assert.equal(editor.value, 'Unposted λ'); assert.equal(editor.selectionStart, 1);
+  $('comments-close').click(); f.open(b.id); $('comments-open').click(); f.type('comments-text', 'Other private comment'); $('comments-close').click(); f.open(a.id); $('comments-open').click(); assert.equal(editor.value, 'Unposted λ');
+  const write = f.explorer.projectStore.write; f.explorer.projectStore.write = async () => { throw Error('disk full'); };
+  $('comments-post').click(); await until(() => /disk full/.test($('comments-status').textContent), 'failed post', 2000).catch(() => assert.fail($('comments-status').textContent)); assert.equal(editor.value, 'Unposted λ'); assert.equal(f.explorer.doc.comments, undefined);
+  f.explorer.projectStore.write = write; $('comments-post').click(); await until(() => f.explorer.doc.comments?.threads.length === 1, 'retry posted');
+  await f.poll(); assert.equal(f.explorer.doc.comments.threads.length, 1);
+});
+
+test('comments UI applies proposed wording only to the private draft and preserves it at the answer limit', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  await f.explorer.command('comment-create', { journey: f.explorer.activeKey, revision: f.explorer.doc.revision, nodeId: node.id, threadId: randomUUID(), messageId: randomUUID(), text: 'Suggestion', suggestion: 'Consider B' }); await f.poll();
+  await until(() => f.window.__updates.document()?.revision === f.explorer.doc.revision, 'saved discussion observed', 2000);
+  f.open(node.id); f.type('answer', 'Keep A'); $('comments-node-open').click(); $('comments-thread').value = f.explorer.doc.comments.threads[0].id; $('comments-thread').dispatchEvent(new f.window.Event('change'));
+  $('comments-messages').querySelector('button').click(); await until(() => $('answer').value === 'Keep A\n\nConsider B', 'suggestion appended');
+  assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.equal(f.explorer.doc.comments.threads[0].status.state, 'open');
+  f.type('answer', 'x'.repeat(20000)); $('comments-messages').querySelector('button').click(); await until(() => /20,000|20000/.test($('comments-status').textContent), 'limit visible'); assert.equal($('answer').value.length, 20000);
+});
+
+test('comments UI labels changed and orphan sources, pages threads, and reads personal copies without posting', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    let doc = e.doc; const event = { actor: null, at: '2026-11-18T12:00:00.000Z' };
+    for (let i = 0; i < 12; i++) doc = changeComments(doc, 'create', { nodeId: doc.nodes[1].id, threadId: randomUUID(), messageId: randomUUID(), text: `Review ${i}` }, event);
+    doc.comments.threads[0].nodeId = 'removed'; doc.nodes[1].answer = 'Changed'; doc.nodes[1].answerState = 'tentative'; await e.save(doc);
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); $('comments-open').click(); assert.equal($('comments-thread').options.length, 11); assert.equal($('comments-next').disabled, false); $('comments-next').click(); assert.equal($('comments-thread').options.length, 3);
+  $('comments-filter').value = 'orphaned'; $('comments-filter').dispatchEvent(new f.window.Event('change')); assert.equal($('comments-thread').options.length, 2);
+  $('comments-thread').value = f.explorer.doc.comments.threads[0].id; $('comments-thread').dispatchEvent(new f.window.Event('change')); assert.match($('comments-context').textContent, /orphan|removed/i); assert.equal($('comments-post').disabled, true);
+  $('comments-filter').value = 'changed'; $('comments-filter').dispatchEvent(new f.window.Event('change')); $('comments-thread').value = f.explorer.doc.comments.threads[1].id; $('comments-thread').dispatchEvent(new f.window.Event('change')); assert.match($('comments-context').textContent, /changed/i); assert.match($('comments-access').textContent, /Project/);
+});
+
+for (const leave of ['hide', 'suspend', 'switch']) test(`comments UI ignores late post replies after ${leave} and preserves newer composing text`, async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), original = f.window.fetch; let release;
+  f.window.fetch = async (...args) => { const response = await original(...args); if (args[0] === 'api/action' && JSON.parse(args[1].body).action === 'comment-create') await new Promise(resolve => { release = resolve; }); return response; };
+  f.open(f.explorer.doc.nodes[1].id); $('comments-open').click(); f.type('comments-text', 'First post'); $('comments-post').click();
+  await until(() => release, 'post reply held'); f.type('comments-text', 'Newer private text');
+  if (leave === 'hide') $('comments-close').click();
+  if (leave === 'suspend') { const event = new f.window.Event('pagehide'); Object.defineProperty(event, 'persisted', { value: true }); f.window.dispatchEvent(event); }
+  if (leave === 'switch') f.window.__updates.apply({ ...f.explorer.uiSnapshot(), document: null, activeKey: null });
+  const status = $('comments-status').textContent; release(); await delay(30); assert.equal($('comments-dialog').open, false); assert.equal($('comments-status').textContent, status); assert.equal(f.explorer.doc.comments.threads.length, 1);
+  if (leave === 'suspend') { const event = new f.window.Event('pageshow'); Object.defineProperty(event, 'persisted', { value: true }); f.window.dispatchEvent(event); await delay(30); }
+  if (leave === 'switch') f.window.__updates.apply(f.explorer.uiSnapshot()); else await f.poll();
+  f.window.__updates.select(f.explorer.doc.nodes[1].id); $('comments-open').click(); assert.equal($('comments-text').value, 'Newer private text');
+});
+
+test('comments UI retries an ambiguous completed post with the same IDs and keeps newer composing text', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), original = f.window.fetch; let lose = true;
+  f.window.fetch = async (...args) => { const response = await original(...args); if (lose && args[0] === 'api/action' && JSON.parse(args[1].body).action === 'comment-create') { lose = false; throw Error('Connection lost after saving'); } return response; };
+  f.open(f.explorer.doc.nodes[1].id); $('comments-open').click(); f.type('comments-text', 'Save once'); $('comments-post').click();
+  await until(() => /Connection lost/.test($('comments-status').textContent), 'ambiguous post', 2000); f.type('comments-text', 'Keep newer text'); $('comments-post').click();
+  await until(() => /Previous post saved/.test($('comments-status').textContent), 'retry reconciled', 2000);
+  assert.equal($('comments-text').value, 'Keep newer text'); assert.equal(f.explorer.doc.comments.threads.length, 1); assert.equal(f.explorer.doc.comments.threads[0].messages.length, 1);
+  const posts = f.actions.filter(row => row.action === 'comment-create'); assert.equal(posts.length, 2); assert.equal(posts[0].messageId, posts[1].messageId); assert.equal(posts[0].threadId, posts[1].threadId);
+});
+
+test('comments UI merge candidates show literal whole threads, messages and resolution evidence without touching drafts', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), event = { actor: null, at: '2026-11-18T12:00:00.000Z' }, threadId = randomUUID(), messageId = randomUUID();
+  const local = { journey: changeComments(f.explorer.doc, 'create', { nodeId: f.explorer.doc.nodes[1].id, threadId, messageId, text: 'Local <script> λ' }, event) }, incoming = structuredClone(local);
+  incoming.journey.comments.threads[0].messages[0].text = 'Incoming <b> 日本語';
+  const ids = [`comment-thread:${threadId}`, `comment-message:${threadId}:${messageId}`, `comment-status:${threadId}`];
+  f.explorer.projectMergeRequest = async () => ({ id: randomUUID(), sources: { local: JSON.stringify(local), incoming: JSON.stringify(incoming), base: JSON.stringify(local) }, plan: { conflicts: ids.map(id => ({ id, label: 'Discussion conflict' })), unresolved: ids, affected: [], content: null, error: null } });
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep private draft'); const editor = $('answer'); editor.setSelectionRange(2, 4);
+  $('project-merge-open').click(); f.type('project-merge-ref', 'fixture'); $('project-merge-preview').click(); await until(() => $('project-merge-conflict').options.length === 3, 'comment candidates');
+  for (const id of ids) { $('project-merge-conflict').value = id; $('project-merge-conflict').dispatchEvent(new f.window.Event('change')); assert.match($('project-merge-local').value, /Local <script> λ/); assert.match($('project-merge-incoming').value, /Incoming <b> 日本語/); }
+  assert.match($('project-merge-local').value, /messagesDigest/); assert.equal($('project-merge-dialog').querySelector('script,b'), null); assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep private draft'); assert.equal(editor.selectionStart, 2);
+});
+
 async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
@@ -2093,6 +2190,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const navigationDialog = document.getElementById('navigation-dialog');
   const contributorDialog = document.getElementById('contributor-dialog');
   if (contributorDialog) { contributorDialog.showModal = () => { contributorDialog.open = true; }; contributorDialog.close = () => { contributorDialog.open = false; }; }
+  const commentsDialog = document.getElementById('comments-dialog');
+  if (commentsDialog) { commentsDialog.showModal = () => { commentsDialog.open = true; }; commentsDialog.close = () => { commentsDialog.open = false; }; }
   navigationDialog.showModal = () => { navigationDialog.open = true; };
   navigationDialog.close = () => { navigationDialog.open = false; };
   const paletteDialog = document.getElementById('palette-dialog');
@@ -2152,6 +2251,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.revealPath = revealPath;
   window.attachVoice = attachVoice;
   window.DraftClient = DraftClient;
+  window.CommentsClient = CommentsClient;
   window.CleanupClient = CleanupClient;
   window.QuestionHelpClient = QuestionHelpClient;
   window.ResearchReviewClient = ResearchReviewClient;
@@ -2166,8 +2266,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.DecisionImpact = DecisionImpact; window.impactPath = impactPath; window.decisionImpactKey = decisionImpactKey; window.criticalPaths = criticalPaths;
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
-  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
+  window.eval(script.replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;

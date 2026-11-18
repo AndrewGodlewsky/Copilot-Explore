@@ -7,6 +7,7 @@ import { ResearchReviewClient } from './research-review-client.mjs';
 import { researchSettingsText } from './research-policy.mjs';
 import { effectiveMode, MODES } from './modes.mjs';
 import { attachNavigation } from './navigation.mjs';
+import { attachMinimap } from './minimap.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';
 import { NextQuestion } from './next-question.mjs';
@@ -80,6 +81,14 @@ const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args)
 const navigation = attachNavigation({ document, window, fetch: (...args) => fetch(...args),
   zoom: (factor, point) => zoom(factor, point),
   pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); } });
+const minimap = attachMinimap({ document, window,
+  scene: () => !closed && !suspended && !libraryView && state.document && geometryBranches === branches ?
+    { geometry: geometryCache.value, selected, collapsed, focusId, view, size: $('map').getBoundingClientRect() } : null,
+  navigate: point => {
+    endDrag();
+    const rect = $('map').getBoundingClientRect();
+    view.x = rect.width / 2 - point.x * view.zoom; view.y = rect.height / 2 - point.y * view.zoom; transform();
+  }, leaveEditor: () => voice.cancel() });
 const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, rationaleOpen: false, helpOpen: false, manualOpen: false, question: '' }); return nodeUi.get(id); };
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -143,6 +152,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    minimap.reset();
     if (state.document?.id !== next.document?.id || state.activeKey !== next.activeKey) nextQuestion = new NextQuestion();
     nextQuestionOpen = false; nextQuestionStamp = ''; $('next-question').hidden = true;
     closeResearchReview();
@@ -659,6 +669,7 @@ function transform() {
   $('zoom-in').disabled = view.zoom >= 3;
   $('zoom-out').disabled = view.zoom <= Math.min(.1, fitScale());
   renderMap();
+  minimap.update();
 }
 function fit() {
   endDrag();
@@ -2164,6 +2175,7 @@ window.addEventListener('pagehide', event => {
   if (viewerTarget) { invalidateViewer('The page was suspended. Reopen Export maps and preview again.'); viewerTarget = null; $('viewer-preview').disabled = true; }
   closeResearchReview();
   suspended = true; pageEpoch++; actionEpoch++; stopPolling(); actionAbort?.abort(); actionAbort = null; busy = false;
+  minimap.reset();
   if ($('diagnostics-dialog').open) closeDiagnostics();
   cleanup.cancel();
   closeBrief();
@@ -2172,12 +2184,14 @@ window.addEventListener('pagehide', event => {
   void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;
   closed = true; clearTimeout(pollTimer); cancelAnimationFrame(layoutFrame); endDrag();
+  minimap.dispose();
   mapObserver.disconnect(); workspaceObserver.disconnect(); document.fonts?.removeEventListener('loadingdone', fontsChanged);
   geometryCache.clear(); fitGeometry.clear(); fitBranches = null; geometryBranches = null; geometryInputs = ''; positions.clear(); branches = null;
 });
 window.addEventListener('pageshow', event => {
   if (!event.persisted || closed || !suspended) return;
   suspended = false; pageEpoch++; pollFailures = 0; stateCursor = null; void (poll());
+  minimap.update();
 });
 async function poll() {
   if (closed || suspended || pollFlight) return;

@@ -1,3 +1,4 @@
+import { attachMinimap, projectOverview, overviewPaths } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
 import test from 'node:test';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
 import { NextQuestion } from '../com.github.copilot/extensions/explorer/web/next-question.mjs';
@@ -32,6 +33,153 @@ const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', op
   { title: 'One block', description: 'Start with the nearest neighbors.', pros: ['Easy handovers'], cons: ['Fewer tools'] },
   { title: 'Whole neighborhood', description: 'Invite everyone nearby.', pros: ['More tools'], cons: ['More coordination'] },
 ], recommendation: 'Try a small pilot.', uncertainty: 'No external sources consulted.', sources: [] };
+
+test('minimap is optional, navigates without saving and preserves the expanded editor in narrow panes', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id), ui = f.window.__updates;
+  assert.ok($('minimap-toggle'), 'discoverable minimap toggle');
+  assert.equal($('minimap').hidden, true); assert.equal($('minimap-toggle').getAttribute('aria-expanded'), 'false');
+  const asset = await fetch(new URL('minimap.mjs', f.window.location.href)); assert.equal(asset.status, 200);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Exact \u{1f331} draft'); f.type('revisit-condition', 'Keep reminder'); f.type('manual-question', 'Keep manual');
+  const answer = $('answer'), reminder = $('revisit-condition'), saved = JSON.stringify(f.explorer.doc), actions = f.actions.length;
+  answer.focus(); answer.setSelectionRange(2, 5); answer.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  $('minimap-toggle').click();
+  assert.equal($('minimap').hidden, false); assert.equal($('minimap-toggle').getAttribute('aria-expanded'), 'true');
+  assert.equal($('map').contains($('minimap')), false, 'overview is outside editor viewport');
+  const geometry = ui.scene().geometry, selected = ui.scene().selected, zoom = ui.scene().view.zoom;
+  $('minimap-map').focus(); const before = ui.scene().view;
+  $('minimap-map').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+  assert.equal(ui.scene().view.x, before.x - 340 / 4); assert.equal(ui.scene().view.zoom, zoom); assert.equal(ui.scene().selected, selected); assert.equal(ui.scene().geometry, geometry);
+  assert.equal($('answer'), answer); assert.equal($('revisit-condition'), reminder); assert.equal(answer.value, 'Exact \u{1f331} draft'); assert.equal(answer.selectionStart, 2); assert.equal(reminder.value, 'Keep reminder');
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  $('minimap-map').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal($('minimap').hidden, true); assert.equal(f.document.activeElement, $('minimap-toggle'));
+  $('minimap-toggle').click(); f.resize(280, 460);
+  assert.equal($('answer'), answer); assert.equal($('minimap').hidden, false);
+  assert.equal(JSON.stringify(f.explorer.doc), saved); assert.deepEqual(f.actions.slice(actions), []);
+  const css = await (await fetch(new URL('style.css', f.window.location.href))).text();
+  assert.doesNotMatch(css, /#map-hint\s*\{\s*display\s*:\s*none/);
+  assert.equal($('map').contains($('map-hint')), false, 'recovery guidance cannot overlay an editor');
+  const style = f.document.createElement('style'); style.textContent = css; f.document.head.append(style);
+  f.resize(280, 120); $('minimap-toggle').click();
+  const section = $('map').parentElement;
+  assert.equal(f.window.getComputedStyle(section).overflow, 'auto', 'hiding in a short pane retains a scroll owner for the editor and recovery controls');
+  assert.equal(f.window.getComputedStyle($('map')).overflow, 'clip', 'map still owns canvas clipping');
+  assert.equal(f.window.getComputedStyle(f.document.querySelector('.node-content')).overflow, 'auto', 'editor keeps its own scrolling');
+  assert.equal(f.window.getComputedStyle($('map')).minHeight, '120px');
+  $('minimap-toggle').focus(); $('minimap-toggle').click(); assert.equal(f.window.getComputedStyle(section).overflow, 'auto');
+  assert.equal(f.window.getComputedStyle($('minimap')).height, '96px'); assert.equal(f.window.getComputedStyle($('minimap-map')).height, '80px');
+  ui.zoom(.00001); assert.equal($('map-hint').hidden, false); assert.notEqual(f.window.getComputedStyle($('map-hint')).display, 'none');
+  assert.equal(f.window.getComputedStyle($('map-hint')).maxHeight, '40px');
+  $('center-question').click(); $('answer').focus(); assert.equal($('answer'), answer); assert.equal(answer.value, 'Exact \u{1f331} draft');
+});
+
+function miniPointer(f, target, type, values = {}) {
+  const event = new f.window.Event(type, { bubbles: true, cancelable: true });
+  Object.assign(event, { pointerId: 71, isPrimary: true, button: 0, buttons: 1, clientX: 100, clientY: 760, ...values });
+  target.dispatchEvent(event); return event;
+}
+
+function assertOverview(f) {
+  const d = f.document, ui = f.window.__updates, scene = ui.scene(), svg = d.getElementById('minimap-map'), rect = svg.getBoundingClientRect();
+  const projection = projectOverview(scene.geometry.bounds, rect.width, rect.height);
+  const expected = overviewPaths(scene.positions, projection, scene.selected, new Set(), null);
+  assert.equal(d.getElementById('minimap-nodes').getAttribute('d'), expected.nodes, 'overview projects every actual scene position');
+  assert.equal(d.getElementById('minimap-selected').getAttribute('d'), expected.selected, 'selected marker uses actual editor dimensions');
+  const viewport = projection.viewport(scene.view, d.getElementById('map').getBoundingClientRect());
+  for (const [name, value] of Object.entries(viewport)) assert.equal(Number(d.getElementById('minimap-viewport').getAttribute(name)), value);
+  assert.equal(svg.querySelectorAll('path').length, 4); assert.equal(svg.querySelectorAll('rect').length, 1); assert.equal(svg.querySelectorAll('[tabindex]').length, 0);
+  return projection;
+}
+
+test('minimap pointer ownership acts once, cancels stale gestures and clamps through main map rules', async t => {
+  const f = await fixture(t, 340), d = f.document, $ = id => d.getElementById(id), ui = f.window.__updates;
+  $('minimap-toggle').click(); const svg = $('minimap-map');
+  f.open(f.explorer.doc.nodes[1].id);
+  const selected = ui.scene().selected, geometry = ui.scene().geometry, before = { ...ui.scene().view };
+  miniPointer(f, svg, 'pointerdown'); assert.deepEqual({ ...ui.scene().view }, before, 'down only takes ownership');
+  miniPointer(f, f.window, 'pointerup', { pointerId: 72 }); assert.deepEqual({ ...ui.scene().view }, before, 'another pointer cannot activate');
+  miniPointer(f, f.window, 'pointerup'); const clicked = { ...ui.scene().view }; assert.notDeepEqual(clicked, before);
+  svg.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true, detail: 1 })); assert.deepEqual({ ...ui.scene().view }, clicked, 'synthetic click after up is not a second action');
+  assert.equal(ui.scene().geometry, geometry); assert.equal(ui.scene().selected, selected); assert.equal(ui.scene().expanded, true);
+  for (const reason of ['pointercancel', 'lostpointercapture', 'blur', 'hide', 'resize', 'zoom', 'suspend']) {
+    miniPointer(f, svg, 'pointerdown');
+    if (reason === 'hide') { $('minimap-toggle').click(); $('minimap-toggle').click(); }
+    else if (reason === 'resize') f.resize(280, 500);
+    else if (reason === 'zoom') ui.zoom(.5);
+    else if (reason === 'suspend') { const event = new f.window.Event('pagehide'); Object.defineProperty(event, 'persisted', { value: true }); f.window.dispatchEvent(event); }
+    else miniPointer(f, reason === 'lostpointercapture' ? svg : f.window, reason);
+    const stopped = { ...ui.scene().view };
+    miniPointer(f, f.window, 'pointerup', { clientX: 15, clientY: 510 }); assert.deepEqual({ ...ui.scene().view }, stopped, `late up after ${reason} is inert`);
+    if (reason === 'suspend') { const event = new f.window.Event('pageshow'); Object.defineProperty(event, 'persisted', { value: true }); f.window.dispatchEvent(event); }
+  }
+  miniPointer(f, svg, 'pointerdown'); miniPointer(f, f.window, 'pointermove', { clientX: -1e9, clientY: 1e9 });
+  const dragged = { ...ui.scene().view }; miniPointer(f, f.window, 'pointerup', { clientX: 1e9, clientY: -1e9 }); assert.deepEqual({ ...ui.scene().view }, dragged, 'drag up does not add a recenter');
+  const { bounds } = ui.scene().geometry, rect = $('map').getBoundingClientRect(), v = ui.scene().view;
+  assert.ok(v.x + bounds.right * v.zoom >= Math.min(64, rect.width / 2, (bounds.right - bounds.left) * v.zoom) - 1e-7);
+  assert.ok(v.y + bounds.top * v.zoom <= rect.height - Math.min(64, rect.height / 2, (bounds.bottom - bounds.top) * v.zoom) + 1e-7);
+  assertOverview(f);
+});
+
+test('minimap reflects folds, focus, history removal and source reveal without losing drafts', async t => {
+  const f = await fixture(t, 340, undefined, true, { before: async e => {
+    await e.command('guidance', { revision: e.doc.revision, objective: 'breaks', successCriteria: '' });
+    await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, category: 'Tools', question: 'Tool failures in winter?' });
+  } }), d = f.document, $ = id => d.getElementById(id), ui = f.window.__updates;
+  $('minimap-toggle').click(); assertOverview(f);
+  const [root, first, target] = f.explorer.doc.nodes; f.open(first.id); f.type('answer', 'Keep answer'); f.type('revisit-condition', 'Keep reminder');
+  const editor = $('answer'); $('branch-workspace').click(); assert.match($('minimap-status').textContent, /3 shown; 1 folded; whole map/); assert.ok($('minimap-folded').getAttribute('d')); assertOverview(f);
+  $('focus-branch').click(); assert.match($('minimap-status').textContent, /2 shown; 1 folded; branch focus/); assert.ok($('minimap-focus').getAttribute('d')); assertOverview(f); assert.equal($('answer'), editor);
+  $('suggest-next').click(); $('open-next-question').click(); assert.equal(ui.scene().selected, target.id); assert.match($('minimap-status').textContent, /whole map/); assertOverview(f);
+  ui.select(first.id); assert.equal($('answer').value, 'Keep answer'); assert.equal($('revisit-condition').value, 'Keep reminder');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'draft before history removal');
+  await f.explorer.command('add', { revision: f.explorer.doc.revision, nodeId: root.id, category: 'History', question: 'Temporary history question?' }); await f.poll();
+  const temporary = f.explorer.doc.nodes.at(-1), revision = f.explorer.doc.revision;
+  ui.select(temporary.id); f.type('revisit-condition', 'Removed reminder retained');
+  await f.explorer.command('restore', { revision, journey: f.explorer.activeKey, snapshotRevision: revision - 1 }); await f.poll();
+  assert.equal(ui.scene().positions.has(temporary.id), false); assertOverview(f);
+  assert.equal($('orphan-drafts').querySelector('[data-orphan-reminder] textarea').value, 'Removed reminder retained');
+  const oldPath = $('minimap-nodes').getAttribute('d');
+  miniPointer(f, $('minimap-map'), 'pointerdown');
+  const replacement = createDocument('Replacement'); replacement.nodes.push({ ...f.explorer.doc.nodes[1], id: 'new-question', parentId: replacement.rootId });
+  ui.apply({ document: replacement, error: '', pending: null }, true);
+  assert.equal($('minimap').hidden, false); assert.notEqual($('minimap-nodes').getAttribute('d'), oldPath); assertOverview(f);
+  const after = { ...ui.scene().view }; miniPointer(f, f.window, 'pointerup'); assert.deepEqual({ ...ui.scene().view }, after, 'journey reset rejects old pointer');
+});
+
+test('minimap uses extreme actual editor geometry with constant DOM and no path rebuild on pan', async t => {
+  const source = makeFixture(fixtureSpecs.find(spec => spec.name === 'near5000-wide')).document;
+  const f = await fixture(t, 340, undefined, false, { before: e => { e.doc = structuredClone(source); } }), $ = id => f.document.getElementById(id), ui = f.window.__updates;
+  $('minimap-toggle').click(); assertOverview(f);
+  const initialZoom = ui.scene().view.zoom; ui.select('node-4949'); const answer = $('answer');
+  ui.zoom(.00000001); assert.equal(ui.scene().view.zoom, initialZoom); assert.ok(ui.scene().positions.get('node-4949').width > 308); assertOverview(f);
+  const geometry = ui.scene().geometry, mutations = [];
+  const observer = new f.window.MutationObserver(records => mutations.push(...records)); observer.observe($('minimap-map'), { attributes: true, subtree: true, childList: true });
+  $('minimap-map').focus();
+  for (let i = 0; i < 10; i++) $('minimap-map').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: i % 2 ? 'ArrowRight' : 'ArrowLeft', bubbles: true }));
+  mutations.push(...observer.takeRecords()); observer.disconnect();
+  assert.equal(ui.scene().geometry, geometry); assert.equal($('answer'), answer);
+  assert.equal(mutations.filter(m => m.attributeName === 'd').length, 0, 'ten pans rebuild zero overview paths');
+  assert.equal(mutations.filter(m => m.type === 'childList').length, 0, 'ten pans create zero overview DOM');
+  assert.equal(mutations.filter(m => m.target.id === 'minimap-viewport').length, 40, 'only four viewport attributes per pan');
+  for (const zoom of [.1, 1, 3]) { ui.zoom(zoom / ui.scene().view.zoom); assertOverview(f); assert.equal($('answer'), answer); }
+  $('fit').click(); assert.equal(ui.scene().expanded, false); assertOverview(f); assert.equal(ui.scene().view.zoom, initialZoom);
+  $('outline-toggle').click(); f.document.querySelector('#outline-list [data-node-id="node-4949"]').click(); assert.equal($('answer'), answer); assertOverview(f);
+  $('minimap-toggle').click(); assert.equal($('minimap-nodes').getAttribute('d'), '');
+  $('minimap-toggle').click(); assertOverview(f);
+  f.resize(280, 420); f.observers.get('minimap-map')(); assertOverview(f); assert.equal($('answer'), answer);
+});
+
+test('minimap focus cancels voice and rejects a late transcript while passive updates retain ownership', async t => {
+  const voice = voiceFixture(); let recording;
+  voice.start = id => { recording = id; return { id, phase: 'listening' }; };
+  voice.poll = () => ({ id: recording, phase: voice.counts().cancels ? 'done' : 'listening', text: 'late words must not insert' });
+  const f = await fixture(t, 340, voice), $ = id => f.document.getElementById(id), ui = f.window.__updates;
+  $('minimap-toggle').click(); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep exact draft');
+  const answer = $('answer'); answer.focus(); await until(() => !$('voice-record').disabled, 'voice ready'); $('voice-record').click(); await until(() => !$('voice-stop').disabled, 'listening');
+  const counts = voice.counts(); ui.zoom(.5); ui.refresh(); assertOverview(f); assert.deepEqual(voice.counts(), counts, 'passive overview refresh does not cancel');
+  $('minimap-map').focus(); await until(() => voice.counts().cancels === 1, 'overview focus cancels'); await delay(250);
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep exact draft'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
 
 async function until(read, label) {
   for (let i = 0; i < 250; i++) { const result = read(); if (result) return result; await delay(10); }
@@ -513,12 +661,15 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.QuestionHelpClient = QuestionHelpClient;
   window.ResearchReviewClient = ResearchReviewClient;
   window.researchSettingsText = researchSettingsText;
-  window.attachNavigation = attachNavigation;
+  window.attachNavigation = attachNavigation; window.attachMinimap = attachMinimap;
+  const mini = document.getElementById('minimap-map');
+  mini.getBoundingClientRect = () => ({ left: 12, top: height + 8, width: Math.min(180, (width - 24) * .4), height: 80 });
+  mini.setPointerCapture = id => captured.add(id); mini.hasPointerCapture = id => captured.has(id); mini.releasePointerCapture = id => captured.delete(id);
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   Object.assign(window, { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches });
   window.NextQuestion = NextQuestion;
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;

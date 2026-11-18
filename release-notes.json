@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.56",
+    "summary": "Show an optional minimap below the canvas to see the current viewport, selected question and folded or focused branches. Click, drag or use arrow keys to navigate without changing answers or zoom. Hide it to reclaim space; the choice lasts for this canvas. Narrow panes now keep schematic recovery guidance visible."
+  },
+  {
     "version": "0.1.55",
     "summary": "Map detail adapts to zoom: distant summaries show labels, status, importance and branch counts; closer cards show questions and answers. Extreme Fit becomes a schematic overview with full Outline access. The same expanded editor stays readable while zooming, preserving drafts, caret, reminders and dictation."
   },

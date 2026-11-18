@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { measure, domFixture } from './perf-baseline.mjs';
 import { fixtureSpecs, makeFixture } from './perf-fixtures.mjs';
-import { validateDocument, isQuestion, DecisionImpact, impactPath } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { validateDocument, isQuestion, DecisionImpact, impactPath, criticalPaths } from '../com.github.copilot/extensions/explorer/model.mjs';
 
 const root = resolve(import.meta.dirname, '..'), output = join(root, '.perf-baseline');
 const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true }).stdout.trim();
@@ -30,6 +30,14 @@ for (const spec of fixtureSpecs.filter(spec => spec.name.startsWith('near'))) {
     assert.equal(Object.values(counts).reduce((a,b) => a+b, 0), questions.length);
     return { questions: questions.length, ...counts };
   }, { setup: () => new DecisionImpact(doc) });
+  await measure(phases, 'criticalSelection', 'Select all critical decisions and recorded dependency context with a cold band cache', (_i, index) => {
+    const result = criticalPaths(doc, index); assert.ok(result.ids.size <= doc.nodes.length); assert.ok(result.visitedLinks <= 2 * (doc.dependencies?.length ?? 0));
+    return { highlighted: result.highlights.size, included: result.ids.size, visitedLinks: result.visitedLinks };
+  }, { setup: () => new DecisionImpact(doc) });
+  await measure(phases, 'criticalView', 'Enter critical paths in the shipped UI (jsdom)', (_i, f) => {
+    f.window.document.getElementById('critical-paths').click(); assert.equal(f.window.document.getElementById('critical-return').hidden, false);
+    return { renderedCards: f.window.document.querySelectorAll('#nodes [data-critical]').length, renderedEdges: f.window.document.querySelectorAll('#edges path').length };
+  }, { setup: () => domFixture(doc), dispose: f => f.close() });
   await measure(phases, 'displayMode', 'Enable impact connection display in the shipped UI (jsdom)', (_i, f) => {
     const select = f.window.document.getElementById('impact-display'); select.value = 'impact'; select.dispatchEvent(new f.window.Event('change'));
     const paths = f.window.document.querySelectorAll('#edges [data-impact]'); assert.ok(paths.length > 0);

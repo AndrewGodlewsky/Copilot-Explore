@@ -38,7 +38,7 @@ Long paths show 30 steps per page. **Open affected question**, or a path step's 
 
 ## Connection display
 
-Choose **Connections ? Downstream impact** above the map. **Normal connections** is the default and returns to the existing display. This is a local canvas choice; it does not change the shared file or historical importance.
+Choose **Connections > Downstream impact** above the map. **Normal connections** is the default and returns to the existing display. This is a local canvas choice; it does not change the shared file or historical importance.
 
 Each incoming tree connection represents its **child question's** recorded downstream band. It does not assert that the parent depends on that child. Direction connections remain neutral; root and direction nodes have no question impact band. Explicit dependencies contribute to the calculation but are not drawn as extra tree connectors.
 

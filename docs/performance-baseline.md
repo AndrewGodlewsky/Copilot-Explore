@@ -1,6 +1,6 @@
 # Synthetic performance baseline
 
-The separate `npm run benchmark:impact` command measures selected-question decision impact, cold-cache all-question bands and enabling the connection display with the same synthetic-fixture and measurement approach. See [decision impact](decision-impact.md) for its bounds, phases and interpretation; it does not change the original baseline phases.
+The separate `npm run benchmark:impact` command measures selected-question decision impact, cold-cache all-question bands enabling the connection display, and critical-path selection/entry with the same synthetic-fixture and measurement approach. See [decision impact](decision-impact.md) for its bounds, phases and interpretation; it does not change the original baseline phases.
 
 Run `npm run benchmark` from the repository root. The command writes `.perf-baseline/baseline.json` and `.perf-baseline/baseline.md`; the directory is ignored by git. It uses no user map or model provider. Fixtures are generated afresh with fixed IDs, timestamps, topology, populated answers and reasoning research, pinned user guidance, answer states, direction nodes, and an accepted reviewed brief. Each fixture passes `validateDocument`. The near-9 MiB case is approximately 60 KiB below the saved native limit. No large fixture file is committed.
 

@@ -73,3 +73,25 @@ export function impactPath(result, targetId, kind = 'combined') {
   while (id !== result.sourceId) { const previous = predecessors.get(id); path.push({ id, via: previous.via }); id = previous.id; }
   path.push({ id: result.sourceId, via: null }); return path.reverse();
 }
+
+/** Highlight every qualifying decision; keep complete recorded dependency components and tree ancestry as context. */
+export function criticalPaths(doc, index = new DecisionImpact(doc)) {
+  const neighbors = new Map(doc.nodes.map(node => [node.id, []])), parents = new Map(doc.nodes.map(node => [node.id, node.parentId]));
+  for (const { dependentId, prerequisiteId } of doc.dependencies ?? []) { neighbors.get(dependentId).push(prerequisiteId); neighbors.get(prerequisiteId).push(dependentId); }
+  const highlights = new Map();
+  for (const node of doc.nodes) if (isQuestion(node)) {
+    const reasons = [];
+    if (index.bandFor(node.id) === 'high') reasons.push('High downstream impact');
+    if (neighbors.get(node.id).length && (node.review || !['decided', 'not-relevant'].includes(effectiveAnswerState(node)))) reasons.push('Unresolved recorded dependency');
+    if (reasons.length) highlights.set(node.id, reasons);
+  }
+  const ids = new Set(highlights.keys()), queue = [...ids]; let visitedLinks = 0;
+  for (let i = 0; i < queue.length; i++) for (const id of neighbors.get(queue[i])) {
+    visitedLinks++; if (!ids.has(id)) { ids.add(id); queue.push(id); }
+  }
+  // Ancestors provide navigation context but do not pull in unrelated dependency components.
+  const ancestors = new Set([doc.rootId]);
+  for (const start of ids) for (let id = parents.get(start); id !== null && !ancestors.has(id); id = parents.get(id)) ancestors.add(id);
+  for (const id of ancestors) ids.add(id);
+  return { highlights, ids, visitedLinks };
+}

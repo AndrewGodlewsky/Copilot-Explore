@@ -12,7 +12,7 @@ import { attachMinimap } from './minimap.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';
 import { NextQuestion } from './next-question.mjs';
-import { DecisionImpact, impactPath, decisionImpactKey } from './decision-impact.mjs';
+import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';
 
 const $ = id => document.getElementById(id);
@@ -43,6 +43,7 @@ let outlinePage = 0, outlineFilterStamp = '', outlineMode = false, outlineNaviga
 let revisitDay = localDate();
 let nextQuestion = new NextQuestion(), nextQuestionOpen = false, nextQuestionStamp = '';
 let impactDocument = null, impactIndex = null, impactDisplay = false;
+let criticalPrior = null, criticalDocument = null, criticalResult = null;
 // Received saved snapshots are immutable. Memoize their content keys without retaining old documents.
 const impactKeys = new WeakMap();
 function impactKey(document) {
@@ -59,6 +60,57 @@ function impactLabel(node) {
   const value = currentImpact().bandFor(node.id);
   return `${value[0].toUpperCase()}${value.slice(1)} downstream impact`;
 }
+function currentCritical(doc = state.document) {
+  const key = impactKey(doc);
+  if (criticalDocument !== key) { criticalDocument = key; criticalResult = criticalPaths(doc, currentImpact(doc)); }
+  return criticalResult;
+}
+function criticalLabel(node) {
+  return criticalPrior ? currentCritical().highlights.get(node.id)?.join('; ') ?? 'Context for critical paths' : '';
+}
+function currentBranches(doc = state.document, contextId = selected) {
+  if (!criticalPrior) return branchView(doc.nodes, doc.rootId, collapsed, focusId);
+  const ids = new Set(currentCritical(doc).ids), byId = new Map(doc.nodes.map(node => [node.id, node]));
+  for (let node = byId.get(contextId); node; node = byId.get(node.parentId)) ids.add(node.id);
+  return branchView(doc.nodes.filter(node => ids.has(node.id)), doc.rootId, new Set());
+}
+function updateCriticalStatus() {
+  $('critical-paths').setAttribute('aria-pressed', String(!!criticalPrior)); $('critical-return').hidden = $('critical-status').hidden = $('critical-details').hidden = !criticalPrior;
+  if (!criticalPrior) return;
+  const result = currentCritical(), count = result.highlights.size;
+  $('critical-status').textContent = `${count ? `${count} highlighted decisions` : 'No matching decisions'}. Decision influence, not a scheduling or unique critical path. Folds, branch focus and Outline filters are paused; Return restores them.`;
+}
+function releaseCritical() {
+  if (criticalPrior) for (const [control, disabled] of criticalPrior.controls) control.disabled = disabled;
+  criticalPrior = null; criticalDocument = null; criticalResult = null; updateCriticalStatus();
+}
+function enterCritical() {
+  if (!state.document || criticalPrior) return;
+  captureWorkspace(); const anchor = anchorPoint();
+  const controls = [...$('outline').querySelectorAll('details input, details select, details button')].map(control => [control, control.disabled]);
+  criticalPrior = { journey: referenceJourney(), selected, expanded, collapsed: new Set(collapsed), focusId, wholeView, view: { ...view }, outlineMode, outlinePage, outlineFilterStamp, outlineNavigated, impactDisplay, impactLegendOpen: $('impact-legend').open, controls };
+  for (const [control] of controls) control.disabled = true;
+  collapsed = new Set(); focusId = null; wholeView = null; outlinePage = 0;
+  branches = currentBranches(); updateCriticalStatus(); updateFocusStatus(); renderWorkspace(); refreshScene(anchor); renderOutline();
+}
+function exitCritical() {
+  if (!criticalPrior) return;
+  captureWorkspace(); const prior = criticalPrior; releaseCritical();
+  if (!state.document || prior.journey !== referenceJourney()) return;
+  const ids = new Set(state.document.nodes.map(node => node.id));
+  if (selected !== prior.selected) voice.cancel();
+  selected = ids.has(prior.selected) ? prior.selected : state.document.rootId; expanded = ids.has(prior.selected) && prior.expanded;
+  collapsed = new Set([...prior.collapsed].filter(id => ids.has(id))); focusId = ids.has(prior.focusId) ? prior.focusId : null; wholeView = prior.wholeView;
+  if (focusId && !withinFocus(selected)) { focusId = null; wholeView = null; }
+  collapsed = revealPath(state.document.nodes, collapsed, selected);
+  impactDisplay = prior.impactDisplay; $('impact-display').value = impactDisplay ? 'impact' : 'normal'; $('edges').dataset.impact = String(impactDisplay);
+  $('impact-legend').hidden = !impactDisplay; $('impact-legend').open = prior.impactLegendOpen;
+  outlinePage = prior.outlinePage; outlineFilterStamp = prior.outlineFilterStamp; outlineNavigated = prior.outlineNavigated;
+  branches = currentBranches(); renderWorkspace(); setOutlineMode(prior.outlineMode); outlineNavigated = prior.outlineNavigated; view = prior.view;
+  updateFocusStatus(); refreshScene(null); renderOutline(); $('critical-paths').focus({ preventScroll: true });
+}
+$('critical-paths').addEventListener('click', enterCritical);
+$('critical-return').addEventListener('click', exitCritical);
 $('impact-display').addEventListener('change', () => {
   const anchor = anchorPoint(); impactDisplay = $('impact-display').value === 'impact';
   $('edges').dataset.impact = String(impactDisplay); $('impact-legend').hidden = !impactDisplay;
@@ -384,6 +436,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    releaseCritical();
     if ($('project-reconcile-dialog').open) closeProjectReconciliation();
     cancelProjectGitStatus(); projectGitResult = null; projectGitError = '';
     if ($('project-copy-dialog').open) closeProjectCopy();
@@ -430,9 +483,10 @@ function apply(next, reset = false) {
     if (!ids.has(selected)) { voice.cancel(); composing = null; workspace = null; $('node-workspace').replaceChildren(); $('question-drawer').replaceChildren(); selected = doc.rootId; expanded = false; focusId = null; wholeView = null; }
     else if (focusId && !ids.has(focusId)) { focusId = null; wholeView = null; }
     collapsed = new Set([...collapsed].filter(id => ids.has(id)));
-    branches = branchView(doc.nodes, doc.rootId, collapsed, focusId);
+    branches = currentBranches(doc);
   }
   updateFocusStatus();
+  updateCriticalStatus();
   showView();
   $('decision-brief').hidden = !doc;
   $('implementation-handoff').hidden = !doc;
@@ -984,7 +1038,7 @@ function select(id, { outlineRow = false } = {}) {
   voice.cancel();
   if (focusId && !withinFocus(id)) { focusId = null; wholeView = null; }
   collapsed = revealPath(state.document.nodes, collapsed, id);
-  branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
+  branches = currentBranches(state.document, id);
   updateFocusStatus();
   const rect = $('map').getBoundingClientRect(), width = Math.min(560, rect.width - 32), old = anchorPoint(id);
   const anchor = { id, x: Math.max(width / 2 + 16, Math.min(rect.width - width / 2 - 16, old?.x ?? rect.width / 2)), y: focusTop(id, rect.height) };
@@ -992,6 +1046,7 @@ function select(id, { outlineRow = false } = {}) {
   renderWorkspace(); refreshScene(anchor); if (outlineMode && !outlineRow) revealOutlineSelection(false); else renderOutline(); $('expanded-title').focus({ preventScroll: true });
 }
 function toggleBranch(id, source) {
+  if (criticalPrior) return;
   const node = state.document?.nodes.find(n => n.id === id);
   if (!node || !branches.parentIds.has(id)) return;
   if (outlineMode) outlineNavigated = true;
@@ -1007,7 +1062,7 @@ function toggleBranch(id, source) {
       voice.cancel(); captureWorkspace(); selected = id; expanded = false; moved = true; break;
     }
   }
-  branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
+  branches = currentBranches();
   renderWorkspace(); refreshScene(anchor); renderOutline();
   if (moved) revealNode(id);
   const focus = moved && outlineMode ? [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === id) : moved ? [...$('nodes').children].find(e => e.dataset.nodeId === id) :
@@ -1026,7 +1081,7 @@ function branchButton(node, workspace = false) {
   const folded = collapsed.has(node.id), label = `${folded ? 'Expand' : 'Collapse'} branch`;
   return button(label, event => toggleBranch(node.id, event.currentTarget.closest('.outline') ? 'outline' : 'map'), { ...(workspace ? { id: 'branch-workspace' } : {}),
     class: workspace ? 'workspace-branch-toggle' : 'branch-toggle', 'data-branch-id': node.id,
-    'aria-label': `${label}: ${node.question}`, 'aria-expanded': String(!folded) });
+    'aria-label': `${label}: ${node.question}`, 'aria-expanded': String(!folded), disabled: !!criticalPrior });
 }
 function focusAncestor(id) {
   const byId = new Map(state.document.nodes.map(node => [node.id, node]));
@@ -1047,12 +1102,13 @@ function updateFocusStatus() {
   $('focus-branch')?.setAttribute('aria-pressed', String(!!node && selected === node.id));
 }
 function showWholeMap() {
+  if (criticalPrior) return;
   if (!focusId) return;
   if (outlineMode) outlineNavigated = true;
   endDrag();
   focusId = null;
   collapsed = revealPath(state.document.nodes, collapsed, selected);
-  branches = branchView(state.document.nodes, state.document.rootId, collapsed);
+  branches = currentBranches();
   if (wholeView) view = wholeView;
   wholeView = null;
   updateFocusStatus();
@@ -1063,11 +1119,12 @@ function showWholeMap() {
   focusTarget.focus({ preventScroll: true });
 }
 function focusBranch(id) {
+  if (criticalPrior) return;
   if (id === state.document.rootId) { showWholeMap(); return; }
   if (outlineMode) outlineNavigated = true;
   if (!wholeView) wholeView = { ...view };
   focusId = id;
-  branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
+  branches = currentBranches();
   updateFocusStatus();
   refreshScene(anchorPoint(id));
 }
@@ -1153,8 +1210,10 @@ function renderMap() {
         nodes.append(card);
       }
       card.className = `node ${acceptedIds.has(n.id) ? 'new-question' : ''} ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''} ${branches.parentIds.has(n.id) ? 'has-branch' : ''}`;
-      card.title = n.question; card.dataset.state = effectiveAnswerState(n);
+      card.title = criticalPrior ? `${n.question} — ${criticalLabel(n)}` : n.question; card.dataset.state = effectiveAnswerState(n);
+      if (criticalPrior) card.dataset.critical = currentCritical().highlights.has(n.id) ? 'highlight' : 'context'; else delete card.dataset.critical;
       card.setAttribute('aria-label', `${n.category}: ${n.question}. ${nodeStatus(n)}${isQuestion(n) ? `; ${importanceLabel(n)}` : ''}${impactDisplay && isQuestion(n) ? `; ${impactLabel(n)}` : ''}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden}` : ''}${n.revisit ? `; reminder: ${revisitLabel(n)}` : ''}${n.answer ? `; Answer: ${n.answer}` : ''}; ${branches.nodeCounts.get(n.id)} descendant nodes`);
+      if (criticalPrior) card.setAttribute('aria-label', `${card.getAttribute('aria-label')}; ${criticalLabel(n)}`);
       card.style.left = `${p.x}px`; card.style.top = `${p.y}px`; card.style.width = `${p.width}px`; card.style.height = `${p.height}px`; card.style.setProperty('--branch', colors[p.branch % colors.length]);
       const summary = detailTier === 'overview' || detailTier === 'schematic';
       const status = (hidden || (root ? `${total} questions` : `${nodeStatus(n)}${n.review ? '; needs review' : ''}`)) + (summary && !hidden ? ` \u00b7 ${branches.nodeCounts.get(n.id)} below` : '') + (n.revisit ? ` · ${revisitLabel(n)}` : '');
@@ -1169,6 +1228,7 @@ function renderMap() {
         if (!toggle) { toggle = branchButton(n); nodes.append(toggle); }
         const label = `${collapsed.has(n.id) ? 'Expand' : 'Collapse'} branch`;
         toggle.textContent = label; toggle.setAttribute('aria-label', `${label}: ${n.question}`); toggle.setAttribute('aria-expanded', String(!collapsed.has(n.id)));
+        toggle.disabled = !!criticalPrior;
         toggle.style.left = `${p.x + p.width - 8}px`; toggle.style.top = `${p.y + p.height - 8}px`;
       }
     }
@@ -1387,7 +1447,8 @@ function renderWorkspace() {
   panel.dataset.nodeId = node.id; panel.replaceChildren(); panel.scrollTop = 0;
   const headingArea = el('div', { class: 'workspace-region' }), content = el('div', { class: 'node-content' });
   const workspaceImpact = el('p', { id: 'workspace-impact', class: 'quiet', hidden: true });
-  panel.append(headingArea, workspaceImpact, content);
+  const workspaceCritical = el('p', { id: 'workspace-critical', class: 'quiet', hidden: true });
+  panel.append(headingArea, workspaceImpact, workspaceCritical, content);
   const drawer = $('question-drawer'); drawer.replaceChildren(); drawer.dataset.expanded = String(!!ui.toolsExpanded);
   const toolsBody = el('div', { id: 'question-tools-body', class: 'question-tools-body' });
   const toolsToggle = button('More options', () => setQuestionTools(drawer.hidden), { id: 'question-tools-toggle', 'aria-expanded': String(!!ui.toolsOpen), 'aria-controls': 'question-drawer' });
@@ -1658,7 +1719,7 @@ function renderWorkspace() {
     if (result) {
       if (ui.question === value) ui.question = '';
       collapsed = revealPath(state.document.nodes, collapsed, result.directionId);
-      branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
+      branches = currentBranches();
       renderWorkspace(); refreshScene();
       notice('Direction saved. Copilot will propose questions beneath it for your review.');
     }
@@ -1669,6 +1730,7 @@ function renderWorkspace() {
     const focused = panel.contains(document.activeElement) || drawer.contains(document.activeElement) ? document.activeElement : null;
     refresh();
     workspaceImpact.hidden = !impactDisplay || !isQuestion(node); workspaceImpact.textContent = impactLabel(node);
+    workspaceCritical.hidden = !criticalPrior; workspaceCritical.textContent = criticalLabel(node);
     updateDependencies();
     updateImpact();
     $('question-drawer-context').textContent = node.question;
@@ -1676,7 +1738,7 @@ function renderWorkspace() {
     if (state.pending && regions.get('pending').area.parentElement !== pendingParent) pendingParent.prepend(regions.get('pending').area);
     const ancestors = [];
     for (let n = byId.get(node.parentId); n; n = byId.get(n.parentId)) ancestors.push([n.id, n.category, n.question]);
-    update('navigation', [node.question, focusId, collapsed.has(node.id), branches.parentIds.has(node.id), ancestors], () => {
+    update('navigation', [node.question, focusId, !!criticalPrior, collapsed.has(node.id), branches.parentIds.has(node.id), ancestors], () => {
       const path = [], byId = new Map(doc.nodes.map(n => [n.id, n]));
       for (let n = node; n; n = byId.get(n.parentId)) path.push(n);
       const crumbs = el('nav', { class: 'crumbs', 'aria-label': 'Question ancestors' });
@@ -1684,7 +1746,7 @@ function renderWorkspace() {
         if (crumbs.childNodes.length) crumbs.append(el('span', {}, '/'));
         crumbs.append(button(n.id === doc.rootId ? 'Your idea' : n.category, () => select(n.id), { id: `ancestor-${n.id}`, title: n.question }));
       }
-      return [crumbs, el('div', { class: 'node-head-actions' }, button('Focus branch', () => focusBranch(node.id), { id: 'focus-branch', 'aria-pressed': String(focusId === node.id), 'aria-label': `Focus branch: ${node.question}` }), branchButton(node, true))];
+      return [crumbs, el('div', { class: 'node-head-actions' }, button('Focus branch', () => focusBranch(node.id), { id: 'focus-branch', disabled: !!criticalPrior, 'aria-pressed': String(focusId === node.id), 'aria-label': `Focus branch: ${node.question}` }), branchButton(node, true))];
     });
     update('heading', [node.question, node.category, node.kind, collapsed.has(node.id), collapsed.has(node.id) ? hiddenSummary(node.id) : ''], () => {
       const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.kind === 'direction' ? nodeStatus(node) : node.category), button('Close question', () => collapseNode(), { id: 'collapse-node' })), el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
@@ -1827,7 +1889,7 @@ function renderQuestionFeedback() {
   feedback.renderStamp = stamp; feedback.replaceChildren();
   if (ids.length) feedback.append(button(`${ids.length} question${ids.length === 1 ? '' : 's'} added — show in branch`, () => {
     select(acceptedParentId); collapsed.delete(acceptedParentId);
-    branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId); refreshScene();
+    branches = currentBranches(); refreshScene();
   }));
 }
 function renderQuestionPreview() {
@@ -2143,16 +2205,17 @@ function setOutlineMode(value) {
 }
 function outlineEntries() {
   const filters = currentSearchFilters('outline');
-  const filtered = !!(filters.query || filters.state !== 'all' || filters.importance !== 'all' || filters.research || filters.review || filters.drafts || filters.reminder !== 'all');
-  const children = new Map(state.document.nodes.map(n => [n.id, []])), byId = new Map(state.document.nodes.map(n => [n.id, n]));
-  for (const n of state.document.nodes) if (n.parentId) children.get(n.parentId).push(n);
+  const filtered = !criticalPrior && !!(filters.query || filters.state !== 'all' || filters.importance !== 'all' || filters.research || filters.review || filters.drafts || filters.reminder !== 'all');
+  const nodes = criticalPrior ? branches.nodes : state.document.nodes;
+  const children = new Map(nodes.map(n => [n.id, []])), byId = new Map(nodes.map(n => [n.id, n]));
+  for (const n of nodes) if (n.parentId) children.get(n.parentId).push(n);
   const entries = [], stack = [{ node: byId.get(state.document.rootId), depth: 0 }];
   while (stack.length) {
     const item = stack.pop(), n = item.node;
     const draft = drafts.get(n.id) ?? draftClient.entries.get(n.id)?.conflict?.text ?? null;
-    const match = matchSearch(n, filters, { draft });
+    const match = criticalPrior ? { snippet: '', hasDraft: !!draft } : matchSearch(n, filters, { draft });
     if (match) entries.push({ ...item, ...match, parent: byId.get(n.parentId)?.question });
-    if (filtered || !collapsed.has(n.id)) for (const node of children.get(n.id).toReversed()) stack.push({ node, depth: item.depth + 1 });
+    if (criticalPrior || filtered || !collapsed.has(n.id)) for (const node of children.get(n.id).toReversed()) stack.push({ node, depth: item.depth + 1 });
   }
   return { entries, filtered, filters };
 }
@@ -2161,7 +2224,7 @@ function revealOutlineSelection(focus = true) {
   outlineNavigated = true;
   $('outline-reset').click();
   collapsed = revealPath(state.document.nodes, collapsed, selected);
-  branches = branchView(state.document.nodes, state.document.rootId, collapsed, focusId);
+  branches = currentBranches();
   outlinePage = Math.floor(Math.max(0, outlineEntries().entries.findIndex(item => item.node.id === selected)) / SEARCH_PAGE_SIZE);
   renderOutline();
   const row = [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === selected);
@@ -2173,7 +2236,7 @@ function renderOutline() {
   const { entries: matches, filtered, filters } = outlineEntries(), filterStamp = JSON.stringify([referenceJourney(), filters]);
   if (outlineFilterStamp !== filterStamp) { outlinePage = 0; outlineFilterStamp = filterStamp; }
   outlinePage = Math.min(outlinePage, Math.max(0, Math.ceil(matches.length / SEARCH_PAGE_SIZE) - 1));
-  const stamp = JSON.stringify([filterStamp, outlinePage, selected, impactDisplay ? impactKey(state.document) : null, matches.map(({ node: n, parent, depth, snippet, hasDraft }) => [n.id, n.question, n.category, nodeStatus(n), n.review, !!n.research, n.revisit, n.importance, parent, depth, snippet, hasDraft, collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
+  const stamp = JSON.stringify([filterStamp, outlinePage, selected, impactDisplay || criticalPrior ? impactKey(state.document) : null, !!criticalPrior, matches.map(({ node: n, parent, depth, snippet, hasDraft }) => [n.id, n.question, n.category, nodeStatus(n), n.review, !!n.research, n.revisit, n.importance, parent, depth, snippet, hasDraft, collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
   if ($('outline-list').renderStamp === stamp) return;
   $('outline-list').renderStamp = stamp;
   const scroll = $('outline-list').scrollTop;
@@ -2181,12 +2244,13 @@ function renderOutline() {
   const focusedBranch = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.branchId : null;
   const page = matches.slice(outlinePage * SEARCH_PAGE_SIZE, (outlinePage + 1) * SEARCH_PAGE_SIZE);
   $('outline-mode-hint').textContent = filtered ? 'Filtered results across the full journey, including folded branches. Levels and parents show original ancestry.' : 'Journey hierarchy. Fold branches to hide descendants. Search includes folded nodes. The selected editor remains available even when its row is hidden.';
+  if (criticalPrior) $('outline-mode-hint').textContent = 'Critical paths: highlighted decisions and their context. All qualifying ties and recorded dependency components remain reachable. Local filters and folds resume when you return to the previous view.';
   $('outline-count').textContent = `${matches.length} matching nodes${matches.length ? `; showing ${outlinePage * SEARCH_PAGE_SIZE + 1}\u2013${outlinePage * SEARCH_PAGE_SIZE + page.length}` : '. No nodes match these filters.'}`;
   $('outline-previous').disabled = outlinePage === 0; $('outline-next').disabled = (outlinePage + 1) * SEARCH_PAGE_SIZE >= matches.length;
   $('outline-list').replaceChildren(...page.map(item => {
     const n = item.node;
     return el('div', { class: 'outline-row', role: 'listitem', style: `--depth:${filtered ? 0 : Math.min(item.depth, 4)}`, 'data-depth': item.depth },
-      button([n.question, el('small', {}, `Level ${item.depth + 1}${item.parent ? ` \u00b7 Parent: ${item.parent}` : ' \u00b7 Journey root'}`), el('small', {}, `${n.category} \u00b7 ${nodeStatus(n)}${n.review ? '; needs review' : ''}${n.research ? ' \u00b7 Research available' : ''}${collapsed.has(n.id) ? ` \u00b7 ${hiddenSummary(n.id)}` : ''}${n.revisit ? ` \u00b7 Reminder: ${revisitLabel(n)}` : ''}`), ...(isQuestion(n) ? [importanceBadge(n), ...(impactDisplay ? [el('small', { class: 'outline-impact' }, impactLabel(n))] : [])] : [])], () => select(n.id, { outlineRow: true }), { 'data-node-id': n.id, 'aria-current': String(n.id === selected) }),
+      button([n.question, el('small', {}, `Level ${item.depth + 1}${item.parent ? ` \u00b7 Parent: ${item.parent}` : ' \u00b7 Journey root'}`), el('small', {}, `${n.category} \u00b7 ${nodeStatus(n)}${n.review ? '; needs review' : ''}${n.research ? ' \u00b7 Research available' : ''}${collapsed.has(n.id) ? ` \u00b7 ${hiddenSummary(n.id)}` : ''}${n.revisit ? ` \u00b7 Reminder: ${revisitLabel(n)}` : ''}`), ...(criticalPrior ? [el('small', { class: 'critical-reason' }, criticalLabel(n))] : []), ...(isQuestion(n) ? [importanceBadge(n), ...(impactDisplay ? [el('small', { class: 'outline-impact' }, impactLabel(n))] : [])] : [])], () => select(n.id, { outlineRow: true }), { 'data-node-id': n.id, 'aria-current': String(n.id === selected) }),
       ...(filtered ? [el('small', { class: 'search-snippet' }, item.snippet)] : []), branchButton(n));
   }));
   $('outline-list').scrollTop = scroll;

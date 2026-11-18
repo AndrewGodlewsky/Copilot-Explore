@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.80",
+    "summary": "Find influential decisions and unresolved recorded dependencies with Critical paths. Equal-impact decisions, connected dependency chains and ancestor context stay visible. Return restores prior folds, focus, filters and navigation; drafts and saved answers remain intact. Outline provides text reasons and paged access."
+  },
+  {
     "version": "0.1.79",
     "summary": "Switch Connections to Downstream impact to see each child decision's full-map influence through color, line width and pattern. A legend, question labels and Outline text explain the bands while preserving drafts and review states. Portable maps and offline viewers clearly label unavailable impact information."
   },

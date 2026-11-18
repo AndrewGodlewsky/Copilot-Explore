@@ -408,3 +408,13 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #workspace-impact { margin: 0; padding: 0 16px 8px; flex: none; }
 @media(prefers-color-scheme:dark) { :root { --impact-low: #b3c2cd; --impact-medium: #72c9c6; --impact-high: #efad7d; } }
 @media(forced-colors:active) { :root { --impact-low: CanvasText; --impact-medium: CanvasText; --impact-high: CanvasText; } #edges[data-impact="true"] path, .impact-sample path { forced-color-adjust: none; } #edges[data-impact="true"] path[data-impact="structural"] { stroke: CanvasText; } }
+
+.critical-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 20px 8px; font-size: 12px; }
+.critical-controls button { font-size: 12px; }
+#critical-status, #critical-details { flex-basis: 100%; min-width: 0; overflow-wrap: anywhere; margin: 4px 0; }
+#critical-details p { margin: 6px 0; }
+#workspace-critical { margin: 0; padding: 0 16px 8px; flex: none; }
+.node[data-critical="highlight"] { border-top: 3px solid currentColor; }
+.node[data-critical="context"] { border-top: 1px dashed var(--muted); }
+.critical-reason { font-weight: 600; }
+@media(forced-colors:active) { .node[data-critical="context"] { border-top-color: CanvasText; } }

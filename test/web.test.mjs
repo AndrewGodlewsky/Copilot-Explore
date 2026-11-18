@@ -32,7 +32,86 @@ import { NavigationPreferences } from '../com.github.copilot/extensions/explorer
 import { draftHash, draftBase } from '../com.github.copilot/extensions/explorer/drafts.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
-import { DecisionImpact, impactPath, decisionImpactKey } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
+import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
+
+test('critical view includes tied decisions through hidden filters and restores prior navigation and drafts', async t => {
+  const f=await fixture(t,360,undefined,false,{before:async e=>{
+    const doc=structuredClone(e.doc);
+    for(const source of doc.nodes.slice(1)) for(let i=0;i<20;i++)doc.nodes.push({id:`${source.id}-critical-${i}`,parentId:source.id,question:`Child ${i}`,category:'Choice',answer:'Saved',answerState:'decided',research:null,review:false});
+    await e.command('import',{revision:e.doc.revision,document:doc});
+  }}), $=id=>f.document.getElementById(id), ui=f.window.__updates, [a,b]=f.explorer.doc.nodes.slice(1);
+  f.open(a.id);f.type('answer','Keep first draft');const editor=$('answer');editor.setSelectionRange(2,7);
+  $('focus-branch').click();$('branch-workspace').click();$('outline-toggle').click();f.type('search','No matching question');
+  await until(()=>$('outline-count').textContent.includes('0 matching'),'filtered empty');
+  const view=JSON.stringify(ui.scene().view), before=JSON.stringify(f.explorer.doc);
+  $('critical-paths').click();
+  assert.equal($('critical-return').hidden,false);assert.match($('critical-status').textContent,/2 highlighted/);
+  assert.match($('critical-status').textContent,/not.*schedul/i);assert.equal($('search').disabled,true);assert.equal($('search').value,'No matching question');
+  assert.equal($('answer'),editor);assert.equal(editor.selectionStart,2);assert.equal(editor.selectionEnd,7);
+  for(const id of [a.id,b.id])assert.match(f.document.querySelector(`#outline-list [data-node-id="${id}"]`).textContent,/High downstream impact/);
+  assert.equal($('focus-status').textContent,'');assert.equal($('focus-branch').disabled,true);
+  f.document.querySelector(`#outline-list [data-node-id="${b.id}"]`).click();f.type('answer','Keep second draft');
+  $('outline-toggle').click();ui.setView({x:12,y:34,zoom:.7});
+  $('impact-display').value='impact';$('impact-display').dispatchEvent(new f.window.Event('change'));
+  $('critical-return').click();
+  assert.equal($('impact-display').value,'normal');
+  assert.equal($('working-view').classList.contains('outline-mode'),true);
+  assert.equal(ui.scene().selected,a.id);assert.equal($('answer').value,'Keep first draft');assert.equal($('search').disabled,false);assert.equal($('search').value,'No matching question');
+  assert.match($('outline-count').textContent,/0 matching/);assert.equal(JSON.stringify(ui.scene().view),view);assert.match($('focus-status').textContent,/Focusing branch/);assert.match($('branch-workspace').textContent,/Expand/);
+  assert.equal(JSON.stringify(f.explorer.doc),before);ui.select(b.id);assert.equal($('answer').value,'Keep second draft');
+});
+
+test('critical view reports empty results, refreshes saved relationships and abandons old navigation on map replacement', async t => {
+  const f=await fixture(t,360), $=id=>f.document.getElementById(id), ui=f.window.__updates, [a,b]=f.explorer.doc.nodes.slice(1);
+  f.open(a.id);f.type('answer','Keep through refresh');const editor=$('answer');$('critical-paths').click();
+  assert.match($('critical-status').textContent,/No matching/);assert.equal($('answer'),editor);
+  await f.explorer.command('add-dependency',{revision:f.explorer.doc.revision,nodeId:b.id,prerequisiteId:a.id});await f.poll();
+  assert.match($('critical-status').textContent,/2 highlighted/);assert.equal($('answer'),editor);assert.equal(editor.value,'Keep through refresh');
+  await until(()=>$('answer-status').textContent==='Draft saved locally','draft durable before removal');
+  const removed=structuredClone(f.explorer.snapshot());removed.document.nodes=removed.document.nodes.filter(n=>n.id!==a.id);delete removed.document.dependencies;removed.document.revision++;ui.apply(removed);
+  $('critical-return').click();assert.equal(ui.scene().selected,removed.document.rootId);
+  $('critical-paths').click();const replacement=structuredClone(f.explorer.snapshot());replacement.document=createDocument('Another map');replacement.activeKey='another-map';ui.apply(replacement);
+  assert.equal($('critical-return').hidden,true);assert.equal($('critical-paths').getAttribute('aria-pressed'),'false');assert.equal($('search').disabled,false);assert.equal(ui.scene().selected,replacement.document.rootId);
+});
+
+test('critical Outline pages expose every equal influence result with visible context labels and map cues', async t => {
+  const f=await fixture(t,360,undefined,false,{before:async e=>{
+    const doc=structuredClone(e.doc);
+    for(let group=0;group<SEARCH_PAGE_SIZE+5;group++) {
+      const id=`critical-group-${group}`;doc.nodes.push({id,parentId:doc.rootId,question:`Influential ${group}`,category:'Choice',answer:'',research:null,review:false});
+      for(let i=0;i<20;i++)doc.nodes.push({id:`${id}-${i}`,parentId:id,question:`Child ${group}/${i}`,category:'Choice',answer:'Saved',answerState:'decided',research:null,review:false});
+    }
+    await e.command('import',{revision:e.doc.revision,document:doc});
+  }}), $=id=>f.document.getElementById(id);
+  $('critical-paths').click();f.window.__updates.fit();
+  assert.ok($('critical-status').textContent.includes(`${SEARCH_PAGE_SIZE+5} highlighted`));assert.equal($('critical-details').hidden,false);
+  assert.ok(f.document.querySelector('#nodes [data-critical="highlight"]'));assert.ok(f.document.querySelector('#nodes [data-critical="context"]'));
+  $('outline-toggle').click();const found=new Set();
+  do { for(const row of $('outline-list').querySelectorAll('[data-node-id]')) { if(row.dataset.nodeId.startsWith('critical-group-')) { found.add(row.dataset.nodeId);assert.match(row.textContent,/High downstream impact/); } } if($('outline-next').disabled)break; $('outline-next').click(); } while(true);
+  assert.equal(found.size,SEARCH_PAGE_SIZE+5);assert.ok($('outline-list').querySelectorAll('[data-node-id]').length<=SEARCH_PAGE_SIZE);
+  $('outline-previous').click();assert.match($('outline-list').textContent,/Context for critical paths/);
+});
+
+test('critical navigation can reveal a previously excluded context question and retain its draft', async t => {
+  const f=await fixture(t,360), $=id=>f.document.getElementById(id), ui=f.window.__updates, [a,b]=f.explorer.doc.nodes.slice(1);
+  f.open(a.id);$('critical-paths').click();assert.equal(ui.scene().positions.has(b.id),false);
+  ui.select(b.id);assert.equal(ui.scene().positions.has(b.id),true);assert.equal($('node-workspace').dataset.nodeId,b.id);assert.match($('workspace-critical').textContent,/Context/);
+  f.type('answer','New context draft');$('critical-return').click();assert.equal(ui.scene().selected,a.id);ui.select(b.id);assert.equal($('answer').value,'New context draft');
+});
+
+test('critical decoration reuses retained card content while exposing reasons through accessible labels and Outline', async t => {
+  const f=await fixture(t,360,undefined,false,{before:async e=>{const [a,b]=e.doc.nodes.slice(1);await e.command('add-dependency',{revision:e.doc.revision,nodeId:b.id,prerequisiteId:a.id});}}), $=id=>f.document.getElementById(id), a=f.explorer.doc.nodes[1];
+  const card=f.document.querySelector(`#nodes [data-node-id="${a.id}"]`), text=card.querySelector('.question');
+  $('critical-paths').click();assert.equal(card.querySelector('.question'),text);assert.equal(card.dataset.critical,'highlight');assert.match(card.getAttribute('aria-label'),/Unresolved recorded dependency/);
+  $('critical-return').click();assert.equal(card.querySelector('.question'),text);assert.equal(card.dataset.critical,undefined);
+});
+
+test('return from critical view safely reveals a saved question moved outside its former branch focus', async t => {
+  const f=await fixture(t,360,undefined,false,{before:async e=>{const doc=structuredClone(e.doc);doc.nodes.push({id:'moved-child',parentId:doc.nodes[1].id,question:'Moved question',category:'Choice',answer:'',research:null,review:false});await e.command('import',{revision:e.doc.revision,document:doc});}}), $=id=>f.document.getElementById(id), ui=f.window.__updates, [a,b]=f.explorer.doc.nodes.slice(1);
+  f.open(a.id);$('focus-branch').click();ui.select('moved-child');f.type('answer','Preserve across reparent');$('critical-paths').click();
+  const changed=structuredClone(f.explorer.snapshot());changed.document.nodes.find(n=>n.id==='moved-child').parentId=b.id;changed.document.revision++;ui.apply(changed);
+  $('critical-return').click();assert.equal(ui.scene().selected,'moved-child');assert.equal(ui.scene().positions.has('moved-child'),true);assert.equal($('focus-status').textContent,'');assert.equal($('answer').value,'Preserve across reparent');
+});
 
 test('connection impact mode labels child bands across folds and saved changes without replacing the editor', async t => {
   const f = await fixture(t, 360, undefined, false, { before: async e => {
@@ -1686,11 +1765,11 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   Object.assign(window, { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches });
   window.NextQuestion = NextQuestion;
-  window.DecisionImpact = DecisionImpact; window.impactPath = impactPath; window.decisionImpactKey = decisionImpactKey;
+  window.DecisionImpact = DecisionImpact; window.impactPath = impactPath; window.decisionImpactKey = decisionImpactKey; window.criticalPaths = criticalPaths;
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { DecisionImpact, impactPath, decisionImpactKey } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;

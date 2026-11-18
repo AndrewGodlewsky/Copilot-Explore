@@ -147,3 +147,5 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #handoff-preview-text, .handoff-appendix { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; }
 
 .node .category{display:flex;align-items:center;gap:5px;flex:none}.category-text{overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}.importance{font-size:10px;font-weight:600;white-space:nowrap;border-left:3px solid currentColor;padding-left:4px;color:#52636e}.node .importance{flex:none}.importance-high{color:#97501c}.importance-medium{color:#326b86}.importance-low{color:#536d45}@media(prefers-color-scheme:dark){.importance{color:#b2c7d2}.importance-high{color:#efbb83}.importance-medium{color:#a3d4ed}.importance-low{color:#bad7a9}}
+
+#next-question{flex:none;max-height:32vh;overflow:auto;margin:0 20px 10px;padding:12px;border:1px solid var(--line);border-radius:6px;overflow-wrap:anywhere;white-space:pre-wrap}#next-question h2{font-size:15px;margin-top:0}#next-question p{font-size:12px;line-height:1.5}#next-question button{font-size:12px}

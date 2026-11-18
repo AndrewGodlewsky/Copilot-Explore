@@ -1,5 +1,6 @@
 import test from 'node:test';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
+import { NextQuestion } from '../com.github.copilot/extensions/explorer/web/next-question.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -41,6 +42,79 @@ async function startReviewedResearch(f) {
   await until(() => !f.document.getElementById('research-review-start').disabled, 'review ready');
   f.document.getElementById('research-review-start').click();
 }
+
+test('next question is optional, opens a folded source and preserves independent drafts without model work', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    await e.command('guidance', { revision: e.doc.revision, objective: 'Understand tool failures', successCriteria: '' });
+  } }), $ = id => f.document.getElementById(id);
+  const [root, first, target] = f.explorer.doc.nodes;
+  let modelCalls = 0;
+  f.explorer.send = async () => { modelCalls++; };
+  f.explorer.researcher.run = async () => { modelCalls++; throw Error('Unexpected helper'); };
+  const asset = await fetch(new URL('next-question.mjs', f.window.location.href));
+  assert.equal(asset.status, 200); assert.match(asset.headers.get('content-type'), /javascript/);
+  f.open(first.id); f.type('answer', 'Uncommitted answer'); f.type('revisit-condition', 'Uncommitted reminder'); f.type('manual-question', 'Uncommitted direction');
+  $('focus-branch').click();
+  assert.ok($('suggest-next'), 'optional next-question action exists');
+  assert.equal($('next-question').hidden, true);
+  const before = JSON.stringify(f.explorer.doc), actions = f.actions.length;
+  $('suggest-next').click();
+  assert.equal($('node-workspace').dataset.nodeId, first.id, 'suggesting does not navigate');
+  assert.match($('next-question').textContent, /What if a tool breaks/);
+  assert.match($('next-question').textContent, /literal|word/i);
+  $('open-next-question').click();
+  assert.equal($('node-workspace').dataset.nodeId, target.id);
+  assert.equal(f.document.activeElement.id, 'expanded-title');
+  assert.equal($('show-whole-map').hidden, true, 'explicit source link exits unrelated focus');
+  f.open(first.id);
+  assert.equal($('answer').value, 'Uncommitted answer'); assert.equal($('revisit-condition').value, 'Uncommitted reminder'); assert.equal($('manual-question').value, 'Uncommitted direction');
+  f.open(root.id); $('branch-workspace').click(); $('open-next-question').click();
+  assert.equal($('node-workspace').dataset.nodeId, target.id, 'source link reveals folded ancestors');
+  $('dismiss-next-question').click();
+  assert.equal($('open-next-question'), null);
+  await f.poll(); assert.equal($('open-next-question'), null, 'poll does not replace a dismissed suggestion');
+  $('suggest-next').click(); assert.equal($('open-next-question'), null, 'same source remains dismissed');
+  assert.match($('next-question').textContent, /dismissed/i);
+  assert.equal(JSON.stringify(f.explorer.doc), before); assert.deepEqual(f.actions.slice(actions), []); assert.equal(f.explorer.pending, null); assert.equal(modelCalls, 0);
+});
+
+test('next question refresh drops stale sources, preserves orphan drafts and renders historical text safely', async t => {
+  const f = await fixture(t, 340, undefined, false, { questions: [
+    { question: 'Tool ownership?', category: 'Scope', importance: 'high', importanceReason: '<script>Historical consequence</script>', rationale: 'Original uncertainty' },
+    { question: 'Other question?', category: 'Scope' },
+  ] }), $ = id => f.document.getElementById(id), target = f.explorer.doc.nodes[1];
+  $('suggest-next').click(); assert.match($('next-question').textContent, /Save an objective/); assert.equal($('open-next-question'), null);
+  await f.explorer.command('guidance', { revision: f.explorer.doc.revision, objective: 'Tool ownership', successCriteria: '' }); await f.poll();
+  assert.ok($('open-next-question')); assert.match($('next-question').textContent, /Historical consequence/); assert.match($('next-question').textContent, /Original uncertainty/); assert.equal($('next-question').querySelector('script'), null);
+  $('dismiss-next-question').click();
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Unrelated', answerState: 'tentative' }); await f.poll();
+  $('suggest-next').click(); assert.equal($('open-next-question'), null); assert.match($('next-question').textContent, /dismissed/);
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: target.id, answer: 'Changed source', answerState: 'tentative' }); await f.poll(); assert.ok($('open-next-question'));
+  const reviewed = structuredClone(f.explorer.doc); reviewed.nodes[1].review = true; await f.explorer.command('import', { revision: f.explorer.doc.revision, document: reviewed }); await f.poll();
+  assert.equal($('open-next-question'), null); assert.match($('next-question').textContent, /1 need source review/);
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: target.id, answer: 'Changed source', answerState: 'tentative' }); await f.poll();
+  $('open-next-question').click(); f.type('answer', 'Keep removed answer'); f.type('revisit-condition', 'Keep removed reminder');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'answer draft saved before removal');
+  const removed = structuredClone(f.explorer.doc); removed.nodes = removed.nodes.filter(n => n.id !== target.id);
+  await f.explorer.command('import', { revision: f.explorer.doc.revision, document: removed }); await f.poll();
+  await until(() => !$('open-next-question'), 'removed source no longer actionable'); assert.match($('next-question').textContent, /No eligible question/);
+  assert.match($('draft-summary').textContent, /draft/i);
+  assert.equal($('orphan-drafts').querySelector('[data-orphan-reminder] textarea').value, 'Keep removed reminder');
+  assert.match($('orphan-drafts').textContent, /Tool ownership/);
+});
+
+test('next question dismissal survives reopening the same journey but clears on page reload', async t => {
+  const f = await fixture(t, 340, undefined, true, { before: e => e.command('guidance', { revision: e.doc.revision, objective: 'Tool reliability', successCriteria: '' }) }), $ = id => f.document.getElementById(id);
+  $('suggest-next').click(); $('dismiss-next-question').click();
+  const key = f.explorer.activeKey;
+  $('library-toggle').click();
+  await until(() => f.document.querySelector(`[data-key="${key}"] [data-action="open"]`), 'current journey in Library');
+  f.document.querySelector(`[data-key="${key}"] [data-action="open"]`).click();
+  await until(() => $('welcome').hidden, 'same journey reopened');
+  $('suggest-next').click(); assert.equal($('open-next-question'), null); assert.match($('next-question').textContent, /dismissed/);
+  const reloaded = await fixture(t, 340, undefined, true, { explorer: f.explorer });
+  reloaded.document.getElementById('suggest-next').click(); assert.ok(reloaded.document.getElementById('open-next-question'));
+});
 
 test('revisit UI saves independently, preserves answer and reminder drafts, and provides filtered archived source navigation', async t => {
   const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
@@ -442,8 +516,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.attachNavigation = attachNavigation;
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   Object.assign(window, { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches });
+  window.NextQuestion = NextQuestion;
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, scene: () => ({ positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; transform(); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;

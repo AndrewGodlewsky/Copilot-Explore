@@ -18,6 +18,7 @@ const assets = new Map([
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
   ['answer-state.mjs', ['answer-state.mjs', 'text/javascript; charset=utf-8']],
   ['revisit.mjs', ['revisit.mjs', 'text/javascript; charset=utf-8']],
+  ['next-question.mjs', ['next-question.mjs', 'text/javascript; charset=utf-8']],
   ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
   ['cleanup.mjs', ['cleanup.mjs', 'text/javascript; charset=utf-8']],
   ['question-help-client.mjs', ['question-help-client.mjs', 'text/javascript; charset=utf-8']],

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.54",
+    "summary": "Request one optional next question using current goal and constraint word matches, unresolved states and historical importance. See the reasons, open its source or dismiss without model calls or map changes. Deferred and needs-review questions stay separate; stale sources lose actions and drafts remain intact. Offline-export copy now describes included historical importance."
+  },
+  {
     "version": "0.1.53",
     "summary": "Generated questions can include Low, Medium or High importance with a concise historical model explanation. See compact labels, inspect reasons, and combine importance, text and reminder filters in Outline. Legacy questions stay Unranked. Validated assessments survive previews, History, native/Markdown exports and selected portable/offline exports without changing answers or certainty."
   },

@@ -54,12 +54,15 @@ export async function projectDocumentAccess({ checkoutDirectory, file, revalidat
     if (stat.size > BigInt(MAX_SHARED_BYTES)) throw Error('Project document exceeds the saved-data size limit.');
     return { stamp: stamp(stat), size: Number(stat.size) };
   };
-  const read = async () => {
-    const before = await entry(), handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  const read = async ({ maxBytes = MAX_SHARED_BYTES + 1, onRead = () => {} } = {}) => {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || typeof onRead !== 'function') throw Error('Invalid document read budget.');
+    const before = await entry();
+    if (before.size > maxBytes) throw Object.assign(Error('Document exceeds the remaining read budget.'), { readLimit: true });
+    const handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
       if (stamp(await handle.stat({ bigint: true })) !== before.stamp) throw Error('Project document changed.');
-      const bytes = Buffer.alloc(before.size + 1); let count = 0;
-      while (count < bytes.length) { const part = await handle.read(bytes, count, bytes.length - count, count); if (!part.bytesRead) break; count += part.bytesRead; }
+      const bytes = Buffer.alloc(Math.min(before.size + 1, maxBytes)); let count = 0;
+      while (count < bytes.length) { const part = await handle.read(bytes, count, bytes.length - count, count); onRead(part.bytesRead); if (!part.bytesRead) break; count += part.bytesRead; }
       if (count !== before.size || stamp(await handle.stat({ bigint: true })) !== before.stamp || (await entry()).stamp !== before.stamp) throw Error('Project document changed while reading.');
       return { bytes: bytes.subarray(0, count), stamp: before.stamp };
     } finally { await handle.close(); }

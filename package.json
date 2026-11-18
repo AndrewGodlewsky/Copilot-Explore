@@ -1,6 +1,6 @@
 {
   "name": "copilot-explorer",
-  "version": "0.1.74",
+  "version": "0.1.75",
   "private": true,
   "type": "module",
   "description": "An exploration map canvas for the GitHub Copilot desktop app.",
@@ -10,6 +10,7 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "check": "node scripts/check.mjs",
+    "validate": "node com.github.copilot/extensions/explorer/validate.mjs",
     "check:ui": "node scripts/check-ui-layout.mjs",
     "e2e": "node scripts/e2e.mjs",
     "smoke:voice": "node scripts/voice-smoke.mjs",

@@ -91,6 +91,7 @@ function personal(value) {
   if (value?.format !== FORMAT || value.version !== 1) throw fail('only supported personal v1 files can be explicitly migrated.');
   const normalized = validateDocument(value);
   preservable(value, normalized);
+  return normalized;
 }
 
 function validate(value) {
@@ -105,6 +106,14 @@ function validate(value) {
   return value;
 }
 export { validate as validateSharedDocument };
+
+/** Validation only: compatibility defaults may be checked but are never written. */
+export function validateExplorationSource(source) {
+  const parsed = parse(source);
+  if (parsed.value?.format === SHARED_FORMAT) { validate(parsed.value); return { format: SHARED_FORMAT, version: SHARED_VERSION, id: parsed.value.journey.id, nodes: parsed.value.journey.nodes.length }; }
+  const doc = personal(parsed.value);
+  return { format: doc.format, version: doc.version, id: doc.id, nodes: doc.nodes.length };
+}
 
 /** Pure read: retains original text and never inserts model defaults into shared content. */
 export function readSharedDocument(source) {

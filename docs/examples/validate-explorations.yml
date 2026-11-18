@@ -1,0 +1,38 @@
+# Opt-in example. Set repository variable EXPLORER_VALIDATOR_REF to a reviewed
+# full Explorer commit SHA that contains validate.mjs, then copy into .github/workflows/.
+name: Validate exploration files
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a pinned validator
+        env:
+          VALIDATOR_REF: ${{ vars.EXPLORER_VALIDATOR_REF }}
+        shell: bash
+        run: '[[ "$VALIDATOR_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "Set EXPLORER_VALIDATOR_REF to a reviewed full commit SHA"; exit 1; }'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: project
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: AndrewGodlewsky/Copilot-Explore
+          ref: ${{ vars.EXPLORER_VALIDATOR_REF }}
+          path: explorer-validator
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Validate shared explorations
+        working-directory: project
+        run: node ../explorer-validator/com.github.copilot/extensions/explorer/validate.mjs --folder .explorer/journeys

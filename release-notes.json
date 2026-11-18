@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.75",
+    "summary": "Validate exploration files from the command line without opening Copilot. Check explicit files or a project folder for supported formats, malformed graphs, duplicate identities, conflict markers and size limits. Files stay unchanged; an opt-in CI example helps teams validate pull requests."
+  },
+  {
     "version": "0.1.74",
     "summary": "Inspect a project journey’s local save and Git status without changing it. See private drafts separately from untracked, ignored, staged, modified and committed files, plus branch and local upstream counts. Remote freshness stays explicitly unknown; refresh preserves your editor and pending work."
   },

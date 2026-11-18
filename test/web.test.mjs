@@ -517,7 +517,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   Object.assign(window, { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches });
   window.NextQuestion = NextQuestion;
-  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, scene: () => ({ positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; transform(); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
+  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
   window.eval(script.replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
@@ -1505,14 +1505,15 @@ test('wheel zoom anchors at the pointer, reaches 300%, resets, and respects text
   assert.ok(viewOf(f).zoom > stable.zoom);
 });
 
-test('an expanded answer remains reachable at 300% in a narrow pane', async t => {
+test('focusing an expanded answer reveals readable controls at 300% in a narrow pane', async t => {
   const f = await fixture(t, 340); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep my draft');
   for (let i = 0; i < 20; i++) f.document.getElementById('zoom-in').click();
+  f.document.getElementById('save-answer').focus();
   const panel = f.document.getElementById('node-workspace'), v = viewOf(f);
   assert.equal(v.zoom, 3);
   const left = v.x + parseFloat(panel.style.left) * v.zoom, top = v.y + parseFloat(panel.style.top) * v.zoom;
-  assert.ok(left >= 15 && left + panel.offsetWidth * v.zoom <= 325, 'editor stays inside the pane width');
-  assert.ok(top >= 15 && top + panel.offsetHeight * v.zoom <= 705, 'heading and scrollable editor remain reachable');
+  assert.ok(left >= 15 && left + panel.offsetWidth <= 325, 'editor stays inside the pane width');
+  assert.ok(top >= 15 && top + panel.offsetHeight <= 705, 'heading and scrollable editor remain reachable');
   f.document.getElementById('save-answer').focus();
   assert.equal(f.document.activeElement.id, 'save-answer'); assert.equal(f.document.getElementById('answer').value, 'Keep my draft');
   assert.equal(viewOf(f).zoom, 3, 'focusing controls does not reset zoom');
@@ -1520,7 +1521,7 @@ test('an expanded answer remains reachable at 300% in a narrow pane', async t =>
   pointer(f, 'pointerdown', map, 100, 100); pointer(f, 'pointermove', map, 300, 200); pointer(f, 'pointerup', map, 300, 200);
   f.document.getElementById('answer').focus();
   const focused = viewOf(f), x = focused.x + parseFloat(panel.style.left) * focused.zoom;
-  assert.ok(x >= 15 && x + panel.offsetWidth * focused.zoom <= 325, 'focusing the editor brings a panned-off card back');
+  assert.ok(x >= 15 && x + panel.offsetWidth <= 325, 'focusing the editor brings a panned-off card back');
 });
 
 test('resizing preserves manual zoom and view instead of resetting to whole map', async t => {
@@ -3446,7 +3447,7 @@ test('large-map near-limit long-text cards stay bounded through zoom, folds and 
   assert.ok(d.querySelectorAll('#edges path').length < 100);
   for (const zoom of [.1, 1, 3]) {
     ui.setView({ x: -10000, y: -1000, zoom });
-    assert.equal(ui.scene().positions, positions);
+    assert.ok(Number.isFinite(ui.scene().positions.get('node-4949').width));
     assert.equal(d.getElementById('answer'), editor);
   }
   ui.select('node-7');
@@ -3461,6 +3462,26 @@ test('large-map near-limit long-text cards stay bounded through zoom, folds and 
   d.getElementById('collapse-node').click(); d.getElementById('fit').click();
   assert.equal(d.querySelectorAll('#nodes [data-node-id]').length, 4950);
   assert.equal(d.querySelectorAll('#edges path').length, 4949);
+  const fitZoom = ui.scene().view.zoom;
+  for (let i = 0; i < 3; i++) { d.getElementById('fit').click(); assert.equal(ui.scene().view.zoom, fitZoom); }
+  for (const box of ui.scene().positions.values()) {
+    const v = ui.scene().view;
+    assert.ok(v.x + box.x * v.zoom >= 0 && v.x + (box.x + box.width) * v.zoom <= 340);
+    assert.ok(v.y + box.y * v.zoom >= 0 && v.y + (box.y + box.height) * v.zoom <= 720);
+  }
+  ui.select('node-4949'); const reopened = d.getElementById('answer');
+  ui.zoom(.00000001); const extreme = ui.scene();
+  assert.equal(extreme.view.zoom, fitZoom);
+  for (const box of extreme.positions.values()) for (const field of ['x', 'y', 'width', 'height']) assert.ok(Number.isFinite(box[field]));
+  assert.ok(Math.abs(extreme.positions.get('node-4949').width * extreme.view.zoom - 308) < 1e-7);
+  ui.reveal('node-4949'); assert.equal(d.getElementById('answer'), reopened);
+  d.getElementById('map').focus(); d.getElementById('map').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+  assert.equal(ui.scene().expanded, false); assert.equal(ui.scene().view.zoom, fitZoom);
+  assert.equal(d.querySelectorAll('#nodes [data-node-id]').length, 4950);
+  d.getElementById('outline-toggle').click();
+  d.querySelector('#outline-list [data-node-id="node-4949"]').click();
+  assert.equal(ui.scene().view.zoom, 1); assert.equal(d.getElementById('answer'), reopened, 'full source reveal reuses the hidden editor');
+  assert.equal(d.activeElement.id, 'expanded-title');
   assert.equal(JSON.stringify(f.explorer.doc), JSON.stringify(source), 'rendering never edits logical content');
 });
 
@@ -3674,4 +3695,112 @@ test('implementation handoff HTTP UI requires exact selection review, preserves 
   assert.equal(f.explorer.doc.handoff.sections.nextSteps[0].text, editor.value); assert.equal($('answer').value, 'PRIVATE DRAFT \u03bb');
   $('copy-handoff').click(); await until(() => copied, 'copied handoff'); assert.match(copied, /Reviewed implementation tasks/); assert.ok(!copied.includes('<img>')); assert.ok(!copied.includes('PRIVATE DRAFT'));
   assert.equal(f.actions.some(action => ['research', 'research-follow-up'].includes(action.action)), false);
+});
+
+
+test('semantic zoom has hysteretic detail tiers, complete accessible text and stable compact geometry', async t => {
+  const question = '\u{1f331}\u6f22\u5b57 e\u0301 <script> literal long question '.repeat(12).trim();
+  const f = await fixture(t, 1100, undefined, false, { questions: [{ question, category: 'Scope', importance: 'high', importanceReason: 'Consequence' }, { question: 'Other?', category: 'Trust' }] });
+  const ui = f.window.__updates, d = f.document, node = f.explorer.doc.nodes[1];
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Saved Unicode \u{1f33f} answer', answerState: 'tentative' }); await f.poll();
+  const original = JSON.stringify(f.explorer.doc), history = JSON.stringify(await f.explorer.readHistory(f.explorer.doc.id));
+  const zoomTo = value => ui.zoom(value / ui.scene().view.zoom);
+  const card = () => d.querySelector(`#nodes [data-node-id="${node.id}"]`);
+  zoomTo(1); ui.reveal(node.id);
+  assert.equal(ui.scene().detail, 'detail'); assert.ok(card().querySelector('.answer-preview'));
+  zoomTo(.9); assert.equal(ui.scene().detail, 'detail');
+  zoomTo(.89); assert.equal(ui.scene().detail, 'question'); ui.reveal(node.id);
+  assert.equal(card().querySelector('.answer-preview'), null);
+  const geometry = ui.scene().geometry;
+  for (const value of [.95, .91, .99, .7, .56]) { zoomTo(value); assert.equal(ui.scene().detail, 'question'); assert.equal(ui.scene().geometry, geometry); }
+  zoomTo(.55); assert.equal(ui.scene().detail, 'overview'); ui.reveal(node.id);
+  assert.ok([...card().querySelector('.question').textContent].length <= 49);
+  assert.ok(card().getAttribute('aria-label').includes(node.question)); assert.ok(card().getAttribute('aria-label').includes('Saved Unicode'));
+  assert.equal(card().querySelector('script'), null);
+  const overview = ui.scene().geometry;
+  for (const value of [.6, .64, .36]) { zoomTo(value); assert.equal(ui.scene().detail, 'overview'); assert.equal(ui.scene().geometry, overview); }
+  zoomTo(.34); assert.equal(ui.scene().detail, 'schematic'); assert.equal(ui.scene().geometry, overview);
+  assert.match(d.getElementById('map-hint').textContent, /Outline/);
+  zoomTo(.39); assert.equal(ui.scene().detail, 'schematic'); zoomTo(.4); assert.equal(ui.scene().detail, 'overview');
+  zoomTo(.65); assert.equal(ui.scene().detail, 'question'); zoomTo(1); assert.equal(ui.scene().detail, 'detail');
+  zoomTo(300); assert.equal(ui.scene().view.zoom, 3); zoomTo(.00001); assert.equal(ui.scene().view.zoom, .1);
+  assert.equal(JSON.stringify(f.explorer.doc), original); assert.equal(JSON.stringify(await f.explorer.readHistory(f.explorer.doc.id)), history);
+});
+
+test('semantic zoom keeps the same readable editor, composition, reminder draft and pointer coordinate', async t => {
+  const f = await fixture(t, 340), d = f.document, ui = f.window.__updates, id = f.explorer.doc.nodes[1].id;
+  f.open(id); f.type('answer', 'Exact \u{1f331} draft'); f.type('revisit-condition', 'Independent reminder'); f.type('manual-question', 'Independent manual text');
+  const answer = d.getElementById('answer'), reminder = d.getElementById('revisit-condition'), panel = d.getElementById('node-workspace');
+  answer.focus(); answer.setSelectionRange(2, 5); answer.scrollTop = 15; d.querySelector('.node-content').scrollTop = 43;
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  for (const value of [.5, .1, .8, 1, 3, .5]) {
+    const scene = ui.scene(), before = scene.view, point = { x: 150, y: 250 };
+    const owner = scene.positions.get(id);
+    const world = { x: (point.x - before.x) / before.zoom, y: (point.y - before.y) / before.zoom };
+    ui.zoom(value / before.zoom, point);
+    const after = ui.scene(), box = after.positions.get(id);
+    const inside = world.x >= owner.x && world.x <= owner.x + owner.width && world.y >= owner.y && world.y <= owner.y + owner.height;
+    if (inside) {
+      assert.ok(Math.abs(after.view.x + (box.x + box.width * (world.x - owner.x) / owner.width) * after.view.zoom - point.x) < 1e-7);
+      assert.ok(Math.abs(after.view.y + (box.y + box.height * (world.y - owner.y) / owner.height) * after.view.zoom - point.y) < 1e-7);
+    }
+    assert.equal(panel.style.transform, `scale(${1 / after.view.zoom})`);
+    assert.ok(Math.abs(box.width * after.view.zoom - panel.offsetWidth) < 1e-7);
+    assert.ok(Math.abs(box.height * after.view.zoom - panel.offsetHeight) < 1e-7);
+    assert.equal(d.getElementById('answer'), answer); assert.equal(d.getElementById('revisit-condition'), reminder);
+    assert.equal(d.activeElement, answer); assert.equal(answer.selectionStart, 2); assert.equal(answer.selectionEnd, 5); assert.equal(answer.scrollTop, 15);
+    assert.equal(d.querySelector('.node-content').scrollTop, 43); assert.equal(reminder.value, 'Independent reminder');
+  }
+  answer.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  f.resize(280, 560); ui.reveal(id);
+  assert.equal(panel.offsetWidth, 248); assert.equal(d.getElementById('answer'), answer); assert.equal(answer.value, 'Exact \u{1f331} draft');
+  ui.fit(); const fitted = ui.scene().view.zoom;
+  for (let i = 0; i < 5; i++) { ui.fit(); assert.equal(ui.scene().view.zoom, fitted, 'Fit does not feed editor dimensions into its floor'); }
+  assert.equal(d.getElementById('answer'), answer); assert.equal(reminder.value, 'Independent reminder');
+  d.getElementById('collapse-node').click(); ui.fit();
+  assert.equal(ui.scene().view.zoom, fitted, 'canonical Fit is independent of expansion');
+});
+
+test('semantic zoom and Fit retain active voice ownership and reminder conflict controls', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 340, voice), d = f.document, ui = f.window.__updates, node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('revisit-condition', 'Keep mine');
+  await f.explorer.command('set-revisit', { revision: f.explorer.doc.revision, nodeId: node.id, date: null, condition: 'Other canvas' }); await f.poll();
+  const keep = d.getElementById('keep-revisit'), reminder = d.getElementById('revisit-condition'), answer = d.getElementById('answer');
+  assert.ok(keep); await until(() => d.getElementById('voice-status').textContent.includes('Hold Ctrl'), 'voice ready');
+  answer.focus(); key(f, 'keydown'); await until(() => voice.counts().starts === 1, 'voice started');
+  const counts = voice.counts();
+  for (const value of [.5, .1, 1, 3]) ui.zoom(value / ui.scene().view.zoom);
+  ui.fit();
+  assert.deepEqual(voice.counts(), counts); assert.equal(d.getElementById('answer'), answer); assert.equal(d.getElementById('keep-revisit'), keep);
+  assert.equal(d.getElementById('revisit-condition'), reminder); assert.equal(reminder.value, 'Keep mine');
+  key(f, 'keyup', { key: 'Control', code: 'ControlLeft', ctrlKey: false }); await until(() => voice.counts().finishes === 1, 'same voice finishes');
+});
+
+
+test('semantic schematic tier retains the focused branch control until focus moves', async t => {
+  const f = await fixture(t), ui = f.window.__updates, d = f.document, root = f.explorer.doc.rootId;
+  ui.zoom(1 / ui.scene().view.zoom); ui.reveal(root);
+  const toggle = d.querySelector(`#nodes [data-branch-id="${root}"]`); toggle.focus();
+  ui.zoom(.1 / ui.scene().view.zoom);
+  assert.equal(d.activeElement, toggle); assert.equal(toggle.isConnected, true);
+  d.getElementById('map').focus(); await delay(0);
+  assert.equal(toggle.isConnected, false, 'schematic only retains the active branch owner');
+});
+
+
+test('semantic zoom anchors the actual compact card and editor point through relayout', async t => {
+  const f = await fixture(t), ui = f.window.__updates, id = f.explorer.doc.nodes[1].id;
+  ui.zoom(1 / ui.scene().view.zoom); ui.reveal(id);
+  function atPoint(nextZoom) {
+    const before = ui.scene(), box = before.positions.get(id), fraction = { x: .35, y: .45 };
+    const point = { x: before.view.x + (box.x + box.width * fraction.x) * before.view.zoom,
+      y: before.view.y + (box.y + box.height * fraction.y) * before.view.zoom };
+    ui.zoom(nextZoom / before.view.zoom, point);
+    const after = ui.scene(), next = after.positions.get(id);
+    assert.ok(Math.abs(after.view.x + (next.x + next.width * fraction.x) * after.view.zoom - point.x) < 1e-7, 'same owner point x');
+    assert.ok(Math.abs(after.view.y + (next.y + next.height * fraction.y) * after.view.zoom - point.y) < 1e-7, 'same owner point y');
+  }
+  for (const zoom of [.5, .7, 1, .5]) atPoint(zoom);
+  ui.select(id);
+  for (const zoom of [.5, .1, 3, 1]) atPoint(zoom);
 });

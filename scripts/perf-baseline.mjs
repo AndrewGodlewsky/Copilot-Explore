@@ -21,6 +21,11 @@ import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 
+import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/web/research-review-client.mjs';
+import { researchSettingsText } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
+import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
+import { NextQuestion } from '../com.github.copilot/extensions/explorer/web/next-question.mjs';
+
 const root = resolve(import.meta.dirname, '..');
 const output = resolve(root, '.perf-baseline');
 const warmups = 1, samples = 2;
@@ -47,6 +52,11 @@ export async function measure(phases, name, operation, work, { count = samples, 
 }
 
 const imports = [
+  "import { ResearchReviewClient } from './research-review-client.mjs';",
+  "import { researchSettingsText } from './research-policy.mjs';",
+  "import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';",
+  "import { NextQuestion } from './next-question.mjs';",
+
   "import { CleanupClient } from './cleanup.mjs';", "import { QuestionHelpClient } from './question-help-client.mjs';",
   "import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", "import { attachVoice } from './voice.mjs';",
   "import { DraftClient } from './drafts.mjs';", "import { attachNavigation } from './navigation.mjs';",
@@ -79,7 +89,7 @@ async function domFixture(document) {
       url === 'api/voice' ? { ready: false, error: 'Disabled in synthetic benchmark.' } : {};
     return new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
   };
-  Object.assign(window, { GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
+  Object.assign(window, { ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
     ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   const source = imports.reduce((text, statement) => text.replace(statement, ''), appScript)
     .replace('void poll();', 'window.__perf = { renderMap, renderWorkspace, renderOutline, poll, select, zoom, pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); }, geometry: () => geometryCache.value, stopPoll: () => clearTimeout(pollTimer) }; void poll();');

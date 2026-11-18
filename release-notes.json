@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.55",
+    "summary": "Map detail adapts to zoom: distant summaries show labels, status, importance and branch counts; closer cards show questions and answers. Extreme Fit becomes a schematic overview with full Outline access. The same expanded editor stays readable while zooming, preserving drafts, caret, reminders and dictation."
+  },
+  {
     "version": "0.1.54",
     "summary": "Request one optional next question using current goal and constraint word matches, unresolved states and historical importance. See the reasons, open its source or dismiss without model calls or map changes. Deferred and needs-review questions stay separate; stale sources lose actions and drafts remain intact. Offline-export copy now describes included historical importance."
   },

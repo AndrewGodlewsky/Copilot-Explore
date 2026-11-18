@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixtureSpecs, makeFixture } from '../scripts/perf-fixtures.mjs';
-import { measure, validResult } from '../scripts/perf-baseline.mjs';
+import { measure, validResult, runBaseline } from '../scripts/perf-baseline.mjs';
 import { MAX_DOCUMENT_BYTES, validateDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { prepareBrief } from '../com.github.copilot/extensions/explorer/decision-brief.mjs';
 
@@ -84,4 +84,16 @@ test('fixture failure is retained, later cases run, both artifacts are written a
   assert.equal(validResult(json, { cases: ['first', 'second'], phases: ['validate'] }), true);
   assert.match(markdown, /first.*fixture: Synthetic valid fixture failed/);
   assert.match(markdown, /second.*validate/);
+});
+
+
+test('synthetic benchmark executes current shipped app imports and retains original phase counts', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'explorer-perf-imports-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const outcome = await runBaseline({ specs: [fixtureSpecs[0]], outputDirectory: dir, log: () => {} });
+  const result = JSON.parse(await readFile(join(dir, 'baseline.json'), 'utf8'));
+  for (const [name, phase] of Object.entries(result.cases[0].phases)) assert.equal(phase.status, 'ok', name + ': ' + phase.error?.message);
+  assert.equal(outcome.exitCode, 0);
+  assert.equal(result.cases[0].phases.renderMap.operations.nodeButtons, 64);
+  assert.equal(result.cases[0].viewInteractions.panZoom.operations.sameEditor, true);
 });

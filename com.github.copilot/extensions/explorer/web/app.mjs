@@ -19,7 +19,8 @@ const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'
 let state = { document: null, pending: null, error: '' };
 let selected = null, expanded = false, signature = '', positions = new Map(), busy = false, firstFit = true;
 let view = { x: 0, y: 0, zoom: 1 }, drag, layoutFrame, viewportSize;
-const geometryCache = new GeometryCache();
+const geometryCache = new GeometryCache(), fitGeometry = new GeometryCache();
+let detailTier = 'detail', fitBranches = null;
 let geometryBranches = null, geometryInputs = '', fontEpoch = 0;
 let workspace = null;
 let suppressClick = false, restoringFocus = false, composing = null;
@@ -151,7 +152,7 @@ function apply(next, reset = false) {
     cleanup.cancel();
     questionHelp.sync();
     voice.cancel();
-    geometryCache.clear(); geometryBranches = null; geometryInputs = '';
+    geometryCache.clear(); fitGeometry.clear(); fitBranches = null; geometryBranches = null; geometryInputs = '';
     $('nodes').replaceChildren(); $('edges').replaceChildren();
     workspace = null; composing = null; drafts.clear(); nodeUi.clear(); positions.clear(); collapsed.clear(); branches = null; focusId = null; wholeView = null; $('node-workspace').replaceChildren();
     selected = next.document?.rootId ?? null; expanded = next.document?.nodes.length === 1; firstFit = true;
@@ -538,27 +539,46 @@ function collapseNode(focus = true) {
   if (focus) revealNode(selected);
   if (focus) [...$('nodes').children].find(e => e.dataset.nodeId === selected)?.focus({ preventScroll: true });
 }
+function zoomDetail(zoom, previous) {
+  if (zoom < .35 || previous === 'schematic' && zoom < .4) return 'schematic';
+  if (zoom <= .55 || ['schematic', 'overview'].includes(previous) && zoom < .65) return 'overview';
+  if (zoom < .9 || previous !== 'detail' && zoom < 1) return 'question';
+  return 'detail';
+}
+function compactSize(node) {
+  return detailTier === 'overview' || detailTier === 'schematic' ? { width: 280, height: 200 } :
+    { width: 220, height: detailTier === 'question' ? 128 : node.answer ? 150 : 110 };
+}
 function refreshScene(anchor = anchorPoint()) {
   if (closed || !state.document) return;
   const panel = $('node-workspace'), rect = $('map').getBoundingClientRect();
   if (!rect.width || !rect.height) return;
   viewportSize ??= { width: rect.width, height: rect.height };
-  const scale = Math.max(1, view.zoom), width = Math.min(560, Math.max(100, rect.width - 32) / scale);
+  detailTier = zoomDetail(view.zoom, detailTier);
+  $('world').dataset.detail = detailTier;
+  const width = Math.min(560, Math.max(100, rect.width - 32));
   // Panel size must not change merely because the user pans it up or down.
-  const height = Math.max(80, rect.height - focusTop(selected, rect.height) - 16) / scale;
+  const height = Math.max(80, rect.height - focusTop(selected, rect.height) - 16);
   panel.style.width = `${width}px`; panel.style.maxHeight = `${height}px`;
+  panel.style.transform = `scale(${1 / view.zoom})`;
   panel.style.setProperty('--heading-limit', `${Math.min(190, height * .42)}px`);
-  const measuredHeight = expanded ? panel.offsetHeight : 0;
-  const inputs = JSON.stringify([state.activeKey, state.document.id, rect.width, rect.height, fontEpoch, expanded ? selected : null, expanded ? width : 0, measuredHeight]);
+  const measuredHeight = expanded ? panel.offsetHeight / view.zoom : 0, logicalWidth = expanded ? width / view.zoom : 0;
+  if (fitBranches !== branches) {
+    // A compact upper bound, independent of zoom and the counter-scaled editor.
+    fitGeometry.get(branches.nodes, state.document.rootId, new Map(branches.nodes.map(n => [n.id, { width: 280, height: 200 }])), [state.activeKey, state.document.id]);
+    fitBranches = branches;
+  }
+  const inputs = JSON.stringify([state.activeKey, state.document.id, rect.width, rect.height, fontEpoch, expanded ? selected : null, logicalWidth, measuredHeight, detailTier === 'schematic' ? 'overview' : detailTier]);
   if (geometryBranches !== branches || geometryInputs !== inputs) {
-    const sizes = new Map(branches.nodes.map(n => [n.id, { width: 220, height: n.answer ? 150 : 110 }]));
-    if (expanded) sizes.set(selected, { width, height: measuredHeight });
-    positions = geometryCache.get(branches.nodes, state.document.rootId, sizes, inputs).positions;
+    const sizes = new Map(branches.nodes.map(n => [n.id, compactSize(n)]));
+    if (expanded) sizes.set(selected, { width: logicalWidth, height: measuredHeight });
+    positions = geometryCache.get(branches.nodes, state.document.rootId, sizes, [state.activeKey, state.document.id, rect.width, rect.height, fontEpoch, expanded ? selected : null]).positions;
     geometryBranches = branches; geometryInputs = inputs;
   }
   if (anchor && positions.has(anchor.id)) {
     const p = positions.get(anchor.id);
-    view.x = anchor.x - (p.x + p.width / 2) * view.zoom; view.y = anchor.y - p.y * view.zoom;
+    view.x = anchor.x - (p.x + p.width * (anchor.relativeX ?? .5)) * view.zoom;
+    view.y = anchor.y - (p.y + p.height * (anchor.relativeY ?? 0)) * view.zoom;
   }
   if (expanded) { const p = positions.get(selected); panel.style.left = `${p.x}px`; panel.style.top = `${p.y}px`; }
   transform();
@@ -574,7 +594,8 @@ function renderMap() {
   const cards = new Map([...nodes.querySelectorAll('[data-node-id]')].map(e => [e.dataset.nodeId, e]));
   const toggles = new Map([...nodes.querySelectorAll('[data-branch-id]')].map(e => [e.dataset.branchId, e]));
   const paths = new Map([...edges.querySelectorAll('path')].map(e => [e.dataset.edgeId, e]));
-  $('map-hint').hidden = expanded;
+  $('map-hint').hidden = expanded && detailTier !== 'schematic';
+  $('map-hint').textContent = detailTier === 'schematic' ? 'Map overview. Zoom in or use Outline to read and open any question.' : 'Drag to move. Scroll to zoom. Select a question to expand it.';
   const total = questionCounts(doc).total;
   for (const n of branches.nodes) {
     const p = positions.get(n.id), root = n.id === doc.rootId;
@@ -587,22 +608,23 @@ function renderMap() {
         nodes.append(card);
       }
       card.className = `node ${acceptedIds.has(n.id) ? 'new-question' : ''} ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''} ${branches.parentIds.has(n.id) ? 'has-branch' : ''}`;
-      card.title = n.question;
-      card.setAttribute('aria-label', `${n.category}: ${n.question}. ${nodeStatus(n)}${isQuestion(n) ? `; ${importanceLabel(n)}` : ''}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden}` : ''}${n.revisit ? `; reminder: ${revisitLabel(n)}` : ''}`);
+      card.title = n.question; card.dataset.state = effectiveAnswerState(n);
+      card.setAttribute('aria-label', `${n.category}: ${n.question}. ${nodeStatus(n)}${isQuestion(n) ? `; ${importanceLabel(n)}` : ''}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden}` : ''}${n.revisit ? `; reminder: ${revisitLabel(n)}` : ''}${n.answer ? `; Answer: ${n.answer}` : ''}; ${branches.nodeCounts.get(n.id)} descendant nodes`);
       card.style.left = `${p.x}px`; card.style.top = `${p.y}px`; card.style.width = `${p.width}px`; card.style.height = `${p.height}px`; card.style.setProperty('--branch', colors[p.branch % colors.length]);
-      const status = (hidden || (root ? `${total} questions` : `${nodeStatus(n)}${n.review ? '; needs review' : ''}`)) + (n.revisit ? ` · ${revisitLabel(n)}` : '');
-      const stamp = JSON.stringify([n.category, n.question, n.answer, status, n.importance]);
+      const summary = detailTier === 'overview' || detailTier === 'schematic';
+      const status = (hidden || (root ? `${total} questions` : `${nodeStatus(n)}${n.review ? '; needs review' : ''}`)) + (summary && !hidden ? ` \u00b7 ${branches.nodeCounts.get(n.id)} below` : '') + (n.revisit ? ` · ${revisitLabel(n)}` : '');
+      const stamp = JSON.stringify([n.category, n.question, n.answer, status, n.importance, detailTier]);
       if (card.renderStamp !== stamp) {
         card.renderStamp = stamp;
-        card.replaceChildren(el('span', { class: 'category' }, el('span', { class: 'category-text' }, n.category), ...(isQuestion(n) ? [importanceBadge(n)] : [])), el('span', { class: 'question' }, n.question),
-          ...(n.answer ? [el('span', { class: 'answer-preview' }, n.answer)] : []), el('span', { class: 'status' }, status));
+        card.replaceChildren(el('span', { class: 'category' }, el('span', { class: 'category-text' }, n.category), ...(isQuestion(n) ? [importanceBadge(n)] : [])), el('span', { class: 'question' }, summary && [...n.question].length > 48 ? [...n.question].slice(0, 48).join('') + '\u2026' : n.question),
+          ...(detailTier === 'detail' && n.answer ? [el('span', { class: 'answer-preview' }, n.answer)] : []), el('span', { class: 'status' }, status));
       }
-      if (branches.parentIds.has(n.id)) {
+      if (branches.parentIds.has(n.id) && (detailTier !== 'schematic' || active?.dataset.branchId === n.id)) {
         let toggle = toggles.get(n.id); toggles.delete(n.id);
         if (!toggle) { toggle = branchButton(n); nodes.append(toggle); }
         const label = `${collapsed.has(n.id) ? 'Expand' : 'Collapse'} branch`;
         toggle.textContent = label; toggle.setAttribute('aria-label', `${label}: ${n.question}`); toggle.setAttribute('aria-expanded', String(!collapsed.has(n.id)));
-        toggle.style.left = `${p.x + p.width - 106}px`; toggle.style.top = `${p.y + p.height - 36}px`;
+        toggle.style.left = `${p.x + p.width - (summary ? 126 : 106)}px`; toggle.style.top = `${p.y + p.height - (summary ? 66 : detailTier === 'question' ? 50 : 36)}px`;
       }
     }
     const edge = geometryCache.value.edges.get(n.id);
@@ -621,7 +643,7 @@ function renderMap() {
 function bounds() { return geometryCache.value.bounds; }
 function fitScale() {
   if (!positions.size) return 1;
-  const b = bounds(), rect = $('map').getBoundingClientRect();
+  const b = fitGeometry.value.bounds, rect = $('map').getBoundingClientRect();
   return Math.min(1, Math.max(1, rect.width - 60) / (b.right - b.left), Math.max(1, rect.height - 60) / (b.bottom - b.top));
 }
 function transform() {
@@ -639,10 +661,13 @@ function transform() {
   renderMap();
 }
 function fit() {
-  endDrag(); voice.cancel();
+  endDrag();
   if (!positions.size) return;
-  const b = bounds(), rect = $('map').getBoundingClientRect();
+  const rect = $('map').getBoundingClientRect();
   view.zoom = fitScale();
+  refreshScene(null);
+  if (expanded) { revealNode(selected); return; }
+  const b = bounds();
   view.x = rect.width / 2 - (b.left + b.right) / 2 * view.zoom; view.y = rect.height / 2 - (b.top + b.bottom) / 2 * view.zoom; transform();
 }
 function centerSelected() {
@@ -655,13 +680,21 @@ function zoom(factor, point) {
   if (!positions.size || drag) return;
   const rect = $('map').getBoundingClientRect(), next = Math.max(Math.min(.1, fitScale()), Math.min(3, view.zoom * factor)), ratio = next / view.zoom;
   const x = point?.x ?? rect.width / 2, y = point?.y ?? rect.height / 2;
-  view.x = x - (x - view.x) * ratio; view.y = y - (y - view.y) * ratio; view.zoom = next; transform();
-  if (expanded) { refreshScene(); revealNode(selected); }
+  const worldX = (x - view.x) / view.zoom, worldY = (y - view.y) / view.zoom;
+  const contains = p => p && worldX >= p.x && worldX <= p.x + p.width && worldY >= p.y && worldY <= p.y + p.height;
+  let owner = expanded && contains(positions.get(selected)) ? selected : null;
+  if (!owner) for (const [id, box] of positions) if (contains(box)) { owner = id; break; }
+  const box = positions.get(owner), anchor = box ? { id: owner, x, y, relativeX: (worldX - box.x) / box.width, relativeY: (worldY - box.y) / box.height } : null;
+  view.x = x - (x - view.x) * ratio; view.y = y - (y - view.y) * ratio; view.zoom = next;
+  refreshScene(anchor);
 }
 function revealNode(id) {
-  const p = positions.get(id); if (!p) return;
+  let p = positions.get(id); if (!p) return;
   const rect = $('map').getBoundingClientRect();
-  view.zoom = Math.min(view.zoom, (rect.width - 32) / p.width, (rect.height - 32) / p.height);
+  if (!expanded || id !== selected) {
+    const next = Math.max(Math.min(.1, fitScale()), Math.min(view.zoom, (rect.width - 32) / p.width, (rect.height - 32) / p.height));
+    if (next !== view.zoom) { view.zoom = next; refreshScene(null); p = positions.get(id); }
+  }
   const left = view.x + p.x * view.zoom, top = view.y + p.y * view.zoom;
   view.x += Math.max(16 - left, Math.min(0, rect.width - 16 - left - p.width * view.zoom));
   view.y += Math.max(16 - top, Math.min(0, rect.height - 16 - top - p.height * view.zoom));
@@ -2140,7 +2173,7 @@ window.addEventListener('pagehide', event => {
   if (event.persisted) return;
   closed = true; clearTimeout(pollTimer); cancelAnimationFrame(layoutFrame); endDrag();
   mapObserver.disconnect(); workspaceObserver.disconnect(); document.fonts?.removeEventListener('loadingdone', fontsChanged);
-  geometryCache.clear(); geometryBranches = null; geometryInputs = ''; positions.clear(); branches = null;
+  geometryCache.clear(); fitGeometry.clear(); fitBranches = null; geometryBranches = null; geometryInputs = ''; positions.clear(); branches = null;
 });
 window.addEventListener('pageshow', event => {
   if (!event.persisted || closed || !suspended) return;

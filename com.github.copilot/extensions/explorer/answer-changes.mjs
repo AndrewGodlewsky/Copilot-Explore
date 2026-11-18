@@ -15,7 +15,7 @@ const identity = e => JSON.stringify([e.file, e.activeKey, e.doc?.id, e.doc?.roo
 // Bind meaningful results and source identities, not progress text or local finding dismissal.
 const artifactKey = work => work && [work.id, work.journey, work.operation, work.status, work.dependencies, work.proposal, work.findings, work.format, work.formatFingerprint, work.includeEvidence, work.evidence];
 const workKey = e => savedDigest([e.pending && [e.pending.id, e.pending.kind, e.pending.nodeId], e.preview, e.questionSource, e.followup, artifactKey(e.briefWork), artifactKey(e.checkWork)]);
-function affectedArtifacts(e, doc, next) {
+export function affectedArtifacts(e, doc, next) {
   const artifacts = [];
   for (const [kind, fresh] of [['brief', briefFreshness], ['handoff', handoffFreshness]]) {
     if (doc[kind] && fresh(doc[kind], doc) === 'current' && fresh(doc[kind], next) !== 'current') artifacts.push({ kind, state: 'saved' });
@@ -28,6 +28,7 @@ function affectedArtifacts(e, doc, next) {
   if (check && ['pending', 'result'].includes(check.status) && checkFreshness(check.dependencies, doc) && !checkFreshness(check.dependencies, next)) artifacts.push({ kind: check.operation, state: check.status });
   return artifacts;
 }
+export { workKey as changeWorkKey };
 const proposal = (input, next) => ({ operation: input.operation ?? 'answer', nodeId: input.nodeId, answer: input.answer, answerState: effectiveAnswerState(findNode(next, input.nodeId)), expand: input.expand === true, draftRevision: input.draftRevision ?? null, draftJourney: input.draftJourney ?? null, reviewCause: input.reviewCause ?? null });
 export function applyAnswerChange(doc, input) {
   if (input.operation === 'reaffirm-review') {

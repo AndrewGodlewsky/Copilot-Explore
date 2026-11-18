@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.88.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.89.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 
 **Usage dashboard** compares current maps, saved answer states and structure, newly observed canvas visits/committed question growth, and retained owned-helper outcomes and usage. UTC date filters apply to observations and receipts, not current stock. Scans are bounded and explicitly refreshed; missing usage and incomplete coverage stay visible. It preserves your editor and drafts. See [metric definitions, inventory, privacy and retention](docs/usage-dashboard.md).
 
@@ -140,6 +140,8 @@ Generated questions first appear in a **not saved** preview inside the requestin
 New generated questions may also carry **Low**, **Medium** or **High importance** and a concise **Why?** explanation tied to the goal, constraints and decision consequences. Importance describes potential impact, not confidence, answer certainty or completion. Map cards and Outline show text labels; use **Importance in this list** to combine a rank with text and reminder filters while keeping the full map available. Old/manual questions stay **Unranked**; ideas and direction seeds are not ranked. Assessments remain historical model reasoning for the original wording and context after edits or guidance/ancestor changes, without automatic reassessment. Native/Markdown, portable maps and selected offline viewer nodes retain recorded ranks, reasons and original wording; the viewer preview shows the exact included content.
 
 **Restart branch**, in the Explore drawer, previews the exact revised answer and descendants to remove. Confirmation creates a protected local History checkpoint, then saves the answer and removal together. Outside dependent answers survive with review flags, and removed-node private drafts remain recoverable. Cancel pending requests and resolve manual direction/reminder drafts first. No questions regenerate automatically. See [branch restart and recovery](docs/branch-restart.md).
+
+**History → Restore one branch** previews a historical subtree without reverting unrelated later work. It preserves compatible node identities, reports dependency conflicts, keeps private drafts recoverable and saves an undoable revision. See [scoped restoration and its limits](docs/branch-restoration.md).
 
 **Review affected answers**, under Tools or an answer's review notice, explains outstanding upstream changes. Reaffirm one cause at a time, revise in the retained editor, or explicitly clear the saved answer. Other causes, private drafts and stale research stay visible. Source changes require a fresh review. See [guided review](docs/guided-review.md).
 
@@ -305,7 +307,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.88, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.88**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.89, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.89**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Settings > Map and motion** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

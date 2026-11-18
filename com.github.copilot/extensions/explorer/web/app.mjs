@@ -135,6 +135,7 @@ function refreshRevisitDay() {
 }
 let collapsed = new Set(), branches = null, focusId = null, wholeView = null;
 let historyEpoch = 0, historyReturn = null, historySelection = null, historyRevision = null;
+let historyBranchRevision = null, branchRestoreEpoch = 0, branchRestoreView = null, branchRestoreCapture = null, branchRestoreFlight = null;
 let guidanceReturn = null, guidanceBase = null, guidanceNeedsChoice = false, guidanceNeedsRefresh = false;
 const showModeDescription = id => { $(`${id}-description`).textContent = MODES[$(id).value].description; };
 let previewEdits = null, acceptedIds = new Set(), acceptedParentId = null;
@@ -637,6 +638,7 @@ function apply(next, reset = false) {
   signature = stamp; state = next;
   syncReviewQueue();
   syncComparison();
+  syncBranchRestore();
   if (answerChange && !answerChange.current()) closeAnswerChange(false, 'Saved sources changed. Review the answer change again; your draft is retained.');
   if (paletteOpen() && (changedDocument || !state.document?.nodes.some(n => n.id === selected))) { closePalette(false); $('palette-open').focus({ preventScroll: true }); }
   for (const [id, ui] of nodeUi) {
@@ -2962,8 +2964,9 @@ $('recovery-copy').addEventListener('click', async () => {
 });
 
 function historyJourney() { return state.activeKey ?? state.document?.id; }
-function closeHistory() {
-  historyEpoch++; historySelection = null; $('history-dialog').close();
+function closeHistory(force = false) {
+  if (!force && branchRestoreFlight?.kind === 'commit') return;
+  historyEpoch++; historySelection = null; resetBranchRestore(true); $('history-dialog').close();
   if (historyReturn?.isConnected) historyReturn.focus({ preventScroll: true });
 }
 async function historyRead(snapshotRevision, epoch, journey) {
@@ -2975,6 +2978,8 @@ async function historyRead(snapshotRevision, epoch, journey) {
   return result;
 }
 async function previewHistory(revision) {
+  if (busy || branchRestoreFlight?.kind === 'commit') return;
+  resetBranchRestore(true);
   const epoch = ++historyEpoch, journey = historyJourney(); historySelection = null;
   $('history-restore').disabled = true; $('history-preview').replaceChildren(); $('history-status').textContent = 'Loading saved version...';
   try {
@@ -2987,9 +2992,15 @@ async function previewHistory(revision) {
       el('details', {}, el('summary', {}, 'Inspect saved content'), content));
     $('history-status').textContent = result.pending ? 'Cancel the current Copilot request before restoring.' : result.preview.matchesCurrent ? 'This version already matches the saved journey. No restore is needed.' : 'Review the preview, then explicitly restore this version.';
     $('history-restore').disabled = historySelection === null || result.pending;
+    historyBranchRevision = revision;
+    $('history-branch-select').replaceChildren(el('option', { value: '' }, 'Choose a historical branch'));
+    for (const node of result.document.nodes) if (node.id !== result.document.rootId) $('history-branch-select').append(el('option', { value: node.id }, `${node.question.slice(0, 100)} [${node.id}]`));
+    $('history-branch').hidden = false; syncBranchRestore();
   } catch (error) { if (epoch === historyEpoch) $('history-status').textContent = error.message; }
 }
 async function loadHistory(undo = false) {
+  if (busy || branchRestoreFlight?.kind === 'commit') return;
+  resetBranchRestore(true);
   const epoch = ++historyEpoch, journey = historyJourney(); historySelection = null;
   $('history-list').replaceChildren(); $('history-preview').replaceChildren(); $('history-restore').disabled = true;
   $('checkpoint-save').disabled = true; $('history-status').textContent = 'Loading history...';
@@ -3015,7 +3026,7 @@ function openHistory(undo) {
 }
 $('history-open').addEventListener('click', () => openHistory(false));
 $('undo-change').addEventListener('click', () => openHistory(true));
-$('history-close').addEventListener('click', closeHistory);
+$('history-close').addEventListener('click', () => closeHistory());
 $('history-dialog').addEventListener('cancel', event => { event.preventDefault(); closeHistory(); });
 $('history-refresh').addEventListener('click', async () => { if (await api('refresh-answer')) await loadHistory(); else $('history-status').textContent = $('notice').textContent; });
 $('checkpoint-form').addEventListener('submit', async event => {
@@ -3025,7 +3036,7 @@ $('checkpoint-form').addEventListener('submit', async event => {
   } else if (epoch === historyEpoch && journey === historyJourney()) $('history-status').textContent = $('notice').textContent;
 });
 $('history-restore').addEventListener('click', async () => {
-  if (historySelection === null || busy) return;
+  if (historySelection === null || busy || branchRestoreCapture) return;
   if (!switchAllowed()) {
     $('history-status').textContent = $('notice').textContent;
     if (orphanReminderDrafts().length) $('history-status').append(button('Review removed reminders', revealOrphanReminders, { id: 'review-orphan-reminders-history' }));
@@ -3040,6 +3051,92 @@ $('history-restore').addEventListener('click', async () => {
     else $('history-status').textContent = $('notice').textContent;
   } catch (error) { $('history-status').textContent = `Drafts could not be preserved. ${error.message}`; }
   finally { $('workspace').inert = false; if (epoch === historyEpoch) $('history-restore').disabled = false; }
+});
+
+const branchDraftStamp = () => JSON.stringify([...draftClient.entries].map(([id, entry]) => [id, entry.textGeneration]));
+const branchRestoreCurrent = () => {
+  const c = branchRestoreCapture;
+  return c && !closed && !suspended && $('history-dialog').open && c.epoch === branchRestoreEpoch && c.history === historyEpoch && c.page === pageEpoch &&
+    c.journey === historyJourney() && c.nodeId === $('history-branch-select').value && c.document === JSON.stringify(state.document) && c.drafts === branchDraftStamp() && !state.pending && !state.preview;
+};
+async function branchRestoreRequest(input, abort = new AbortController()) {
+  const timer = setTimeout(() => abort.abort(), 20000);
+  try {
+    const response = await fetch('api/branch-restore', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+    const value = await response.json(); if (!response.ok) throw Error(value.error); return value;
+  } finally { clearTimeout(timer); }
+}
+function resetBranchRestore(hide = false) {
+  const token = branchRestoreView?.token;
+  branchRestoreEpoch++; branchRestoreFlight?.abort?.abort(); branchRestoreFlight = null; branchRestoreView = null; branchRestoreCapture = null;
+  if (token) void branchRestoreRequest({ action: 'discard', token }).catch(() => {});
+  $('history-branch-review').hidden = true; $('history-branch-confirm').disabled = true; $('history-branch-status').textContent = '';
+  $('history-restore').disabled = historySelection === null || !!state.pending || !!state.preview;
+  $('history-close').disabled = false; $('history-refresh').disabled = false; $('workspace').inert = false;
+  if (hide) { historyBranchRevision = null; $('history-branch').hidden = true; }
+  syncBranchRestore();
+}
+function syncBranchRestore() {
+  const current = branchRestoreCurrent(), commit = branchRestoreFlight?.kind === 'commit';
+  $('history-branch-select').disabled = !!branchRestoreFlight;
+  $('history-branch-preview').disabled = !!branchRestoreFlight || busy || !historyBranchRevision && historyBranchRevision !== 0 || !$('history-branch-select').value || !!state.pending || !!state.preview;
+  $('history-branch-confirm').disabled = !!branchRestoreFlight || !current || !branchRestoreView?.canRestore;
+  $('history-branch-items').disabled = !!branchRestoreFlight || !current || !branchRestoreView;
+  $('history-branch-prev').disabled = !!branchRestoreFlight || !current || !branchRestoreView || branchRestoreView.page === 0;
+  $('history-branch-next').disabled = !!branchRestoreFlight || !current || !branchRestoreView || (branchRestoreView.page + 1) * 50 >= branchRestoreView.total;
+  $('history-close').disabled = commit; $('history-refresh').disabled = commit;
+  if (branchRestoreCapture) $('history-restore').disabled = true;
+  if (branchRestoreCapture && !current && !commit) $('history-branch-status').textContent = 'Saved sources or drafts changed. Refresh history and preview again; private drafts are retained.';
+}
+function renderBranchRestore(value) {
+  branchRestoreView = value; $('history-branch-review').hidden = false;
+  $('history-branch-status').textContent = `${value.added} restored, ${value.removed} removed, ${value.reviewed} needing review; ${value.removedReferences} removed private reference(s). ${value.research} restored research result(s) remain historical. ${value.conflicts ? `${value.conflicts} conflict(s) block restoration.` : value.changed ? 'Inspect every change, then explicitly restore this branch.' : 'This branch already matches; no restoration is needed.'}${value.artifacts.length ? ` ${value.artifacts.map(a => `${a.state} ${a.kind}`).join(', ')} will become stale.` : ''}`;
+  $('history-branch-items').replaceChildren(...value.items.map(item => el('option', { value: item.index }, item.label)));
+  if (value.selected) $('history-branch-items').value = String(value.selected.index);
+  $('history-branch-detail').value = value.selected ? JSON.stringify(value.selected.data, null, 2) : '';
+  $('history-branch-page').textContent = `${value.total ? value.page * 50 + 1 : 0}–${Math.min((value.page + 1) * 50, value.total)} of ${value.total}`;
+  $('history-branch-prev').disabled = value.page === 0; $('history-branch-next').disabled = (value.page + 1) * 50 >= value.total;
+  syncBranchRestore();
+}
+async function prepareBranchRestore() {
+  if (busy || branchRestoreFlight || !$('history-branch-select').value) return;
+  if (!switchAllowed()) { $('history-branch-status').textContent = $('notice').textContent; return; }
+  resetBranchRestore();
+  const capture = { epoch: branchRestoreEpoch, history: historyEpoch, page: pageEpoch, journey: historyJourney(), revision: historyRevision, snapshotRevision: historyBranchRevision,
+    nodeId: $('history-branch-select').value, document: JSON.stringify(state.document), drafts: branchDraftStamp() };
+  branchRestoreCapture = capture; const abort = new AbortController(); branchRestoreFlight = { kind: 'prepare', abort };
+  $('history-branch-status').textContent = 'Preserving private drafts and preparing branch preview…'; syncBranchRestore(); voice.cancel();
+  try {
+    await draftClient.flush(); if (!branchRestoreCurrent()) throw Error('Sources or drafts changed. Refresh history and preview again.');
+    const value = await branchRestoreRequest({ action: 'prepare', journey: capture.journey, revision: capture.revision, snapshotRevision: capture.snapshotRevision, nodeId: capture.nodeId }, abort);
+    if (!branchRestoreCurrent()) return; renderBranchRestore(value);
+  } catch (error) {
+    if (capture.epoch === branchRestoreEpoch) { branchRestoreCapture = null; $('history-branch-status').textContent = `Drafts could not be preserved or preview could not complete. ${error.message}`; }
+  } finally { if (capture.epoch === branchRestoreEpoch) { branchRestoreFlight = null; syncBranchRestore(); } }
+}
+async function pageBranchRestore(page, selected = null) {
+  if (!branchRestoreCurrent() || branchRestoreFlight || !branchRestoreView) return;
+  const epoch = branchRestoreEpoch, abort = new AbortController(); branchRestoreFlight = { kind: 'page', abort }; syncBranchRestore();
+  try { const value = await branchRestoreRequest({ action: 'page', token: branchRestoreView.token, page, selected }, abort); if (branchRestoreCurrent()) renderBranchRestore(value); }
+  catch (error) { if (epoch === branchRestoreEpoch) { branchRestoreView.canRestore = false; $('history-branch-status').textContent = error.message; } }
+  finally { if (epoch === branchRestoreEpoch) { branchRestoreFlight = null; syncBranchRestore(); } }
+}
+$('history-branch-select').addEventListener('change', () => resetBranchRestore());
+$('history-branch-preview').addEventListener('click', () => void prepareBranchRestore());
+$('history-branch-cancel').addEventListener('click', () => { if (branchRestoreFlight?.kind !== 'commit') { resetBranchRestore(); $('history-restore').disabled = historySelection === null || !!state.pending; } });
+$('history-branch-prev').addEventListener('click', () => { if (branchRestoreView) void pageBranchRestore(branchRestoreView.page - 1); });
+$('history-branch-next').addEventListener('click', () => { if (branchRestoreView) void pageBranchRestore(branchRestoreView.page + 1); });
+$('history-branch-items').addEventListener('change', () => { if (branchRestoreView) void pageBranchRestore(branchRestoreView.page, Number($('history-branch-items').value)); });
+$('history-branch-confirm').addEventListener('click', async () => {
+  if (!branchRestoreCurrent() || branchRestoreFlight || busy || !branchRestoreView?.canRestore) return;
+  if (!switchAllowed()) { $('history-branch-status').textContent = $('notice').textContent; return; }
+  const epoch = branchRestoreEpoch, capture = branchRestoreCapture, token = branchRestoreView.token; branchRestoreFlight = { kind: 'commit' }; voice.cancel(); syncBranchRestore(); $('workspace').inert = true;
+  try {
+    await draftClient.flush(); if (!branchRestoreCurrent()) throw Error('Sources or drafts changed. Preview again.');
+    if (await api('restore-branch', { journey: capture.journey, revision: capture.revision, token, confirm: true })) { if (epoch === branchRestoreEpoch) closeHistory(true); }
+    else if (epoch === branchRestoreEpoch) { branchRestoreView.canRestore = false; $('history-branch-status').textContent = $('notice').textContent; }
+  } catch (error) { if (epoch === branchRestoreEpoch) { branchRestoreView.canRestore = false; $('history-branch-status').textContent = `Drafts could not be preserved. ${error.message}`; } }
+  finally { if (epoch === branchRestoreEpoch) { branchRestoreFlight = null; $('workspace').inert = false; syncBranchRestore(); } }
 });
 
 function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) || draftClient.entries.get(n.id)?.conflict) ?? []; }
@@ -3602,6 +3699,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  if ($('history-dialog').open) closeHistory(true);
   closeAnswerChange();
   closeReviewQueue(true);
   closeScenarioFork(true);

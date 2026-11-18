@@ -148,6 +148,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (selected !== null && !/^(0|[1-9][0-9]*)$/.test(selected)) throw new Error('Invalid history revision.');
         return json(200, await explorer.readHistory(url.searchParams.get('journey'), selected === null ? undefined : Number(selected)));
       }
+      if (req.method === 'POST' && route === 'api/branch-restore') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.branchRestoreRequest(await body(req, 2048)));
+      }
       if (req.method === 'POST' && route === 'api/recovery') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         try { return json(200, await explorer.recoveryRequest(await body(req, 2048))); }

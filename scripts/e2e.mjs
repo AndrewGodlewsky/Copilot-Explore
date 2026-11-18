@@ -132,7 +132,15 @@ try {
   await action('guidance', { objective: '', successCriteria: '', pins: [{ id: 'constraint-00000000000000', text: 'Preserve the garden constraint' }] });
   const coverage = await action('context-coverage', { kind: 'questions', nodeId, scope: 'path' });
   assert.equal(coverage.contextCoverage.included.pins, 1); assert.ok(coverage.contextCoverage.bytes <= 131072);
+  const beforeAnswerRevision = (await state()).document.revision;
   await action('answer', { nodeId, answer: 'Neighbors', expand: false });
+  const branchCurrent = await state();
+  const branchResponse = await fetch(opened.url + 'api/branch-restore', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin },
+    body: JSON.stringify({ action: 'prepare', journey: branchCurrent.activeKey, revision: branchCurrent.document.revision, snapshotRevision: beforeAnswerRevision, nodeId }) });
+  assert.equal(branchResponse.status, 200); const branchPreview = await branchResponse.json(); assert.equal(branchPreview.canRestore, true);
+  snapshot = await action('restore-branch', { journey: branchCurrent.activeKey, token: branchPreview.token, confirm: true });
+  assert.equal(snapshot.document.nodes.find(node => node.id === nodeId).answer, '');
+  snapshot = await action('answer', { nodeId, answer: 'Neighbors', expand: false });
   const metadata = await session.rpc.metadata.snapshot();
   assert.equal(await realpath(metadata.workingDirectory), await realpath(project));
   assert.notEqual(metadata.workingDirectory, metadata.workspacePath);

@@ -8,6 +8,7 @@ import { ProjectCopy } from './project-copy.mjs';
 import { ScenarioFork } from './scenario-fork.mjs';
 import { ScenarioComparison } from './scenario-compare.mjs';
 import { ScenarioPreferences } from './scenario-preference-workflow.mjs';
+import { BranchRestoration } from './branch-restoration.mjs';
 import { savedDigest } from './review-causes.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
@@ -52,6 +53,7 @@ export class Explorer {
     this.preview = null; this.questionSource = null;
     this.researchReview = new ResearchReview();
     this.scenarioPreferences = new ScenarioPreferences();
+    this.branchRestoration = new BranchRestoration();
     this.projectContext = new ProjectContext(projectRoot);
     this.projectRepository = library ? new ProjectRepository({ readRoot: projectRoot, localDirectory: library.directory }) : null;
     this.researcher = researcher; this.researchTasks = new Set(); this.researchTask = Promise.resolve(); this.unconfirmedResearchRelease = null; this.researchWork = null;
@@ -72,6 +74,7 @@ export class Explorer {
   snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, projectChange: this.projectChange ?? null, storage: this.projectStore ? { scope: 'project', path: this.projectStore.context.relativePath } : { scope: 'personal' }, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
   auxiliaryDirectory() { return this.projectStore?.context.directory ?? this.library?.directory ?? dirname(this.file); }
   async changeStorage(store) {
+    this.branchRestoration.clear();
     this.projectCopy = null;
     this.scenarioComparison?.clear();
     this.scenarioPreferences.clear();
@@ -830,6 +833,7 @@ export class Explorer {
       return { ...result, journey, pending: !!this.pending, revision: current.revision, ...(requested !== undefined ? { snapshotRevision: requested } : {}) };
     }));
   }
+  branchRestoreRequest(input) { return this.transact(() => this.withDocumentLock(() => this.branchRestoration.request(this, input))); }
   async save(next, label = 'Map updated') {
     const before = this.doc;
     try { return await this.withDocumentLock(() => this.saveLocked(next, label)); }
@@ -1079,7 +1083,7 @@ export class Explorer {
         await this.library.update(input.key, input.patch, input.metadataRevision); this.dashboard?.invalidate(); return this.uiSnapshot();
       }
       if (this.pending && !(['research', 'research-follow-up'].includes(this.pending.kind) && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
-      if (this.preview && (['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'import', 'restore', 'restart-branch', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
+      if (this.preview && (['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'import', 'restore', 'restore-branch', 'restart-branch', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
       if (this.doc && input.revision !== this.doc.revision) throw new Error('The map changed. Refresh and try again; your draft is still here.');
       const next = structuredClone(this.doc);
       this.error = '';
@@ -1238,6 +1242,9 @@ export class Explorer {
             await history.checkpoint(current, input.snapshotRevision, input.name, action === 'remove-checkpoint');
           });
           break;
+        case 'restore-branch':
+          await this.withDocumentLock(() => this.branchRestoration.commit(this, input));
+          break;
         case 'restore':
           await this.withDocumentLock(async () => {
             const history = await this.history(input.journey), current = await this.fresh();
@@ -1285,5 +1292,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
+  async close() { this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

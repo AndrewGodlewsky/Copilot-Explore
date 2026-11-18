@@ -22,6 +22,24 @@ test('shared restart retains a private protected checkpoint and restores removed
   await e.command('restore', { journey: e.activeKey, revision: e.doc.revision, snapshotRevision: before.revision }); assert.deepEqual(e.doc.nodes, before.nodes);
 });
 
+test('scoped shared restoration preserves later sibling answers and keeps drafts and undo history private', async t => {
+  const f = await fixture(t), e = new Explorer({ file: f.file }); await e.attachProject(f.journey); t.after(() => e.close());
+  const old = structuredClone(e.doc), branch = old.nodes[1];
+  const [child] = addQuestions(old, branch.id, [{ question: 'Historical detail?', category: 'Scope' }]);
+  const [sibling] = addQuestions(old, old.rootId, [{ question: 'Independent?', category: 'Scope' }]);
+  child.answer = 'Historical exact'; await e.save(old); const sourceRevision = e.doc.revision;
+  const later = structuredClone(e.doc); later.nodes = later.nodes.filter(n => n.id !== child.id); later.nodes.find(n => n.id === sibling.id).answer = 'Keep later work'; await e.save(later);
+  await e.writeDraft({ journey: e.activeKey, nodeId: sibling.id, base: e.doc.nodes.find(n => n.id === sibling.id), text: 'PRIVATE_RESTORE_DRAFT', revision: 0 });
+  const savedSibling = structuredClone(e.doc.nodes.find(n => n.id === sibling.id)), before = e.doc.revision;
+  const p = await e.branchRestoreRequest({ action: 'prepare', journey: e.activeKey, revision: before, snapshotRevision: sourceRevision, nodeId: branch.id });
+  await e.command('restore-branch', { journey: e.activeKey, revision: before, token: p.token, confirm: true });
+  assert.equal(e.doc.nodes.find(n => n.id === child.id).answer, 'Historical exact'); assert.deepEqual(e.doc.nodes.find(n => n.id === sibling.id), savedSibling);
+  assert.equal((await e.readHistory(e.activeKey)).undoRevision, before);
+  assert.equal((await e.readDrafts(e.activeKey)).entries[0].text, 'PRIVATE_RESTORE_DRAFT');
+  const shared = await readFile(f.file, 'utf8'); assert.equal(shared.includes('PRIVATE_RESTORE_DRAFT'), false); assert.equal(shared.includes(p.token), false);
+  assert.equal(readSharedDocument(shared).document.journey.nodes.length, e.doc.nodes.length);
+});
+
 test('project consequence confirmation persists review causes and rejects a replaced shared base', async t => {
   const f = await fixture(t), e = new Explorer({ file: f.file }); await e.attachProject(f.journey); t.after(() => e.close());
   const next = structuredClone(e.doc), parent = next.nodes[1]; addQuestions(next, parent.id, [{ question: 'Downstream?', category: 'Scope' }]); await e.save(next);

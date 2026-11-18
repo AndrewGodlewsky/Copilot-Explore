@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { DecisionImpact } from './web/decision-impact.mjs';
 import { savedDigest, reviewCauses, addReviewCause, reviewCauseKey } from './review-causes.mjs';
 import { researchSettings, researchSettingsText } from './web/research-policy.mjs';
-import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './web/answer-state.mjs';
+import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, effectiveKind, nodeStatus } from './web/answer-state.mjs';
 import { effectiveMode, validMode, MODES } from './web/modes.mjs';
 import { validateRevisit } from './web/revisit.mjs';
 export { localDate, revisitStatuses } from './web/revisit.mjs';
@@ -374,6 +374,83 @@ export function restartBranch(doc, id, answer, answerState) {
   const links = (doc.dependencies ?? []).filter(link => !removed.has(link.dependentId) && !removed.has(link.prerequisiteId));
   if (links.length) doc.dependencies = links; else delete doc.dependencies;
   return true;
+}
+
+/** A scoped historical replacement; neither input is mutated and conflicts have no candidate. */
+export function branchRestoration(current, historical, nodeId) {
+  current = validateDocument(current); historical = validateDocument(historical);
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b), conflicts = [];
+  const conflict = (kind, id, message) => conflicts.push({ kind, id, message });
+  const blocked = () => ({ document: null, changed: false, conflicts, added: [], removed: [], reviewed: [], research: [], changes: [], dependencies: [] });
+  const old = new Map(historical.nodes.map(n => [n.id, n])), now = new Map(current.nodes.map(n => [n.id, n])), selected = old.get(nodeId);
+  const compatible = (a, b) => a.parentId === b.parentId && effectiveKind(a) === effectiveKind(b) && a.question === b.question;
+  if (['id', 'rootId', 'createdAt'].some(key => current[key] !== historical[key])) conflict('identity', nodeId, 'This snapshot belongs to a different journey identity.');
+  if (!same(current.forkOrigin, historical.forkOrigin) || !same(current.copyOrigin, historical.copyOrigin)) conflict('lineage', nodeId, 'Scenario lineage changed; scoped restoration cannot replace or infer it.');
+  if (!selected || nodeId === historical.rootId) conflict('selection', nodeId, 'Select a non-root historical branch. Use whole-map restore for the root.');
+  if (conflicts.length) return blocked();
+  if (!now.has(selected.parentId)) conflict('parent', selected.parentId, 'The historical parent is missing. Restore that parent branch first.');
+  else if (selected.parentId !== historical.rootId && !compatible(now.get(selected.parentId), old.get(selected.parentId))) conflict('identity', selected.parentId, 'The historical parent has incompatible parent, kind or question identity.');
+  const subtree = (doc, id) => {
+    const children = new Map(doc.nodes.map(n => [n.id, []]));
+    for (const n of doc.nodes) if (n.parentId !== null) children.get(n.parentId).push(n.id);
+    const found = new Set(), queue = children.has(id) ? [id] : [];
+    for (let i = 0; i < queue.length; i++) { found.add(queue[i]); queue.push(...children.get(queue[i])); }
+    return found;
+  };
+  const before = subtree(current, nodeId), restored = subtree(historical, nodeId);
+  for (const id of restored) {
+    const a = now.get(id), b = old.get(id);
+    if (a && (!before.has(id) || !compatible(a, b))) conflict('identity', id, 'A restored ID is reused outside the branch or has incompatible parent, kind or question identity.');
+  }
+  if (conflicts.length) return blocked();
+  const removed = [...before].filter(id => !restored.has(id)), added = [...restored].filter(id => !now.has(id));
+  const replacement = historical.nodes.filter(n => restored.has(n.id)), nodes = current.nodes.filter(n => !before.has(n.id)).map(n => structuredClone(n));
+  const index = before.size ? current.nodes.findIndex(n => before.has(n.id)) : nodes.findIndex(n => n.id === selected.parentId) + 1;
+  nodes.splice(index, 0, ...replacement);
+  const candidate = { ...current, nodes }, ids = new Set(nodes.map(n => n.id)), key = link => JSON.stringify([link.dependentId, link.prerequisiteId]), links = new Map();
+  for (const link of current.dependencies ?? []) {
+    if (before.has(link.dependentId) && before.has(link.prerequisiteId)) continue;
+    if (!ids.has(link.dependentId) || !ids.has(link.prerequisiteId)) conflict('dependency', link.dependentId, 'A current boundary dependency refers to a removed node. Correct that link explicitly before restoring.');
+    else links.set(key(link), link);
+  }
+  for (const link of historical.dependencies ?? []) {
+    if (!restored.has(link.dependentId) && !restored.has(link.prerequisiteId)) continue;
+    for (const id of [link.dependentId, link.prerequisiteId]) if (!restored.has(id) && now.has(id) && !compatible(now.get(id), old.get(id))) conflict('identity', id, 'A historical boundary dependency endpoint has incompatible parent, kind or question identity.');
+    if (!ids.has(link.dependentId) || !ids.has(link.prerequisiteId)) conflict('dependency', link.dependentId, 'A historical boundary dependency has a missing endpoint. Restore its prerequisite branch or correct the dependency first.');
+    else if (links.has(key(link)) && !same(links.get(key(link)), link)) conflict('dependency', link.dependentId, 'Current and historical boundary dependency explanations conflict. Resolve the link explicitly before restoring.');
+    else links.set(key(link), link);
+  }
+  if (conflicts.length) return blocked();
+  if (links.size) candidate.dependencies = [...links.values()]; else delete candidate.dependencies;
+  try { validateDocument(candidate); } catch (error) { conflict('graph', nodeId, error.message); return blocked(); }
+  const oldLinks = new Map((current.dependencies ?? []).map(link => [key(link), link]));
+  const dependencies = [...new Set([...oldLinks.keys(), ...links.keys()])].filter(id => !same(oldLinks.get(id), links.get(id))).map(id => ({ before: oldLinks.get(id) ?? null, after: links.get(id) ?? null }));
+  const changedIds = new Set([...before, ...restored].filter(id => !same(now.get(id), restored.has(id) ? old.get(id) : undefined)));
+  if (!changedIds.size && !dependencies.length && same([...before], [...restored])) return { document: current, changed: false, conflicts, added, removed, reviewed: [], research: [], changes: [], dependencies };
+  // Complete research prerequisites were not retained. Restored evidence is historical.
+  const outside = (doc, branch) => [doc.nodes.filter(n => !branch.has(n.id)), doc.topic, doc.objective, doc.successCriteria, doc.mode, doc.pins,
+    (doc.dependencies ?? []).filter(link => !branch.has(link.dependentId) || !branch.has(link.prerequisiteId))];
+  const contextChanged = !same(outside(current, before), outside(historical, restored));
+  const cause = { sourceId: nodeId, baseDigest: savedDigest(current), revision: current.revision };
+  for (const n of replacement) { if (contextChanged) addReviewCause(n, cause); if (n.research) n.researchStale = true; }
+  // Walk the union of both graphs once: only downstream outside nodes need review.
+  const edges = new Map([...now.keys(), ...ids].map(id => [id, new Set()]));
+  for (const doc of [current, candidate]) {
+    for (const n of doc.nodes) if (n.parentId !== null) edges.get(n.parentId).add(n.id);
+    for (const link of doc.dependencies ?? []) edges.get(link.prerequisiteId).add(link.dependentId);
+  }
+  const affected = new Set(changedIds);
+  for (const change of dependencies) affected.add((change.after ?? change.before).dependentId);
+  const queue = [...affected];
+  for (let i = 0; i < queue.length; i++) for (const id of edges.get(queue[i]) ?? []) if (!affected.has(id)) { affected.add(id); queue.push(id); }
+  for (const n of nodes) if (!restored.has(n.id) && affected.has(n.id)) addReviewCause(n, cause);
+  candidate.finishedAt = null;
+  let document;
+  try { document = validateDocument(candidate); } catch (error) { conflict('limits', nodeId, error.message); return blocked(); }
+  const after = new Map(document.nodes.map(n => [n.id, n]));
+  const changes = [...new Set([...now.keys(), ...after.keys()])].filter(id => !same(now.get(id), after.get(id))).map(id => ({ id, before: now.get(id) ?? null, after: after.get(id) ?? null }));
+  return { document, changed: true, conflicts, added, removed, dependencies, changes,
+    reviewed: changes.filter(change => change.after?.review).map(change => change.id), research: replacement.filter(n => n.research).map(n => n.id) };
 }
 export function contextFor(doc, nodeId) {
   const byId = new Map(doc.nodes.map(n => [n.id, n]));

@@ -4322,6 +4322,107 @@ test('voice bar distinguishes loading, measured audio, silence, transcription an
   key(f, 'keyup'); await until(() => bar.dataset.phase === 'transcribing', 'transcription');
   key(f, 'keydown', { key: 'Escape', code: 'Escape', ctrlKey: false }); assert.equal(bar.hidden, true);
 });
+async function branchRestorationFixture(t, missing = false) {
+  let saved;
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const old = structuredClone(e.doc), branch = old.nodes[1], sibling = old.nodes[2];
+    const child = { id: 'historical-detail', parentId: branch.id, question: 'Historical detail?', category: 'Scope', answer: 'Original detail', answerState: 'assumption', research: null, review: false };
+    old.nodes.push(child); await e.save(old); const snapshotRevision = e.doc.revision;
+    const later = structuredClone(e.doc); later.nodes[2].answer = 'Later sibling answer'; later.nodes[2].answerState = 'decided';
+    if (missing) later.nodes = later.nodes.filter(n => n.id !== child.id); else later.nodes.find(n => n.id === child.id).answer = 'Later detail';
+    later.nodes.push({ id: 'new-detail', parentId: branch.id, question: 'New detail?', category: 'Scope', answer: '', research: null, review: false });
+    await e.save(later); saved = { branch, sibling, child, snapshotRevision };
+  } });
+  const $ = id => f.document.getElementById(id);
+  const open = async (nodeId = saved.branch.id) => {
+    $('history-open').click(); await until(() => f.document.querySelector(`[data-history-revision="${saved.snapshotRevision}"]`), 'historical revision');
+    f.document.querySelector(`[data-history-revision="${saved.snapshotRevision}"]`).click();
+    await until(() => !$('history-branch').hidden, 'branch selector');
+    $('history-branch-select').value = nodeId; $('history-branch-select').dispatchEvent(new f.window.Event('change'));
+  };
+  return { ...f, ...saved, $, openHistoryBranch: open };
+}
+
+test('scoped History restore previews exact changes, cancels safely and preserves an unrelated editor draft and caret', async t => {
+  const f = await branchRestorationFixture(t), $ = f.$; f.open(f.sibling.id); f.type('answer', 'Unrelated private draft 🌱');
+  const editor = $('answer'); editor.focus(); editor.setSelectionRange(3, 10); const saved = structuredClone(f.explorer.doc.nodes[2]);
+  await f.openHistoryBranch(); $('history-branch-preview').click(); await until(() => !$('history-branch-confirm').disabled, 'branch preview');
+  assert.match($('history-branch-status').textContent, /1 removed/); assert.ok($('history-branch-detail').value.includes('before'));
+  const revision = f.explorer.doc.revision; $('history-branch-cancel').click(); assert.equal(f.explorer.doc.revision, revision);
+  assert.equal($('history-branch-review').hidden, true); assert.equal($('answer'), editor); assert.equal(editor.value, 'Unrelated private draft 🌱');
+  $('history-branch-preview').click(); await until(() => !$('history-branch-confirm').disabled, 'reopened preview'); $('history-branch-confirm').click();
+  await until(() => !$('history-dialog').open && f.explorer.doc.revision === revision + 1, 'branch restored').catch(error => { throw Error(`${error.message}: ${$('history-branch-status').textContent}`); });
+  assert.equal(f.explorer.doc.nodes.find(n => n.id === f.child.id).answer, 'Original detail');
+  assert.equal(f.explorer.doc.nodes.some(n => n.id === 'new-detail'), false); assert.deepEqual(f.explorer.doc.nodes.find(n => n.id === f.sibling.id), saved);
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Unrelated private draft 🌱'); assert.equal(editor.selectionStart, 3); assert.equal(editor.selectionEnd, 10);
+});
+
+test('scoped History restore blocks failed draft flush and invalidates a preview after a saved source change', async t => {
+  const f = await branchRestorationFixture(t), $ = f.$; f.open(f.sibling.id);
+  await f.explorer.readDrafts(f.explorer.doc.id); const write = f.explorer.draftStore.write;
+  f.explorer.draftStore.write = async () => { throw Error('Draft fixture unavailable'); }; f.type('answer', 'Keep failed draft');
+  await f.openHistoryBranch(); $('history-branch-preview').click();
+  await until(() => /Drafts could not be preserved/.test($('history-branch-status').textContent), 'failed flush');
+  assert.equal(f.explorer.branchRestoration.entry, null); assert.equal($('answer').value, 'Keep failed draft');
+  f.explorer.draftStore.write = write; $('history-branch-preview').click(); await until(() => !$('history-branch-confirm').disabled, 'retry preview');
+  const changed = structuredClone(f.explorer.doc); changed.objective = 'Changed source'; await f.explorer.save(changed); await f.poll();
+  assert.equal($('history-branch-confirm').disabled, true); assert.match($('history-branch-status').textContent, /changed|refresh/i);
+  $('history-close').click(); assert.equal($('answer').value, 'Keep failed draft');
+});
+
+test('scoped History restore ignores a suspended preview response and can restore a missing historical branch after resume', async t => {
+  const f = await branchRestorationFixture(t, true), $ = f.$, original = f.window.fetch; let release, held = false;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/branch-restore' && JSON.parse(options.body).action === 'prepare' && !held) { held = true; return new Promise(resolve => { release = () => resolve(response); }); }
+    return response;
+  };
+  await f.openHistoryBranch(f.child.id); $('history-branch-preview').click(); await until(() => release, 'held preview');
+  const hide = new f.window.Event('pagehide'); Object.defineProperty(hide, 'persisted', { value: true }); f.window.dispatchEvent(hide);
+  assert.equal($('history-dialog').open, false);
+  const show = new f.window.Event('pageshow'); Object.defineProperty(show, 'persisted', { value: true }); f.window.dispatchEvent(show); await f.poll(); release(); await delay(20);
+  await f.openHistoryBranch(f.child.id); assert.equal($('history-branch-preview').disabled, false); $('history-branch-preview').click();
+  await until(() => !$('history-branch-confirm').disabled, 'fresh missing-branch preview'); assert.match($('history-branch-status').textContent, /1 restored/);
+  $('history-branch-confirm').click(); await until(() => !$('history-dialog').open && f.explorer.doc.nodes.some(n => n.id === f.child.id), 'missing branch restored');
+  assert.equal(f.explorer.doc.nodes.find(n => n.id === f.child.id).answer, 'Original detail'); assert.equal(f.explorer.doc.nodes.some(n => n.id === 'new-detail'), true);
+});
+
+test('scoped History restore shows identity conflicts and keeps confirmation disabled', async t => {
+  const f = await branchRestorationFixture(t), $ = f.$, changed = structuredClone(f.explorer.doc);
+  changed.nodes.find(n => n.id === f.child.id).parentId = f.sibling.id; await f.explorer.save(changed); await f.poll();
+  await f.openHistoryBranch(); $('history-branch-preview').click(); await until(() => !$('history-branch-review').hidden, 'conflict preview');
+  assert.equal($('history-branch-confirm').disabled, true); assert.match($('history-branch-status').textContent, /conflict/); assert.match($('history-branch-detail').value, /identity|outside/);
+  $('history-branch-cancel').click(); $('history-branch-prev').click(); $('history-branch-next').click();
+  assert.equal(f.explorer.doc.nodes.find(n => n.id === f.child.id).parentId, f.sibling.id);
+});
+
+test('scoped History restore preserves an edit made while drafts are flushing and requires a new preview', async t => {
+  const f = await branchRestorationFixture(t), $ = f.$; f.open(f.sibling.id); let release;
+  f.pauseDraftWrite(() => new Promise(resolve => { release = resolve; })); f.type('answer', 'First draft');
+  await f.openHistoryBranch(); $('history-branch-preview').click(); await until(() => release, 'held private draft write');
+  f.type('answer', 'Later draft wins'); f.pauseDraftWrite(null); release();
+  await until(() => !$('history-branch-preview').disabled, 'flush completed');
+  assert.equal(f.explorer.branchRestoration.entry, null); assert.match($('history-branch-status').textContent, /changed/); assert.equal($('answer').value, 'Later draft wins');
+  $('history-branch-preview').click(); await until(() => !$('history-branch-confirm').disabled, 'fresh preview');
+});
+
+test('scoped History restore reports an in-flight commit and ignores its old response after page resume', async t => {
+  const f = await branchRestorationFixture(t), $ = f.$; await f.openHistoryBranch(); $('history-branch-preview').click(); await until(() => !$('history-branch-confirm').disabled, 'preview');
+  const original = f.window.fetch, before = f.explorer.doc.revision; let release;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/action' && JSON.parse(options.body).action === 'restore-branch') return new Promise(resolve => { release = () => resolve(response); });
+    return response;
+  };
+  $('history-branch-confirm').click(); await until(() => release, 'committed response held');
+  assert.equal(f.explorer.doc.revision, before + 1); assert.equal($('history-close').disabled, true); assert.equal($('history-refresh').disabled, true);
+  $('history-dialog').dispatchEvent(new f.window.Event('cancel', { cancelable: true })); assert.equal($('history-dialog').open, true);
+  const hide = new f.window.Event('pagehide'); Object.defineProperty(hide, 'persisted', { value: true }); f.window.dispatchEvent(hide);
+  const show = new f.window.Event('pageshow'); Object.defineProperty(show, 'persisted', { value: true }); f.window.dispatchEvent(show); await f.poll();
+  await f.openHistoryBranch(); release(); await delay(20);
+  assert.equal($('history-dialog').open, true); assert.equal($('history-branch-preview').disabled, false); assert.equal(f.explorer.doc.revision, before + 1);
+});
+
 test('history dialog previews undo, preserves stale drafts and names checkpoints without revisions', async t => {
   const f = await fixture(t, 340), node = f.explorer.doc.nodes[1]; f.open(node.id);
   f.type('answer', 'Committed'); f.document.getElementById('save-answer').click();

@@ -8,7 +8,7 @@ import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
 import { ProjectMerge } from './project-merge.mjs';
 import { AnswerChanges } from './answer-changes.mjs';
-import { addDependency, removeDependency } from './model.mjs';
+import { addDependency, removeDependency, restartBranch } from './model.mjs';
 import { projectDocumentAccess } from './storage-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
@@ -915,7 +915,7 @@ export class Explorer {
         await this.library.update(input.key, input.patch, input.metadataRevision); this.dashboard?.invalidate(); return this.uiSnapshot();
       }
       if (this.pending && !(['research', 'research-follow-up'].includes(this.pending.kind) && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
-      if (this.preview && (['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'import', 'restore', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
+      if (this.preview && (['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'import', 'restore', 'restart-branch', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
       if (this.doc && input.revision !== this.doc.revision) throw new Error('The map changed. Refresh and try again; your draft is still here.');
       const next = structuredClone(this.doc);
       this.error = '';
@@ -1002,18 +1002,22 @@ export class Explorer {
           await this.attach(input.key, input.searchResult);
           break;
         case 'answer':
+        case 'restart-branch':
           if (input.draftRevision !== undefined) {
             if (!Number.isSafeInteger(input.draftRevision) || input.draftRevision < 0) throw new Error('Invalid draft revision.');
             await this.draftIdentity(input.draftJourney);
           }
-          const changedAnswer = answerNode(next, input.nodeId, input.answer, input.answerState);
+          if (action === 'restart-branch' && input.expand === true) throw Error('Restart does not generate questions. Explore deeper explicitly afterward.');
+          const changeInput = { ...input, operation: action };
+          const changedAnswer = (action === 'restart-branch' ? restartBranch : answerNode)(next, input.nodeId, input.answer, input.answerState);
           if (input.expand === true && effectiveAnswerState(findNode(next, input.nodeId)) === 'unanswered') throw new Error('Choose a state or write an answer before exploring deeper.');
           await this.withDocumentLock(async () => {
             const saved = await this.fresh(), review = this.answerChanges ??= new AnswerChanges();
-            await review.guard(this, saved, input, next);
+            await review.guard(this, saved, changeInput, next);
             if (changedAnswer) {
+              if (action === 'restart-branch') await review.checkpoint(this, saved, changeInput, next);
               next.finishedAt = null;
-              await this.commitCurrentLocked(saved, next, 'Answer or state changed', () => review.guard(this, saved, input, next));
+              await this.commitCurrentLocked(saved, next, action === 'restart-branch' ? 'Branch restarted with protected checkpoint' : 'Answer or state changed', () => review.guard(this, saved, changeInput, next));
             }
             if (input.answerPreview && review.entry?.token === input.answerPreview) review.entry = null;
           });

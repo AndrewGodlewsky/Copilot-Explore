@@ -401,15 +401,23 @@ function closeAnswerChange(accept = false, message = '') {
 }
 function renderAnswerChange() {
   const p = answerChange?.value; if (!p) return;
+  const restart = p.operation === 'restart-branch';
+  $('answer-change-title').textContent = restart ? 'Restart this branch' : 'Review this answer change';
+  $('answer-change-intention').textContent = restart ? 'Remove only the selected question’s tree descendants after preserving a checkpoint. Outside branches survive. No new questions will be generated.' : 'These are recorded reasoning relationships, not a prediction of real-world damage. Affected answers are retained and marked for review.';
   $('answer-change-summary').textContent = `${p.acknowledgment ? 'This acknowledges current review causes without changing answer text or state. Captured work still needs reconsideration. ' : ''}${p.counts.total} affected questions: ${p.counts.structural} reachable through the tree, ${p.counts.confirmed} through explicit dependencies, ${p.counts.mixedOnly} through mixed paths only. Tree and dependency counts may overlap. ${p.directions} structural directions also need review.`;
   $('answer-change-confirm').textContent = p.acknowledgment ? 'Acknowledge review and update captured work' : 'Save and mark affected items for review';
+  if (restart) {
+    $('answer-change-summary').prepend(`${p.removed} descendants will be removed, including ${p.removedResearch} research results. ${p.removedReferences} local reference selections will remain unavailable until restored. ${p.checkpoint ? `Protected checkpoint: ${p.checkpoint}.` : 'No saved change; no checkpoint or revision will be created.'} Surviving reasoning: `);
+    $('answer-change-confirm').textContent = `Restart and remove ${p.removed} descendants`;
+  }
   $('answer-change-old-label').textContent = `Saved answer (${ANSWER_STATES[p.current.state]})`; $('answer-change-old').textContent = p.current.answer || '(No answer text)';
   $('answer-change-new-label').textContent = `Proposed answer (${ANSWER_STATES[p.proposed.state]})`; $('answer-change-new').textContent = p.proposed.answer || '(No answer text)';
   $('answer-change-artifacts').textContent = `${p.research} retained research results need reconsideration; ${p.generated} accepted generated questions need review. Saved research does not retain complete context dependencies, so all retained results are conservatively flagged, even without a recorded path. ${p.staged ? 'The unsaved question proposal becomes stale. ' : ''}${p.running ? 'Active research will be discarded and only its owned helper stopped. ' : ''}${p.followup ? 'The research conversation becomes historical. ' : ''}Answers and research are preserved; research is not automatically refreshed.`;
   const artifactNames = { brief: 'decision brief', handoff: 'implementation handoff', 'answer-check': 'answer check', 'challenge-review': 'challenge review' };
+  if (restart) $('answer-change-artifacts').textContent = `${p.research} surviving research results need reconsideration; ${p.generated} surviving generated questions need review. Removed content is recoverable from History. Private drafts remain recoverable; selected local references to removed questions remain unavailable. ${p.followup ? 'The research conversation becomes historical. ' : ''}Research is not automatically refreshed.`;
   for (const artifact of p.artifacts) $('answer-change-artifacts').append(` The ${artifact.state === 'saved' ? 'saved' : artifact.state === 'pending' ? 'running' : 'unsaved'} ${artifactNames[artifact.kind]} becomes stale${artifact.state === 'pending' ? ' and its owned helper stops' : ''}.`);
   $('answer-change-adr').textContent = p.adr;
-  $('answer-change-items').replaceChildren(...p.items.map(n => el('option', { value: n.id }, `${n.question} (${n.direction ? 'direction' : ANSWER_STATES[n.state]}${n.structural ? '; tree exposure' : ''}${n.confirmed ? '; explicit dependency' : ''}${n.review && !n.structural && !n.confirmed ? '; mixed exposure' : ''}${!n.review && n.research ? '; research reconsideration only' : ''}${n.research ? '; retained research' : ''}${n.generated ? '; generated question' : ''})`)));
+  $('answer-change-items').replaceChildren(...p.items.map(n => el('option', { value: n.id }, `${n.removed ? 'REMOVE: ' : ''}${n.question} (${n.direction ? 'direction' : ANSWER_STATES[n.state]}${n.structural ? '; tree exposure' : ''}${n.confirmed ? '; explicit dependency' : ''}${n.review && !n.structural && !n.confirmed ? '; mixed exposure' : ''}${!n.review && n.research ? '; research reconsideration only' : ''}${n.research ? '; retained research' : ''}${n.generated ? '; generated question' : ''}${n.removed && n.referenced ? '; local reference becomes unavailable' : ''})`)));
   $('answer-change-items').value = p.targetId ?? ''; $('answer-change-items').disabled = !p.items.length;
   $('answer-change-page').textContent = p.total ? `Items ${p.page * 50 + 1}-${Math.min((p.page + 1) * 50, p.total)} of ${p.total}` : 'No downstream items. Context-bound work listed above may still become stale.';
   $('answer-change-prev').disabled = p.page === 0; $('answer-change-next').disabled = (p.page + 1) * 50 >= p.total;
@@ -417,13 +425,17 @@ function renderAnswerChange() {
   $('answer-change-path').start = p.pathPage * 30 + 1;
   $('answer-change-path-page').textContent = p.pathTotal ? `Path steps ${p.pathPage * 30 + 1}-${Math.min((p.pathPage + 1) * 30, p.pathTotal)} of ${p.pathTotal}. A path with a tree step is possible exposure.` : 'No recorded path. Research context dependencies are unknown; no decision relationship has been inferred.';
   $('answer-change-path-prev').disabled = p.pathPage === 0; $('answer-change-path-next').disabled = (p.pathPage + 1) * 30 >= p.pathTotal;
+  $('answer-change-links').hidden = !restart;
+  $('answer-change-link-list').replaceChildren(...p.links.map(link => el('li', {}, `${link.dependent} depends on ${link.prerequisite}${link.external ? ' (crosses removed branch boundary)' : ' (inside removed branch)'}.${link.explanation ? ` ${link.explanation}` : ''}`)));
+  $('answer-change-link-page').textContent = p.linkTotal ? `Links ${p.linkPage * 25 + 1}-${Math.min((p.linkPage + 1) * 25, p.linkTotal)} of ${p.linkTotal}. All listed links will be removed; outside questions remain.` : 'No dependency links will be removed.';
+  $('answer-change-link-prev').disabled = p.linkPage === 0; $('answer-change-link-next').disabled = (p.linkPage + 1) * 25 >= p.linkTotal;
   $('answer-change-confirm').disabled = false; $('answer-change-error').textContent = '';
 }
-async function pageAnswerChange(page, targetId = null, pathPage = 0) {
+async function pageAnswerChange(page, targetId = null, pathPage = 0, linkPage = answerChange?.value.linkPage ?? 0) {
   const review = answerChange; if (!review) return;
   const sequence = ++review.sequence; $('answer-change-confirm').disabled = true;
   try {
-    const value = await answerChangeRequest({ action: 'page', token: review.value.token, page, targetId, pathPage });
+    const value = await answerChangeRequest({ action: 'page', token: review.value.token, page, targetId, pathPage, linkPage });
     if (answerChange !== review || sequence !== review.sequence) return;
     if (!review.current()) return closeAnswerChange(false, 'The answer or its sources changed. Review again; your draft is retained.');
     review.value = value; renderAnswerChange();
@@ -449,6 +461,8 @@ $('answer-change-next').addEventListener('click', () => void pageAnswerChange(an
 $('answer-change-items').addEventListener('change', () => void pageAnswerChange(answerChange.value.page, $('answer-change-items').value));
 $('answer-change-path-prev').addEventListener('click', () => void pageAnswerChange(answerChange.value.page, answerChange.value.targetId, answerChange.value.pathPage - 1));
 $('answer-change-path-next').addEventListener('click', () => void pageAnswerChange(answerChange.value.page, answerChange.value.targetId, answerChange.value.pathPage + 1));
+$('answer-change-link-prev').addEventListener('click', () => void pageAnswerChange(answerChange.value.page, answerChange.value.targetId, answerChange.value.pathPage, answerChange.value.linkPage - 1));
+$('answer-change-link-next').addEventListener('click', () => void pageAnswerChange(answerChange.value.page, answerChange.value.targetId, answerChange.value.pathPage, answerChange.value.linkPage + 1));
 async function api(action, input = {}) {
   if (busy || closed || suspended) return null;
   busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort();
@@ -839,16 +853,16 @@ async function refreshProjectLibrary(input = { action: 'refresh', folder: $('pro
   }
   finally { clearTimeout(timer); if (projectListingFlight === abort) { projectListingFlight = null; $('project-library-refresh').disabled = false; } }
 }
-function switchAllowed() {
+function switchAllowed(reason = 'opening another journey') {
   if (busy || closed || draftClient.savingAnswer) return false;
-  if (state.pending) { notice('Cancel the current Copilot request before opening another journey.'); return false; }
+  if (state.pending) { notice(`Cancel the current Copilot request before ${reason}.`); return false; }
   if (state.preview) { notice('Dismiss the unsaved question preview before switching journeys or restoring. Return to the map to review it.'); return false; }
-  if ([...nodeUi.values()].some(ui => ui.question.length)) { notice('Add or clear your missing-direction drafts before opening another journey. Back to current map keeps your drafts.'); return false; }
+  if ([...nodeUi.values()].some(ui => ui.question.length)) { notice(`Add or clear your missing-direction drafts before ${reason}. Back to current map keeps your drafts.`); return false; }
   if (orphanReminderDrafts().length) {
     notice('Copy or discard removed-question reminder drafts before switching or restoring.');
     $('notice').append(button('Review removed reminders', revealOrphanReminders, { id: 'review-orphan-reminders' })); return false;
   }
-  if ([...nodeUi.values()].some(ui => ui.revisitDraft)) { notice('Save your reminder edits or choose Use saved reminder before opening another journey.'); return false; }
+  if ([...nodeUi.values()].some(ui => ui.revisitDraft)) { notice(`Save your reminder edits or choose Use saved reminder before ${reason}.`); return false; }
   return true;
 }
 function cancelProjectGitStatus() { projectGitEpoch++; projectGitFlight?.abort(); projectGitFlight = null; }
@@ -1587,8 +1601,9 @@ function renderWorkspace() {
     answer.addEventListener('input', () => { if (!current()) return; draftClient.edit(node.id, answer.value); answerStatus(node); });
     answer.addEventListener('focus', () => { if (current()) draftClient.touch(node.id); });
     answer.addEventListener('compositionstart', () => { if (current()) draftClient.touch(node.id); });
-    const save = async deepen => {
+    const save = async (deepen, restart = false) => {
       if (!current()) return;
+      if (restart && !switchAllowed('restarting this branch')) return;
       if (deepen && state.preview) return notice('Accept or dismiss the unsaved question preview before generating again.');
       voice.cancel();
       cleanup.cancel();
@@ -1597,22 +1612,29 @@ function renderWorkspace() {
       if (deepen && draftClient.state(node.id) === 'unanswered') return notice('Choose a state or write an answer before exploring deeper.');
       if (ui.refreshAnswer) return notice('Refresh the saved journey before retrying.');
       if (deepen) revealQuestionWork();
+      let restartCheckpoint = null;
       try {
         if (!drafts.has(node.id)) draftClient.edit(node.id, answer.value);
         const generation = draftClient.entries.get(node.id).edits;
+        if (restart) {
+          await draftClient.flush();
+          if (!current() || draftClient.entries.get(node.id)?.edits !== generation) return notice('The draft changed while preserving it. Review the current edit before restarting.');
+        }
         if (await draftClient.save(node.id, async (value, draftRevision, draftJourney, answerState) => {
-          const input = { nodeId: node.id, answer: value, answerState, expand: deepen, draftRevision, draftJourney };
+          const input = { nodeId: node.id, answer: value, answerState, expand: deepen, draftRevision, draftJourney, ...(restart ? { operation: 'restart-branch' } : {}) };
           let proof;
           try { proof = await reviewAnswerChange(input, generation); }
           catch (error) { if (/Another canvas|map changed|journey changed on disk/i.test(error.message)) { ui.refreshAnswer = true; if (current()) renderDraftRecovery(node); } throw error; }
           if (!proof) return null;
-          const result = await api('answer', { ...input, answerPreview: proof.token, confirmConsequences: proof.requiresConfirmation });
+          restartCheckpoint = proof.checkpoint;
+          const result = await api(restart ? 'restart-branch' : 'answer', { ...input, answerPreview: proof.token, confirmConsequences: proof.requiresConfirmation });
           if (!result && /Another canvas|map changed/.test($('notice').textContent)) { ui.refreshAnswer = true; if (current()) renderDraftRecovery(node); }
           return result;
         }, () => state.document.nodes.find(n => n.id === node.id))) {
           if (!current()) return;
           renderWorkspace(); refreshScene();
-          if (deepen) notice('Answer saved. Copilot will propose follow-up questions for your review.');
+          if (restart) notice(restartCheckpoint ? 'Branch restart completed. History preserves removed content; private drafts remain recoverable. Explore deeper explicitly when ready.' : 'The branch already matches this answer. Nothing changed; no checkpoint or revision was created.');
+          else if (deepen) notice('Answer saved. Copilot will propose follow-up questions for your review.');
           else if (draftClient.entries.get(node.id)?.edits === generation && !draftClient.entries.get(node.id)?.conflict && !drafts.has(node.id)) {
             const result = nextQuestion.suggest(state.document, referenceJourney());
             const nodes = state.document.nodes, index = nodes.findIndex(n => n.id === node.id);
@@ -1638,6 +1660,7 @@ function renderWorkspace() {
     const savebar = el('div', { class: 'workspace-savebar' }, toolsToggle,
       button('Save & continue', () => { voice.cancel(); void save(false); }, { id: 'save-answer', class: 'primary', 'aria-label': 'Save & continue', title: 'Save and open an existing useful question; Ctrl/Command + Enter', disabled: pending && !['research', 'research-follow-up'].includes(state.pending.kind) }));
     toolPanels.explore.append(el('p', { class: 'quiet' }, 'Save this answer and ask Copilot for follow-up questions to review.'), button('Explore deeper', () => { voice.cancel(); void save(true); }, { id: 'save-deeper', title: 'Save this answer and ask Copilot for follow-up questions', 'aria-label': 'Save answer and explore deeper', disabled: pending }));
+    toolPanels.explore.append(el('p', { class: 'quiet' }, 'Correct an assumption and restart below this question. Review exact removals first; a protected History checkpoint keeps the old branch recoverable.'), button('Restart branch…', () => { voice.cancel(); void save(false, true); }, { id: 'restart-branch', disabled: pending || !!state.preview }));
     panel.append(savebar);
     savebar.addEventListener('keydown', saveKey); toolsBody.addEventListener('keydown', saveKey);
     const researchNote = el('p', { id: 'research-save-note', class: 'quiet' }, 'Save is available during research. Saving its source context discards that research. Wait or cancel research before Explore deeper.'); toolPanels.explore.append(researchNote);
@@ -1908,7 +1931,7 @@ function renderWorkspace() {
     for (const id of ['research-request', 'followup-review', 'save-deeper']) if ($(id)) $(id).disabled = pending;
     if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up'].includes(state.pending?.kind);
     if ($('save-answer')) $('save-answer').disabled = pending && !['research', 'research-follow-up'].includes(state.pending.kind);
-    for (const id of ['generate-questions', 'add-direction']) if ($(id)) $(id).disabled = pending || !!state.preview;
+    for (const id of ['generate-questions', 'add-direction', 'restart-branch']) if ($(id)) $(id).disabled = pending || !!state.preview;
     if (root && $('generate-questions')) $('generate-questions').textContent = doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions';
     if ($('manual-question').value !== ui.question) $('manual-question').value = ui.question;
     const answer = $('answer'), value = drafts.get(node.id) ?? node.answer;

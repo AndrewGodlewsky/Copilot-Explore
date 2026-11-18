@@ -37,3 +37,5 @@ For v0.1.81 / #66, native checks remain pending: review a changed ancestor and c
 # Impact-aware next question (v0.1.82)
 
 Owner-only: in a narrow native pane, request a suggestion for a high-impact assumption needing review. Check the computed impact, exact downstream counts and separate historical importance are readable with keyboard/screen reader access. Open it, return to another draft and confirm its text/caret are retained. Explicitly deferred questions must stay out of suggestions. These checks are pending; jsdom does not establish native rendering.
+
+For v0.1.83 / #68, owner-only native checks remain pending: open Restart branch in the Explore drawer at narrow width; inspect removed nodes and link pages, exact answer text and checkpoint notice; cancel with Escape and preserve caret/IME; confirm and verify surviving selection, orphan draft recovery and History restore. No browser/desktop automation was used.

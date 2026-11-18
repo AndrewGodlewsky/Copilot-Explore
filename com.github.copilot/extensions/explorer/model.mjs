@@ -334,6 +334,19 @@ export function answerNode(doc, id, answer, answerState) {
   delete node.reviewCauses;
   return true;
 }
+export function restartBranch(doc, id, answer, answerState) {
+  const impact = new DecisionImpact(doc).analyze(id), removed = new Set([...impact.predecessors.tree.keys()].filter(nodeId => nodeId !== id));
+  const cause = { sourceId: id, baseDigest: savedDigest(doc), revision: doc.revision };
+  const changed = answerNode(doc, id, answer, answerState);
+  if (!removed.size) return changed;
+  // Removing reasoning invalidates its surviving dependents even when the selected answer is unchanged.
+  for (const node of doc.nodes) if (node.id !== id && !removed.has(node.id) && impact.predecessors.combined.has(node.id)) addReviewCause(node, cause);
+  doc.nodes = doc.nodes.filter(node => !removed.has(node.id));
+  for (const node of doc.nodes) if (node.research) node.researchStale = true;
+  const links = (doc.dependencies ?? []).filter(link => !removed.has(link.dependentId) && !removed.has(link.prerequisiteId));
+  if (links.length) doc.dependencies = links; else delete doc.dependencies;
+  return true;
+}
 export function contextFor(doc, nodeId) {
   const byId = new Map(doc.nodes.map(n => [n.id, n]));
   const path = [];

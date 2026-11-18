@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.83",
+    "summary": "Restart a branch from a corrected answer. Preview every removed descendant and dependency link, preserve a protected History checkpoint, then save the revision together. Outside dependent answers survive with review flags; removed-node drafts remain recoverable. Cancel keeps your proposed answer, and regeneration stays explicit."
+  },
+  {
     "version": "0.1.82",
     "summary": "Next-question suggestions now prioritize downstream impact and assumptions needing review. See exact affected-question counts and separate historical AI importance. Explicit deferrals stay excluded, drafts stay private, and dismissals survive unrelated edits. Older maps can use tree impact without new metadata."
   },

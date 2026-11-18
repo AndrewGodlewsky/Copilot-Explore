@@ -11,6 +11,17 @@ import { atomicWrite } from '../com.github.copilot/extensions/explorer/storage.m
 import { readSharedDocument } from '../com.github.copilot/extensions/explorer/shared-document.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 
+test('shared restart retains a private protected checkpoint and restores removed shared content', async t => {
+  const f = await fixture(t), e = new Explorer({ file: f.file }); await e.attachProject(f.journey); t.after(() => e.close());
+  const next = structuredClone(e.doc), parent = next.nodes[1]; addQuestions(next, parent.id, [{ question: 'Removed shared detail?', category: 'Scope' }]); await e.save(next);
+  const before = structuredClone(e.doc), input = { revision: e.doc.revision, nodeId: parent.id, answer: 'Corrected shared premise', answerState: 'decided' };
+  const p = await e.answerChangeRequest({ action: 'prepare', operation: 'restart-branch', journey: e.activeKey, ...input });
+  await e.command('restart-branch', { ...input, answerPreview: p.token, confirmConsequences: true });
+  const shared = readSharedDocument(await readFile(f.file)).document; assert.equal(shared.journey.nodes.length, 2); assert.equal(JSON.stringify(shared).includes(p.checkpoint), false);
+  const history = await e.readHistory(e.activeKey); assert.equal(history.entries[0].checkpoints.includes(p.checkpoint), true);
+  await e.command('restore', { journey: e.activeKey, revision: e.doc.revision, snapshotRevision: before.revision }); assert.deepEqual(e.doc.nodes, before.nodes);
+});
+
 test('project consequence confirmation persists review causes and rejects a replaced shared base', async t => {
   const f = await fixture(t), e = new Explorer({ file: f.file }); await e.attachProject(f.journey); t.after(() => e.close());
   const next = structuredClone(e.doc), parent = next.nodes[1]; addQuestions(next, parent.id, [{ question: 'Downstream?', category: 'Scope' }]); await e.save(next);

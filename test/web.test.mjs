@@ -1806,6 +1806,34 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
 
+test('branch restart previews exact removal and links, cancels safely, then retains removed-node drafts and active source', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc), source = doc.nodes[1], outside = doc.nodes[2];
+    doc.nodes.push({ id: 'restart-child', parentId: source.id, question: 'Obsolete detail?', category: 'Scope', answer: 'Old detail', answerState: 'decided', research: null, review: false });
+    doc.dependencies = [{ dependentId: outside.id, prerequisiteId: 'restart-child', explanation: 'Uses the detail' }]; await e.save(doc);
+  } }), $ = id => f.document.getElementById(id), source = f.explorer.doc.nodes[1];
+  f.window.__updates.select('restart-child'); f.type('answer', 'Preserve removed draft'); f.window.__updates.select(source.id);
+  f.type('answer', '  Corrected premise\n'); $('answer').setSelectionRange(3, 10, 'backward');
+  assert.ok($('restart-branch')); $('restart-branch').click(); await until(() => $('answer-change-dialog').open, 'restart preview');
+  assert.match($('answer-change-title').textContent, /Restart/); assert.match($('answer-change-summary').textContent, /1 descendant/); assert.match($('answer-change-link-list').textContent, /Uses the detail/); assert.match($('answer-change-items').textContent, /REMOVE.*Obsolete detail/);
+  $('answer-change-cancel').click(); assert.equal($('answer').value, '  Corrected premise\n'); assert.equal($('answer').selectionStart, 3); assert.ok(f.explorer.doc.nodes.some(n => n.id === 'restart-child'));
+  await new Promise(setImmediate); $('restart-branch').click(); await until(() => $('answer-change-dialog').open, 'new restart preview'); $('answer-change-confirm').click();
+  await until(() => $('notice').textContent.includes('Branch restart completed'), 'restart committed'); assert.equal($('node-workspace').dataset.nodeId, source.id);
+  assert.equal($('orphan-drafts').querySelector('textarea').value, 'Preserve removed draft'); assert.equal(f.explorer.doc.nodes[2].review, true); assert.equal(f.explorer.pending, null);
+});
+
+test('restart cannot remove descendants when their private drafts fail to flush', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[2].parentId = doc.nodes[1].id; await e.save(doc);
+  } }), $ = id => f.document.getElementById(id), [source, child] = f.explorer.doc.nodes.slice(1), original = JSON.stringify(f.explorer.doc), write = f.explorer.writeDraft.bind(f.explorer);
+  f.explorer.writeDraft = input => input.nodeId === child.id ? Promise.reject(Error('Fixture draft storage unavailable')) : write(input);
+  f.window.__updates.select(child.id); f.type('answer', 'Keep child draft'); f.window.__updates.select(source.id); f.type('answer', 'Changed premise');
+  $('question-tab-explore').click(); $('restart-branch').click();
+  await until(() => $('notice').textContent.includes('Fixture draft storage unavailable'), 'draft preservation failure');
+  assert.equal($('answer-change-dialog').open, false); assert.equal(JSON.stringify(f.explorer.doc), original); assert.equal($('answer').value, 'Changed premise');
+  f.window.__updates.select(child.id); assert.equal($('answer').value, 'Keep child draft'); f.explorer.writeDraft = write;
+});
+
 test('answer consequence HTTP dialog pages paths, cancels exact drafts, then confirms the displayed affected set', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {
     const doc = structuredClone(e.doc); let parent = doc.nodes[1].id;

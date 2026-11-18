@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.66",
+    "summary": "Documented the current research experience, verified the installed plugin version, and mapped usability gaps to the redesign backlog. Includes a repeatable question-to-answer checklist and clearly separates automated evidence from pending native and live-research checks."
+  },
+  {
     "version": "0.1.65",
     "summary": "Question tools now open in a full-width drawer below the map, with Explore, Research, Answer details and Context tabs. Expand for more room or close it to focus on writing. Save & continue saves your answer and opens an existing next question without generating. Voice preferences stay in Settings; drafts survive drawer and tab changes."
   },

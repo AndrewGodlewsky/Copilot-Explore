@@ -609,18 +609,21 @@ function renderNextQuestion() {
   const panel = $('next-question'), focused = panel.contains(document.activeElement), focusId = document.activeElement.id;
   panel.hidden = false;
   const messages = {
-    'no-goal': 'Save an objective in Edit guidance before requesting a suggestion. No goal is inferred from your topic.',
+    'no-goal': 'Save an objective in Edit guidance for literal matching. No eligible question currently has medium/high impact or needs review; no goal is inferred from your topic.',
     empty: 'There are no existing questions to prioritize. Review your goal and decide whether this map is useful enough to finish; more questions are not necessarily progress.',
     resolved: 'All recorded questions are decided or marked not relevant, with no needs-review flags. Review your conclusions and remaining uncertainty; finishing is your choice.',
-    excluded: 'The remaining questions are deferred or need source review. Review them in Outline when appropriate; this does not mean the uncertainty is resolved.',
+    excluded: 'The remaining questions are explicitly deferred. Review them in Outline when appropriate; this does not mean the uncertainty is resolved.',
     dismissed: 'The matching questions are dismissed in this canvas. Other unresolved questions may still matter.',
-    'no-match': 'No eligible question shares the supported literal words with current guidance. Useful work may remain: review the map or refine your guidance. This is not a conclusion that the map is complete.',
+    'no-match': 'No eligible question has medium/high impact, needs review, or shares supported literal words with current guidance. Useful work may remain: review the map or refine your guidance. This is not a conclusion that the map is complete.',
   };
   const { candidate, counts } = result;
   panel.replaceChildren(el('h2', { id: 'next-question-title', tabindex: '-1' }, 'A useful next question?'));
   if (candidate) {
-    panel.append(el('p', {}, candidate.question), el('p', {}, `Why it may help: this ${ANSWER_STATES[candidate.state].toLowerCase()} question shares ${candidate.constraintTerms.length ? `constraint words: ${candidate.constraintTerms.join(', ')}. ` : ''}${candidate.goalTerms.length ? `objective / success-criteria words: ${candidate.goalTerms.join(', ')}.` : ''}`),
-      el('p', { class: 'quiet' }, 'Local heuristic: distinct constraint matches first, then objective / success-criteria matches, then historical importance (high, medium, low, unranked), then stable question ID. This is not semantic reasoning or an optimal next action.'),
+    const impact = candidate.impact, affected = impact.counts;
+    panel.append(el('p', {}, candidate.question), el('p', {}, `Why it may help: ${ANSWER_STATES[candidate.state]}${candidate.review ? '; needs review' : ''}. ${impact.band[0].toUpperCase() + impact.band.slice(1)} downstream impact: ${affected.total} affected questions, ${affected.structural} through the tree, ${affected.confirmed} through explicit dependencies, ${affected.mixedOnly} through mixed paths only. Counts may overlap; tree paths describe possible exposure. ${affected.states.unanswered} unanswered and ${affected.review} needing review among affected questions.`),
+      el('p', {}, `${candidate.constraintTerms.length ? `Literal constraint words: ${candidate.constraintTerms.join(', ')}. ` : ''}${candidate.goalTerms.length ? `Literal objective / success-criteria words: ${candidate.goalTerms.join(', ')}.` : ''}${!candidate.constraintTerms.length && !candidate.goalTerms.length ? 'No literal guidance matches; the recommendation uses saved impact or review status.' : ''}`),
+      el('p', { class: 'quiet' }, 'Local heuristic: impact band first, then assumptions needing review, other needs-review questions, constraint matches, objective / success-criteria matches, historical importance, then stable ID. This is not semantic reasoning or an optimal next action.'),
+      el('p', { class: 'quiet' }, impact.rules),
       el('p', {}, `Recorded importance: ${candidate.importance ?? 'Unranked'}.`));
     if (candidate.importance || candidate.rationale) panel.append(el('details', {}, el('summary', {}, 'Historical explanation'),
       el('p', {}, importanceHistory), el('p', {}, `Original suggested wording: ${candidate.originalQuestion}`),
@@ -632,13 +635,13 @@ function renderNextQuestion() {
     }, { id: 'open-next-question' }), button('Dismiss', () => {
       nextQuestion.dismiss(state.document, candidate.id, referenceJourney());
       nextQuestionOpen = false; nextQuestionStamp = '';
-      panel.replaceChildren(el('h2', { id: 'next-question-title' }, 'Suggestion dismissed'), el('p', {}, 'Suggestion dismissed. Request another only when useful. Dismissal lasts in this canvas until this source or saved guidance changes, the journey switches, or the page reloads.'));
+      panel.replaceChildren(el('h2', { id: 'next-question-title' }, 'Suggestion dismissed'), el('p', {}, 'Suggestion dismissed. Request another only when useful. Dismissal lasts in this canvas until this source, review causes, impact band or saved guidance changes, the journey switches, or the page reloads.'));
       $('suggest-next').focus({ preventScroll: true });
     }, { id: 'dismiss-next-question' })));
   } else panel.append(el('p', {}, messages[result.status]));
-  panel.append(el('p', { class: 'quiet' }, `${counts.questions} questions scanned: ${counts.resolved} resolved, ${counts.deferred} deferred, ${counts.review} need source review; ${counts.eligible} eligible, ${counts.matched} literal matches, ${counts.dismissed} matching dismissals. Reminder urgency is separate.`),
+  panel.append(el('p', { class: 'quiet' }, `${counts.questions} questions scanned: ${counts.resolved} resolved, ${counts.deferred} deferred, ${counts.review} need source review; ${counts.eligible} eligible, ${counts.matched} qualify by impact, review or guidance, ${counts.dismissed} qualifying dismissals. Review overlaps other counts. Reminder urgency is separate.`),
     el('details', {}, el('summary', {}, 'Scope and limits'), el('p', {}, 'Uses all saved questions and complete objective, success criteria and constraints (up to 5,000 nodes and 16,000 guidance characters). Case-normalized Unicode word matching excludes words shorter than three characters and common English stop words; no stemming, synonyms or language understanding. Current question wording is matched, not historical rationale. Historical importance is not reassessed for current guidance. Selection uses saved answer states; saved answer changes reset dismissal but their words are not matched. Drafts, research, project files and private references are not consulted. No model calls or map changes.'),
-      el('p', {}, 'Dismissal lasts in this canvas until that question’s saved source or guidance changes, the journey switches, or the page reloads. Other questions and reminders do not reset it. Opening a question is your choice; nothing is answered or generated.')),
+      el('p', {}, 'Medium/high impact or a review flag can qualify without guidance matches. Decided and not-relevant questions qualify only when needing review; explicit Revisit later remains excluded even with review flags. Dismissal lasts until the question’s saved source, review causes, impact band or guidance changes, the journey switches, or the page reloads. Same-band topology changes and unrelated answer wording do not reset it. Opening a question is your choice; nothing is answered or generated.')),
     button('Close suggestion', () => { nextQuestionOpen = false; panel.hidden = true; nextQuestionStamp = ''; $('suggest-next').focus({ preventScroll: true }); }));
   if (focused) ($(focusId) ?? $('next-question-title')).focus({ preventScroll: true });
 }

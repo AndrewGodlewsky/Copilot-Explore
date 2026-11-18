@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { measure, domFixture } from './perf-baseline.mjs';
 import { fixtureSpecs, makeFixture } from './perf-fixtures.mjs';
 import { validateDocument, isQuestion, DecisionImpact, impactPath, criticalPaths } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { NextQuestion } from '../com.github.copilot/extensions/explorer/web/next-question.mjs';
 
 const root = resolve(import.meta.dirname, '..'), output = join(root, '.perf-baseline');
 const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true }).stdout.trim();
@@ -24,6 +25,10 @@ for (const spec of fixtureSpecs.filter(spec => spec.name.startsWith('near'))) {
   await measure(phases, 'index', 'Build saved-map adjacency snapshot', () => { new DecisionImpact(doc); return { nodes: doc.nodes.length, edges: doc.nodes.length - 1 + (doc.dependencies?.length ?? 0) }; });
   await measure(phases, 'analysis', 'Inspect one influential saved question', () => index.analyze(source), { report: result => ({ affected: result.counts.total, visitedEdges: result.visitedEdges, band: result.band }) });
   await measure(phases, 'path', 'Materialize one requested explanation path', () => ({ steps: impactPath(result, target, 'combined').length }));
+  await measure(phases, 'nextQuestion', 'Rank all saved eligible questions and explain the winner with a cold impact cache', () => {
+    const result = new NextQuestion().suggest(doc); assert.equal(result.counts.questions, questions.length);
+    return { questions: result.counts.questions, eligible: result.counts.eligible, candidate: result.candidate?.id ?? null, band: result.candidate?.impact.band ?? null, affected: result.candidate?.impact.counts.total ?? 0 };
+  });
   await measure(phases, 'allBands', 'Calculate exact display bands for every question with a cold cache', (_i, index) => {
     const counts = { low: 0, medium: 0, high: 0 };
     for (const question of questions) counts[index.bandFor(question.id)]++;

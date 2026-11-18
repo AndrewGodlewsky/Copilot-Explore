@@ -42,7 +42,8 @@ test('next question explains missing goals, literal-match limits and unresolved 
     question('e', 'Tool?', { kind: 'direction' }),
   ]);
   let result = chooser.suggest(doc);
-  assert.equal(result.status, 'excluded'); assert.deepEqual(result.counts, { questions: 4, resolved: 2, deferred: 1, review: 1, eligible: 0, matched: 0, dismissed: 0 });
+  assert.equal(result.candidate.id, 'd'); assert.deepEqual(result.counts, { questions: 4, resolved: 2, deferred: 1, review: 1, eligible: 1, matched: 1, dismissed: 0 });
+  doc.nodes[4].answerState = 'revisit-later'; assert.equal(chooser.suggest(doc).status, 'excluded');
   doc.nodes = doc.nodes.filter(n => !['c', 'd', 'e'].includes(n.id)); assert.equal(chooser.suggest(doc).status, 'resolved');
   assert.equal(chooser.suggest(map()).status, 'empty');
   assert.equal(chooser.suggest(map([question('a', 'ÉNERGIE?')], { objective: 'énergie' })).candidate.id, 'a');
@@ -62,7 +63,7 @@ test('next question dismissal belongs to unchanged source and guidance, survives
   doc.nodes.push(removed); assert.equal(chooser.suggest(doc).candidate.id, 'a', 'removed identity pruned');
   chooser.dismiss(doc, 'a'); assert.equal(new suggestions.NextQuestion().suggest(doc).candidate.id, 'a', 'reload lifetime');
   chooser.suggest(map()); assert.equal(chooser.suggest(doc).candidate.id, 'a', 'journey boundary clears dismissal');
-  doc.nodes.at(-1).review = true; assert.equal(chooser.suggest(doc).candidate, null);
+  doc.nodes.at(-1).review = true; assert.equal(chooser.suggest(doc).candidate.id, 'a');
 });
 
 test('next question scans the complete maximum map and guidance without mutating or reading private context', () => {
@@ -76,4 +77,28 @@ test('next question scans the complete maximum map and guidance without mutating
   Object.defineProperty(doc.nodes[1], 'research', { get: () => { throw Error('private research read'); } });
   Object.defineProperty(doc, 'projectContext', { get: () => { throw Error('project context read'); } });
   assert.equal(chooser.suggest(doc).candidate.id, 'q4998');
+});
+
+test('influential unresolved assumptions outrank literal high-importance leaves with exact saved-map evidence', () => {
+  const chooser = new suggestions.NextQuestion(), doc = map([ranked('leaf', 'Tool reliability?', 'high'), question('source', 'Database choice?', { answer: 'Probably SQL', answerState: 'assumption', review: true }),
+    ...Array.from({ length: 20 }, (_, i) => question(`child-${i}`, 'Unanswered detail?', { parentId: 'source' }))]);
+  doc.dependencies = [{ dependentId: 'leaf', prerequisiteId: 'source' }];
+  const chosen = chooser.suggest(doc).candidate;
+  assert.equal(chosen.id, 'source'); assert.equal(chosen.review, true); assert.equal(chosen.impact.band, 'high');
+  assert.equal(chosen.impact.counts.total, 21); assert.equal(chosen.impact.counts.structural, 20); assert.equal(chosen.impact.counts.confirmed, 1); assert.equal(chosen.impact.counts.states.unanswered, 21);
+  assert.equal(chosen.importance, null); assert.deepEqual(chosen.goalTerms, []);
+  doc.objective = ''; assert.equal(chooser.suggest(doc).candidate.id, 'source', 'impact supports maps without guidance');
+  delete doc.dependencies; const treeOnly = chooser.suggest(doc).candidate;
+  assert.equal(treeOnly.id, 'source'); assert.equal(treeOnly.impact.counts.confirmed, 0); assert.equal(treeOnly.impact.counts.total, 20);
+  doc.nodes.at(-1).answerState = 'decided'; doc.nodes.at(-1).answer = 'Saved'; assert.equal(chooser.suggest(doc).candidate.impact.counts.states.unanswered, 19, 'same-revision saved changes refresh exact evidence');
+});
+
+test('review eligibility honors explicit deferral and favors assumptions; dismissal tracks relevant impact and causes', () => {
+  const chooser = new suggestions.NextQuestion(), doc = map([question('a', 'Tool?', { answer: 'Yes', answerState: 'decided', review: true }), question('b', 'Tool?', { answer: 'Maybe', answerState: 'assumption', review: true }), question('c', 'Tool?', { answerState: 'revisit-later', review: true })]);
+  assert.equal(chooser.suggest(doc).candidate.id, 'b'); chooser.dismiss(doc, 'b'); assert.equal(chooser.suggest(doc).candidate.id, 'a');
+  doc.nodes.push(question('unrelated', 'Other?', { answer: 'Settled', answerState: 'decided' })); assert.equal(chooser.suggest(doc).candidate.id, 'a');
+  doc.nodes[2].reviewCauses = { changes: [{ sourceId: 'a', revision: 1, baseDigest: 'a'.repeat(64) }], earlier: false }; assert.equal(chooser.suggest(doc).candidate.id, 'b');
+  chooser.dismiss(doc, 'b'); doc.dependencies = [{ dependentId: 'unrelated', prerequisiteId: 'b' }]; assert.equal(chooser.suggest(doc).candidate.id, 'b', 'changed impact band resets dismissal');
+  chooser.dismiss(doc, 'b'); doc.nodes.at(-1).answer = 'Different settled wording'; assert.equal(chooser.suggest(doc).candidate.id, 'a', 'same band and unrelated answer do not reset dismissal');
+  doc.nodes[1].answerState = 'not-relevant'; assert.equal(chooser.suggest(doc).candidate.id, 'a', 'not-relevant review remains eligible');
 });

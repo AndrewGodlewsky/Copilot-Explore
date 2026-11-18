@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.82",
+    "summary": "Next-question suggestions now prioritize downstream impact and assumptions needing review. See exact affected-question counts and separate historical AI importance. Explicit deferrals stay excluded, drafts stay private, and dismissals survive unrelated edits. Older maps can use tree impact without new metadata."
+  },
+  {
     "version": "0.1.81",
     "summary": "Review downstream consequences before saving an influential answer. Paged paths explain affected questions, directions and research; cancel keeps exact drafts. Fresh confirmations protect against changed sources. Cross-branch review causes are retained, and saved research is clearly flagged for reconsideration."
   },

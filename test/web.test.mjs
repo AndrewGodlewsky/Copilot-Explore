@@ -316,15 +316,19 @@ test('question drawer tabs preserve drafts and keyboard focus across close, poll
   assert.equal($('manual-question').value, 'Try another route'); assert.equal($('answer').value, 'Working answer'); assert.equal($('answer-state').value, 'needs-evidence');
 });
 
-test('Save & continue without guidance skips resolved, deferred and review questions and wraps', async t => {
+test('Save & continue without guidance prioritizes review then wraps past resolved and deferred questions', async t => {
   const f = await fixture(t, 460, undefined, false, { questions: ['First', 'Resolved', 'Deferred', 'Review', 'Last'].map(category => ({ category, question: `${category} question?` })), before: async e => {
     const doc = structuredClone(e.doc); doc.nodes[2].answerState = 'not-relevant'; doc.nodes[3].answerState = 'revisit-later'; doc.nodes[4].review = true;
     await e.save(doc, 'Fixture states');
-  } }), $ = id => f.document.getElementById(id), [first, , , , last] = f.explorer.doc.nodes.slice(1);
+  } }), $ = id => f.document.getElementById(id), [first, , , review, last] = f.explorer.doc.nodes.slice(1);
   f.open(last.id); f.type('answer', 'Last answer'); $('save-answer').click();
+  await until(() => $('node-workspace').dataset.nodeId === review.id, 'opened question needing review');
+  chooseState(f, 'decided'); f.type('answer', 'Reviewed answer'); $('save-answer').click();
+  await until(() => $('node-workspace').dataset.nodeId === last.id, 'continued after acknowledged review');
+  chooseState(f, 'decided'); $('save-answer').click();
   await until(() => $('node-workspace').dataset.nodeId === first.id, 'wrapped to first unresolved question');
   chooseState(f, 'decided'); f.type('answer', 'First answer'); $('save-answer').click();
-  await until(() => $('node-workspace').dataset.nodeId === last.id, 'skipped unavailable questions');
+  await until(() => $('notice').textContent.includes('No next question'), 'skipped unavailable questions');
   assert.equal(f.explorer.pending, null);
 });
 
@@ -1324,7 +1328,7 @@ test('next question refresh drops stale sources, preserves orphan drafts and ren
   $('suggest-next').click(); assert.equal($('open-next-question'), null); assert.match($('next-question').textContent, /dismissed/);
   await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: target.id, answer: 'Changed source', answerState: 'tentative' }); await f.poll(); assert.ok($('open-next-question'));
   const reviewed = structuredClone(f.explorer.doc); reviewed.nodes[1].review = true; await f.explorer.command('import', { revision: f.explorer.doc.revision, document: reviewed }); await f.poll();
-  assert.equal($('open-next-question'), null); assert.match($('next-question').textContent, /1 need source review/);
+  assert.ok($('open-next-question')); assert.match($('next-question').textContent, /1 need source review/);
   await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: target.id, answer: 'Changed source', answerState: 'tentative' }); await f.poll();
   $('open-next-question').click(); f.type('answer', 'Keep removed answer'); f.type('revisit-condition', 'Keep removed reminder');
   await until(() => $('answer-status').textContent === 'Draft saved locally', 'answer draft saved before removal');
@@ -1334,6 +1338,20 @@ test('next question refresh drops stale sources, preserves orphan drafts and ren
   assert.match($('draft-summary').textContent, /draft/i);
   assert.equal($('orphan-drafts').querySelector('[data-orphan-reminder] textarea').value, 'Keep removed reminder');
   assert.match($('orphan-drafts').textContent, /Tool ownership/);
+});
+
+test('impact suggestion explains saved evidence and opens a reviewed assumption without changing drafts or the map', async t => {
+  const f = await fixture(t, 340, undefined, false, { questions: [{ question: 'Tool reliability?', category: 'Scope', importance: 'high', importanceReason: 'Historical only' }, { question: 'Database choice?', category: 'Scope' }], before: async e => {
+    const doc = structuredClone(e.doc), source = doc.nodes[2]; source.answer = 'Probably SQL'; source.answerState = 'assumption'; source.review = true;
+    for (let i = 0; i < 20; i++) doc.nodes.push({ id: `impact-child-${i}`, parentId: source.id, question: 'Detail?', category: 'Scope', answer: '', research: null, review: false });
+    doc.dependencies = [{ dependentId: doc.nodes[1].id, prerequisiteId: source.id }]; await e.save(doc);
+  } }), $ = id => f.document.getElementById(id), source = f.explorer.doc.nodes[2], first = f.explorer.doc.nodes[1];
+  f.open(first.id); f.type('answer', 'Private leaf draft'); const before = JSON.stringify(f.explorer.doc), actions = f.actions.length;
+  $('suggest-next').click(); assert.match($('next-question').textContent, /High downstream impact/); assert.match($('next-question').textContent, /21 affected questions/); assert.match($('next-question').textContent, /1 through explicit dependencies/); assert.match($('next-question').textContent, /21 unanswered/);
+  assert.match($('next-question').textContent, /needs review/i); assert.match($('next-question').textContent, /Recorded importance: Unranked/);
+  $('open-next-question').click(); assert.equal($('node-workspace').dataset.nodeId, source.id); assert.equal($('answer').value, 'Probably SQL');
+  assert.equal(JSON.stringify(f.explorer.doc), before); assert.deepEqual(f.actions.slice(actions), []); assert.equal(f.explorer.pending, null);
+  f.window.__updates.select(first.id); assert.equal($('answer').value, 'Private leaf draft');
 });
 
 test('next question dismissal survives reopening the same journey but clears on page reload', async t => {

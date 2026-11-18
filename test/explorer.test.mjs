@@ -1,3 +1,4 @@
+import { waitFor } from './helpers/wait-for.mjs';
 import { startResearch } from './helpers/research-review.mjs';
 import { confirmAnswer } from './helpers/answer-change.mjs';
 import test from 'node:test';
@@ -66,6 +67,7 @@ test('state-only answer saves mark descendants, no-ops preserve finish and check
   await e.command('add', { revision: e.doc.revision, nodeId: id, question: 'Next?', category: 'Scope' });
   await confirmAnswer(e, { revision: e.doc.revision, nodeId: id, answer: '', answerState: 'needs-evidence', expand: true });
   assert.equal(e.doc.nodes[1].answerState, 'needs-evidence'); assert.equal(e.doc.nodes[2].review, true);
+  await waitFor(() => messages.at(-1)?.prompt.includes(e.pending.id));
   assert.equal(messages.at(-1).mode, 'enqueue'); assert.match(messages.at(-1).prompt, /needs-evidence/);
   await e.command('cancel'); await e.command('finish', { revision: e.doc.revision });
   const before = structuredClone(e.doc);
@@ -98,6 +100,7 @@ async function fixture(t, options = {}) {
 async function started(t, options) {
   const f = await fixture(t, options);
   await f.explorer.command('start', { topic: 'A community garden 🌿' });
+  await waitFor(() => f.messages.some(value => value.prompt.includes(f.explorer.pending.id)));
   await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [question] });
   await f.explorer.command('accept-questions', { revision: f.explorer.doc.revision, batchId: f.explorer.preview.id, selected: f.explorer.preview.questions.map((q, index) => ({ index, question: q.question })) });
   return f;
@@ -169,7 +172,7 @@ test('guidance reaches queued questions and native HTTP exports without draft te
   const { explorer, messages } = await started(t);
   await explorer.command('guidance', { revision: explorer.doc.revision, objective: 'Choose a garden 🌿', successCriteria: 'One practical location' });
   await explorer.command('questions', { revision: explorer.doc.revision, nodeId: explorer.doc.rootId });
-  await new Promise(resolve => setImmediate(resolve));
+  await waitFor(() => messages.at(-1)?.prompt.includes(explorer.pending.id));
   assert.match(messages.at(-1).prompt, /Choose a garden 🌿/);
   assert.match(messages.at(-1).prompt, /One practical location/);
   const server = await startServer(explorer); t.after(() => server.close());
@@ -219,6 +222,7 @@ test('queued generation and isolated research persist across reopen', async t =>
   assert.equal(messages[0].mode, 'enqueue'); assert.match(messages[0].prompt, /submit_questions/);
   const node = explorer.doc.nodes[1];
   await explorer.command('answer', { revision: explorer.doc.revision, nodeId: node.id, answer: 'Neighbors', expand: true });
+  await waitFor(() => messages.at(-1)?.prompt.includes(explorer.pending.id));
   assert.match(messages.at(-1).prompt, /Neighbors/);
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ question: 'How will neighbors join?', category: 'Access' }] });
   await explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: [{ index: 0, question: explorer.preview.questions[0].question }] });
@@ -319,10 +323,10 @@ test('canvas instances are independent, reopen from disk and reject cross-sessio
     const result = await fetch(first.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'start', topic: 'First' }) });
     assert.equal(result.status, 200);
     const read = extension.canvas.actions.find(a => a.name === 'get_exploration').handler;
-    assert.equal(read({ ...ctx, instanceId: 'two' }).document, null);
+    assert.equal((await read({ ...ctx, instanceId: 'two' })).document, null);
     assert.throws(() => read({ ...ctx, sessionId: 'wrong' }), /different session/);
     await extension.canvas.onClose(ctx);
-    const reopened = await extension.canvas.open(ctx); assert.notEqual(first.url, reopened.url); assert.equal(read(ctx).document.topic, 'First');
+    const reopened = await extension.canvas.open(ctx); assert.notEqual(first.url, reopened.url); const snapshot = await read(ctx); assert.equal(snapshot.document.topic, 'First'); assert.equal(snapshot.scenario.classification, 'unselected');
   } finally { await extension.close(); } // Close canvas writers before fixture(t) removes their directory.
 });
 test('tree layout keeps siblings separated and branches connected below the idea', () => {

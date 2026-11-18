@@ -113,9 +113,19 @@ try {
   assert.equal(snapshot.preview.questions[0].importance, 'high'); assert.equal(snapshot.preview.questions[0].importanceReason, importanceReason);
   const native = await session.rpc.canvas.action.invoke({ instanceId, actionName: 'get_exploration', input: {} });
   assert.ok(!JSON.stringify(native).includes('Who will care for it?'), 'Native context excludes candidates');
+  assert.ok(JSON.stringify(native).includes('unselected'), 'Native reads carry the current scenario classification');
   assert.equal((await (await fetch(opened.url + 'export.json')).json()).nodes.length, 1);
   snapshot = await action('accept-questions', { batchId: snapshot.preview.id, selected: [{ index: 0, question: 'Who will care for it?' }] });
   assert.equal(snapshot.document.nodes.length, 2); assert.equal(snapshot.preview, null);
+  const preferenceRequest = async input => {
+    const response = await fetch(opened.url + 'api/scenario-preference', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify({ journey: snapshot.activeKey, revision: snapshot.document.revision, ...input }) });
+    assert.equal(response.status, 200, await response.clone().text()); return response.json();
+  };
+  const inspectedPreference = await preferenceRequest({ action: 'inspect' });
+  const selectedPreference = await preferenceRequest({ action: 'select', id: inspectedPreference.id, rationale: 'Local fixture preference' });
+  assert.equal(selectedPreference.selection.status, 'preferred');
+  assert.ok(JSON.stringify(await session.rpc.canvas.action.invoke({ instanceId, actionName: 'get_exploration', input: {} })).includes('preferred'));
+  await preferenceRequest({ action: 'clear', id: selectedPreference.id, rationale: 'Fixture complete' });
   assert.equal(snapshot.document.nodes[1].rationale, rationale);
   assert.equal(snapshot.document.nodes[1].importance, 'high'); assert.equal(snapshot.document.nodes[1].importanceReason, importanceReason);
   const nodeId = snapshot.document.nodes[1].id;

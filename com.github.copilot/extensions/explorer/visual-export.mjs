@@ -11,7 +11,7 @@ const xml = value => portableText(value).replace(/[&<>"']/g, c => ({ '&': '&amp;
 const markdown = value => portableText(value).replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, '\\$&');
 const scopeLabel = scope => scope === 'whole' ? 'Whole journey' : 'Selected branch';
 
-export function visualSnapshot(doc, { scope, nodeId }) {
+export function visualSnapshot(doc, { scope, nodeId }, scenarioNote) {
   if (!['whole', 'branch'].includes(scope) || (scope === 'whole' ? nodeId !== null : typeof nodeId !== 'string')) throw new Error('Select a whole journey or a saved branch.');
   const rootId = scope === 'whole' ? doc.rootId : nodeId;
   const byId = new Map(doc.nodes.map(n => [n.id, n])), children = new Map(doc.nodes.map(n => [n.id, []]));
@@ -30,6 +30,7 @@ export function visualSnapshot(doc, { scope, nodeId }) {
       ...(role === 'question' && n.importance ? { importance: n.importance, importanceReason: portableText(n.importanceReason), originalQuestion: portableText(n.generation.originalQuestion) } : {}),
       status: nodeStatus(n), review: n.review === true };
   });
+  if (scenarioNote) nodes[0].scenarioNote = portableText(scenarioNote);
   const snapshot = { scope, rootId: 'n0', nodes };
   if (Buffer.byteLength(JSON.stringify(snapshot)) > VISUAL_LIMITS.inputBytes) throw new Error(limitsMessage);
   return snapshot;
@@ -37,7 +38,7 @@ export function visualSnapshot(doc, { scope, nodeId }) {
 
 function cardLines(n) {
   const role = { idea: 'Idea', question: 'Question', direction: 'Direction (user supplied; not an answer)' }[n.role];
-  return [`${n.id} · ${role}`, `Category: ${n.category}`, `State: ${n.status}${n.review ? ' · Needs review' : ''}`, 'Downstream impact unavailable in this export.', 'Connections show tree structure only.', '', n.question,
+  return [...(n.scenarioNote ? [n.scenarioNote, ''] : []), `${n.id} · ${role}`, `Category: ${n.category}`, `State: ${n.status}${n.review ? ' · Needs review' : ''}`, 'Downstream impact unavailable in this export.', 'Connections show tree structure only.', '', n.question,
     ...(n.role === 'question' ? [`Importance: ${n.importance ?? 'Unranked'}`, ...(n.importance ? ['Historical model assessment for original wording and context; not confidence, certainty or a user decision. Not automatically reassessed after changes.', `Original suggested wording: ${n.originalQuestion}`, n.importanceReason] : [])] : []),
     ...(n.role === 'question' ? ['', 'Saved user answer:', n.answer || '(No answer text)'] : [])];
 }
@@ -94,9 +95,9 @@ body{font:14px/1.5 sans-serif;color:#202830;margin:24px}svg{width:100%;height:au
 </style></head><body><div class="instructions"><h1>Print your saved map</h1><p>Open this downloaded file in Brave. Choose Print, then Save as PDF. Check paper size, scale and page preview before saving. The overview may be small; complete readable cards follow on separate pages. Large cards can span pages. Explorer cannot confirm printing or saving.</p></div><section class="overview">${svg}</section>${snapshot.nodes.map(n => `<article><h2>${n.id} — ${xml(scopeLabel(snapshot.scope))}</h2><p>${n.parentId ? `Parent: ${n.parentId}` : 'Root of exported scope'}</p><pre>${xml(cardLines(n).join('\n'))}</pre></article>`).join('')}</body></html>`;
 }
 
-export function visualExport(doc, input) {
+export function visualExport(doc, input, scenarioNote) {
   if (!Object.hasOwn(formats, input.format)) throw new Error('Choose Mermaid, JSON Canvas, SVG or Print / PDF.');
-  const snapshot = visualSnapshot(doc, input);
+  const snapshot = visualSnapshot(doc, input, scenarioNote);
   let content;
   if (input.format === 'mermaid') {
     // Mermaid decimal entities are its documented label escape mechanism. Encode

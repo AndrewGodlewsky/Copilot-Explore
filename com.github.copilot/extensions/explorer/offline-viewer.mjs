@@ -38,7 +38,7 @@ export function canonicalViewerSelection(selection) {
   if (!result.length) throw Error('Select at least one saved node.');
   return result.sort((a, b) => a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0);
 }
-export function viewerSnapshot(doc, selection) {
+export function viewerSnapshot(doc, selection, scenarioNote) {
   const choices = new Map(canonicalViewerSelection(selection).map(s => [s.nodeId, s]));
   const selected = doc.nodes.filter(n => choices.has(n.id));
   if (selected.length !== choices.size) throw Error('Selected nodes are unavailable. Reopen Export maps.');
@@ -54,7 +54,7 @@ export function viewerSnapshot(doc, selection) {
     bytes += Buffer.byteLength(JSON.stringify(result)); if (bytes > VIEWER_LIMITS.inputBytes) throw Error(limitMessage);
     return result;
   });
-  const snapshot = { nodes };
+  const snapshot = { nodes, ...(scenarioNote ? { scenarioNote } : {}) };
   if (Buffer.byteLength(JSON.stringify(snapshot)) > VIEWER_LIMITS.inputBytes) throw Error(limitMessage);
   return snapshot;
 }

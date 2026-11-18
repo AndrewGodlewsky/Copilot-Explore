@@ -33,7 +33,7 @@ let suppressClick = false, restoringFocus = false, composing = null;
 let actionEpoch = 0, closed = false, pollTimer;
 let viewerTarget = null, viewerEpoch = 0, viewerPreview = null;
 let scenarioFork = null, scenarioFlight = null;
-let comparison = null;
+let comparison = null, preference = null;
 let stateCursor = null, pollFlight = null, pollFailures = 0, pageEpoch = 0, suspended = false, actionAbort = null;
 function stopPolling() {
   clearTimeout(pollTimer); pollFlight?.abort.abort(); pollFlight = null; stateCursor = null;
@@ -261,7 +261,7 @@ const paletteCommands = [
   ['edit-guidance', 'Edit guidance'], ['history-open', 'History'], ['recovery-open', 'Recovery'],
   ['visual-export-open', 'Export maps'], ['decision-brief', 'Decision brief'], ['implementation-handoff', 'Implementation handoff'],
   ['check-answers', 'Check answers'], ['challenge-decisions', 'Challenge decisions'], ['research-request', 'Research options'],
-  ['revisit-answer', 'Revisit this answer'],
+  ['revisit-answer', 'Revisit this answer'], ['scenario-preference-open', 'Scenario preference'],
 ];
 let paletteEpoch = 0, paletteTimer, paletteFlight = false, paletteQueued = false, paletteNext = null;
 let palettePage = 0, paletteReturn = null, paletteOrigin = '', paletteActing = false;
@@ -563,7 +563,7 @@ async function api(action, input = {}) {
     const result = await response.json();
     if (closed || suspended || page !== pageEpoch || epoch !== actionEpoch) return null;
     if (!response.ok) throw new Error(result.error);
-    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'open-compared-source', 'import'].includes(action)); return result;
+    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'open-compared-source', 'open-preferred-source', 'import'].includes(action)); return result;
   } catch (error) {
     if (!closed && !suspended && page === pageEpoch && epoch === actionEpoch) notice(abort.signal.aborted ? 'The action response timed out. Refresh the saved map before retrying; it may have been saved. Your draft is still here.' : error.message);
     return null;
@@ -607,6 +607,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    closePreference(true);
     releaseCritical();
     if ($('project-reconcile-dialog').open) closeProjectReconciliation();
     cancelProjectGitStatus(); projectGitResult = null; projectGitError = '';
@@ -663,6 +664,7 @@ function apply(next, reset = false) {
   updateFocusStatus();
   updateCriticalStatus();
   showView();
+  renderPreferenceBanner(); syncPreference();
   $('decision-brief').hidden = !doc;
   $('review-affected').hidden = !doc;
   $('implementation-handoff').hidden = !doc;
@@ -975,6 +977,91 @@ function syncComparison() {
   if (c.stale) $('comparison-status').textContent = c.error || 'Saved context changed. Close comparison, refresh the sources and select them again. Your draft is retained.';
   else if (!c.flight && (state.pending || state.preview)) $('comparison-status').textContent = 'Comparison is read-only. Finish or cancel pending work and accept or dismiss staged questions before source navigation.';
 }
+function renderPreferenceBanner() {
+  const value = state.scenario, available = !!state.document && !!state.library;
+  $('scenario-preference-open').hidden = !available;
+  $('scenario-preference-banner').hidden = !available;
+  const classification = value?.hypothetical ? 'hypothetical alternative' : value?.status ?? 'not checked';
+  $('scenario-preference-text').textContent = `Last checked ${value?.scope ?? state.storage?.scope ?? 'personal'} scenario: ${classification}. ${value?.message ?? (value?.hypothetical ? 'Conditional context; not the current project direction.' : value?.status === 'alternative' ? 'Open the preferred source or explicitly allow hypothetical use before AI work and decision exports.' : value?.status === 'unresolved' ? 'Reconcile the preferred source or explicitly choose or clear the selection.' : 'Refresh Scenario preference after changes from another canvas or teammate.')}`;
+}
+function preferenceCurrent(p = preference) {
+  return !!p && preference === p && !closed && !suspended && p.page === pageEpoch && p.journey === referenceJourney() && p.base === JSON.stringify(state.document);
+}
+function syncPreference() {
+  const p = preference; if (!p) return;
+  const current = preferenceCurrent(p), locked = !current || !!p.flight || p.navigating || busy;
+  const value = p.value, unavailable = locked || !value || Date.now() >= value.expiresAt;
+  for (const id of ['select', 'clear', 'restore']) $(`preference-${id}`).disabled = unavailable || !!state.pending || !!state.preview || id === 'restore' && !value?.history.length;
+  $('preference-open-source').disabled = unavailable || !!state.pending || !!state.preview || !value?.selection.preferred || value.selection.status === 'unresolved';
+  $('preference-hypothetical').disabled = unavailable || value?.selection.status !== 'alternative';
+  $('preference-hypothetical').textContent = value?.hypothetical ? 'Stop hypothetical use' : 'Use this alternative hypothetically';
+  $('preference-refresh').disabled = !!p.flight || p.navigating || busy || p.journey !== referenceJourney();
+  $('preference-close').disabled = !!p.navigating || !!p.flight && p.action !== 'inspect';
+  if (!current) $('preference-status').textContent = 'Saved map or page changed. Refresh this preference before acting. Your draft is retained.';
+}
+function showPreferenceHistory() {
+  const event = preference?.value?.history.find(row => String(row.revision) === $('preference-history').value);
+  $('preference-history-detail').textContent = event ? `Change ${event.revision} at ${event.at}
+${event.preferred ? `Preferred: ${event.preferred.identity.id}
+Location: ${event.preferred.location}` : 'No preferred scenario'}
+Reason: ${event.rationale || '(Not supplied)'}` : 'No recorded selection changes.';
+}
+function renderPreference(value) {
+  $('preference-source').textContent = `Open source: ${value.source.topic} (${value.source.identity.id}). Recorded family: ${value.source.family.id}. ${value.source.scope} location: ${value.source.location}.`;
+  $('preference-path').textContent = `Preference storage: ${value.preferencePath}`;
+  $('preference-status').textContent = `Status: ${value.hypothetical ? 'hypothetical alternative' : value.selection.status}. Preference revision ${value.selection.revision}. ${value.selection.preferred ? `Preferred source: ${value.selection.preferred.identity.id}.` : 'No direction selected.'} ${state.pending || state.preview ? 'Finish or cancel pending work and its preview before changing the selection.' : ''}`;
+  $('preference-history').replaceChildren(...value.history.map(event => el('option', { value: event.revision }, `Change ${event.revision}: ${event.preferred?.identity.id ?? 'cleared'}`)));
+  $('preference-history-coverage').textContent = `${value.history.length} retained change(s); ${value.omittedHistory} earlier change(s) omitted. Restoring records a new change and never merges answers.`;
+  showPreferenceHistory();
+}
+function closePreference(force = false) {
+  const p = preference; if (!force && (p?.navigating || p?.flight && p.action !== 'inspect')) return;
+  preference = null; p?.flight?.abort();
+  if ($('preference-dialog').open) $('preference-dialog').close();
+  if (p?.value) void fetch('api/scenario-preference', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'discard', journey: p.journey, revision: p.revision, id: p.value.id }) }).catch(() => {});
+  if (!force && p?.focus?.isConnected) p.focus.focus({ preventScroll: true });
+}
+async function requestPreference(action) {
+  const p = preference; if (!p || p.flight || p.navigating || busy || closed || suspended) return;
+  if (action === 'inspect') { p.journey = referenceJourney(); p.revision = state.document.revision; p.base = JSON.stringify(state.document); p.value = null; }
+  else if (!preferenceCurrent(p) || !p.value) return;
+  const extra = action === 'inspect' ? {} : { id: p.value.id, ...(['select', 'clear', 'restore'].includes(action) ? { rationale: $('preference-rationale').value } : {}), ...(action === 'restore' ? { eventRevision: Number($('preference-history').value) } : {}), ...(action === 'hypothetical' ? { enabled: !p.value.hypothetical } : {}) };
+  const abort = new AbortController(); p.flight = abort; p.action = action; actionEpoch++; stateCursor = null; pollFlight?.abort.abort();
+  syncPreference(); $('preference-status').textContent = action === 'inspect' ? 'Reading saved preference...' : 'Saving this explicit choice...';
+  const timer = setTimeout(() => abort.abort(), 20000);
+  try {
+    const response = await fetch('api/scenario-preference', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, journey: p.journey, revision: p.revision, ...extra }) });
+    const value = await response.json(); if (!preferenceCurrent(p)) return;
+    if (!response.ok) throw Error(value.error);
+    p.value = value; renderPreference(value);
+    state = { ...state, scenario: { journey: p.journey, scope: value.source.scope, status: value.selection.status, hypothetical: value.hypothetical, revision: value.selection.revision } };
+    renderPreferenceBanner(); stateCursor = null;
+  } catch (error) {
+    if (preferenceCurrent(p)) { p.value = null; $('preference-status').textContent = `${abort.signal.aborted ? 'Preference response timed out.' : error.message} Refresh to inspect the saved result before retrying. A submitted change may have completed. Your map and draft are retained.`; }
+  } finally { clearTimeout(timer); p.flight = null; if (preference === p) syncPreference(); }
+}
+function openPreference() {
+  if (!state.library || !state.document || busy || closed || suspended) return;
+  closePreference(true); voice.cancel();
+  preference = { journey: referenceJourney(), revision: state.document.revision, base: JSON.stringify(state.document), page: pageEpoch, focus: document.activeElement, value: null };
+  $('preference-rationale').value = ''; $('preference-source').textContent = journeyDescription(); $('preference-path').textContent = ''; $('preference-history').replaceChildren(); $('preference-history-detail').textContent = ''; $('preference-history-coverage').textContent = '';
+  $('preference-dialog').showModal(); $('preference-refresh').focus(); void requestPreference('inspect');
+}
+for (const id of ['scenario-preference-open', 'scenario-preference-manage']) $(id).addEventListener('click', openPreference);
+for (const action of ['select', 'clear', 'restore', 'hypothetical']) $(`preference-${action}`).addEventListener('click', () => { if (!$(`preference-${action}`).disabled) void requestPreference(action); });
+$('preference-refresh').addEventListener('click', () => void requestPreference('inspect'));
+$('preference-history').addEventListener('change', showPreferenceHistory);
+$('preference-close').addEventListener('click', () => closePreference());
+$('preference-dialog').addEventListener('cancel', event => { event.preventDefault(); closePreference(); });
+$('preference-open-source').addEventListener('click', async () => {
+  const p = preference; if (!preferenceCurrent(p) || $('preference-open-source').disabled) return;
+  p.navigating = true; syncPreference();
+  try {
+    const result = await switchJourney('open-preferred-source', { journey: p.journey, revision: p.revision, id: p.value.id }, () => preferenceCurrent(p));
+    if (result) closePreference(true);
+    else if (preferenceCurrent(p)) $('preference-status').textContent = $('notice').textContent || 'Could not open the preferred source. Your draft is retained.';
+  } finally { p.navigating = false; syncPreference(); }
+});
 function closeComparison(force = false) {
   const c = comparison; if (c?.navigating && !force) return;
   comparison = null; c?.flight?.abort();
@@ -3518,6 +3605,7 @@ window.addEventListener('pagehide', event => {
   closeAnswerChange();
   closeReviewQueue(true);
   closeScenarioFork(true);
+  closePreference(true);
   closeComparison(true);
   if ($('project-merge-dialog').open) closeProjectMerge();
   if ($('project-reconcile-dialog').open) closeProjectReconciliation();

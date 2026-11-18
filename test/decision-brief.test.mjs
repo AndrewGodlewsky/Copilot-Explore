@@ -1,3 +1,4 @@
+import { waitFor } from './helpers/wait-for.mjs';
 import { startResearch } from './helpers/research-review.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -74,7 +75,7 @@ test('HTTP proposal edits accept separately, immutable answers, revision/history
 });
 test('cancellation waits actual shared release, blocks help/cleanup, rejects late output and unconfirmed release',async t=>{
  let release,started,signal;const explorer=await controller(t,{run(prepared,options){signal=options.signal;started=true;return new Promise(resolve=>{release=()=>resolve(parseBrief(JSON.stringify(output(explorer.doc)),prepared));});},close(){}}),request=base(explorer);
- await explorer.briefRequest({...request,action:'start'});await new Promise(r=>setImmediate(r));assert.ok(started);
+ await explorer.briefRequest({...request,action:'start'});await waitFor(() => started);assert.ok(started);
  explorer.cleaner={run(){throw Error('unexpected');},close(){}};explorer.questionHelper={run(){throw Error('unexpected');},close(){}};
  await assert.rejects(explorer.cleanupRequest({action:'start',...base(explorer),nodeId:explorer.doc.nodes[1].id,mutation:0,text:'draft'}),/Cancel the decision brief/);
  await assert.rejects(explorer.helpRequest({action:'start',...base(explorer),nodeId:explorer.doc.nodes[1].id,operation:'terms'}),/Cancel the decision brief/);
@@ -116,7 +117,7 @@ test('shared brief/cleanup cancellation queues wait for actual release in both d
   const explorer=await controller(t,{run(value){latePrepared=value;return begin('brief',value);},close(){}});explorer.cleaner={run(value){return begin('cleanup',value);},close(){}};
   const brief=base(explorer),cleanup={...base(explorer),nodeId:explorer.doc.nodes[1].id,mutation:0,text:'draft'};
   const startBrief=()=>explorer.briefRequest({...brief,action:'start'}),startCleanup=()=>explorer.cleanupRequest({...cleanup,action:'start'});
-  await (first==='brief'?startBrief():startCleanup());await new Promise(setImmediate);
+  await (first==='brief'?startBrief():startCleanup());await waitFor(() => calls.length === 1);
   if(first==='brief'){await explorer.briefRequest({...brief,action:'discard'});await startCleanup();}else{const {text,...cancel}=cleanup;await explorer.cleanupRequest({...cancel,action:'cancel'});await startBrief();}
   assert.equal(calls.length,1);release();await explorer.toolFreeTask;assert.equal(calls.length,2);assert.equal(maximum,1);assert.ok(latePrepared);
  }

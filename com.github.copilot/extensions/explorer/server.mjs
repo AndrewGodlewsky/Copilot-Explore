@@ -1,11 +1,8 @@
-import { handoffMarkdown } from './implementation-handoff.mjs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { toMarkdown } from './model.mjs';
-import { briefMarkdown } from './decision-brief.mjs';
 import { VoiceService } from './voice.mjs';
 import { NavigationPreferences, defaultNavigationSettings } from './navigation-preferences.mjs';
 import { Diagnostics, supportBundle } from './diagnostics.mjs';
@@ -186,6 +183,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.projectCopyRequest(await body(req, 4096)));
       }
+      if (req.method === 'POST' && route === 'api/scenario-preference') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.scenarioPreferenceRequest(await body(req, 16 * 1024)));
+      }
       if (req.method === 'POST' && route === 'api/scenario-compare') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         const result = await explorer.scenarioCompareRequest(await body(req, 4096));
@@ -240,16 +241,12 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         res.once('finish', () => { if (res.statusCode === 200) observe('response-finished'); });
         res.once('close', () => { if (!res.writableFinished) observe('interrupted'); });
         try {
-          if (!explorer.doc) throw new Error('Missing journey');
-          const doc = await explorer.readCurrent();
-          if (route === 'brief.md' && !doc.brief) throw new Error('Missing accepted brief');
-          if (route === 'handoff.md' && !doc.handoff) throw new Error('Missing accepted handoff');
-          const content = route === 'handoff.md' ? handoffMarkdown(doc.handoff, doc) : route === 'brief.md' ? briefMarkdown(doc.brief, doc) : route.endsWith('.md') ? toMarkdown(doc) : JSON.stringify(doc, null, 2);
+          const { doc, content } = await explorer.exportDocument(route);
           const filename = `${route === 'handoff.md' ? 'implementation-handoff' : route === 'brief.md' ? 'decision-brief' : 'exploration'}-${doc.id.slice(0, 8)}${route.endsWith('.md') ? '.md' : '.explore.json'}`;
           res.writeHead(200, { 'Content-Type': route.endsWith('.md') ? 'text/markdown; charset=utf-8' : 'application/json', 'Content-Disposition': `attachment; filename="${filename}"` });
           return res.end(content);
         } catch {
-          observe('failed'); return json(400, { error: 'Export generation failed. Retry the saved read in Recovery, then explicitly retry this export. Browser file saving cannot be confirmed.' });
+          observe('failed'); return json(400, { error: 'Export generation failed. Check Scenario preference and retry the saved read in Recovery, then explicitly retry this export. Browser file saving cannot be confirmed.' });
         }
       }
       if (req.method === 'GET' && assets.has(route)) {

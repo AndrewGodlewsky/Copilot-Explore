@@ -1,3 +1,4 @@
+import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import { confirmAnswer } from './helpers/answer-change.mjs';
 import assert from 'node:assert/strict';
@@ -89,7 +90,7 @@ test('follow-up history is transient, exact reviewed work and completion preserv
 test('late cancelled work cannot enter a replacement, relevant changes mark existing exchanges historical', async t => {
   const f = await fixture(t); await f.start(await f.review('Why?')); await new Promise(setImmediate);
   await f.e.command('cancel'); const replacement = await f.review('Why now?'); await f.start(replacement);
-  f.runs[0].resolve(result); await new Promise(setImmediate); await new Promise(setImmediate);
+  f.runs[0].resolve(result); await waitFor(() => f.runs.length === 2);
   assert.equal(f.runs.length, 2); f.runs[1].resolve(result); await f.settle();
   assert.equal(f.e.uiSnapshot().followup.exchanges[0].question, 'Why now?');
   await confirmAnswer(f.e, { nodeId: f.doc.nodes[1].id, answer: 'Changed committed answer', revision: f.e.doc.revision });
@@ -108,7 +109,7 @@ test('shared actual-release queue gates follow-up and research in both direction
     let release; f.runs[0].reject(Object.assign(Error('Shutdown incomplete'), { releaseConfirmed: new Promise(resolve => { release = resolve; }) }));
     await f.settle(); assert.equal(f.runs.length, 1); assert.match(f.e.error, /shutdown/);
     await assert.rejects(followup(), /shutdown/); await assert.rejects(ordinary(), /shutdown/);
-    release(true); await new Promise(setImmediate); await followup(); await new Promise(setImmediate);
+    release(true); await new Promise(setImmediate); await followup(); await waitFor(() => f.runs.length === 2);
     assert.equal(f.runs.length, 2); f.runs[1].resolve(result); await f.settle(); assert.equal(f.e.uiSnapshot().followup.exchanges.length, 1);
   }
 });

@@ -1,3 +1,4 @@
+import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocument, addQuestions, validateDocument, toMarkdown } from '../com.github.copilot/extensions/explorer/model.mjs';
@@ -128,7 +129,7 @@ test('scope inspection sends nothing; generation bytes and captured pin freshnes
   const { e, sends, command, guidance } = await controllerFixture(t); await guidance([pin]);
   const inspected = await command('context-coverage', { kind: 'questions', nodeId: e.doc.rootId, scope: 'path' });
   assert.equal(sends.length, 0); assert.equal(e.pending, null);
-  await command('questions', { nodeId: e.doc.rootId, scope: 'path' }); await new Promise(setImmediate);
+  await command('questions', { nodeId: e.doc.rootId, scope: 'path' }); await waitFor(() => sends.length === 1);
   assert.equal(sends[0].mode, 'enqueue'); assert.equal(Buffer.byteLength(sends[0].prompt), inspected.contextCoverage.bytes);
   assert.deepEqual(JSON.parse(sends[0].prompt.split('EXPLORATION DATA\n')[1]).pins, [pin]);
   await e.receive('questions', { requestId: e.pending.id, questions: [{ question: 'Next?', category: 'Next' }] });

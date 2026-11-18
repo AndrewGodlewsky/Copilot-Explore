@@ -1,3 +1,4 @@
+import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
@@ -79,7 +80,7 @@ test('research does not spend its owned allowance on a controller watchdog or qu
   await new Promise(resolve => setTimeout(resolve, 20));
   try { assert.equal(f.e.pending?.kind, 'research'); assert.equal(f.runs.length, 0); }
   finally { release(); }
-  release(); await new Promise(setImmediate);
+  release(); await waitFor(() => f.runs.length === 1);
   assert.equal(f.runs.length, 1); assert.equal(f.runs[0].prepared.limits.timeLimitMs, 300000);
   await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(f.e.pending?.kind, 'research');
   await f.e.command('cancel');
@@ -165,7 +166,7 @@ test('transport response cap rejects escaped exclusion IDs without retaining a p
     const id = String(i).padStart(4, '0') + '\u0000'.repeat(96); excluded.push(id);
     doc.nodes.push({ ...doc.nodes[2], id });
   }
-  const review = new ResearchReview(), explorer = { doc, file: 'map', activeKey: null, readCurrent: async () => doc };
+  const review = new ResearchReview(), explorer = { doc, file: 'map', activeKey: null, readCurrent: async () => doc, scenarioPolicy: async () => ({ label: { classification: 'unselected' } }), assertScenarioPolicy: async () => {} };
   await assert.rejects(review.prepare(explorer, { action: 'prepare', clientId: randomUUID(), sequence: 1, journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded }), /1 MiB response limit/);
   assert.equal(review.current, null);
 });

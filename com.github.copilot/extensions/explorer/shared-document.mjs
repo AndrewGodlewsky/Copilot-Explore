@@ -73,6 +73,10 @@ function parse(source) {
   return { content, value, baseDigest: digest(content) };
 }
 
+// Other versioned repository records share the lossless JSON boundary; each
+// caller still validates its own schema and any smaller byte limit.
+export { parse as parseDocumentJson };
+
 const identityField = key => /(^id$|Id$)/.test(key) || ['format', 'version', 'mode', 'kind', 'answerState', 'origin', 'basis', 'provenance', 'url', 'createdAt', 'updatedAt', 'finishedAt', 'retrievedAt'].includes(key);
 function preservable(original, normalized, path = 'journey', key = '') {
   if (original !== null && typeof original === 'object') {

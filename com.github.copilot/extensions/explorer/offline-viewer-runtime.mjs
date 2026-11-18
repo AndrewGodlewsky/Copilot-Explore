@@ -3,6 +3,7 @@
 export function renderOfflineViewer(snapshot) {
   const $ = id => document.getElementById(id);
   const el = (tag, text) => { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return item; };
+  if (snapshot.scenarioNote) document.querySelector('header').append(el('p', snapshot.scenarioNote));
   const nodes = snapshot.nodes, byId = new Map(nodes.map(n => [n.id, n]));
   let selected = nodes[0].id, filtered = nodes;
   const searchable = new Map(nodes.map(n => [n.id, JSON.stringify(n).toLocaleLowerCase()]));

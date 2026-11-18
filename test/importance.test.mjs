@@ -1,3 +1,4 @@
+import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -43,7 +44,7 @@ test('importance is server-owned historical assessment through accepted edits, d
   t.after(async () => { await e.close(); await rm(dir, { recursive: true, force: true }); });
   const command = (action, input = {}) => e.command(action, { revision: e.doc?.revision, ...input });
   await command('start', { topic: 'Garden', objective: 'Pilot', successCriteria: 'Cheap' });
-  await Promise.resolve(); assert.match(messages.at(-1).prompt, /importanceReason/); assert.match(messages.at(-1).prompt, /constraints.*consequences/);
+  await waitFor(() => messages.length === 1); assert.match(messages.at(-1).prompt, /importanceReason/); assert.match(messages.at(-1).prompt, /constraints.*consequences/);
   const id = e.pending.id, before = await readFile(e.file, 'utf8');
   await assert.rejects(e.receive('questions', { requestId: id, questions: [{ ...candidate, importanceReason: undefined }] }), /importance/i);
   assert.equal(e.pending.id, id);

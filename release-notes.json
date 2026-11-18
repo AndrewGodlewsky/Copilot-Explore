@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.88",
+    "summary": "Choose a preferred scenario with a reason and recoverable selection history. Keep alternatives intact and explicitly allow hypothetical AI work or exports. Personal and Project preferences remain separate; missing sources and changed selections require review. Source labels preserve answer certainty and private drafts."
+  },
+  {
     "version": "0.1.87",
     "summary": "Compare Personal or Project scenarios using recorded origins, exact answers, states and retained evidence. Paged comparisons preserve both maps and private drafts; changed sources require a fresh comparison. Library metadata saves now retry brief Windows sharing denials while rejecting changed sources."
   },

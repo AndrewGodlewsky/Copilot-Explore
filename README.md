@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.87.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.88.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 
 **Usage dashboard** compares current maps, saved answer states and structure, newly observed canvas visits/committed question growth, and retained owned-helper outcomes and usage. UTC date filters apply to observations and receipts, not current stock. Scans are bounded and explicitly refreshed; missing usage and incomplete coverage stay visible. It preserves your editor and drafts. See [metric definitions, inventory, privacy and retention](docs/usage-dashboard.md).
 
@@ -12,6 +12,8 @@ The optional **Ctrl+Shift+P** shortcut is off by default and lasts only for this
 <!-- explorer-current-version:end -->
 
 Save a local-calendar **review date** and/or **manual revisit condition** on a question. Filter reminders in the question list or Library, including archived journeys, and use **Revisit** to return to a source. Acknowledge, reschedule/reactivate or clear with History while keeping answer certainty and ancestor review separate. Conditions are evaluated by you; no monitoring, notifications or calendar writes run. See [reminder semantics and export coverage](docs/revisit-reminders.md).
+
+**Scenario preference** selects one current direction within a recorded fork family, with a reason and retained change history. Alternatives remain intact. AI work and decision exports use the preferred source or an explicitly permitted, labeled hypothetical alternative. Personal and Project selections are separate. See [selection, sharing and recovery rules](docs/scenario-preference.md).
 
 ## Reviewed implementation handoff
 
@@ -292,7 +294,7 @@ The **expanding node is integrated into the installed canvas from v0.1.7**. The 
 
 The [interaction research](docs/explorer-interaction-research.md) examines six product precedents and relevant studies. It records why the owner preferred the expanding node. Its [earlier concept sketches](docs/prototypes/research-directions.html) remain available for reference.
 
-DOM interaction tests run the shipped HTML/JavaScript against the real local server and persistence controller, with geometry stubs because [jsdom does not render a visual browser](https://github.com/jsdom/jsdom#pretending-to-be-a-visual-browser). They cover in-map forms, drafts, saves, research results and follow-up navigation. Layout tests separately check variable-size boxes and branch separation.
+DOM interaction tests run the shipped HTML/JavaScript against the real local server and persistence controller, with geometry stubs because [jsdom does not render a visual browser](https://github.com/jsdom/jsdom#pretending-to-be-a-visual-browser). They cover in-map forms, drafts, saves, research results and follow-up navigation. Layout tests separately check variable-size boxes and branch separation. `npm test` runs at most four test files concurrently to bound native Git process contention; application request timeouts remain unchanged.
 
 For the real SDK/runtime smoke tests, set `COPILOT_SDK_DIR` to the installed SDK directory containing `index.js`, and `COPILOT_CLI_PATH` to its paired runtime executable, then run `npm run e2e` and `npm run e2e:research`. Disposable homes and loopback model/MCP fixtures check plugin discovery, HTTP serving, queued chat delivery, canvas callbacks, isolated research tools/context, cancellation, accounting and export/import without paid inference or browser automation.
 
@@ -303,7 +305,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.87, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.87**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.88, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.88**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Settings > Map and motion** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

@@ -1,3 +1,4 @@
+import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
@@ -91,6 +92,7 @@ test('mode change preserves old nodes, clears finish and invalidates staged ques
   assert.equal(e.doc.revision, revision + 1);
   assert.equal(validateDocument(JSON.parse(await readFile(e.file, 'utf8'))).mode, 'diagnose');
   await e.command('questions', { revision: e.doc.revision, nodeId: e.doc.rootId });
+    await waitFor(() => messages.at(-1)?.prompt.includes(e.pending.id));
   assert.match(messages.at(-1).prompt, /symptoms.*reproduction.*evidence.*alternative causes/i);
   await assert.rejects(e.command('guidance', { revision: e.doc.revision, objective: '', successCriteria: '', mode: 'design' }), /Wait/);
   await e.receive('questions', { requestId: e.pending.id, questions: [{ question: 'How?', category: 'Plan' }] });
@@ -123,6 +125,7 @@ test('each strategy reaches attached generation without changing its enqueue pol
   for (const mode of modes) {
     await e.command('guidance', { revision: e.doc.revision, objective: '', successCriteria: '', mode });
     await e.command('questions', { revision: e.doc.revision, nodeId: e.doc.rootId });
+    await waitFor(() => messages.at(-1)?.prompt.includes(e.pending.id));
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(messages.at(-1).mode, 'enqueue');
     assert.match(messages.at(-1).prompt, strategy[mode]);

@@ -1,3 +1,4 @@
+import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -112,7 +113,7 @@ test('challenge HTTP boundary rejects invalid purpose and stale reviewed inputs 
   const disk = structuredClone(explorer.doc); disk.nodes[1].answer = 'Changed during preview'; disk.revision++; await writeFile(explorer.file, JSON.stringify(disk));
   assert.equal((await post('api/check-answers', start)).status, 400); assert.equal(calls, 0);
   await explorer.load(); const freshReview = await challengeReview(explorer);
-  await explorer.checkRequest({ ...start, token: freshReview.token }); await new Promise(setImmediate);
+  await explorer.checkRequest({ ...start, token: freshReview.token }); await waitFor(() => !!complete);
   const later = structuredClone(explorer.doc); later.pins = [{ id: randomUUID(), text: 'New constraint' }]; later.revision++; await writeFile(explorer.file, JSON.stringify(later));
   complete(); await explorer.toolFreeTask;
   assert.equal((await explorer.checkRequest({ ...req, action: 'poll' })).status, 'stale');
@@ -173,7 +174,7 @@ test('cancelled, replaced and late results cannot overwrite current check; share
     return Promise.resolve(parseAnswerCheck('{"findings":[]}', prepared));
   }, close() {} });
   const one = request(explorer), two = request(explorer);
-  await explorer.checkRequest({ ...one, action: 'start' }); await new Promise(setImmediate);
+  await explorer.checkRequest({ ...one, action: 'start' }); await waitFor(() => calls === 1);
   assert.equal(calls, 1);
   await explorer.checkRequest({ ...one, action: 'cancel' });
   await explorer.checkRequest({ ...two, action: 'start' }); assert.equal(calls, 1);
@@ -187,7 +188,7 @@ test('pending check and decision brief require explicit cancellation before anot
   explorer.cleaner = { run() { throw Error('Unexpected cleanup'); }, close() {} };
   explorer.questionHelper = { run() { throw Error('Unexpected help'); }, close() {} };
   explorer.briefHelper = { async run(prepared) { return parseBrief(JSON.stringify({ goal: [], decisions: [], constraints: [], assumptions: [], unresolved: [], nextSteps: [] }), prepared); }, close() {} };
-  const check = request(explorer); await explorer.checkRequest({ ...check, action: 'start' }); await new Promise(setImmediate);
+  const check = request(explorer); await explorer.checkRequest({ ...check, action: 'start' }); await waitFor(() => !!release);
   await assert.rejects(explorer.checkRequest({ ...request(explorer), action: 'start' }), /Cancel the running answer check/);
   await assert.rejects(explorer.briefRequest({ ...request(explorer), action: 'start' }), /Cancel the answer check/);
   await assert.rejects(explorer.cleanupRequest({ ...request(explorer), action: 'start', nodeId: explorer.doc.nodes[1].id, mutation: 0, text: 'draft' }), /Cancel the answer check/);

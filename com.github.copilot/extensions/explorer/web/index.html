@@ -6,7 +6,7 @@
     <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 16 5 6M16 16 27 6M16 16 5 27M16 16 27 27"/><circle cx="16" cy="16" r="5"/><circle cx="5" cy="6" r="2"/><circle cx="27" cy="6" r="2"/><circle cx="5" cy="27" r="2"/><circle cx="27" cy="27" r="2"/></svg><strong>Explorer</strong><span class="poc">Preview</span></div>
     <nav aria-label="Exploration actions">
       <details id="file-menu" class="app-menu"><summary>File</summary><div class="menu-items"><button id="library-toggle" hidden>Library</button><button id="import">Open file</button><button id="project-open" hidden>Open project journey</button><button id="recovery-open">Recovery</button><button id="storage-home" hidden>Local storage</button><a id="save-file" href="export.json" download hidden>Save file</a><button id="visual-export-open" hidden>Export maps</button><button id="project-copy-open" hidden>Save a project copy</button><button id="project-reconcile-open" hidden>Review project changes</button><button id="project-merge-open" hidden>Compare and merge project journey</button><button id="finish" hidden>Finish exploration</button></div></details>
-      <details id="tools-menu" class="app-menu"><summary>Tools</summary><div class="menu-items"><button id="review-affected" hidden>Review affected answers</button><button id="decision-brief" hidden>Decision brief</button><button id="implementation-handoff" hidden>Implementation handoff</button><button id="check-answers" hidden>Check answers</button><button id="challenge-decisions" hidden>Challenge decisions</button><button id="dashboard-open" type="button" aria-haspopup="dialog">Usage dashboard</button></div></details>
+      <details id="tools-menu" class="app-menu"><summary>Tools</summary><div class="menu-items"><button id="scenario-preference-open" hidden>Scenario preference</button><button id="review-affected" hidden>Review affected answers</button><button id="decision-brief" hidden>Decision brief</button><button id="implementation-handoff" hidden>Implementation handoff</button><button id="check-answers" hidden>Check answers</button><button id="challenge-decisions" hidden>Challenge decisions</button><button id="dashboard-open" type="button" aria-haspopup="dialog">Usage dashboard</button></div></details>
       <button id="palette-open" type="button" aria-haspopup="dialog">Commands</button>
       <button id="navigation-open" class="settings-gear" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m9 3-.5 2-2 1.2-2-.6-2 3.4L4 10.5v3L2.5 15l2 3.4 2-.6 2 1.2.5 2h4l.5-2 2-1.2 2 .6 2-3.4-1.5-1.5v-3L20 9l-2-3.4-2 .6-2-1.2-.5-2Z"/><circle cx="11.25" cy="12" r="3"/></svg></button>
     </nav>
@@ -15,6 +15,7 @@
   <div id="connection-status" class="notice" role="status" aria-live="polite" hidden></div>
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
   <div id="project-change" class="notice" role="alert" hidden><span id="project-change-text"></span> <button id="project-change-review">Review project changes</button></div>
+  <div id="scenario-preference-banner" class="notice" role="status" hidden><span id="scenario-preference-text"></span> <button id="scenario-preference-manage">Scenario preference</button></div>
   <section id="welcome" class="welcome">
     <section id="library-home" aria-labelledby="library-title" hidden>
       <div class="library-heading"><h1 id="library-title">Your explorations</h1><button id="library-return" hidden>Back to current map</button></div>
@@ -173,6 +174,22 @@
     <div class="actions"><button id="palette-refresh">Refresh from beginning</button><button id="palette-next" disabled>Next matches</button></div>
     <p class="quiet">Off by default. Works outside text fields only when the configured voice shortcut is known and different. Copilot or the OS may reserve it; use Commands if it conflicts.</p>
     <button id="palette-close">Close</button>
+  </dialog>
+  <dialog id="preference-dialog" aria-labelledby="preference-title">
+    <h2 id="preference-title">Scenario preference</h2>
+    <p>Choose one current direction in this recorded fork family. Alternatives and their answers remain intact. Personal and Project preferences are separate.</p>
+    <p id="preference-source"></p><p id="preference-path" class="quiet"></p>
+    <p id="preference-status" role="status" aria-live="polite"></p>
+    <button id="preference-refresh" type="button">Refresh saved preference</button>
+    <label for="preference-rationale">Reason for changing the preference (optional)</label><textarea id="preference-rationale" rows="3" maxlength="2000"></textarea>
+    <div class="dialog-actions"><button id="preference-select" type="button" disabled>Prefer this scenario</button><button id="preference-clear" type="button" disabled>Clear preference</button><button id="preference-open-source" type="button" disabled>Open preferred scenario</button></div>
+    <p class="quiet">Hypothetical use lets AI and exports use this alternative as conditional context. It does not change the preferred direction or confirm any answer. This permission lasts only for this canvas, map and unchanged preference.</p>
+    <button id="preference-hypothetical" type="button" disabled>Use this alternative hypothetically</button>
+    <h3>Preference history</h3><p id="preference-history-coverage" class="quiet"></p>
+    <label for="preference-history">Retained selection change</label><select id="preference-history"></select><pre id="preference-history-detail"></pre>
+    <button id="preference-restore" type="button" disabled>Restore this selection as a new change</button>
+    <p class="quiet">Project preferences are saved in the checkout. Commit the preference file with its shared scenario files. Resolve conflicting Git edits explicitly; Explorer never guesses a winner.</p>
+    <button id="preference-close" type="button">Close</button>
   </dialog>
   <dialog id="comparison-dialog" aria-labelledby="comparison-title">
     <h2 id="comparison-title">Compare saved scenarios</h2>

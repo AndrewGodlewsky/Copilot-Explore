@@ -1,3 +1,4 @@
+import { waitFor } from './helpers/wait-for.mjs';
 import { startResearch } from './helpers/research-review.mjs';
 import { confirmAnswer } from './helpers/answer-change.mjs';
 import test from 'node:test';
@@ -110,7 +111,7 @@ test('already sent external decisions invalidate by ID while a newly answered br
 test('research replacement queues behind actual release and ignores old completion/error', async t => {
   const f = await fixture(t); await f.begin(); const old = f.runs[0];
   await f.command('cancel'); await f.begin(); assert.equal(f.runs.length, 1);
-  const replacement = f.e.pending.id; old.resolve(result); await new Promise(setImmediate);
+  const replacement = f.e.pending.id; old.resolve(result); await waitFor(() => f.runs.length === 2);
   assert.equal(f.runs.length, 2); assert.equal(f.e.pending.id, replacement); assert.equal(f.e.doc.nodes[1].research, null);
   old.reject(Error('Duplicate late error')); await f.finish(); assert.deepEqual(f.e.doc.nodes[1].research, { ...result, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });
 });

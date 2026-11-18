@@ -1,3 +1,4 @@
+import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -73,7 +74,7 @@ test('staged rationale is trusted, survives acceptance and history, and never mu
   await e.command('import', { revision: e.doc.revision, document: imported });
   assert.equal(e.doc.nodes[1].rationale, rationale);
   await e.command('questions', { revision: e.doc.revision, nodeId: e.doc.rootId });
-  await Promise.resolve();
+  await waitFor(() => messages.at(-1)?.prompt.includes(e.pending.id));
   assert.match(messages.at(-1).prompt, /Historical model explanation/);
   assert.match(messages.at(-1).prompt, /not a user fact or decision/);
   const staleRequest = e.pending.id;

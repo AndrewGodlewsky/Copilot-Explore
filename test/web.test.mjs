@@ -1177,6 +1177,57 @@ test('project library refresh and pin preserve an answer draft, and listed openi
   assert.equal(f.explorer.pending, null); assert.equal($('workspace').hidden, false);
 });
 
+test('scenario preference chooses and restores a direction without changing answers or the connected draft editor', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep this draft 🌱'); const editor = $('answer'); editor.focus(); editor.setSelectionRange(2, 7);
+  const before = structuredClone(f.explorer.doc);
+  $('scenario-preference-open').click(); await until(() => !$('preference-select').disabled, 'preference inspected');
+  assert.equal($('preference-dialog').open, true); assert.match($('preference-source').textContent, new RegExp(before.id));
+  f.type('preference-rationale', 'Our current direction <script>🌱</script>'); $('preference-select').click();
+  await until(() => $('preference-status').textContent.includes('preferred') && !$('preference-clear').disabled, 'preferred selected');
+  assert.equal($('preference-history-detail').querySelector('script'), null); assert.match($('scenario-preference-text').textContent, /preferred/i);
+  $('preference-clear').click(); await until(() => $('preference-status').textContent.includes('unselected') && !$('preference-restore').disabled, 'preference cleared');
+  $('preference-history').value = '1'; $('preference-history').dispatchEvent(new f.window.Event('change')); $('preference-restore').click();
+  await until(() => $('preference-history').options.length === 3, 'preference restored as a new event');
+  $('preference-close').click(); assert.equal($('preference-dialog').open, false); assert.equal($('answer'), editor);
+  assert.equal(editor.value, 'Keep this draft 🌱'); assert.equal(editor.selectionStart, 2); assert.equal(editor.selectionEnd, 7);
+  assert.deepEqual(f.explorer.doc, before); assert.equal(f.actions.filter(a => ['answer', 'research', 'questions'].includes(a.action)).length, 0);
+});
+
+test('scenario preference grants visible hypothetical use and opens the preferred source through draft preservation', async t => {
+  let original, alternative;
+  const f = await fixture(t, 340, undefined, true, { before: async e => {
+    original = e.activeKey; const view = await e.scenarioPreferenceRequest({ action: 'inspect', journey: original, revision: e.doc.revision });
+    await e.scenarioPreferenceRequest({ action: 'select', journey: original, revision: e.doc.revision, id: view.id, rationale: 'Current direction' });
+    alternative = await e.library.import(buildScenario(e.doc, { nodeId: e.doc.nodes[1].id, answer: 'Alternative only', answerState: 'assumption' }).document);
+    await e.attach(alternative.key);
+  } }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Preserve alternative draft'); const editor = $('answer');
+  assert.match($('scenario-preference-text').textContent, /alternative/); $('scenario-preference-open').click(); await until(() => !$('preference-hypothetical').disabled, 'alternative inspected');
+  $('preference-hypothetical').click(); await until(() => $('preference-hypothetical').textContent === 'Stop hypothetical use', 'hypothetical enabled');
+  assert.match($('scenario-preference-text').textContent, /hypothetical alternative/); $('preference-close').click(); assert.equal($('answer'), editor);
+  $('scenario-preference-open').click(); await until(() => !$('preference-open-source').disabled, 'preferred source available');
+  $('preference-open-source').click(); await until(() => f.explorer.activeKey === original && !$('preference-dialog').open, 'preferred source opened');
+  assert.match($('scenario-preference-text').textContent, /preferred/);
+  await f.explorer.attach(alternative.key); assert.equal((await f.explorer.readDrafts(alternative.key)).entries.find(value => value.nodeId === node.id).text, 'Preserve alternative draft');
+  assert.equal(f.explorer.doc.nodes[1].answerState, 'assumption'); assert.equal(f.explorer.doc.nodes[1].answer, 'Alternative only');
+});
+
+test('scenario preference ignores suspended-page responses and rejects a stale map selection', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Draft survives suspension');
+  const originalFetch = f.window.fetch; let release;
+  f.window.fetch = async (...args) => { const response = await originalFetch(...args); if (args[0] === 'api/scenario-preference' && JSON.parse(args[1].body).action === 'inspect') return new Promise(resolve => { release = () => resolve(response); }); return response; };
+  $('scenario-preference-open').click(); await until(() => release, 'held preference inspection');
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true })); release(); f.window.fetch = originalFetch;
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await delay(30);
+  assert.equal($('preference-dialog').open, false); assert.equal($('answer').value, 'Draft survives suspension');
+  $('scenario-preference-open').click(); await until(() => !$('preference-select').disabled, 'fresh preference inspected');
+  const changed = structuredClone(f.explorer.doc); changed.nodes[1].answer = 'External saved edit'; changed.revision++; await writeFile(f.explorer.file, JSON.stringify(changed));
+  $('preference-select').click(); await until(() => $('preference-status').textContent.includes('Refresh to inspect'), 'stale selection rejected');
+  assert.equal($('preference-select').disabled, true); $('preference-close').click(); assert.equal($('answer').value, 'Draft survives suspension');
+});
+
 test('scenario comparison is explicitly selected, read-only, paged and preserves the existing editor on cancel', async t => {
   let target;
   const f = await fixture(t, 340, undefined, true, { before: async e => {
@@ -1500,6 +1551,8 @@ test('closing or suspending a merge preview rejects late responses and keeps the
 async function startReviewedResearch(f) {
   await until(() => !f.document.getElementById('research-review-start').disabled, 'review ready');
   f.document.getElementById('research-review-start').click();
+  await until(() => !f.document.getElementById('research-review-dialog').open, 'reviewed start response applied');
+  if (f.explorer.pending?.kind === 'research') await until(() => f.researchReady(), 'owned research dispatched');
 }
 
 test('next question is optional, opens a folded source and preserves independent drafts without model work', async t => {
@@ -1907,6 +1960,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const copyDialog = document.getElementById('project-copy-dialog');
   const forkDialog = document.getElementById('scenario-fork-dialog');
   if (forkDialog) { forkDialog.showModal = () => { forkDialog.open = true; }; forkDialog.close = () => { forkDialog.open = false; }; }
+  const preferenceDialog = document.getElementById('preference-dialog');
+  preferenceDialog.showModal = () => { preferenceDialog.open = true; };
+  preferenceDialog.close = () => { preferenceDialog.open = false; };
   const comparisonDialog = document.getElementById('comparison-dialog');
   if (comparisonDialog) { comparisonDialog.showModal = () => { comparisonDialog.open = true; }; comparisonDialog.close = () => { comparisonDialog.open = false; }; }
   const reconcileDialog = document.getElementById('project-reconcile-dialog');
@@ -2031,7 +2087,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   };
   const type = (id, value) => { const e = document.getElementById(id); assert.ok(e, id); e.value = value; e.dispatchEvent(new window.Event('input', { bubbles: true })); };
   const click = text => { const b = [...document.querySelectorAll('#node-workspace button, #question-drawer button')].find(e => (e.getAttribute('aria-label') ?? e.textContent) === text || e.textContent === text); assert.ok(b, text); b.click(); };
-  return { explorer, window, document, open, type, click, actions, observers, resizeWorkspace: value => { workspaceHeight = value; observers.get('node-workspace')(); }, poll: () => window.__updates.poll(), resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
+  return { explorer, window, document, open, type, click, actions, observers, resizeWorkspace: value => { workspaceHeight = value; observers.get('node-workspace')(); }, poll: () => window.__updates.poll(), resolveResearch: value => resolveResearch(value), researchReady: () => !!resolveResearch, captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
@@ -2752,7 +2808,7 @@ test('pinned references show committed text and state, remain optional, and jump
   assert.equal((await f.window.fetch('export.json').then(r => r.text())).includes('nodeIds'), false);
   assert.equal(f.explorer.doc.nodes[2].answer, '');
   f.document.getElementById('focus-branch').click();
-  panel.querySelector('.reference-jump').click();
+  f.document.querySelector('#references .reference-jump').click();
   assert.equal(f.document.getElementById('expanded-title').textContent, source.question);
   f.open(active.id); assert.equal(f.document.getElementById('answer').value, 'Unsent draft stays');
   const before = f.explorer.doc.revision;

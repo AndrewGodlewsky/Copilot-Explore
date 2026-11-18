@@ -23,6 +23,7 @@ function relativePath(value) {
     value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git' || /[. ]$/.test(part) || /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part))) throw Error('Use a project-relative path with forward slashes and ordinary folder names. Traversal, Git metadata and special paths are excluded.');
   return value;
 }
+export { relativePath as validateProjectPath };
 export class ProjectRepository {
   constructor({ readRoot, localDirectory }) { this.project = new ProjectContext(readRoot); this.localDirectory = localDirectory; }
   async checkout() {

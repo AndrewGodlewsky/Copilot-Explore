@@ -42,9 +42,17 @@ function descend(parts) {
 // This shares the existing cooperative local-filesystem contract. Path checks
 // detect observed replacements; Node has no portable atomic ancestor-bound unlink.
 export class StorageManagement {
-  constructor(directory, { write = atomicWrite, remove = unlink } = {}) {
-    this.directory = resolve(directory); this.write = write; this.remove = remove; this.captured = null;
+  constructor(directory, { write = atomicWrite, remove = unlink, validate = validateDocument, externalDocument } = {}) {
+    this.directory = resolve(directory); this.write = write; this.remove = remove; this.captured = null; this.validateDocument = validate;
+    if (externalDocument && (typeof externalDocument.read !== 'function' || !keyPattern.test(externalDocument.key) || typeof externalDocument.id !== 'string' || dirname(resolve(externalDocument.lockFile)) !== this.directory)) throw new Error('Invalid external document binding.');
+    this.externalDocument = externalDocument ? Object.freeze({ ...externalDocument, file: resolve(externalDocument.file), lockFile: resolve(externalDocument.lockFile) }) : null;
   }
+  boundDocument(record) {
+    const bound = this.externalDocument;
+    if (bound && (resolve(record.file) !== bound.file || record.key !== bound.key || record.id !== bound.id)) throw new Error('Invalid external journey ownership.');
+    return bound;
+  }
+  documentLock(record) { return this.boundDocument(record)?.lockFile ?? record.file + '.lock'; }
   async root(expected) {
     let path = parse(this.directory).root;
     for (const part of relative(path, this.directory).split(sep).filter(Boolean)) {
@@ -178,16 +186,17 @@ export class StorageManagement {
   }
   async state(record, expected = {}) {
     const root = await this.root(expected.root), file = resolve(record.file);
-    if (dirname(file) !== this.directory || !keyPattern.test(record.key)) throw new Error('Invalid journey ownership.');
-    await this.absent(file + '.lock.recover'); await this.absent(file + '.lock.abandoned');
+    const bound = this.boundDocument(record), lockFile = this.documentLock(record);
+    if (!bound && dirname(file) !== this.directory || !keyPattern.test(record.key)) throw new Error('Invalid journey ownership.');
+    await this.absent(lockFile + '.recover'); await this.absent(lockFile + '.abandoned');
     const directory = join(this.directory, 'history', record.key);
     await this.safe(directory, { root, parents: expected.directoryParents, file: false });
     if (expected.directoryIdentity && identity(await lstat(directory)) !== expected.directoryIdentity) throw new Error('History directory changed.');
     await this.absent(join(directory, 'intent.json'));
-    const current = await this.read(file, MAX_DOCUMENT_BYTES, { root });
-    const document = validateDocument(JSON.parse(current.text));
+    const current = bound ? await bound.read() : await this.read(file, MAX_DOCUMENT_BYTES, { root });
+    const document = this.validateDocument(bound ? current.document : JSON.parse(current.text));
     if (document.id !== record.id) throw new Error('Journey identity changed.');
-    const history = new History(this.directory, record.key, record.id);
+    const history = new History(this.directory, record.key, record.id, { validate: this.validateDocument });
     const manifest = await this.read(join(directory, 'manifest.json'), 128 * 1024, { root });
     const value = history.validate(JSON.parse(manifest.text));
     const currentRow = history.row(document, value.head.label);
@@ -202,7 +211,7 @@ export class StorageManagement {
     for (const record of records) {
       if (candidates.length >= STORAGE_LIMITS.candidates || readBytes >= STORAGE_LIMITS.readBytes) { issues.push('Preview limit reached; remaining journeys were not considered.'); break; }
       try {
-        await this.absent(record.file + '.lock');
+        await this.absent(this.documentLock(record));
         const state = await this.state(record, { root });
         const protectedRows = new Set(state.value.entries.slice(-keepHistory).map(row => row.hash));
         const rows = state.value.entries.filter(row => !protectedRows.has(row.hash) && !row.checkpoints.length && row.revision !== state.value.undoRevision);
@@ -212,7 +221,7 @@ export class StorageManagement {
           readBytes += row.bytes;
           if (readBytes > STORAGE_LIMITS.readBytes) throw new Error('Preview read budget reached.');
           const file = join(state.directory, `${row.hash}.json`), entry = await this.read(file, MAX_DOCUMENT_BYTES, { root });
-          const raw = JSON.parse(entry.text), doc = validateDocument(raw);
+          const raw = JSON.parse(entry.text), doc = this.validateDocument(raw);
           if (hash(entry.text) !== row.hash || Buffer.byteLength(entry.text) !== row.bytes || doc.id !== record.id || raw.id !== doc.id || raw.revision !== row.revision || doc.revision !== row.revision || raw.updatedAt !== row.time) throw new Error('History snapshot is damaged.');
           observed.set(row.hash, entry);
         }
@@ -238,8 +247,9 @@ export class StorageManagement {
       if (['removed', 'ineligible'].includes(candidate.status)) { results.push({ key: record.key, hash: row.hash, revision: row.revision, status: candidate.status, message: candidate.message }); continue; }
       let lock, status = 'failed', message = 'Cleanup could not complete; retry only this preview.';
       try {
-        await this.root(candidate.root); await this.absent(record.file + '.lock.recover'); await this.absent(record.file + '.lock.abandoned');
-        lock = await acquireLock(record.file + '.lock', { recover: false });
+        const lockFile = this.documentLock(record);
+        await this.root(candidate.root); await this.absent(lockFile + '.recover'); await this.absent(lockFile + '.abandoned');
+        lock = await acquireLock(lockFile, { recover: false });
         let state = await this.state(record, candidate);
         const path = join(state.directory, `${row.hash}.json`);
         if (state.current.stamp !== candidate.currentStamp) throw new Error('Journey changed since preview.');
@@ -262,7 +272,7 @@ export class StorageManagement {
         const newest = state.value.entries.at(-1);
         if (!newest) throw new Error('Last recovery version changed.');
         const recovery = await this.read(join(state.directory, `${newest.hash}.json`), MAX_DOCUMENT_BYTES, candidate);
-        const recoveryRaw = JSON.parse(recovery.text), recoveryDocument = validateDocument(recoveryRaw);
+        const recoveryRaw = JSON.parse(recovery.text), recoveryDocument = this.validateDocument(recoveryRaw);
         if (hash(recovery.text) !== newest.hash || Buffer.byteLength(recovery.text) !== newest.bytes || recoveryRaw.id !== record.id || recoveryDocument.id !== record.id ||
           recoveryRaw.revision !== newest.revision || recoveryDocument.revision !== newest.revision || recoveryRaw.updatedAt !== newest.time) throw new Error('Last recovery version changed.');
         let snapshot;

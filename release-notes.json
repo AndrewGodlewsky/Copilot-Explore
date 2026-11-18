@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.69",
+    "summary": "Added project-storage foundations that keep shared journeys separate from private drafts, helper records, locks and recovery history. Includes clone isolation, interrupted-save recovery and safe local-history cleanup. Project storage controls will follow separately."
+  },
+  {
     "version": "0.1.68",
     "date": "2026-11-18",
     "summary": "Added the shared exploration format foundation: exact text preservation, stable content identities, deterministic edits, and safe preparation of personal-file conversion. Repository storage remains a separate step."

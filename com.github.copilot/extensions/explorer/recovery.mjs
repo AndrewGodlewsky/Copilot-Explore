@@ -29,7 +29,7 @@ export async function recoveryRead(directory, name, max) {
     return buffer.subarray(0, bytesRead).toString('utf8');
   } finally { await handle.close(); }
 }
-export async function discoverVersions(directory, key, acceptsId, selected) {
+export async function discoverVersions(directory, key, acceptsId, selected, { validate = validateDocument } = {}) {
   if (!validRecoveryKey(key) || selected !== undefined && !validRecoveryKey(selected)) throw new Error('Invalid recovery selection.');
   const history = join(directory, 'history'), root = join(history, key);
   let names;
@@ -45,7 +45,7 @@ export async function discoverVersions(directory, key, acceptsId, selected) {
       if (bytes > 128 * 1024 * 1024) throw new Error('Recovery byte limit.');
       const data = await recoveryRead(root, name, MAX_DOCUMENT_BYTES);
       if (recoveryHash(data) !== name.slice(0, -5)) throw new Error('Damaged snapshot.');
-      const raw = JSON.parse(data), doc = validateDocument(raw);
+      const raw = JSON.parse(data), doc = validate(raw);
       if (raw.id !== doc.id || raw.revision !== doc.revision || raw.updatedAt !== doc.updatedAt || !acceptsId(doc.id)) throw new Error('Wrong snapshot identity.');
       entries.push({ hash: name.slice(0, -5), revision: doc.revision, time: doc.updatedAt });
       if (selected === name.slice(0, -5)) document = doc;

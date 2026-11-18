@@ -6,8 +6,6 @@ import { atomicWrite } from './storage.mjs';
 
 export const HISTORY_LIMITS = Object.freeze({ revisions: 50, bytes: 128 * 1024 * 1024, checkpoints: 10, name: 120 });
 const hash = value => createHash('sha256').update(value).digest('hex');
-const encode = doc => JSON.stringify(validateDocument(doc), null, 2);
-const digest = doc => hash(encode(doc));
 const validHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const revision = value => Number.isSafeInteger(value) && value >= 0;
 const nameValid = value => typeof value === 'string' && value.trim().length > 0 && value.length <= HISTORY_LIMITS.name;
@@ -16,9 +14,14 @@ const recoveryError = () => new Error('History recovery required. Files are pres
 // Every method is called under the active document's writer lock. The active
 // document rename is the commit point; intent recovery never replaces it.
 export class History {
-  constructor(directory, key, id, { write = atomicWrite } = {}) {
+  constructor(directory, key, id, { write = atomicWrite, validate = validateDocument } = {}) {
     if (!validHash(key) || typeof id !== 'string' || !id.length || id.length > 100) throw new Error('Invalid history identity.');
-    this.directory = resolve(directory); this.key = key; this.id = id; this.write = write; this.verified = new Map();
+    this.directory = resolve(directory); this.key = key; this.id = id; this.write = write; this.validateDocument = validate; this.verified = new Map();
+  }
+  encode(doc) {
+    const data = JSON.stringify(this.validateDocument(doc), null, 2);
+    if (Buffer.byteLength(data) > MAX_DOCUMENT_BYTES) throw new Error('History snapshot exceeds the saved-data size limit.');
+    return data;
   }
   async root() {
     let root = this.directory;
@@ -52,7 +55,7 @@ export class History {
       !(value.undoRevision === null || revision(value.undoRevision) && value.entries.some(row => row.revision === value.undoRevision && row.revision < value.head.revision))) throw new Error('Invalid history manifest.');
     return value;
   }
-  row(doc, label) { const data = encode(doc); return { revision: doc.revision, hash: hash(data), bytes: Buffer.byteLength(data), time: doc.updatedAt, label, checkpoints: [] }; }
+  row(doc, label) { const data = this.encode(doc); return { revision: doc.revision, hash: hash(data), bytes: Buffer.byteLength(data), time: doc.updatedAt, label, checkpoints: [] }; }
   initial(doc) { return { version: 1, key: this.key, id: this.id, head: this.row(doc, 'Initial saved version'), entries: [], undoRevision: null }; }
   async verify(row) {
     const stat = await lstat(join(await this.root(), `${row.hash}.json`));
@@ -66,14 +69,14 @@ export class History {
     if (hash(data) !== row.hash || Buffer.byteLength(data) !== row.bytes) throw new Error('A history snapshot is damaged.');
     const raw = JSON.parse(data);
     if (raw.id !== this.id || raw.revision !== row.revision || raw.updatedAt !== row.time) throw new Error('History snapshot identity does not match.');
-    const doc = validateDocument(raw);
+    const doc = this.validateDocument(raw);
     if (doc.id !== this.id || doc.revision !== row.revision || doc.updatedAt !== row.time) throw new Error('History snapshot identity does not match.');
     return doc;
   }
   async store(doc, row) {
     const file = `${row.hash}.json`, existing = await this.read(file, MAX_DOCUMENT_BYTES, true);
     if (existing !== null) { await this.snapshot(row); return; }
-    await this.write(join(await this.root(), file), encode(doc));
+    await this.write(join(await this.root(), file), this.encode(doc));
   }
   prune(value, required) {
     while (value.entries.length > HISTORY_LIMITS.revisions || value.entries.reduce((sum, row) => sum + row.bytes, 0) > HISTORY_LIMITS.bytes) {
@@ -88,7 +91,7 @@ export class History {
     const root = await this.root(), retained = new Set(value.entries.map(row => `${row.hash}.json`));
     for (const file of await readdir(root)) {
       if (!/^[a-f0-9]{64}\.json$/.test(file) || retained.has(file)) continue;
-      const data = await this.read(file, MAX_DOCUMENT_BYTES), doc = validateDocument(JSON.parse(data));
+      const data = await this.read(file, MAX_DOCUMENT_BYTES), doc = this.validateDocument(JSON.parse(data));
       if (hash(data) !== file.slice(0, -5) || doc.id !== this.id) throw new Error('An unreferenced history snapshot is damaged.');
       await unlink(join(root, file));
     }
@@ -105,7 +108,7 @@ export class History {
           // Final manifest may already have landed before a crash removing intent.
           if (!(intent.version === 1 && validHash(intent.before) && intent.after === value.head.hash && JSON.stringify(proposed) === JSON.stringify(value))) throw new Error('Invalid history intent.');
         }
-        const active = digest(current);
+        const active = hash(this.encode(current));
         if (active === intent.after) {
           for (const row of proposed.entries) await this.verify(row);
           await this.write(join(await this.root(), 'manifest.json'), JSON.stringify(proposed)); value = proposed;

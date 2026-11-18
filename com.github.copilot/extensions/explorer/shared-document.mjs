@@ -104,6 +104,7 @@ function validate(value) {
   preservable(value.journey, normalized);
   return value;
 }
+export { validate as validateSharedDocument };
 
 /** Pure read: retains original text and never inserts model defaults into shared content. */
 export function readSharedDocument(source) {

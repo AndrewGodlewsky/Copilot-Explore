@@ -10,6 +10,7 @@ import { ContributorSettings } from './contributor-settings.mjs';
 import { attributeContributions, contributionStatus } from './contributors.mjs';
 import { changeComments, commentStatuses } from './comments.mjs';
 import { changeReviewHandoffs, handoffStatuses } from './review-handoffs.mjs';
+import { PortableReferences } from './portable-reference-workflow.mjs';
 import { ScenarioComparison } from './scenario-compare.mjs';
 import { ScenarioPreferences } from './scenario-preference-workflow.mjs';
 import { BranchRestoration } from './branch-restoration.mjs';
@@ -62,6 +63,7 @@ export class Explorer {
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
     this.researchReview = new ResearchReview();
+    this.portableReferences = new PortableReferences();
     this.scenarioPreferences = new ScenarioPreferences();
     this.branchRestoration = new BranchRestoration();
     this.projectContext = new ProjectContext(projectRoot);
@@ -107,6 +109,10 @@ export class Explorer {
     return attributeContributions(before, next, intent, (await settings.read()).actor, new Date().toISOString());
   }
   async changeStorage(store) {
+    if (this.projectStore !== store) await this.analytics?.flush();
+    this.replaceStorage(store);
+  }
+  replaceStorage(store) {
     this.adrFormats.clear();
     this.adrWriter.clear();
     this.branchRestoration.clear();
@@ -114,15 +120,19 @@ export class Explorer {
     this.scenarioComparison?.clear();
     this.scenarioPreferences.clear();
     if (this.projectStore === store) return;
-    await this.analytics?.flush();
     this.projectStore = store;
     this.projectChange = null; this.projectReconciliation = null; this.projectObservedAt = 0;
     this.draftStore = this.referenceStore = this.historyStore = this.storageManager = this.dashboard = null;
     this.dashboardHelperStatus = undefined;
     if (this.analytics) { this.analytics = null; this.startObservation(); }
   }
-  async attachProject(store) {
-    await this.changeStorage(store);
+  async attachProject(store, beforeAttach) {
+    if (this.projectStore !== store) await this.analytics?.flush();
+    if (beforeAttach) {
+      await beforeAttach();
+      if (this.closed) throw Error('This canvas is closed.');
+    }
+    this.replaceStorage(store);
     this.file = store.context.file; this.doc = store.document; this.activeKey = store.context.key;
     this.researchReview.clear(); this.followup = null; this.recoveryNotice = null; this.exportObservation = null;
     this.reconcileCleanup();
@@ -805,6 +815,7 @@ export class Explorer {
       });
     });
   }
+  portableReferenceRequest(input) { return this.transact(() => this.portableReferences.request(this, input)); }
   scenarioPreferenceRequest(input) { return this.transact(() => this.scenarioPreferences.request(this, input)); }
   scenarioPolicy() { return this.scenarioPreferences.policy(this); }
   assertScenarioPolicy(policy) { return this.scenarioPreferences.assertPolicy(this, policy); }
@@ -1111,6 +1122,11 @@ export class Explorer {
   }
   command(action, input = {}) {
     return this.transact(async () => {
+      if (action === 'open-reference') {
+        const { action: ignoredAction, scope: ignoredScope, ...fields } = input;
+        const result = await this.portableReferences.open(this, fields);
+        return { ...this.uiSnapshot(), referenceNodeId: result.nodeId };
+      }
       if (action === 'open-preferred-source') {
         if (this.closed || !this.library || input.journey !== this.activeKey || input.revision !== this.doc?.revision || this.pending || this.preview || Object.keys(input).filter(key => !['action', 'scope'].includes(key)).sort().join(',') !== 'id,journey,revision') throw Error('Scenario navigation changed or work is active. Finish pending work and inspect the preference again.');
         const selected = await this.scenarioPreferences.source(this, input.id);
@@ -1463,5 +1479,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.adrFormats.clear(); this.adrWriter.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
+  async close() { this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

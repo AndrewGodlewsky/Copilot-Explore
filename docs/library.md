@@ -4,6 +4,8 @@ Personal library behavior is described below. See [project saving](project-savin
 
 [Review handoffs](review-handoffs.md) carry branch investigation notes and requested/taken/completed responsibility in the shared journey. Personal copies retain them for inspection; changing responsibility requires Project storage. Scenario forks do not inherit ownership requests.
 
+[Portable references](portable-references.md) let another checkout inspect and open an exact shared journey/question from its relative file location and saved IDs. Use **Tools > Open reference** or the welcome-screen action; opening retains the existing draft and pending-work safeguards. Moved files require a new reference from their new location.
+
 `library.mjs` owns discovery, safe entry resolution, duplicate imports, and library metadata. `controller.mjs` still owns document revisions and the per-document exclusive writer lock. `Explorer({ file, ... })` remains available for tests and preview; production uses `Explorer({ library, binding, ... })`.
 
 The Explorer data root contains the original version-1 `.explore.json` documents. New files use `journey-<sha256(document.id)>.explore.json`; existing root files are discovered and never renamed or removed. Document IDs identify journeys independently of host sessions/canvases. An entry key is SHA-256 of its filename, a NUL separator, and its document ID. The UI receives keys and summaries, never file paths. Different legacy files with the same logical ID remain separate entries; divergent contents are visibly marked as ambiguous.

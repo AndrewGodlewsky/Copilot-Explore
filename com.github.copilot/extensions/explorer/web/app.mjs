@@ -4,6 +4,7 @@ import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
 import { CommentsClient } from './comments-client.mjs';
 import { ReviewHandoffsClient } from './review-handoffs-client.mjs';
+import { PortableReferenceClient } from './portable-reference-client.mjs';
 import { CleanupClient } from './cleanup.mjs';
 import { QuestionHelpClient } from './question-help-client.mjs';
 import { ResearchReviewClient } from './research-review-client.mjs';
@@ -264,6 +265,13 @@ const comments = new CommentsClient({ $, el, button, fetch: (...args) => fetch(.
 const reviewHandoffs = new ReviewHandoffsClient({ $, el, button, fetch: (...args) => fetch(...args), state: () => state,
   active: () => !closed && !suspended, canAct: () => !busy, apply, selected: () => selected, eventText: contributorEventText,
   copyText: text => navigator.clipboard.writeText(text),
+  begin: () => {
+    busy = true; const epoch = ++actionEpoch; stateCursor = null; pollFlight?.abort.abort();
+    return () => { if (actionEpoch === epoch) { busy = false; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); } };
+  } });
+const portableReferences = new PortableReferenceClient({ $, state: () => state, active: () => !closed && !suspended, canAct: () => !busy,
+  fetch: (...args) => fetch(...args), copyText: text => navigator.clipboard.writeText(text), select,
+  navigate: (input, current) => switchJourney('open-reference', input, current),
   begin: () => {
     busy = true; const epoch = ++actionEpoch; stateCursor = null; pollFlight?.abort.abort();
     return () => { if (actionEpoch === epoch) { busy = false; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); } };
@@ -733,6 +741,7 @@ function apply(next, reset = false) {
   signature = stamp; state = next;
   comments.update();
   reviewHandoffs.update();
+  portableReferences.update();
   if ($('adr-questions-dialog').open) renderAdrQuestions();
   syncReviewQueue();
   syncComparison();
@@ -2054,6 +2063,7 @@ function renderWorkspace() {
   region('contributors', toolPanels.details);
   toolPanels.details.append(button('Review comments on this node', () => { if (current()) comments.open(node.id); }, { id: 'comments-node-open', 'aria-haspopup': 'dialog' }));
   toolPanels.details.append(button('Review handoffs for this branch', () => { if (current()) reviewHandoffs.open(node.id); }, { id: 'review-handoffs-node-open', 'aria-haspopup': 'dialog' }));
+  toolPanels.details.append(button('Copy portable reference', () => { if (current()) void portableReferences.open(node.id); }, { id: 'portable-reference-node-copy', 'aria-haspopup': 'dialog' }));
   if (root) {
     content.append(el('p', { class: 'quiet' }, 'Pick a connected question to explore it. Each question opens into its own workspace on the map.'), button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
   } else if (!isQuestion(node)) {
@@ -4312,6 +4322,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  portableReferences.close(false);
   closeContributors(false);
   comments.close(false);
   reviewHandoffs.close(false);

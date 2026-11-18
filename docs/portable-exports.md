@@ -1,5 +1,7 @@
 # Portable map exports
 
+To point someone to an editable saved question in their own checkout, use a [portable reference](portable-references.md). References contain a relative file location and stable IDs; the visual exports below are separate reduced projections.
+
 Review dates, manual revisit conditions and acknowledgment timestamps are omitted from every portable visual format. Use complete native JSON or Markdown to retain [revisit reminders](revisit-reminders.md).
 
 Choose **Export maps** at any point, or **Finish exploration** when ready. Complete Markdown and `.explore.json` downloads always contain the full saved journey, research and accepted artifacts. Local answer drafts and private project excerpts are excluded. Use the native file to continue editing in Explorer.

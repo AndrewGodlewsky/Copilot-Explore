@@ -12,6 +12,7 @@ const assets = new Map([
   ['', ['index.html', 'text/html; charset=utf-8']],
   ['dashboard.mjs', ['dashboard.mjs', 'text/javascript; charset=utf-8']],
   ['app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
+  ['portable-reference-client.mjs', ['portable-reference-client.mjs', 'text/javascript; charset=utf-8']],
   ['layout.mjs', ['layout.mjs', 'text/javascript; charset=utf-8']],
   ['minimap.mjs', ['minimap.mjs', 'text/javascript; charset=utf-8']],
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
@@ -179,6 +180,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       }
       if (req.method === 'GET' && route === 'api/drafts') return json(200, await explorer.readDrafts(url.searchParams.get('journey')));
       if (req.method === 'GET' && route === 'api/references') return json(200, await explorer.readReferences(url.searchParams.get('journey')));
+      if (req.method === 'POST' && route === 'api/portable-reference') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.portableReferenceRequest(await body(req, 20 * 1024)));
+      }
       if (req.method === 'POST' && route === 'api/references') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.writeReferences(await body(req, 1024)));
@@ -242,7 +247,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req);
-        if ((input.answerPreview || ['research', 'research-follow-up', 'regenerate-questions', 'adr-questions', 'restore', 'restart-branch', 'reaffirm-review', 'clear-review-answer', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry', 'project-merge-accept', 'add-dependency', 'remove-dependency', 'comment-create', 'comment-reply', 'comment-resolve', 'comment-reopen', 'review-handoff-create', 'review-handoff-take', 'review-handoff-reassign', 'review-handoff-complete'].includes(input.action)) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        if ((input.answerPreview || ['research', 'research-follow-up', 'regenerate-questions', 'adr-questions', 'restore', 'restart-branch', 'reaffirm-review', 'clear-review-answer', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry', 'project-merge-accept', 'open-reference', 'add-dependency', 'remove-dependency', 'comment-create', 'comment-reply', 'comment-resolve', 'comment-reopen', 'review-handoff-create', 'review-handoff-take', 'review-handoff-reassign', 'review-handoff-complete'].includes(input.action)) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
       if (req.method === 'POST' && route === 'api/viewer-export') {

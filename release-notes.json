@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.100",
+    "summary": "Share portable references to saved Project journeys and questions. Copy readable Markdown, inspect the exact target in another checkout, and explicitly open it through folds or branch focus. Changed content needs acknowledgement; missing or mismatched targets stay unopened. Keep private drafts and show manual copy text when clipboard access fails."
+  },
+  {
     "version": "0.1.99",
     "summary": "Request, take, reassign and complete branch reviews with shared notes, selected questions and contributor history. Show changed or removed sources and review competing ownership changes explicitly. Copy one handoff by choice; preserve private drafts and safe retries. Native map reads omit review notes. Completion never changes answers or sends notifications."
   },

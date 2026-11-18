@@ -29,7 +29,9 @@ import { attributeContributions } from '../com.github.copilot/extensions/explore
 import { changeComments } from '../com.github.copilot/extensions/explorer/comments.mjs';
 import { CommentsClient } from '../com.github.copilot/extensions/explorer/web/comments-client.mjs';
 import { ReviewHandoffsClient } from '../com.github.copilot/extensions/explorer/web/review-handoffs-client.mjs';
+import { PortableReferenceClient } from '../com.github.copilot/extensions/explorer/web/portable-reference-client.mjs';
 import { changeReviewHandoffs } from '../com.github.copilot/extensions/explorer/review-handoffs.mjs';
+import { createPortableReference, formatPortableReference, parsePortableReference } from '../com.github.copilot/extensions/explorer/portable-reference.mjs';
 import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
 import { createDocument, contextFor, addDependency, answerNode } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
@@ -2156,6 +2158,60 @@ test('review handoff UI merge review displays the complete literal responsibilit
   assert.match($('project-merge-local').value, /Local <script>/); assert.match($('project-merge-incoming').value, /Incoming <b>/); assert.match($('project-merge-incoming').value, /Original λ/); assert.match($('project-merge-incoming').value, /digest/); assert.equal($('answer').value, 'Keep private draft');
 });
 
+test('portable reference UI copies a saved question with manual clipboard fallback and preserves answer and discussion drafts', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Private answer draft'); const editor = $('answer'); editor.setSelectionRange(2, 5);
+  $('comments-node-open').click(); f.type('comments-text', 'Private discussion draft'); $('comments-close').click();
+  $('review-handoffs-node-open').click(); f.type('review-handoffs-note', 'Private handoff draft'); $('review-handoffs-close').click();
+  Object.defineProperty(f.window.navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw Error('Unavailable'); } } });
+  await uiResponse(f, 'api/portable-reference', 'copy', () => $('portable-reference-node-copy').click()); await until(() => /copy manually/.test($('portable-reference-status').textContent), 'manual reference copy');
+  const copied = parsePortableReference($('portable-reference-output').value); assert.equal(copied.nodeId, node.id); assert.equal(copied.journeyId, f.explorer.doc.id); assert.doesNotMatch($('portable-reference-output').value, /Private/);
+  $('portable-reference-close').click(); assert.equal($('answer'), editor); assert.equal(editor.value, 'Private answer draft'); assert.equal(editor.selectionStart, 2);
+  $('comments-node-open').click(); assert.equal($('comments-text').value, 'Private discussion draft'); $('comments-close').click();
+  $('review-handoffs-node-open').click(); assert.equal($('review-handoffs-note').value, 'Private handoff draft');
+});
+
+test('portable reference UI opens an exact same-journey target through focus and folds while retaining scoped drafts', async t => {
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), ui = f.window.__updates, [root, first, target] = f.explorer.doc.nodes;
+  f.open(first.id); f.type('answer', 'First node draft'); $('focus-branch').click();
+  $('comments-node-open').click(); f.type('comments-text', 'Keep comment'); $('comments-close').click();
+  const ref = formatPortableReference(createPortableReference(f.explorer.doc, f.explorer.projectStore.context.relativePath, target.id));
+  $('portable-reference-open').click(); f.type('portable-reference-text', ref); await uiResponse(f, 'api/portable-reference', 'inspect', () => $('portable-reference-inspect').click()); await until(() => !$('portable-reference-go').disabled, 'target inspected');
+  await uiResponse(f, 'api/action', 'open-reference', () => $('portable-reference-go').click()); await until(() => ui.scene().selected === target.id && !$('portable-reference-dialog').open, 'target opened');
+  assert.equal($('focus-status').textContent, ''); assert.equal(f.document.activeElement, $('expanded-title')); ui.select(first.id); assert.equal($('answer').value, 'First node draft');
+  $('comments-node-open').click(); assert.equal($('comments-text').value, 'Keep comment'); $('comments-close').click();
+  ui.select(root.id); $('branch-workspace').click(); $('portable-reference-open').click(); f.type('portable-reference-text', ref); await uiResponse(f, 'api/portable-reference', 'inspect', () => $('portable-reference-inspect').click()); await until(() => !$('portable-reference-go').disabled, 'folded target inspected');
+  await uiResponse(f, 'api/action', 'open-reference', () => $('portable-reference-go').click()); await until(() => ui.scene().selected === target.id && !$('portable-reference-dialog').open, 'folded target revealed'); assert.ok(ui.scene().positions.has(target.id));
+});
+
+test('portable reference UI respects unsaved-direction and draft-save guards before switching to a different saved journey', async t => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-reference-ui-')); t.after(() => rm(project, { recursive: true, force: true })); await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true }); let target;
+  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => { target = await e.projectRepository.create(e.doc); } }), $ = id => f.document.getElementById(id), old = f.explorer.activeKey, first = f.explorer.doc.nodes[1];
+  f.open(first.id); f.type('answer', 'Keep personal draft'); f.type('manual-question', 'Unposted direction');
+  const ref = formatPortableReference(createPortableReference(target.document, target.context.relativePath, first.id));
+  $('portable-reference-open').click(); f.type('portable-reference-text', ref); await uiResponse(f, 'api/portable-reference', 'inspect', () => $('portable-reference-inspect').click()); await until(() => !$('portable-reference-go').disabled, 'cross journey inspected');
+  $('portable-reference-go').click(); await until(() => /not opened/.test($('portable-reference-status').textContent), 'direction guard'); assert.equal(f.explorer.activeKey, old); assert.match($('notice').textContent, /direction drafts/);
+  $('portable-reference-close').click(); f.type('manual-question', ''); $('portable-reference-open').click(); await uiResponse(f, 'api/portable-reference', 'inspect', () => $('portable-reference-inspect').click()); await until(() => !$('portable-reference-go').disabled, 'retry inspected');
+  let blocked = true; f.pauseDraftWrite(() => { if (blocked) throw Error('Draft disk unavailable'); }); f.type('answer', 'Newest personal draft'); $('portable-reference-go').click();
+  await until(() => /Draft could not be saved/.test($('notice').textContent), 'draft failure blocked navigation'); assert.equal(f.explorer.activeKey, old); blocked = false;
+  await uiResponse(f, 'api/action', 'open-reference', () => $('portable-reference-go').click()); await until(() => f.explorer.projectStore && !$('portable-reference-dialog').open, 'project target opened'); assert.equal(f.window.__updates.scene().selected, first.id);
+  await f.explorer.command('open', { revision: f.explorer.doc.revision, key: old }); await f.poll(); f.window.__updates.select(first.id); await until(() => $('answer').value === 'Newest personal draft', 'personal draft restored');
+});
+
+test('portable reference UI opens from a fresh welcome screen and requires acknowledgement of a changed saved target', async t => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-reference-welcome-')), local = await mkdtemp(join(tmpdir(), 'explorer-reference-local-'));
+  t.after(async () => { await rm(project, { recursive: true, force: true }); await rm(local, { recursive: true, force: true }); }); await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+  const explorer = await new Explorer({ library: new Library(local), binding: 'fresh-reference-canvas', projectRoot: async () => project, send() { throw Error('Reference navigation must not send'); } }).load();
+  const doc = createDocument('Shared welcome'); doc.nodes.push({ id: 'saved-question', parentId: doc.rootId, question: 'Question to review?', category: 'Choice', answer: 'Earlier answer', research: null, review: false });
+  const path = `.explorer/journeys/${doc.id}.explore.json`, reference = formatPortableReference(createPortableReference(doc, path, 'saved-question'));
+  doc.nodes[1].answer = 'Changed answer'; await explorer.projectRepository.create(doc);
+  const f = await fixture(t, 340, undefined, false, { explorer, empty: true }), $ = id => f.document.getElementById(id);
+  $('portable-reference-welcome').click(); f.type('portable-reference-text', reference); await uiResponse(f, 'api/portable-reference', 'inspect', () => $('portable-reference-inspect').click());
+  await until(() => /changed/.test($('portable-reference-preview').textContent), 'changed target shown'); assert.equal(explorer.doc, null); assert.equal($('portable-reference-go').disabled, true);
+  $('portable-reference-ack').checked = true; $('portable-reference-ack').dispatchEvent(new f.window.Event('change'));
+  await uiResponse(f, 'api/action', 'open-reference', () => $('portable-reference-go').click()); await until(() => !$('portable-reference-dialog').open && $('answer')?.value === 'Changed answer', 'acknowledged saved target opened'); assert.equal(f.window.__updates.scene().selected, 'saved-question');
+});
+
 async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
@@ -2241,6 +2297,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   if (commentsDialog) { commentsDialog.showModal = () => { commentsDialog.open = true; }; commentsDialog.close = () => { commentsDialog.open = false; }; }
   const handoffsDialog = document.getElementById('review-handoffs-dialog');
   if (handoffsDialog) { handoffsDialog.showModal = () => { handoffsDialog.open = true; }; handoffsDialog.close = () => { handoffsDialog.open = false; }; }
+  const referenceDialog = document.getElementById('portable-reference-dialog');
+  if (referenceDialog) { referenceDialog.showModal = () => { referenceDialog.open = true; }; referenceDialog.close = () => { referenceDialog.open = false; }; }
   navigationDialog.showModal = () => { navigationDialog.open = true; };
   navigationDialog.close = () => { navigationDialog.open = false; };
   const paletteDialog = document.getElementById('palette-dialog');
@@ -2302,6 +2360,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.DraftClient = DraftClient;
   window.CommentsClient = CommentsClient;
   window.ReviewHandoffsClient = ReviewHandoffsClient;
+  window.PortableReferenceClient = PortableReferenceClient;
   window.CleanupClient = CleanupClient;
   window.QuestionHelpClient = QuestionHelpClient;
   window.ResearchReviewClient = ResearchReviewClient;
@@ -2317,8 +2376,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
-  await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
+  window.eval(script.replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  await until(() => options.empty ? !document.getElementById('library-home').hidden : options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
     const button = [...document.querySelectorAll('#nodes button')].find(b => b.title === question);

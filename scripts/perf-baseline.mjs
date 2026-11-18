@@ -20,6 +20,7 @@ import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
 import { CommentsClient } from '../com.github.copilot/extensions/explorer/web/comments-client.mjs';
 import { ReviewHandoffsClient } from '../com.github.copilot/extensions/explorer/web/review-handoffs-client.mjs';
+import { PortableReferenceClient } from '../com.github.copilot/extensions/explorer/web/portable-reference-client.mjs';
 import { CleanupClient } from '../com.github.copilot/extensions/explorer/web/cleanup.mjs';
 import { QuestionHelpClient } from '../com.github.copilot/extensions/explorer/web/question-help-client.mjs';
 import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
@@ -74,6 +75,7 @@ const imports = [
   "import { DraftClient } from './drafts.mjs';", "import { attachNavigation } from './navigation.mjs';",
   "import { CommentsClient } from './comments-client.mjs';",
   "import { ReviewHandoffsClient } from './review-handoffs-client.mjs';",
+  "import { PortableReferenceClient } from './portable-reference-client.mjs';",
   "import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';",
   "import { effectiveMode, MODES } from './modes.mjs';",
 ];
@@ -105,7 +107,7 @@ export async function domFixture(document) {
   };
   Object.assign(window, { DecisionImpact, impactPath, decisionImpactKey, criticalPaths, searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, attachDashboard, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
     ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
-  Object.assign(window, { reviewQueue, reviewContext, CommentsClient, ReviewHandoffsClient });
+  Object.assign(window, { reviewQueue, reviewContext, CommentsClient, ReviewHandoffsClient, PortableReferenceClient });
   const source = imports.reduce((text, statement) => text.replace(statement, ''), appScript)
     .replace('void poll();', 'window.__perf = { renderMap, renderWorkspace, renderOutline, poll, select, zoom, pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); }, geometry: () => geometryCache.value, stopPoll: () => clearTimeout(pollTimer) }; void poll();');
   window.eval(source);

@@ -465,3 +465,8 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #review-handoffs-dialog .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 .review-handoff-event { border-top: 1px solid var(--line); padding-block: 8px; }
 .review-handoff-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+
+#portable-reference-dialog { width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; }
+#portable-reference-dialog textarea { display: block; width: 100%; box-sizing: border-box; margin: .4rem 0 .7rem; }
+#portable-reference-dialog button { margin: .35rem .35rem .35rem 0; }
+.portable-reference-preview { white-space: pre-wrap; overflow-wrap: anywhere; }

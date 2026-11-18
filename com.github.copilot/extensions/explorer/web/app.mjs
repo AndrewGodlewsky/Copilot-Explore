@@ -32,6 +32,9 @@ function connectionStatus(message = '') { $('connection-status').textContent = m
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
 let revisitDay = localDate();
 const revisitLabel = node => revisitStatuses(node.revisit, revisitDay).map(status => REVISIT_FILTERS[status]).join(' · ');
+const importanceLabel = node => node.importance ? `${node.importance[0].toUpperCase()}${node.importance.slice(1)} importance` : 'Unranked';
+const importanceBadge = node => el('span', { class: `importance importance-${node.importance ?? 'unranked'}` }, importanceLabel(node));
+const importanceHistory = 'Historical model assessment for the original suggested wording and context; not confidence, answer certainty or a user decision. Not automatically reassessed after changes.';
 function refreshRevisitDay() {
   const today = localDate(); if (today === revisitDay) return;
   revisitDay = today;
@@ -116,6 +119,7 @@ function captureWorkspace() {
     ui.scroll = content.scrollTop;
     ui.researchOpen = panel.querySelector('.research-disclosure')?.open ?? false;
     ui.rationaleOpen = panel.querySelector('#question-rationale')?.open ?? false;
+    ui.importanceOpen = panel.querySelector('#question-importance')?.open ?? false;
     ui.helpOpen = panel.querySelector('#question-help')?.open ?? false;
     ui.manualOpen = panel.querySelector('.manual')?.open ?? false;
     if (!references.error) references.open = panel.querySelector('#references')?.open ?? references.open;
@@ -534,13 +538,13 @@ function renderMap() {
       }
       card.className = `node ${acceptedIds.has(n.id) ? 'new-question' : ''} ${root ? 'root' : ''} ${n.answer ? 'done' : ''} ${selected === n.id ? 'selected' : ''} ${n.review ? 'needs-review' : ''} ${branches.parentIds.has(n.id) ? 'has-branch' : ''}`;
       card.title = n.question;
-      card.setAttribute('aria-label', `${n.category}: ${n.question}. ${nodeStatus(n)}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden}` : ''}${n.revisit ? `; reminder: ${revisitLabel(n)}` : ''}`);
+      card.setAttribute('aria-label', `${n.category}: ${n.question}. ${nodeStatus(n)}${isQuestion(n) ? `; ${importanceLabel(n)}` : ''}${n.review ? '; needs review' : ''}${hidden ? `; ${hidden}` : ''}${n.revisit ? `; reminder: ${revisitLabel(n)}` : ''}`);
       card.style.left = `${p.x}px`; card.style.top = `${p.y}px`; card.style.width = `${p.width}px`; card.style.height = `${p.height}px`; card.style.setProperty('--branch', colors[p.branch % colors.length]);
       const status = (hidden || (root ? `${total} questions` : `${nodeStatus(n)}${n.review ? '; needs review' : ''}`)) + (n.revisit ? ` · ${revisitLabel(n)}` : '');
-      const stamp = JSON.stringify([n.category, n.question, n.answer, status]);
+      const stamp = JSON.stringify([n.category, n.question, n.answer, status, n.importance]);
       if (card.renderStamp !== stamp) {
         card.renderStamp = stamp;
-        card.replaceChildren(el('span', { class: 'category' }, n.category), el('span', { class: 'question' }, n.question),
+        card.replaceChildren(el('span', { class: 'category' }, el('span', { class: 'category-text' }, n.category), ...(isQuestion(n) ? [importanceBadge(n)] : [])), el('span', { class: 'question' }, n.question),
           ...(n.answer ? [el('span', { class: 'answer-preview' }, n.answer)] : []), el('span', { class: 'status' }, status));
       }
       if (branches.parentIds.has(n.id)) {
@@ -712,6 +716,7 @@ function renderWorkspace() {
   };
   workspace = owner;
   region('rationale');
+  region('importance');
   if (!root && isQuestion(node)) {
     const help = el('details', { id: 'question-help', class: 'question-help' }, el('summary', { id: 'question-help-summary' }, 'Help with this question'),
       el('p', { class: 'quiet' }, 'Model help explains this saved question. Your question and answer stay unchanged. For sourced or current information, use Explore options.'),
@@ -842,6 +847,15 @@ function renderWorkspace() {
       const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.kind === 'direction' ? nodeStatus(node) : node.category), el('div', { class: 'node-head-actions' }, button('Focus branch', () => focusBranch(node.id), { id: 'focus-branch', 'aria-pressed': String(focusId === node.id), 'aria-label': `Focus branch: ${node.question}` }), branchButton(node, true), button('Collapse node', () => collapseNode(), { id: 'collapse-node' }))), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
       if (collapsed.has(node.id)) heading.append(el('p', { class: 'branch-count' }, hiddenSummary(node.id)));
       return heading;
+    });
+    update('importance', [node.importance, node.importanceReason, node.generation], () => {
+      if (!isQuestion(node)) return;
+      if (!node.importance) return el('p', { class: 'quiet' }, 'Importance: Unranked. No assessment recorded.');
+      const why = el('details', { id: 'question-importance', class: 'question-rationale' }, el('summary', { id: 'question-importance-summary' }, importanceBadge(node), ' — Why?'),
+        el('p', { class: 'quiet' }, importanceHistory), el('p', { class: 'quiet' }, 'Original suggested wording: ', node.generation.originalQuestion), el('p', {}, node.importanceReason));
+      why.open = ui.importanceOpen ?? false;
+      why.addEventListener('toggle', () => { if (why.isConnected) ui.importanceOpen = why.open; });
+      return why;
     });
     update('rationale', [node.rationale, node.generation], () => {
       if (node.rationale) {
@@ -975,6 +989,13 @@ function renderQuestionPreview() {
     const wording = el('textarea', { id: `candidate-question-${index}`, rows: '2', maxlength: '600', 'aria-label': `Question ${index + 1} wording` }); wording.value = edit.question;
     wording.addEventListener('input', () => { if (!wording.isConnected || state.preview?.id !== batch.id) return; edit.question = wording.value; });
     const row = el('div', { class: 'candidate' }, el('label', { for: check.id }, check, `Include ${batch.questions[index].category} question`), wording);
+    const candidate = batch.questions[index];
+    if (candidate.importance) {
+      const why = el('details', { id: `candidate-importance-${index}`, class: 'candidate-rationale' }, el('summary', {}, importanceBadge(candidate), ' — Why?'),
+        el('p', { class: 'quiet' }, importanceHistory), el('p', { class: 'quiet' }, 'Original suggested wording: ', candidate.question), el('p', {}, candidate.importanceReason));
+      why.open = edit.importanceOpen ?? false;
+      why.addEventListener('toggle', () => { if (why.isConnected) edit.importanceOpen = why.open; }); row.append(why);
+    } else row.append(importanceBadge(candidate));
     if (batch.questions[index].rationale) {
       const why = el('details', { id: `candidate-rationale-${index}`, class: 'candidate-rationale' }, el('summary', {}, 'Why suggested?'),
         el('p', { class: 'quiet' }, 'Historical model explanation for the original suggested wording and context. It will stay with this question if you accept an adjusted version.'),
@@ -1244,16 +1265,17 @@ function renderResearch(node) {
 }
 function renderOutline() {
   if (!state.document || $('outline').hidden) return;
-  const stamp = JSON.stringify([referenceJourney(), $('search').value, $('revisit-filter').value, revisitDay, state.document.nodes.map(n => [n.id, n.parentId, n.question, n.answer, n.category, n.answerState, n.review, n.revisit, collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
+  const stamp = JSON.stringify([referenceJourney(), $('search').value, $('revisit-filter').value, $('importance-filter').value, revisitDay, state.document.nodes.map(n => [n.id, n.parentId, n.question, n.answer, n.category, n.answerState, n.review, n.revisit, n.importance, collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
   if ($('outline-list').renderStamp === stamp) return;
   $('outline-list').renderStamp = stamp;
   const scroll = $('outline-list').scrollTop;
   const focused = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
   const focusedBranch = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.branchId : null;
   const query = $('search').value.toLowerCase();
-  const nodes = state.document.nodes.filter(n => `${n.question} ${n.answer} ${n.category}`.toLowerCase().includes(query) && revisitMatches(n.revisit, $('revisit-filter').value, revisitDay));
+  const importance = $('importance-filter').value;
+  const nodes = state.document.nodes.filter(n => `${n.question} ${n.answer} ${n.category}`.toLowerCase().includes(query) && revisitMatches(n.revisit, $('revisit-filter').value, revisitDay) && (importance === 'all' || isQuestion(n) && (n.importance ?? 'unranked') === importance));
   $('outline-list').replaceChildren(...nodes.map(n => el('div', { class: 'outline-row' },
-    button([n.question, el('small', {}, `${n.category} · ${nodeStatus(n)}${n.review ? '; needs review' : ''}${collapsed.has(n.id) ? ` · ${hiddenSummary(n.id)}` : ''}${n.revisit ? ` · Reminder: ${revisitLabel(n)}` : ''}`)], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id }),
+    button([n.question, el('small', {}, `${n.category} · ${nodeStatus(n)}${n.review ? '; needs review' : ''}${collapsed.has(n.id) ? ` · ${hiddenSummary(n.id)}` : ''}${n.revisit ? ` · Reminder: ${revisitLabel(n)}` : ''}`), ...(isQuestion(n) ? [importanceBadge(n)] : [])], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id }),
     branchButton(n))));
   if (focused) [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
   $('outline-list').scrollTop = scroll;
@@ -1883,7 +1905,7 @@ function invalidateViewer(message = 'Selection changed. Preview the included con
 }
 function openViewerSelection() {
   viewerTarget = { journey: state.activeKey ?? state.document.id, revision: state.document.revision };
-  invalidateViewer('Choose saved nodes, then optionally include their answers and research. Preview before downloading.');
+  invalidateViewer('Choose saved nodes, including recorded importance and reasons, then optionally include their answers and research. Preview before downloading.');
   $('viewer-selection').replaceChildren();
   for (const node of state.document.nodes) {
     const row = el('fieldset', { 'data-node-id': node.id }), include = el('input', { type: 'checkbox', 'data-field': 'node' });
@@ -1916,7 +1938,7 @@ async function requestViewer(action) {
       const value = await response.json(); if (!current()) return;
       viewerPreview = { digest: value.digest };
       $('viewer-preview-content').textContent = JSON.stringify(value.snapshot, null, 2);
-      $('viewer-status').textContent = `Preview: ${value.snapshot.nodes.length} saved nodes. Review all included text below before downloading. Research is recorded AI suggestion and interpretation, not a user decision or verified fact.`;
+      $('viewer-status').textContent = `Preview: ${value.snapshot.nodes.length} saved nodes. Review all included text below before downloading. Research is recorded AI suggestion and interpretation, not a user decision or verified fact. Importance is a historical model assessment, not confidence or certainty.`;
       $('viewer-download').disabled = false;
     } else {
       const blob = await response.blob(); if (!current()) return;
@@ -1969,6 +1991,7 @@ $('outline').addEventListener('keydown', event => {
 });
 $('search').addEventListener('input', renderOutline);
 $('revisit-filter').addEventListener('change', renderOutline);
+$('importance-filter').addEventListener('change', renderOutline);
 $('request-status').addEventListener('click', () => {
   if (state.pending || state.preview) {
     const id = (state.pending ?? state.preview).nodeId;

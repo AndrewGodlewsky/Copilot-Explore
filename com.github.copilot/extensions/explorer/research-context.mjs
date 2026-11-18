@@ -9,6 +9,8 @@ export const record = node => ({ id: node.id, parentId: node.parentId, question:
   ...(isQuestion(node) ? { answerState: effectiveAnswerState(node) } : node.kind === 'direction' ? { kind: 'direction', origin: 'user' } : {}), review: node.review });
 const generationRecord = (node, relation, includeRationale = true) => ({ id: node.id, parentId: node.parentId, question: node.question, relation,
   ...(node.kind === 'direction' ? { kind: 'direction', origin: 'user' } : {}),
+  ...(includeRationale && node.importance && node.generation ? { historicalImportance: { originalQuestion: node.generation.originalQuestion, importance: node.importance, importanceReason: node.importanceReason,
+    provenance: 'Historical model assessment for the original suggested wording and context; not a user fact or decision, confidence or answer certainty. Not automatically reassessed after changes.' } } : {}),
   ...(includeRationale && node.rationale && node.generation ? { historicalRationale: { originalQuestion: node.generation.originalQuestion, rationale: node.rationale,
     provenance: 'Historical model explanation for the original suggested wording and context; not a user fact or decision.' } } : {}) });
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -82,7 +84,7 @@ export function prepareResearch(doc, nodeId, options) {
   const decisionsElsewhere = doc.nodes.filter(node => (options?.operation === 'brief' || stateful(node)) && !seen.has(node.id))
     .sort((a, b) => (options?.operation === 'brief' ? Number(!!stateful(b)) - Number(!!stateful(a)) : 0) || distances.get(a.id) - distances.get(b.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map(record);
   const generationContext = options?.operation === 'questions' ? [
-    ...path.slice().reverse().map(item => byId.get(item.id)).filter(node => node.rationale && node.generation).map(node => generationRecord(node, 'path')),
+    ...path.slice().reverse().map(item => byId.get(item.id)).filter(node => (node.rationale || node.importance) && node.generation).map(node => generationRecord(node, 'path')),
     ...doc.nodes.filter(node => node.parentId === nodeId).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0).map(node => generationRecord(node, 'child')),
   ] : undefined;
   const prepared = prepareContext({ ...framing(doc), identity: identity(doc), targetId: nodeId, path, decisionsElsewhere, ...(generationContext ? { generationContext } : {}) }, options);
@@ -93,6 +95,6 @@ export function sameResearchSources(dependencies, doc) {
   if (!dependencies || !doc || !equal(dependencies.identity, identity(doc)) || !equal(dependencies.framing, framing(doc))) return false;
   const nodes = new Map(doc.nodes.map(node => [node.id, node]));
   return nodes.has(dependencies.nodeId) && dependencies.records.every(saved => nodes.has(saved.id) && equal(saved, record(nodes.get(saved.id)))) &&
-    (dependencies.generationRecords ?? []).every(saved => nodes.has(saved.id) && equal(saved, generationRecord(nodes.get(saved.id), saved.relation, Object.hasOwn(saved, 'historicalRationale'))));
+    (dependencies.generationRecords ?? []).every(saved => nodes.has(saved.id) && equal(saved, generationRecord(nodes.get(saved.id), saved.relation, Object.hasOwn(saved, 'historicalRationale') || Object.hasOwn(saved, 'historicalImportance'))));
 }
 export function sameResearchDestination(dependencies, doc) { return equal(dependencies.destination, findNode(doc, dependencies.nodeId).research); }

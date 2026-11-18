@@ -47,6 +47,10 @@ export function renderOfflineViewer(snapshot) {
     const n = byId.get(selected), detail = $('detail'); detail.replaceChildren();
     const title = el('h2', n.question); title.id = 'node-title'; title.tabIndex = -1;
     detail.append(title, el('p', `${n.id} · ${n.role === 'direction' ? 'Direction (user supplied; not an answer)' : n.role === 'idea' ? 'Idea' : 'Question'} · ${n.category}`), el('p', `State: ${n.status}${n.review ? ' · Needs review' : ''}`));
+    if (n.role === 'question') detail.append(el('p', `Importance: ${n.importance ?? 'Unranked'}`));
+    if (n.importance) {
+      const assessment = el('details'); assessment.append(el('summary', 'Why this importance?'), el('p', 'Historical model assessment for original wording and context; not confidence, certainty or a user decision. Not automatically reassessed after changes.'), el('p', `Original suggested wording: ${n.originalQuestion}`), el('p', n.importanceReason)); detail.append(assessment);
+    }
     if (n.parentId) jump(detail, n.parentId, `Parent: ${byId.get(n.parentId).question}`);
     else detail.append(el('p', 'Root of this exported selection.'));
     paragraph(detail, 'Saved user answer', n.answer === null ? 'Not included in this export.' : n.answer || '(No answer text)');

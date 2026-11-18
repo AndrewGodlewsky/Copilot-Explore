@@ -27,6 +27,7 @@ export function visualSnapshot(doc, { scope, nodeId }) {
     const n = byId.get(id), role = effectiveKind(n);
     return { id: ids.get(id), parentId: id === rootId ? null : ids.get(n.parentId), role,
       question: portableText(n.question), category: portableText(n.category), answer: role === 'question' ? portableText(n.answer) : '',
+      ...(role === 'question' && n.importance ? { importance: n.importance, importanceReason: portableText(n.importanceReason), originalQuestion: portableText(n.generation.originalQuestion) } : {}),
       status: nodeStatus(n), review: n.review === true };
   });
   const snapshot = { scope, rootId: 'n0', nodes };
@@ -37,6 +38,7 @@ export function visualSnapshot(doc, { scope, nodeId }) {
 function cardLines(n) {
   const role = { idea: 'Idea', question: 'Question', direction: 'Direction (user supplied; not an answer)' }[n.role];
   return [`${n.id} · ${role}`, `Category: ${n.category}`, `State: ${n.status}${n.review ? ' · Needs review' : ''}`, '', n.question,
+    ...(n.role === 'question' ? [`Importance: ${n.importance ?? 'Unranked'}`, ...(n.importance ? ['Historical model assessment for original wording and context; not confidence, certainty or a user decision. Not automatically reassessed after changes.', `Original suggested wording: ${n.originalQuestion}`, n.importanceReason] : [])] : []),
     ...(n.role === 'question' ? ['', 'Saved user answer:', n.answer || '(No answer text)'] : [])];
 }
 function wrapped(lines) {

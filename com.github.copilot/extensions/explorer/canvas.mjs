@@ -46,7 +46,7 @@ const object = (properties, required = Object.keys(properties)) => ({ type: 'obj
 const requestId = string(100);
 export const actionSchemas = {
   get_exploration: object({}),
-  submit_questions: object({ requestId, questions: { ...array(object({ question: string(600), category: string(60), rationale: string(1000) }, ['question', 'category']), 6), minItems: 1 } }),
+  submit_questions: object({ requestId, questions: { ...array({ ...object({ question: string(600), category: string(60), rationale: string(1000), importance: { type: 'string', enum: ['low', 'medium', 'high'] }, importanceReason: string(600) }, ['question', 'category']), dependentRequired: { importance: ['importanceReason'], importanceReason: ['importance'] } }, 6), minItems: 1 } }),
   fail_request: object({ requestId, message: string(2000) }),
 };
 

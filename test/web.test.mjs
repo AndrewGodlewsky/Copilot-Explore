@@ -698,6 +698,57 @@ test('research allows independent answer save through HTTP and preserves editor 
   assert.equal($('references').open, true); assert.equal($('question-rationale').open, true); assert.ok($('voice-status')); assert.ok($('help-rephrase'));
 });
 
+test('importance labels and composed Outline filters preserve the full map and independent editing state', async t => {
+  const reason = '<img src=x onerror=alert(1)> Consequences for the goal.';
+  const f = await fixture(t, 340, undefined, false, { questions: [
+    { question: 'Who starts?', category: 'People', importance: 'high', importanceReason: reason },
+    { question: 'When?', category: 'Time', importance: 'low', importanceReason: 'Scheduling flexibility.' },
+    { question: 'Legacy?', category: 'Scope' },
+    { question: 'What tools?', category: 'Tools', importance: 'medium', importanceReason: 'Budget constraint.' },
+  ] }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  assert.match(f.document.querySelector(`[data-node-id="${node.id}"]`).textContent, /High importance/);
+  const geometry = f.window.__updates.scene().geometry;
+  const compact = f.document.querySelector(`#nodes [data-node-id="${node.id}"]`);
+  const revised = structuredClone(f.explorer.doc); revised.nodes[1].importanceReason += ' Historical detail.';
+  await f.explorer.save(revised, 'Imported assessment detail'); await f.poll();
+  assert.equal(f.window.__updates.scene().geometry, geometry, 'reason-only changes do not change compact geometry');
+  assert.equal(f.document.querySelector(`#nodes [data-node-id="${node.id}"]`), compact);
+  $('outline-toggle').click(); assert.ok($('importance-filter'));
+  for (const [rank, count] of [['high', 1], ['medium', 1], ['low', 1], ['unranked', 1], ['all', 5]]) {
+    $('importance-filter').value = rank; $('importance-filter').dispatchEvent(new f.window.Event('change'));
+    assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, count);
+  }
+  $('importance-filter').value = 'high'; $('importance-filter').dispatchEvent(new f.window.Event('change'));
+  $('revisit-filter').value = 'manual-condition'; $('revisit-filter').dispatchEvent(new f.window.Event('change'));
+  assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 0);
+  assert.equal(f.window.__updates.scene().geometry, geometry, 'list filters do not invalidate map geometry');
+  await f.explorer.command('set-revisit', { revision: f.explorer.doc.revision, nodeId: node.id, date: null, condition: 'Manual check' }); await f.poll();
+  assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 1);
+  f.type('search', 'When'); assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 0);
+  f.window.__updates.select(node.id); assert.equal($('node-workspace').dataset.nodeId, node.id, 'hidden result remains revealable');
+  assert.match($('question-importance').textContent, /Historical model assessment/); assert.ok($('question-importance').textContent.includes(reason)); assert.equal($('question-importance').querySelector('img'), null);
+  f.type('answer', 'Independent answer draft'); f.type('revisit-condition', 'Independent reminder draft');
+  $('question-importance').open = true; const answer = $('answer'), reminder = $('revisit-condition'); reminder.focus(); reminder.setSelectionRange(2, 6);
+  answer.dispatchEvent(new f.window.Event('compositionstart', { bubbles: true }));
+  const next = structuredClone(f.explorer.doc); next.nodes[1].importanceReason = 'Changed historical reason'; next.nodes[1].review = true;
+  await f.explorer.save(next, 'Imported assessment'); await f.poll(); answer.dispatchEvent(new f.window.Event('compositionend', { bubbles: true })); await f.poll();
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'Independent answer draft'); assert.equal($('revisit-condition'), reminder); assert.equal(reminder.value, 'Independent reminder draft'); assert.equal(reminder.selectionStart, 2); assert.equal(reminder.selectionEnd, 6);
+  assert.ok($('question-importance').open); assert.ok($('voice-status')); assert.equal(f.explorer.pending, null);
+  assert.equal($('importance-filter').value, 'high'); assert.equal($('revisit-filter').value, 'manual-condition');
+});
+
+test('importance preview discloses original assessment safely and legacy questions stay Unranked', async t => {
+  const f = await fixture(t, 340, undefined, false, { preview: true, questions: [{ question: 'Original?', category: 'Scope', importance: 'medium', importanceReason: '<script>model</script>' }, { question: 'Legacy?', category: 'Time' }] }), $ = id => f.document.getElementById(id);
+  await until(() => $('candidate-importance-0'), 'importance preview');
+  assert.match($('candidate-importance-0').textContent, /Medium importance/); assert.match($('candidate-importance-0').textContent, /Original\?/);
+  assert.equal($('candidate-importance-0').querySelector('script'), null);
+  assert.match($('question-preview').textContent, /Unranked/);
+  f.type('candidate-question-0', 'Edited?'); $('accept-questions').click();
+  await until(() => [...f.document.querySelectorAll('#nodes button')].some(b => b.title === 'Edited?'), 'accepted map question');
+  f.open(f.explorer.doc.nodes[1].id);
+  assert.match($('question-importance').textContent, /Original\?/); assert.equal(f.explorer.doc.nodes[1].importance, 'medium');
+});
+
 test('historical question rationale is disclosed near expanded question without changing drafts or voice', async t => {
   const explanation = '<img src=x onerror=alert(1)> Unclear audience affects the pilot.';
   const f = await fixture(t, 340, undefined, false, { questions: [{ question: 'Who should borrow first?', category: 'People', rationale: explanation }] });

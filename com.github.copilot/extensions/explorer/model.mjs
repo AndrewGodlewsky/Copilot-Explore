@@ -41,11 +41,18 @@ export function directionText(value) {
   text(value, 'Direction', 600);
   return value;
 }
+export function questionImportance(value) {
+  if (!Object.hasOwn(value, 'importance') && !Object.hasOwn(value, 'importanceReason')) return {};
+  if (!['low', 'medium', 'high'].includes(value.importance) || !Object.hasOwn(value, 'importanceReason')) throw new Error('Question importance needs low, medium or high and an importance reason.');
+  text(value.importanceReason, 'Importance reason', 600);
+  return { importance: value.importance, importanceReason: value.importanceReason };
+}
 export function questions(value) {
   const result = list(value, 'questions', 6, q => ({
     question: text(q?.question, 'Question', 600),
     category: text(q?.category, 'Category', 60),
     ...(q && Object.hasOwn(q, 'rationale') ? { rationale: text(q.rationale, 'Question rationale', 1000) } : {}),
+    ...questionImportance(q),
   }));
   if (!result.length) throw new Error('Return at least one question.');
   return result;
@@ -79,6 +86,7 @@ export function acceptQuestions(doc, parentId, batch, selected) {
     const original = batch.questions[selected[i].index];
     node.generation = generation({ requestId: batch.id, originalQuestion: original.question, originalCategory: original.category, adjusted: node.question !== original.question }, node.question, node.category);
     if (Object.hasOwn(original, 'rationale')) node.rationale = text(original.rationale, 'Question rationale', 1000);
+    Object.assign(node, questionImportance(original));
   });
   next.finishedAt = null;
   validateDocument(next);
@@ -181,6 +189,7 @@ export function validateDocument(value) {
     question: n.kind === 'direction' ? directionText(n.question) : text(n.question, 'Question', n.id === value.rootId ? 4000 : 600),
     category: text(n.category, 'Category', 60), answer: guidanceText(n.answer, 'Answer', 20000),
     ...(Object.hasOwn(n, 'rationale') ? { rationale: text(n.rationale, 'Question rationale', 1000) } : {}),
+    ...questionImportance(n),
     ...(Object.hasOwn(n, 'answerState') ? { answerState: n.answerState } : {}),
     research: n.research === null ? null : research(n.research), review: n.review === true,
     ...(Object.hasOwn(n, 'revisit') ? { revisit: validateRevisit(n.revisit) } : {}),
@@ -188,6 +197,7 @@ export function validateDocument(value) {
   }));
   const byId = new Map(nodes.map(n => [n.id, n]));
   for (const node of nodes) {
+    if (Object.hasOwn(node, 'importance') && (node.id === value.rootId || !isQuestion(node) || !node.generation)) throw new Error('Only generated ordinary questions can have importance.');
     if (Object.hasOwn(node, 'revisit') && !isQuestion(node)) throw new Error('Only ordinary questions can have revisit reminders.');
     if (Object.hasOwn(node, 'kind') && (node.kind !== 'direction' || node.id === value.rootId)) throw new Error('Invalid node kind.');
     if (Object.hasOwn(node, 'rationale') && (node.id === value.rootId || !isQuestion(node) || !node.generation)) throw new Error('Only generated ordinary questions can have a rationale.');
@@ -318,6 +328,8 @@ export function toMarkdown(doc) {
     lines.push('### User answer', '', `State: ${ANSWER_STATES[effectiveAnswerState(n)]}.`, '', n.answer ? md(n.answer) : '_No answer text._', '');
     if (n.revisit) lines.push('### User revisit reminder', '', `Review date (local calendar): ${n.revisit.date ?? 'Not set'}.`, '', 'Manual condition (evaluated by you; not monitored):', '', n.revisit.condition ? md(n.revisit.condition) : '_Not set._', '', `Acknowledged: ${n.revisit.acknowledgedAt ?? 'Not yet'}. Acknowledgment records a review, not a changed answer or resolved decision.`, '');
     if (n.generation) lines.push('### Question provenance', '', `Generated question: ${md(n.generation.originalQuestion)}`, '', `Generated category: ${md(n.generation.originalCategory)}. ${n.generation.adjusted ? 'Wording adjusted by the user before acceptance.' : 'Accepted without wording changes.'}`, '');
+    lines.push(`Importance: ${n.importance ?? 'Unranked'}.`, '');
+    if (n.importance) lines.push('Historical model assessment for the original suggested wording and context; not confidence, answer certainty or a user decision. Not automatically reassessed after changes.', '', `Original suggested wording: ${md(n.generation.originalQuestion)}`, '', md(n.importanceReason), '');
     if (n.rationale) {
       lines.push('### Why this question?', '', 'Historical model explanation for the original suggested wording and context; not a user fact or decision.', '');
       if (n.generation?.adjusted) lines.push(`Original suggested wording: ${md(n.generation.originalQuestion)}`, '');

@@ -165,3 +165,17 @@ test('preview digest distinguishes original selected identities even when projec
   const changed = { ...first, action: 'download', digest: preview.digest, selection: [{ ...first.selection[0], nodeId: f.b.id }] };
   assert.equal((await f.post(changed)).status, 400);
 });
+
+test('viewer HTTP previews importance and rejects a changed historical assessment with the old digest', async t => {
+  const f = await setup(t), doc = structuredClone(f.doc), node = doc.nodes[1];
+  node.importance = 'high'; node.importanceReason = '<script>Historical consequence</script>';
+  node.generation = { requestId: 'imported-request', originalQuestion: node.question, originalCategory: node.category, adjusted: false };
+  await writeFile(f.file, JSON.stringify(doc)); f.explorer.doc = doc;
+  const preview = await f.post().then(r => r.json());
+  assert.equal(preview.snapshot.nodes[0].importance, 'high'); assert.equal(preview.snapshot.nodes[0].importanceReason, node.importanceReason);
+  const download = { ...f.input, action: 'download', digest: preview.digest };
+  assert.equal((await f.post(download)).status, 200);
+  node.importanceReason = 'Changed historical consequence';
+  await writeFile(f.file, JSON.stringify(doc)); f.explorer.doc = doc;
+  assert.equal((await f.post(download)).status, 400, 'projection freshness catches even unchanged revision');
+});

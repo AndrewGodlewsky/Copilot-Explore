@@ -1225,6 +1225,23 @@ Read issue-70.md, task-42-design-notes.md, AGENTS.md and the current state/histo
 - Test injected local dates/time zones/DST/day boundaries, invalid leap dates, acknowledgement/rescheduling, stale writers, archive/import/restore and native/Markdown/export round trips. Use disposable documents and fake clocks; do not change the machine clock or real user data. Verify keyboard/draft behavior in HTTP/jsdom and run npm test/check/package.
 - Synchronize patch metadata/README/release note, document date/condition semantics, self-review and commit; no nested agents, publication, issue closure or native UI automation. Write task-42-report.md with schema, transitions, privacy/freshness effects, evidence, SHA and pending manual checks. Controller reviews and publishes.
 
+Published task 42: **v0.1.52**, `b5f10de`, required checks recorded in the task report; independent review approved and remote main verified.
+
+## Task 43: Rank question importance (#51 / additional request)
+
+Read issue-importance.md, task-43-design-notes.md, AGENTS.md and current generation/preview/rationale contracts. BASE is `b5f10de764c7ffee17d130014f09ed341586a990`; ship version **0.1.53**. Reconcile the published interfaces against the current implementation before editing. Propose concrete bounds, ownership, freshness and verification seams before broad edits; record the accepted contract in this task and its brief.
+
+- New generated questions may carry exact low/medium/high importance and a concise explanation tied to the goal, constraints and consequences. Importance is not model confidence, answer certainty or completion state. Both fields remain optional for old callbacks/documents; absence means Unranked, never an invented Medium score.
+- Define and validate the supplied field pair, exact length bounds and trusted provenance through model callbacks, server-owned previews, accepted questions, history/import and native/Markdown/available visual exports. Root and direction seeds are not automatically ranked as answerable questions.
+- Show compact text labels in map and Outline with accessible secondary color cues and an on-demand explanation. Provide a basic importance filter that the later unified search/filter issue can extend. Preserve navigation/reveal and the full accessible map when filtering hides a selected or source node.
+- Treat old explanations/ranks as historical assessments when wording or dependencies change; reuse existing rationale/review semantics rather than implying silent reassessment. Do not spend tokens in the background to rank legacy questions. An explicit existing generation path may assess new questions; keep legacy Unranked honest.
+- Preserve expanding-editor identity, draft/caret/IME/voice, zoom/culling/layout caches, context privacy and exact callback correlation. Compact rank content changes must invalidate only geometry that actually depends on them.
+- Test every rank, missing/invalid pairs, overlong/hostile text, legacy files/callbacks, strict preview provenance, edited questions, conflicting/tentative context, filtering/reveal and near-cap serialization. Use the installed local generation callback fixture and HTTP/jsdom; run npm test/check/package. No paid provider, existing sessions or native UI automation.
+- Synchronize patch metadata/README/release note, self-review and commit; no nested agents, publication or issue closure. Write task-43-report.md with schema/provenance/filter contracts, tests, SHA and pending native/model-quality checks. Controller independently reviews and publishes.
+
+Accepted contract (2026-11-17): sparse paired `importance` (`low`/`medium`/`high`) and `importanceReason` (nonblank, at most 600 UTF-16 code units; preserve exact text). Reject invalid/missing mates and non-generated/root/direction placements. Server-owned previews supply the pair; clients edit only selected wording. Reuse generation original wording/adjusted and ancestor review semantics, label every explanation historical model reasoning, and never silently reassess on changes. Outline-only importance filtering composes with text and reminder filters; full map/navigation remain available. Compact category-line labels retain fixed geometry. Persist the selected pair and original wording in native/Markdown and portable/offline projections; viewer digest binds included assessment content. Verify model/history/bounds, HTTP/jsdom drafts/filter/reveal, installed SDK callback correlation and local fixture, then full test/check/package/complete shipped-byte audit.
+
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

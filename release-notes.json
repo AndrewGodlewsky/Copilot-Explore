@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.53",
+    "summary": "Generated questions can include Low, Medium or High importance with a concise historical model explanation. See compact labels, inspect reasons, and combine importance, text and reminder filters in Outline. Legacy questions stay Unranked. Validated assessments survive previews, History, native/Markdown exports and selected portable/offline exports without changing answers or certainty."
+  },
+  {
     "version": "0.1.52",
     "summary": "Set local-calendar review dates and manual revisit conditions on questions. Find due, overdue and acknowledged reminders in the Library and question list, including archived journeys. Acknowledge, reschedule or clear with History while preserving answers and certainty. Conditions stay user-evaluated; no monitoring, notifications or calendar writes. Native and Markdown exports retain reminders."
   },

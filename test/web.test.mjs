@@ -159,6 +159,38 @@ test('full Outline layout rules neutralize the counter-scaled editor and keep na
   $('outline-toggle').click(); assert.equal(f.window.getComputedStyle($('map')).overflow, 'clip'); assert.equal($('map-controls').hidden, false);
 });
 
+test('selected Outline question and metadata keep readable contrast in both themes and on hover', async t => {
+  const f = await fixture(t, 280), $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id); $('outline-toggle').click();
+  const style = f.document.createElement('style'); style.textContent = await (await fetch(new URL('style.css', f.window.location.href))).text(); f.document.head.append(style);
+  const rules = [...style.sheet.cssRules], row = $('outline-list').querySelector('[aria-current="true"]');
+  const inheritedColor = element => {
+    const color = f.window.getComputedStyle(element).color;
+    return color === 'inherit' || !color ? inheritedColor(element.parentElement) : color;
+  };
+  const luminance = color => {
+    assert.match(color, /^rgb\(/, `resolved opaque CSS color: ${color}`);
+    const channels = color.match(/[\d.]+/g).map(Number).map(x => x / 255).map(x => x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4);
+    return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
+  };
+  for (const theme of ['dark', 'light']) {
+    // jsdom does not evaluate color-scheme media, CSS variables or inherit. Select only
+    // the actual theme rules, resolve their root variables, and retain cascade order.
+    const active = rules.flatMap(rule => rule.conditionText ? rule.conditionText === '(prefers-color-scheme:dark)' && theme === 'dark' ? [...rule.cssRules] : [] : [rule]);
+    const vars = new Map();
+    for (const rule of active) if (rule.selectorText === ':root') for (let i = 0; i < rule.style.length; i++) { const name = rule.style[i]; if (name.startsWith('--')) vars.set(name, rule.style.getPropertyValue(name)); }
+    style.textContent = active.map(rule => rule.cssText).join('\n').replace(/var\((--[\w-]+)\)/g, (original, name) => vars.get(name) ?? original).replaceAll(':hover', '[data-theme-test-hover]');
+    for (const hover of [false, true]) {
+      row.toggleAttribute('data-theme-test-hover', hover);
+      const background = luminance(f.window.getComputedStyle(row).backgroundColor);
+      for (const [label, element] of [['question', row], ['metadata', row.querySelector('small')]]) {
+        const foreground = luminance(inheritedColor(element));
+        const ratio = (Math.max(background, foreground) + .05) / (Math.min(background, foreground) + .05);
+        assert.ok(ratio >= 4.5, `${theme} ${hover ? 'hover' : 'rest'} ${label}: ${ratio.toFixed(2)}:1 contrast`);
+      }
+    }
+  }
+});
+
 test('full Outline falls back from a removed focused row without clearing the search or changing the editor', async t => {
   const f = await fixture(t, 280), $ = id => f.document.getElementById(id), [removed, selected] = f.explorer.doc.nodes.slice(1);
   f.open(selected.id); const answer = $('answer'); $('outline-toggle').click(); f.type('search', 'borrow');

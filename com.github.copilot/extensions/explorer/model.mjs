@@ -224,7 +224,9 @@ export function validateDocument(value) {
   if (reached.size !== nodes.length) throw new Error('The map contains disconnected nodes or a cycle.');
   const topic = text(value.topic, 'Idea', 4000);
   if (root.question !== topic) throw new Error('The root must match the idea.');
+  if (Object.hasOwn(value, 'copyOrigin') && (!value.copyOrigin || Object.keys(value.copyOrigin).sort().join(',') !== 'kind,sourceDigest,sourceId' || value.copyOrigin.kind !== 'personal-copy' || typeof value.copyOrigin.sourceId !== 'string' || !value.copyOrigin.sourceId || value.copyOrigin.sourceId.trim() !== value.copyOrigin.sourceId || value.copyOrigin.sourceId.length > 100 || !/^[a-f0-9]{64}$/.test(value.copyOrigin.sourceDigest))) throw Error('Invalid project copy origin lineage.');
   const document = { format: FORMAT, version: 1, id: text(value.id, 'Exploration ID', 100),
+    ...(Object.hasOwn(value, 'copyOrigin') ? { copyOrigin: { ...value.copyOrigin } } : {}),
     revision: Number.isSafeInteger(value.revision) && value.revision >= 0 ? value.revision : 0,
     topic, objective: guidanceText(Object.hasOwn(value, 'objective') ? value.objective : '', 'Objective', MAX_OBJECTIVE),
     successCriteria: guidanceText(Object.hasOwn(value, 'successCriteria') ? value.successCriteria : '', 'Success criteria', MAX_SUCCESS_CRITERIA),

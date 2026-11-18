@@ -954,6 +954,31 @@ test('project library refresh and pin preserve an answer draft, and listed openi
   assert.equal(f.explorer.pending, null); assert.equal($('workspace').hidden, false);
 });
 
+test('reviewed project copy shows exact content, excludes drafts, saves once and continues only by choice', async t => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-copy-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
+  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project }), $ = id => f.document.getElementById(id);
+  const key = f.explorer.activeKey, file = f.explorer.file, original = await readFile(file), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'PRIVATE draft must stay here'); const editor = $('answer');
+  assert.equal($('project-copy-open').hidden, false); $('project-copy-open').click();
+  $('project-copy-preview').click(); await until(() => !$('project-copy-confirm').hidden && !$('project-copy-confirm').disabled, 'copy preview');
+  assert.equal(f.document.activeElement, $('project-copy-content')); assert.ok(!$('project-copy-content').value.includes('PRIVATE draft'));
+  const content = $('project-copy-content').value, path = f.explorer.projectCopy.selection.selected.relativePath;
+  $('project-copy-confirm').click(); await until(() => !$('project-copy-continue').hidden, 'copy saved');
+  assert.equal(f.explorer.activeKey, key); assert.equal($('answer'), editor); assert.equal(editor.value, 'PRIVATE draft must stay here');
+  assert.equal(await readFile(join(project, path), 'utf8'), content); assert.deepEqual(await readFile(file), original);
+  $('project-copy-continue').click(); await until(() => !$('project-copy-dialog').open && f.explorer.snapshot().storage.scope === 'project', 'explicit continue');
+  assert.equal(f.explorer.pending, null); assert.equal($('project-copy-open').hidden, true);
+  assert.deepEqual((await f.explorer.readDrafts(f.explorer.activeKey)).entries, []);
+  await f.explorer.command('open', { key, revision: f.explorer.doc.revision }); await f.poll();
+  assert.equal((await f.explorer.readDrafts(key)).entries[0].text, 'PRIVATE draft must stay here');
+  $('project-copy-open').click(); $('project-copy-preview').click(); await until(() => !$('project-copy-confirm').hidden && !$('project-copy-confirm').disabled, 'existing preview');
+  assert.match($('project-copy-status').textContent, /Identical copy/);
+  f.type('project-copy-folder', 'changed'); assert.equal($('project-copy-confirm').hidden, true); assert.equal($('project-copy-content').value, '');
+  $('project-copy-close').click(); assert.equal(f.document.activeElement, $('project-copy-open'));
+  const denied = await fetch(new URL('api/project-copy', f.window.location.href), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: '{}' }); assert.equal(denied.status, 403);
+});
+
 async function startReviewedResearch(f) {
   await until(() => !f.document.getElementById('research-review-start').disabled, 'review ready');
   f.document.getElementById('research-review-start').click();
@@ -1346,6 +1371,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   exportDialog.showModal = () => { exportDialog.open = true; };
   exportDialog.close = () => { exportDialog.open = false; };
   const storageDialog = document.getElementById('storage-dialog');
+  const copyDialog = document.getElementById('project-copy-dialog');
+  copyDialog.showModal = () => { copyDialog.open = true; };
+  copyDialog.close = () => { copyDialog.open = false; };
   storageDialog.showModal = () => { storageDialog.open = true; };
   storageDialog.close = () => { storageDialog.open = false; };
   const dashboardDialog = document.getElementById('dashboard-dialog');

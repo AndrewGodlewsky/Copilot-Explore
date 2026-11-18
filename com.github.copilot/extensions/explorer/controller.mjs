@@ -3,6 +3,8 @@ import { followupResult, retainExchanges, sameFollowup } from './research-follow
 import { ProjectContext } from './project-context.mjs';
 import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
+import { ProjectCopy } from './project-copy.mjs';
+import { projectDocumentAccess } from './storage-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
 import { Library } from './library.mjs';
@@ -58,6 +60,7 @@ export class Explorer {
   snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, storage: this.projectStore ? { scope: 'project', path: this.projectStore.context.relativePath } : { scope: 'personal' }, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
   auxiliaryDirectory() { return this.projectStore?.context.directory ?? this.library?.directory ?? dirname(this.file); }
   async changeStorage(store) {
+    this.projectCopy = null;
     if (this.projectStore === store) return;
     await this.analytics?.flush();
     this.projectStore = store;
@@ -571,6 +574,29 @@ export class Explorer {
       return { ...preview, issues: [...(inventory.partial ? ['Inventory is partial; unscanned and unknown data remain protected.'] : []), ...found.issues, ...preview.issues].slice(0, 100) };
     });
   }
+  projectCopyRequest(input) {
+    return this.transact(async () => {
+      if (this.closed || !this.doc || !this.library || !this.projectRepository || this.projectStore || !input || typeof input !== 'object' || Array.isArray(input) ||
+        !['preview', 'confirm'].includes(input.action) || Object.keys(input).sort().join(',') !== (input.action === 'preview' ? 'action,folder,includeResearch,journey,newCopy,revision' : 'action,id,journey,revision')) throw Error('Invalid personal project-copy request.');
+      if (input.journey !== this.activeKey || input.revision !== this.doc.revision || this.pending || this.preview) throw Error('The journey changed or a request is active. Finish or cancel it, then preview the project copy again.');
+      return this.withDocumentLock(async () => {
+        if (input.action === 'preview') {
+          this.projectCopy = null;
+          const file = this.file, key = this.activeKey, revision = this.doc.revision;
+          const access = await projectDocumentAccess({ checkoutDirectory: this.library.directory, file });
+          const copy = new ProjectCopy(this.projectRepository, async () => {
+            if (this.projectStore || this.file !== file || this.activeKey !== key) throw Error('Personal source changed. Preview again.');
+            const current = await this.readCurrent(), source = (await access.read()).bytes;
+            if (current.revision !== revision || JSON.stringify(validateDocument(JSON.parse(source.toString('utf8').replace(/^\uFEFF/, '')))) !== JSON.stringify(current)) throw Error('Personal source changed. Preview again.');
+            return source;
+          });
+          const result = await copy.preview(input); this.projectCopy = copy; return result;
+        }
+        if (!this.projectCopy) throw Error('Project copy preview expired. Preview again.');
+        return this.projectCopy.confirm(input.id);
+      });
+    });
+  }
   projectLibraryRequest(input) {
     return this.transact(async () => {
       if (this.closed || !this.projectRepository || !input || typeof input !== 'object' || Array.isArray(input) ||
@@ -808,7 +834,7 @@ export class Explorer {
         await this.library.update(input.key, input.patch, input.metadataRevision); this.dashboard?.invalidate(); return this.uiSnapshot();
       }
       if (this.pending && !(['research', 'research-follow-up'].includes(this.pending.kind) && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
-      if (this.preview && (['start', 'open', 'open-project', 'open-project-entry', 'import', 'restore', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
+      if (this.preview && (['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'import', 'restore', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
       if (this.doc && input.revision !== this.doc.revision) throw new Error('The map changed. Refresh and try again; your draft is still here.');
       const next = structuredClone(this.doc);
       this.error = '';
@@ -872,6 +898,10 @@ export class Explorer {
         case 'open-project-entry':
           if (!this.projectLibrary || input.listing !== this.projectLibrary.listing) throw Error('Project library selection expired. Refresh the folder.');
           await this.attachProject(await this.projectLibrary.open(input.key, this.binding));
+          break;
+        case 'open-project-copy':
+          if (!this.projectCopy || this.projectStore) throw Error('Project copy selection expired. Open it from the Project library.');
+          await this.attachProject(await this.projectCopy.open(input.id));
           break;
         case 'open-project':
           if (!this.projectRepository) throw Error('Project storage requires the installed Explorer library.');

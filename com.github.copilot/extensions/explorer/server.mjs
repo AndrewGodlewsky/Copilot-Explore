@@ -172,6 +172,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.projectLibraryRequest(await body(req, 4096)));
       }
+      if (req.method === 'POST' && route === 'api/project-copy') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.projectCopyRequest(await body(req, 4096)));
+      }
       if (req.method === 'GET' && route === 'api/library') {
         if (!explorer.library) return json(200, { revision: 0, entries: [], errors: [] });
         return json(200, await explorer.library.list({ search: url.searchParams.get('search') ?? '', archived: url.searchParams.get('archived') === 'true', reminder: url.searchParams.get('reminder') ?? 'all', ...(url.searchParams.has('today') ? { today: url.searchParams.get('today') } : {}) }));

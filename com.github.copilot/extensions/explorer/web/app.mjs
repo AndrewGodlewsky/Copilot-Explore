@@ -315,7 +315,7 @@ async function api(action, input = {}) {
     const result = await response.json();
     if (closed || suspended || page !== pageEpoch || epoch !== actionEpoch) return null;
     if (!response.ok) throw new Error(result.error);
-    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'open-project', 'open-project-entry', 'import'].includes(action)); return result;
+    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'import'].includes(action)); return result;
   } catch (error) {
     if (!closed && !suspended && page === pageEpoch && epoch === actionEpoch) notice(abort.signal.aborted ? 'The action response timed out. Refresh the saved map before retrying; it may have been saved. Your draft is still here.' : error.message);
     return null;
@@ -357,6 +357,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    if ($('project-copy-dialog').open) closeProjectCopy();
     outlineNavigated = false;
     minimap.reset();
     if (state.document?.id !== next.document?.id || state.activeKey !== next.activeKey) nextQuestion = new NextQuestion();
@@ -409,6 +410,7 @@ function apply(next, reset = false) {
   $('check-answers').hidden = !doc; $('challenge-decisions').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('visual-export-open').hidden = !doc;
+  $('project-copy-open').hidden = !doc || !state.library || state.storage?.scope === 'project';
   $('edit-guidance').disabled = !!state.pending;
   if (state.contextCoverage && JSON.stringify(state.contextCoverage) !== lastCoverage) { lastCoverage = JSON.stringify(state.contextCoverage); showCoverage(state.contextCoverage, 'Prepared'); }
   notice(state.error || state.recoveryNotice?.message || (['failed', 'interrupted'].includes(state.exportObservation?.status) ? 'Export did not finish. Open Recovery to explicitly retry. Browser file saving is unknown.' : ''));
@@ -691,6 +693,56 @@ function switchAllowed() {
   if ([...nodeUi.values()].some(ui => ui.revisitDraft)) { notice('Save your reminder edits or choose Use saved reminder before opening another journey.'); return false; }
   return true;
 }
+let projectCopyEpoch = 0, projectCopyPreview = null, projectCopyFlight = null;
+function clearProjectCopy(message = '') {
+  projectCopyEpoch++; projectCopyFlight?.abort(); projectCopyFlight = null; projectCopyPreview = null;
+  $('project-copy-review').hidden = true; $('project-copy-content').value = '';
+  $('project-copy-confirm').hidden = true; $('project-copy-continue').hidden = true;
+  $('project-copy-status').textContent = message; $('project-copy-preview').disabled = false;
+}
+function closeProjectCopy() {
+  clearProjectCopy(); $('project-copy-dialog').close();
+  $($('project-copy-open').hidden ? 'library-toggle' : 'project-copy-open').focus({ preventScroll: true });
+}
+async function requestProjectCopy(action) {
+  const preview = projectCopyPreview;
+  if (action === 'confirm' && !preview) return;
+  if (action === 'preview') clearProjectCopy();
+  projectCopyFlight?.abort(); const abort = new AbortController(); projectCopyFlight = abort;
+  const epoch = ++projectCopyEpoch, page = pageEpoch, journey = state.activeKey, revision = state.document?.revision;
+  const current = () => !closed && !suspended && page === pageEpoch && epoch === projectCopyEpoch && $('project-copy-dialog').open && journey === state.activeKey;
+  const timer = setTimeout(() => abort.abort(), 20000);
+  $('project-copy-preview').disabled = true; $('project-copy-confirm').disabled = true;
+  $('project-copy-status').textContent = action === 'preview' ? 'Preparing exact committed content…' : 'Verifying and saving reviewed content…';
+  try {
+    const input = { action, journey, revision, ...(action === 'preview' ? { folder: $('project-copy-folder').value, includeResearch: $('project-copy-research').checked, newCopy: $('project-copy-additional').checked } : { id: preview.id }) };
+    const response = await fetch('api/project-copy', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+    const result = await response.json(); if (!current()) return;
+    if (!response.ok) throw Error(result.error);
+    if (action === 'preview') {
+      projectCopyPreview = result; $('project-copy-review').hidden = false; $('project-copy-path').textContent = `Destination: ${result.path}`;
+      $('project-copy-content').value = result.content; $('project-copy-confirm').hidden = false;
+      $('project-copy-confirm').textContent = result.existing ? 'Confirm existing identical copy' : 'Save reviewed copy';
+      $('project-copy-status').textContent = `${result.existing ? 'Identical copy already exists. ' : ''}${result.researchCount} question research records ${result.researchIncluded ? 'included' : 'omitted'}. Review the file, then confirm. Personal content and drafts remain unchanged.`;
+      $('project-copy-content').focus();
+    } else {
+      $('project-copy-confirm').hidden = true; $('project-copy-continue').hidden = false;
+      $('project-copy-status').textContent = `Verified project copy: ${result.path}. Your personal journey is still open. Commit and share this file through Git when ready.`;
+      $('project-copy-continue').focus();
+    }
+  } catch (error) { if (current()) $('project-copy-status').textContent = abort.signal.aborted ? action === 'preview' ? 'Preview timed out. Retry preparing the preview; no copy was saved by this preview request.' : 'Response timed out. The copy may be saved. Retry this same confirmation to verify it without creating another copy.' : error.message; }
+  finally { clearTimeout(timer); if (projectCopyFlight === abort) { projectCopyFlight = null; $('project-copy-preview').disabled = false; $('project-copy-confirm').disabled = false; } }
+}
+$('project-copy-open').addEventListener('click', () => { clearProjectCopy(); $('project-copy-dialog').showModal(); $('project-copy-folder').focus(); });
+$('project-copy-preview').addEventListener('click', () => { void requestProjectCopy('preview'); });
+$('project-copy-confirm').addEventListener('click', () => { void requestProjectCopy('confirm'); });
+$('project-copy-continue').addEventListener('click', async () => {
+  const preview = projectCopyPreview, epoch = projectCopyEpoch;
+  if (preview && await switchJourney('open-project-copy', { id: preview.id }, () => projectCopyPreview === preview && epoch === projectCopyEpoch && $('project-copy-dialog').open)) closeProjectCopy();
+});
+for (const id of ['project-copy-folder', 'project-copy-research', 'project-copy-additional']) $(id).addEventListener('input', () => clearProjectCopy('Selection changed. Preview again.'));
+$('project-copy-close').addEventListener('click', closeProjectCopy);
+$('project-copy-dialog').addEventListener('cancel', event => { event.preventDefault(); closeProjectCopy(); });
 async function switchJourney(action, input, current = () => true) {
   if (!switchAllowed()) return null;
   voice.cancel();
@@ -2672,6 +2724,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  if ($('project-copy-dialog').open) closeProjectCopy();
   clearProjectListing('Page suspended. Refresh project journeys before selecting.');
   if (viewerTarget) { invalidateViewer('The page was suspended. Reopen Export maps and preview again.'); viewerTarget = null; $('viewer-preview').disabled = true; }
   closeResearchReview();

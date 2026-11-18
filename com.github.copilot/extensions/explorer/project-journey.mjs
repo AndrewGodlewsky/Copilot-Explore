@@ -52,16 +52,19 @@ export class ProjectJourney {
     });
     return this;
   }
-  async create(document) {
+  async create(document, { beforeWrite = async () => {} } = {}) {
     validateProjectWorkingDocument(document);
     const prepared = prepareSharedMigration(JSON.stringify(document)); this.checkIdentity(prepared.document);
     return this.transact(() => this.context.withCreationLock(async () => {
       try { await this.context.read(); throw Error('A project document already exists. Open it or choose a different destination.'); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
       // A reused identity with local history must be reconciled explicitly, not reset.
-      if (await this.history.read('manifest.json', 128 * 1024, true) !== null || await this.history.read('intent.json', 256 * 1024, true) !== null) throw Error('Local history already exists for this journey. Reopen or recover it before creating a copy.');
+      const manifest = await this.history.read('manifest.json', 128 * 1024, true);
+      if (await this.history.read('intent.json', 256 * 1024, true) !== null || manifest !== null && this.history.validate(JSON.parse(manifest)).head.hash !== this.history.row(working(prepared.document, 0), 'Initial version').hash) throw Error('Local history already exists for this journey. Reopen or recover it before creating a copy.');
       await this.history.reconcile(working(prepared.document, 0));
-      await this.context.assertCurrent(); await this.write(this.context.file, prepared.content);
+      await beforeWrite(); await this.context.assertCurrent();
+      try { await this.context.read(); throw Error('A project document already exists. Open it or choose a different destination.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      await this.write(this.context.file, prepared.content);
       this.accept(readSharedDocument(prepared.content), 0); return this.document;
     }));
   }

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.72",
+    "summary": "Save a reviewed project copy of a personal exploration. Preview the exact file, choose whether to include question research, and continue in the copy only when ready. Originals and private drafts stay put; retries recognize identical copies and changed destinations are never overwritten."
+  },
+  {
     "version": "0.1.71",
     "summary": "Find shared journeys in the new Current project library. Refresh a selected folder, see individual file errors and duplicate warnings, and reopen journeys in your current canvas. Pins and recent openings stay private, with stale selections and incomplete scans clearly identified."
   },

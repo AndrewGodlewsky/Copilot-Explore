@@ -33,6 +33,7 @@
   </section>
   <main id="workspace" hidden>
     <section class="map-section" aria-label="Exploration map">
+      <div id="question-stage">
       <div id="orphan-drafts"></div>
       <div class="map-heading"><div><h1 id="map-title"></h1><button id="request-status" hidden></button><div id="focus-access" class="focus-access" hidden><span id="focus-status" role="status"></span><button id="show-whole-map" hidden>Show whole map</button></div></div><div class="history-access"><button id="undo-change">Undo</button><button id="history-open">History</button></div><button id="outline-toggle" aria-expanded="false" aria-controls="outline">Outline view</button></div>
       <section id="next-question" aria-labelledby="next-question-title" hidden></section>
@@ -44,6 +45,9 @@
       <section id="minimap" aria-label="Map overview" hidden><svg id="minimap-map" tabindex="0" role="group" aria-label="Minimap navigation" aria-describedby="minimap-status minimap-instructions" viewBox="0 0 180 80"><g aria-hidden="true"><path id="minimap-nodes"/><path id="minimap-folded"/><path id="minimap-focus"/><path id="minimap-selected"/><rect id="minimap-viewport"/></g></svg><div class="minimap-help"><p id="minimap-status"></p><p id="minimap-instructions">Click or drag to move. Arrow keys pan; Home or Enter centers; Escape hides. Blue: selected. Dashed: folded. Ring: focus. Box: viewport. Use Outline for questions.</p></div></section>
       <div id="map-controls" class="map-controls"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-level" aria-label="Reset zoom to 100%" title="Reset zoom to 100%">100%</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="fit" aria-label="Fit visible map" title="Fit visible map">Fit</button><button id="center-question" aria-label="Center question" title="Center question">Center</button><button id="minimap-toggle" aria-expanded="false" aria-controls="minimap">Show minimap</button><span id="navigation-hint" class="navigation-hint" role="status"></span><span class="legend"><i></i> Open <i class="answered"></i> Answered</span></div>
       </div>
+      </div>
+      <button id="question-drawer-handle" type="button" aria-controls="question-drawer" hidden>Question tools</button>
+      <section id="question-drawer" aria-labelledby="question-drawer-title" hidden></section>
     </section>
   </main>
   <dialog id="recovery-dialog" aria-labelledby="recovery-title"><h2 id="recovery-title">Recovery</h2><p>Inspect saved versions without changing your journey or drafts. Opening a version creates a separate copy and preserves the original files.</p><p id="recovery-status" role="status" aria-live="polite"></p><div id="recovery-operations"></div><div id="recovery-list"></div><section id="recovery-preview"></section><p class="quiet">Missing operation records mean unknown, not interrupted. Model requests are never replayed here. Use the normal Research action for a fresh request. Export responses cannot confirm a file was saved by your browser.</p><div class="guidance-actions"><button id="recovery-close">Close</button><button id="recovery-refresh">Refresh recovery</button><button id="recovery-retry">Retry saved read / history</button><button id="recovery-copy" disabled>Open as separate recovery copy</button></div></dialog>

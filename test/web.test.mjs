@@ -31,11 +31,16 @@ import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs'
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 
-test('question shelf keeps secondary tools out of answering and preserves mounted drafts when toggled', async t => {
+test('question drawer keeps secondary tools out of answering and preserves mounted drafts when toggled', async t => {
   const f = await fixture(t, 360), $ = id => f.document.getElementById(id);
   f.open(f.explorer.doc.nodes[1].id);
   const answer = $('answer'), parent = answer.parentElement, body = $('question-tools-body');
   assert.ok(body); assert.equal(body.hidden, true);
+  assert.equal($('question-drawer').parentElement, $('question-stage').parentElement);
+  for (const id of ['working-view', 'context-controls', 'map-title']) assert.ok($('question-stage').contains($(id)), id);
+  assert.equal($('question-stage').contains($('question-drawer')), false);
+  assert.equal($('node-workspace').contains(body), false);
+  assert.equal($('world').contains(body), false);
   for (const id of ['answer-state', 'clean-answer', 'revisit-editor', 'question-context', 'research-summary', 'manual-question']) assert.ok(body.contains($(id)), id);
   assert.equal($('node-workspace').contains($('voice-settings')), false);
   f.type('answer', 'Keep my answer and caret'); answer.focus(); answer.setSelectionRange(3, 8);
@@ -50,6 +55,77 @@ test('question shelf keeps secondary tools out of answering and preserves mounte
   assert.equal($('answer'), answer); assert.equal(body.hidden, true); assert.equal($('revisit-condition').value, 'Next month');
 });
 
+test('constrained question stage reveals focused card controls without resetting user scroll on polling', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  const stage = $('question-stage'), save = $('save-answer');
+  Object.defineProperty(stage, 'clientHeight', { value: 180 });
+  stage.getBoundingClientRect = () => ({ top: 100, bottom: 280, height: 180 });
+  save.getBoundingClientRect = () => ({ top: 400 - stage.scrollTop, bottom: 436 - stage.scrollTop, height: 36 });
+  save.focus(); assert.equal(stage.scrollTop, 156);
+  stage.scrollTop = 72; await f.poll(); assert.equal(stage.scrollTop, 72, 'polling does not drag the reader back to the card');
+});
+
+test('Save & continue opens an existing useful question without generation', async t => {
+  const f = await fixture(t, 460, undefined, false, { before: e => e.command('guidance', { revision: e.doc.revision, objective: 'Tool reliability', successCriteria: '' }) }), $ = id => f.document.getElementById(id);
+  const [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
+  f.type('answer', 'Start with neighbors'); $('save-answer').click();
+  await until(() => $('node-workspace').dataset.nodeId === b.id, 'continued to local useful question');
+  assert.equal(f.explorer.doc.nodes.find(n => n.id === a.id).answer, 'Start with neighbors');
+  assert.equal(f.explorer.pending, null); assert.equal(f.explorer.doc.nodes.length, 3);
+});
+
+test('Save & continue stays with the answer when there is no locally useful next question', async t => {
+  const f = await fixture(t, 460, undefined, false, { questions: [{ category: 'People', question: 'Who should borrow first?' }] }), $ = id => f.document.getElementById(id), a = f.explorer.doc.nodes[1]; f.open(a.id);
+  f.type('answer', 'Keep the saved answer'); $('save-answer').click();
+  await until(() => $('notice').textContent.includes('No next question'), 'no-next feedback');
+  assert.equal($('node-workspace').dataset.nodeId, a.id); assert.equal(f.explorer.pending, null);
+});
+
+test('Save & continue ignores stale completion after typing or navigating', async t => {
+  for (const change of ['typing', 'navigation']) {
+    const f = await fixture(t, 460, undefined, false, { before: e => e.command('guidance', { revision: e.doc.revision, objective: 'Tool reliability', successCriteria: '' }) }), $ = id => f.document.getElementById(id);
+    const [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
+    let release; f.pauseAnswer(() => new Promise(resolve => { release = resolve; }));
+    f.type('answer', 'Submitted answer'); $('save-answer').click(); await until(() => release, 'save held');
+    if (change === 'typing') f.type('answer', 'Newer draft');
+    else { f.open(b.id); f.open(a.id); }
+    release(); await until(() => f.explorer.doc.nodes.find(n => n.id === a.id).answer === 'Submitted answer', 'save delivered'); await delay(80);
+    assert.equal($('node-workspace').dataset.nodeId, a.id, change);
+    if (change === 'typing') assert.equal($('answer').value, 'Newer draft');
+  }
+});
+
+test('question drawer tabs preserve drafts and keyboard focus across close, polling and navigation', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id), [a, b] = f.explorer.doc.nodes.slice(1);
+  f.open(a.id); $('question-tools-toggle').click();
+  const answer = $('answer'); f.type('answer', 'Working answer'); chooseState(f, 'needs-evidence');
+  $('question-tab-details').click(); f.type('revisit-condition', 'After a trial'); $('revisit-editor').open = true;
+  $('question-tab-explore').click(); f.type('manual-question', 'Try another route');
+  $('question-tab-research').focus(); $('question-tab-research').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+  assert.equal($('question-tab-details').getAttribute('aria-selected'), 'true'); assert.equal(f.document.activeElement, $('question-tab-details'));
+  $('question-tools-body').scrollTop = 137; $('question-drawer-close').click();
+  assert.equal(f.document.activeElement, $('question-tools-toggle')); assert.equal($('question-drawer').hidden, true);
+  $('question-drawer-handle').click(); assert.equal($('question-tools-body').scrollTop, 137);
+  answer.focus(); answer.dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal($('question-drawer').hidden, true); assert.equal($('node-workspace').hidden, false); assert.equal(f.document.activeElement, $('question-tools-toggle'));
+  await f.poll(); assert.equal($('answer'), answer); assert.equal($('answer-state').value, 'needs-evidence');
+  f.open(b.id); f.open(a.id); $('question-tools-toggle').click();
+  assert.equal($('question-tab-details').getAttribute('aria-selected'), 'true'); assert.equal($('revisit-condition').value, 'After a trial');
+  assert.equal($('manual-question').value, 'Try another route'); assert.equal($('answer').value, 'Working answer'); assert.equal($('answer-state').value, 'needs-evidence');
+});
+
+test('Save & continue without guidance skips resolved, deferred and review questions and wraps', async t => {
+  const f = await fixture(t, 460, undefined, false, { questions: ['First', 'Resolved', 'Deferred', 'Review', 'Last'].map(category => ({ category, question: `${category} question?` })), before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[2].answerState = 'not-relevant'; doc.nodes[3].answerState = 'revisit-later'; doc.nodes[4].review = true;
+    await e.save(doc, 'Fixture states');
+  } }), $ = id => f.document.getElementById(id), [first, , , , last] = f.explorer.doc.nodes.slice(1);
+  f.open(last.id); f.type('answer', 'Last answer'); $('save-answer').click();
+  await until(() => $('node-workspace').dataset.nodeId === first.id, 'wrapped to first unresolved question');
+  chooseState(f, 'decided'); f.type('answer', 'First answer'); $('save-answer').click();
+  await until(() => $('node-workspace').dataset.nodeId === last.id, 'skipped unavailable questions');
+  assert.equal(f.explorer.pending, null);
+});
+
 test('global settings gear remains available without a card and in Outline', async t => {
   const f = await fixture(t, 360), $ = id => f.document.getElementById(id);
   assert.equal($('navigation-open').getAttribute('aria-label'), 'Settings');
@@ -62,7 +138,7 @@ test('global settings gear remains available without a card and in Outline', asy
   assert.equal($('answer'), answer); assert.equal(answer.value, 'Settings must keep this'); assert.equal(f.document.activeElement, $('navigation-open'));
 });
 
-test('Commands reveals a closed question shelf before opening a tool review', async t => {
+test('Commands reveals a closed question drawer before opening a tool review', async t => {
   const f = await fixture(t), $ = id => f.document.getElementById(id);
   f.open(f.explorer.doc.nodes[1].id); assert.equal($('question-tools-body').hidden, true);
   const answer = $('answer'); f.type('answer', 'Keep my private text');
@@ -71,10 +147,19 @@ test('Commands reveals a closed question shelf before opening a tool review', as
   assert.equal(command.getAttribute('aria-disabled'), 'false'); command.click();
   await until(() => $('research-review-dialog').open, 'review opened');
   assert.equal($('question-tools-body').hidden, false); assert.equal($('research-summary').parentElement.open, true);
+  assert.equal(f.document.querySelector('[data-tool-tab=research]').getAttribute('aria-selected'), 'true');
   assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep my private text'); assert.equal(f.explorer.pending, null);
 });
 
-test('request navigation and new previews reveal the top of a scrolled question shelf', async t => {
+test('Commands cannot start a drawer operation after the question is collapsed', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  $('collapse-node').click(); $('palette-open').click();
+  const command = $('palette-commands').querySelector('[data-command="research-request"]');
+  assert.equal(command.getAttribute('aria-disabled'), 'true'); command.click();
+  assert.equal($('research-review-dialog').open, false); assert.equal(f.explorer.pending, null);
+});
+
+test('request navigation and new previews reveal the top of a scrolled question drawer', async t => {
   const f = await fixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
   f.open(node.id); f.type('answer', 'Start with nearby neighbors');
   $('question-tools-toggle').click(); $('question-tools-body').scrollTop = 800;
@@ -304,7 +389,7 @@ test('full Outline keeps research and private cleanup previews on their captured
   const request = f.explorer.pending.id; $('outline-toggle').click(); $('outline-toggle').click(); assert.equal(f.explorer.pending.id, request);
   f.resolveResearch(findings); await until(() => f.explorer.doc.nodes[1].research, 'research completed'); await f.poll();
   assert.equal($('answer'), answer); assert.equal(answer.value, 'OUTLINE_PRIVATE'); assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.match($('outline-list').textContent, /Research available/);
-  chooseState(f, 'tentative'); const count = f.actions.filter(a => a.action === 'answer').length; f.click('Save answer');
+  chooseState(f, 'tentative'); const count = f.actions.filter(a => a.action === 'answer').length; f.click('Save & continue');
   await until(() => f.explorer.doc.nodes[1].answer === 'OUTLINE_PRIVATE', 'same save action'); assert.equal(f.explorer.doc.nodes[1].answerState, 'tentative'); assert.equal(f.actions.filter(a => a.action === 'answer').length, count + 1);
   assert.equal(f.actions.filter(a => a.action === 'research').length, 1);
 });
@@ -1322,7 +1407,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     assert.ok(button, 'compact node exists: ' + question); button.click();
   };
   const type = (id, value) => { const e = document.getElementById(id); assert.ok(e, id); e.value = value; e.dispatchEvent(new window.Event('input', { bubbles: true })); };
-  const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => (e.getAttribute('aria-label') ?? e.textContent) === text || e.textContent === text); assert.ok(b, text); b.click(); };
+  const click = text => { const b = [...document.querySelectorAll('#node-workspace button, #question-drawer button')].find(e => (e.getAttribute('aria-label') ?? e.textContent) === text || e.textContent === text); assert.ok(b, text); b.click(); };
   return { explorer, window, document, open, type, click, actions, observers, resizeWorkspace: value => { workspaceHeight = value; observers.get('node-workspace')(); }, poll: () => window.__updates.poll(), resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
@@ -1554,7 +1639,7 @@ test('research allows independent answer save through HTTP and preserves editor 
   $('answer').focus(); $('answer').setSelectionRange(6, 10);
   await until(() => $('save-deeper').disabled, 'research contention reflected');
   assert.equal($('save-answer').disabled, false);
-  assert.match(f.document.querySelector('#node-workspace').textContent, /Wait or cancel research before Explore deeper/);
+  assert.match(f.document.querySelector('#question-drawer').textContent, /Wait or cancel research before Explore deeper/);
   assert.equal($('answer').selectionStart, 6); assert.equal($('answer').selectionEnd, 10);
   assert.equal(f.document.activeElement.id, 'answer');
   assert.ok($('voice-status')); assert.ok($('help-rephrase')); assert.ok($('question-rationale'));
@@ -1717,7 +1802,7 @@ test('question help shows a bounded error and permits explicit keyboard retry', 
   await until(() => /A plain-language explanation/.test($('question-help-results').textContent), 'explicit retry');
   assert.equal(count, 2);
   assert.equal($('question-help-results').querySelector('p.cleanup-text').tabIndex, 0);
-  assert.equal($('question-help-summary').closest('#node-workspace') !== null, true);
+  assert.equal($('question-help-summary').closest('#question-drawer') !== null, true);
 });
 
 test('question help refreshes an external source change before explicit retry', async t => {
@@ -1966,7 +2051,8 @@ test('answer state selection saves only on explicit commit and displays in map o
   f.document.getElementById('save-answer').click();
   await until(() => f.explorer.doc.nodes[1].answerState === 'not-relevant' && !f.document.getElementById('discard-draft'), 'state committed and draft cleared');
   assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.match(f.document.getElementById('progress').textContent, /0 answered.*1 resolved.*1 unresolved/);
-  assert.match(f.document.getElementById('answer-status').textContent, /saved/i);
+  await until(() => f.document.getElementById('node-workspace').dataset.nodeId !== node.id, 'continued after state save');
+  f.open(node.id); assert.match(f.document.getElementById('answer-status').textContent, /saved/i);
   f.document.getElementById('collapse-node').click();
   assert.match(f.document.querySelector(`[data-node-id="${node.id}"].node`).textContent, /Not relevant/);
   f.document.getElementById('outline-toggle').click(); assert.match(f.document.getElementById('outline-list').textContent, /Not relevant/);
@@ -2399,8 +2485,9 @@ test('late background reads cannot undo a completed save in the UI', async t => 
   let release, started = false;
   f.pauseState(() => { started = true; return new Promise(resolve => { release = resolve; }); });
   await until(() => started, 'old state response held');
-  f.type('answer', 'The saved answer'); f.click('Save answer');
-  await until(() => f.document.getElementById('answer-status').textContent === 'Answer saved', 'saved response applied');
+  f.type('answer', 'The saved answer'); f.click('Save & continue');
+  await until(() => f.document.getElementById('node-workspace').dataset.nodeId !== node.id, 'save and continuation applied');
+  f.open(node.id);
   f.pauseState(null); release(); await delay(50);
   assert.equal(f.document.getElementById('answer').value, 'The saved answer');
   assert.equal(f.document.getElementById('progress').textContent.startsWith('1 answered'), true);
@@ -2431,8 +2518,9 @@ test('installed questions expand inside the map, preserve drafts, and collapse t
   assert.ok(worldY + parseFloat(parent.style.top) >= 16, 'the parent remains visible above the expanded question');
   f.type('answer', 'Neighbors on our block'); f.open(b.id); f.open(a.id);
   assert.equal(f.document.getElementById('answer').value, 'Neighbors on our block');
-  f.click('Save answer'); await until(() => f.explorer.doc.nodes[1].answer, 'answer saved');
-  await until(() => f.document.getElementById('answer-status')?.textContent === 'Answer saved', 'save rendered');
+  f.click('Save & continue'); await until(() => f.explorer.doc.nodes[1].answer, 'answer saved');
+  await until(() => f.document.getElementById('node-workspace').dataset.nodeId !== a.id, 'save and continuation rendered');
+  f.open(a.id);
   f.click('Close question');
   assert.ok(f.document.getElementById('node-workspace').hidden);
   assert.match(f.document.getElementById('nodes').textContent, /Neighbors on our block/);
@@ -2532,17 +2620,17 @@ test('research callbacks and follow-ups work inside a narrow expanded node witho
   await until(() => f.explorer.pending?.kind === 'research', 'research requested');
   f.type('answer', 'My own thought, still editing');
   f.resolveResearch(findings);
-  await until(() => f.document.querySelector('#node-workspace .option'), 'research delivered');
+  await until(() => f.document.querySelector('#question-drawer .option'), 'research delivered');
   assert.equal(f.document.getElementById('answer').value, 'My own thought, still editing');
-  assert.match(f.document.getElementById('node-workspace').textContent, /not externally verified/);
+  assert.match(f.document.getElementById('question-drawer').textContent, /not externally verified/);
   f.click('Use this option');
   assert.match(f.document.getElementById('answer').value, /^My own thought, still editing\n\nOne block/);
   assert.equal(f.explorer.doc.nodes[1].answer, '');
   f.click('Save answer and explore deeper'); await until(() => f.explorer.pending?.kind === 'questions', 'follow-ups requested');
   await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [{ category: 'People', question: 'How will you invite them?' }] });
   await until(() => f.document.getElementById('accept-questions'), 'review follow-ups'); f.document.getElementById('accept-questions').click();
-  await until(() => [...f.document.querySelectorAll('#node-workspace .followup')].length, 'follow-up link');
-  f.document.querySelector('#node-workspace .followup').click();
+  await until(() => [...f.document.querySelectorAll('#question-drawer .followup')].length, 'follow-up link');
+  f.document.querySelector('#question-drawer .followup').click();
   assert.equal(f.document.getElementById('expanded-title').textContent, 'How will you invite them?');
   assert.ok(parseFloat(f.document.getElementById('node-workspace').style.width) <= 308);
 });
@@ -2554,7 +2642,7 @@ test('typing while saving survives the response and editing does not drag the ca
   assert.equal(f.captures(), 0, 'text editing is not canvas panning');
   let release, started = false;
   f.pauseAnswer(() => { started = true; return new Promise(resolve => { release = resolve; }); });
-  f.type('answer', 'Submitted answer'); f.click('Save answer'); await until(() => started, 'save held');
+  f.type('answer', 'Submitted answer'); f.click('Save & continue'); await until(() => started, 'save held');
   f.type('answer', 'Newer unsaved thought'); release();
   await until(() => f.explorer.doc.nodes[1].answer === 'Submitted answer', 'save delivered');
   await delay(80);
@@ -2601,7 +2689,7 @@ test('pending work remains reachable from the whole map and cancellation preserv
   f.document.getElementById('request-status').click();
   assert.equal(f.document.getElementById('expanded-title').textContent, a.question);
   f.click('Cancel request'); await until(() => !f.explorer.pending, 'cancelled');
-  await until(() => !f.document.querySelector('#node-workspace .pending'), 'cancellation rendered');
+  await until(() => !f.document.querySelector('#question-drawer .pending'), 'cancellation rendered');
   assert.equal(f.document.getElementById('answer').value, 'Keep this while researching');
 });
 
@@ -2628,7 +2716,7 @@ test('a rejected stale save keeps the answer draft available', async t => {
   const f = await fixture(t), a = f.explorer.doc.nodes[1]; f.open(a.id);
   f.type('answer', 'My unsaved change');
   await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: a.id, answer: 'A separately saved change' });
-  f.click('Save answer');
+  f.click('Save & continue');
   await until(() => f.document.getElementById('notice').textContent.includes('The map changed'), 'stale save error');
   assert.equal(f.document.getElementById('answer').value, 'My unsaved change');
   assert.equal(f.explorer.doc.nodes[1].answer, 'A separately saved change');
@@ -2637,11 +2725,11 @@ test('a rejected stale save keeps the answer draft available', async t => {
 test('keyboard focus survives research, cancellation, and background map updates', async t => {
   const f = await fixture(t), [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
   f.document.querySelector('.research-disclosure summary').click();
-  const research = [...f.document.querySelectorAll('#node-workspace button')].find(e => e.textContent === 'Research options');
+  const research = [...f.document.querySelectorAll('#node-workspace button, #question-drawer button')].find(e => e.textContent === 'Research options');
   research.focus(); research.click(); await startReviewedResearch(f);
-  await until(() => f.document.querySelector('#node-workspace .pending'), 'pending controls');
+  await until(() => f.document.querySelector('#question-drawer .pending'), 'pending controls');
   assert.equal(f.document.activeElement.textContent, 'Cancel request');
-  f.click('Cancel request'); await until(() => !f.document.querySelector('#node-workspace .pending'), 'cancellation rendered');
+  f.click('Cancel request'); await until(() => !f.document.querySelector('#question-drawer .pending'), 'cancellation rendered');
   assert.equal(f.document.activeElement.id, 'expanded-title');
   f.document.getElementById('fit').click();
   const target = f.document.querySelector(`[data-node-id="${a.id}"]`); assert.equal(target.tagName, 'BUTTON', 'edge identity cannot shadow node controls'); target.focus();
@@ -2767,7 +2855,7 @@ test('answer save captures the click text while a draft flush is still pending',
   const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id);
   let release, started; const gate = new Promise(resolve => { release = resolve; }), entered = new Promise(resolve => { started = resolve; });
   f.pauseDraftWrite(() => { started(); return gate; }); t.after(release);
-  f.type('answer', 'Clicked save'); f.click('Save answer'); await entered;
+  f.type('answer', 'Clicked save'); f.click('Save & continue'); await entered;
   f.type('answer', 'Typed after click'); release(); f.pauseDraftWrite(null);
   await until(() => f.explorer.doc.nodes[1].answer, 'committed captured text');
   assert.equal(f.explorer.doc.nodes[1].answer, 'Clicked save');
@@ -2810,7 +2898,8 @@ test('keyboard answer save clears its draft without treating restored focus as t
   assert.equal(f.explorer.pending, null, 'the save shortcut does not start generation');
   await delay(100);
   assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, null);
-  assert.equal(f.document.getElementById('answer-status').textContent, 'Answer saved');
+  assert.notEqual(f.document.getElementById('node-workspace').dataset.nodeId, node.id);
+  f.open(node.id); assert.equal(f.document.getElementById('answer-status').textContent, 'Answer saved');
 });
 
 test('recovery based on an older state read cannot replace a newer committed answer', async t => {
@@ -3411,7 +3500,8 @@ test('history dialog previews undo, preserves stale drafts and names checkpoints
   const f = await fixture(t, 340), node = f.explorer.doc.nodes[1]; f.open(node.id);
   f.type('answer', 'Committed'); f.document.getElementById('save-answer').click();
   await until(() => f.explorer.doc.nodes[1].answer === 'Committed' && !f.document.getElementById('discard-draft'), 'answer saved');
-  f.type('answer', 'Local draft'); chooseState(f, 'needs-evidence');
+  await until(() => f.document.getElementById('node-workspace').dataset.nodeId !== node.id, 'continued after save');
+  f.open(node.id); f.type('answer', 'Local draft'); chooseState(f, 'needs-evidence');
   const undo = f.document.getElementById('undo-change'); assert.ok(undo, 'Undo access'); undo.click();
   await until(() => !f.document.getElementById('history-restore').disabled, 'undo preview');
   assert.match(f.document.getElementById('history-preview').textContent, /changed|restore/i);
@@ -4471,7 +4561,7 @@ test('conditional polling bounds timeouts and retry delays without replaying fai
   };
   for (let i = 0; i < 5; i++) { const work = f.poll(); deadline(); await work; assert.equal(timedSignal.aborted, true); }
   assert.deepEqual(delays, [2400, 4800, 9600, 15000, 15000]);
-  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep this through disconnect'); f.click('Save answer');
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep this through disconnect'); f.click('Save & continue');
   await until(() => actionCalls === 1, 'explicit failed action'); await delay(0);
   f.window.fetch = async (path, options) => { if (path === 'api/action') actionCalls++; return original(path, options); };
   await f.poll(); await f.poll(); assert.equal(actionCalls, 1); assert.equal(f.document.getElementById('answer').value, 'Keep this through disconnect');
@@ -4481,7 +4571,7 @@ test('late action response from a hidden page cannot replace the reconnected map
   const f = await fixture(t); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Explicit saved answer');
   const original = f.window.fetch; let held;
   f.window.fetch = async (path, options) => { const response = await original(path, options); if (path === 'api/action') return new Promise(resolve => { held = () => resolve(response); }); return response; };
-  f.click('Save answer'); await until(() => held, 'held action after commit');
+  f.click('Save & continue'); await until(() => held, 'held action after commit');
   const hide = new f.window.Event('pagehide'); Object.defineProperty(hide, 'persisted', { value: true }); f.window.dispatchEvent(hide);
   f.explorer.error = 'Newer state after action'; const show = new f.window.Event('pageshow'); Object.defineProperty(show, 'persisted', { value: true }); f.window.dispatchEvent(show);
   await until(() => f.document.getElementById('notice').textContent === 'Newer state after action', 'new epoch snapshot');

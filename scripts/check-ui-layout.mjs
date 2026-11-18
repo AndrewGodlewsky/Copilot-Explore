@@ -44,17 +44,35 @@ const browser = await chromium.launch({ executablePath: browserPath, headless: t
 const failures = [], samples = [];
 const settle = page => page.evaluate(async () => { await document.fonts.ready; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); });
 const expect = (condition, message, detail) => { if (!condition) failures.push({ message, detail }); };
+async function inspectDrawer(page, label) {
+  const layout = await page.locator('#question-drawer').evaluate(drawer => {
+    const rect = el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height }; };
+    const body = document.getElementById('question-tools-body');
+    return { drawer: rect(drawer), host: rect(drawer.parentElement), viewport: { width: innerWidth, height: innerHeight },
+      insideCard: !!drawer.closest('#node-workspace'), insideWorld: !!drawer.closest('#world'),
+      body: rect(body), scrollHeight: body.scrollHeight, clientHeight: body.clientHeight, overflow: getComputedStyle(body).overflowY,
+      controls: ['#question-drawer-close', '#question-drawer-size', '[data-tool-tab][aria-selected="true"]'].map(s => ({ selector: s, ...rect(document.querySelector(s)) })) };
+  });
+  expect(!layout.insideCard && !layout.insideWorld, `${label}: drawer is outside the card and zoomed map`, layout);
+  expect(layout.drawer.left >= -1 && layout.drawer.right <= layout.viewport.width + 1 && layout.drawer.width >= layout.host.width - 2, `${label}: drawer uses the full available screen width`, layout);
+  expect(layout.drawer.bottom <= Math.min(layout.host.bottom, layout.viewport.height) + 1, `${label}: drawer stays above the footer`, layout);
+  for (const control of layout.controls) expect(control.top >= layout.drawer.top && control.bottom <= layout.drawer.bottom && control.left >= layout.drawer.left && control.right <= layout.drawer.right, `${label}: ${control.selector} remains reachable`, layout);
+  expect(layout.clientHeight > 40 && (layout.scrollHeight <= layout.clientHeight + 1 || ['auto', 'scroll'].includes(layout.overflow)), `${label}: tools have a usable scrolling area`, layout);
+}
 async function inspectWorkspace(page, label, { scroll = false, answer = false } = {}) {
-  const panel = await page.locator('#node-workspace').evaluate(el => ({ height: el.clientHeight, contentHeight: el.scrollHeight, overflow: getComputedStyle(el).overflowY }));
+  const panel = await page.locator('#node-workspace').evaluate(el => ({ height: el.clientHeight, contentHeight: el.scrollHeight, overflow: getComputedStyle(el).overflowY, scrollPane: el.classList.contains('scroll-pane') }));
   expect(panel.contentHeight <= panel.height + 1 || ['auto', 'scroll'].includes(panel.overflow), `${label}: overflowing workspace is manually scrollable`, panel);
   const selectors = ['#save-answer', '#question-tools-toggle', ...(answer ? ['#answer'] : [])];
   for (const selector of selectors) {
-    if (scroll) await page.locator(selector).scrollIntoViewIfNeeded();
+    if (scroll || panel.scrollPane) await page.locator(selector).scrollIntoViewIfNeeded();
     const bounds = await page.locator(selector).evaluate(el => {
-      const r = el.getBoundingClientRect(), panel = document.getElementById('node-workspace').getBoundingClientRect(), map = document.getElementById('map').getBoundingClientRect();
-      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height, panelTop: panel.top, panelBottom: panel.bottom, mapTop: map.top, mapBottom: map.bottom, mapLeft: map.left, mapRight: map.right };
+      const r = el.getBoundingClientRect(), panel = document.getElementById('node-workspace').getBoundingClientRect(), map = document.getElementById('map').getBoundingClientRect(), view = document.getElementById('working-view').getBoundingClientRect(), stage = (document.getElementById('question-stage') ?? document.querySelector('.map-section')).getBoundingClientRect();
+      return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height, panelTop: panel.top, panelBottom: panel.bottom, mapTop: Math.max(map.top, view.top, stage.top), mapBottom: Math.min(map.bottom, view.bottom, stage.bottom), mapLeft: Math.max(map.left, view.left, stage.left), mapRight: Math.min(map.right, view.right, stage.right) };
     });
-    expect(bounds.top >= Math.max(bounds.panelTop, bounds.mapTop) && bounds.bottom <= Math.min(bounds.panelBottom, bounds.mapBottom) + 1 && bounds.left >= bounds.mapLeft && bounds.right <= bounds.mapRight, `${label}: ${selector} is reachable`, bounds);
+    const top = Math.max(bounds.panelTop, bounds.mapTop), bottom = Math.min(bounds.panelBottom, bounds.mapBottom);
+    const visible = Math.min(bounds.bottom, bottom) - Math.max(bounds.top, top);
+    const vertical = selector === '#answer' ? visible >= Math.min(48, bottom - top - 4) : bounds.top >= top && bounds.bottom <= bottom + 1;
+    expect(vertical && bounds.left >= bounds.mapLeft && bounds.right <= bounds.mapRight, `${label}: ${selector} is reachable`, bounds);
   }
 }
 async function inspectCards(page, label) {
@@ -94,7 +112,7 @@ async function inspectCards(page, label) {
   }
 }
 try {
-  for (const scenario of [{ name: 'wide', width: 1200, height: 900, colorScheme: 'dark' }, { name: 'narrow', width: 460, height: 780, colorScheme: 'light' }, { name: 'short', width: 360, height: 640, colorScheme: 'dark' }, { name: 'minimum', width: 280, height: 640, colorScheme: 'light' }]) {
+  for (const scenario of [{ name: 'wide', width: 1200, height: 900, colorScheme: 'dark' }, { name: 'narrow', width: 460, height: 780, colorScheme: 'light' }, { name: 'short', width: 360, height: 640, colorScheme: 'dark' }, { name: 'low-height', width: 720, height: 480, colorScheme: 'light' }, { name: 'minimum', width: 280, height: 640, colorScheme: 'light' }]) {
     voiceReady = false;
     const context = await browser.newContext({ viewport: { width: scenario.width, height: scenario.height }, colorScheme: scenario.colorScheme });
     const page = await context.newPage(); page.setDefaultTimeout(10000); page.on('pageerror', error => failures.push({ message: `${scenario.name}: page error`, detail: error.message }));
@@ -133,10 +151,10 @@ try {
       await page.locator('#outline-toggle').click(); await settle(page);
       const writing = await page.evaluate(() => {
         const answer = document.getElementById('answer').getBoundingClientRect(), content = document.querySelector('.node-content').getBoundingClientRect(), map = document.getElementById('map').getBoundingClientRect();
-        return { visible: Math.max(0, Math.min(answer.bottom, content.bottom, map.bottom) - Math.max(answer.y, content.y, map.y)), saveBottom: document.getElementById('save-answer').getBoundingClientRect().bottom, shelfBottom: document.getElementById('question-tools-toggle').getBoundingClientRect().bottom, mapBottom: map.bottom };
+        return { visible: Math.max(0, Math.min(answer.bottom, content.bottom, map.bottom) - Math.max(answer.y, content.y, map.y)), scrollPane: document.getElementById('node-workspace').classList.contains('scroll-pane') };
       });
-      expect(writing.visible >= (scenario.width < 320 ? 48 : 80), `${scenario.name}: unavailable voice leaves room to write`, writing);
-      expect(writing.saveBottom <= writing.mapBottom + 1 && writing.shelfBottom <= writing.mapBottom + 1, `${scenario.name}: Save and shelf remain reachable`, writing);
+      expect(writing.visible >= (scenario.width < 320 || writing.scrollPane ? 48 : 80), `${scenario.name}: unavailable voice leaves room to write`, writing);
+      await inspectWorkspace(page, `${scenario.name}/writing`);
       const editor = await page.locator('#answer').elementHandle(); await page.locator('#answer').fill('Keep this private draft');
       voiceReady = true;
       await page.locator('#answer').blur(); await page.locator('#answer').focus();
@@ -153,14 +171,33 @@ try {
         await inspectWorkspace(page, `${scenario.name}/${phase}`);
       }
       await page.locator('#voice-cancel').click();
-      await page.locator('#question-tools-toggle').click();
-      await settle(page); await inspectWorkspace(page, `${scenario.name}/open-shelf`);
+      await page.locator('#question-tools-toggle').click(); await settle(page);
+      await inspectDrawer(page, `${scenario.name}/drawer`);
+      await inspectWorkspace(page, `${scenario.name}/drawer-card`, { scroll: true });
+      await page.locator('[data-tool-tab="details"]').click();
       await page.locator('#revisit-editor > summary').click(); await page.locator('#revisit-condition').fill('After our pilot');
       await page.locator('#revisit-condition').press('Escape'); await page.locator('#navigation-open').click(); await page.locator('#navigation-cancel').click();
       expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: editor and draft survive`, {});
       expect(await page.locator('#revisit-condition').inputValue() === 'After our pilot', `${scenario.name}: reminder draft survives`, {});
-      if (screenshots && scenario.name === 'minimum') await page.screenshot({ path: join(output, 'minimum-pane.png') });
-      // Error banners reduce the space available to the editor. Fixture content, no user data.
+      await page.locator('#question-tools-toggle').click();
+      await page.locator('[data-tool-tab="context"]').click(); await page.locator('[data-tool-tab="details"]').click();
+      expect(await page.locator('#revisit-condition').inputValue() === 'After our pilot', `${scenario.name}: tab changes preserve reminder draft`, {});
+      await page.locator('#question-drawer-size').click(); await settle(page);
+      await inspectDrawer(page, `${scenario.name}/expanded-drawer`);
+      await page.locator('#question-drawer-size').click(); await settle(page);
+      // Drawer dimensions do not follow the transformed map's zoom.
+      const drawerWidth = (await page.locator('#question-drawer').boundingBox()).width;
+      await page.locator('#zoom-in').click(); await page.locator('#zoom-in').click(); await settle(page);
+      expect(Math.abs((await page.locator('#question-drawer').boundingBox()).width - drawerWidth) < 1, `${scenario.name}: map zoom leaves drawer at screen scale`, {});
+      await page.locator('#zoom-level').click();
+      await page.locator('[data-tool-tab="explore"]').click();
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-drawer.png`) });
+      await page.locator('#outline-toggle').click(); await settle(page);
+      await inspectDrawer(page, `${scenario.name}/outline-drawer`);
+      expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer')), `${scenario.name}: Outline keeps the same editor`, {});
+      await page.locator('#outline-toggle').click();
+      await page.locator('#question-drawer-close').click();
+      // Error banners reduce space without moving the drawer into the card.
       await page.evaluate(() => { const notice = document.getElementById('notice'); notice.textContent = 'The saved journey changed in another window. Your answer draft is still here. Refresh the saved journey before trying to save this answer again.'; notice.hidden = false; });
       await settle(page);
       if (await page.locator('#node-workspace.scroll-pane').count()) {
@@ -172,27 +209,38 @@ try {
       }
       await inspectWorkspace(page, `${scenario.name}/notice`, { scroll: true, answer: true });
       await page.locator('#question-tools-toggle').click(); await settle(page);
-      await inspectWorkspace(page, `${scenario.name}/notice-open-shelf`, { scroll: true });
-      if (screenshots && scenario.name === 'minimum') await page.screenshot({ path: join(output, 'minimum-notice.png') });
+      await inspectDrawer(page, `${scenario.name}/notice-open-drawer`);
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-notice-drawer.png`) });
+      await page.locator('#question-drawer-size').click(); await settle(page);
+      await inspectDrawer(page, `${scenario.name}/notice-expanded-drawer`);
+      await page.locator('#question-drawer-size').click(); await settle(page);
+      await page.locator('#question-drawer-close').click();
+      await page.evaluate(() => { document.getElementById('notice').hidden = true; });
+      // Successful ordinary saves continue locally, without asking a model.
+      const beforeSaveRequests = requests;
+      await page.locator('#save-answer').click();
+      await page.waitForFunction(id => document.getElementById('node-workspace').dataset.nodeId !== id, parent.id);
+      expect(requests === beforeSaveRequests, `${scenario.name}: Save & continue makes no model request`, {});
+      await page.locator('#outline-toggle').click(); await page.locator(`#outline-list [data-node-id="${parent.id}"]`).click(); await page.locator('#outline-toggle').click();
       if (scenario.name === 'minimum') {
+        if (await page.locator('#question-tools-body').isHidden()) await page.locator('#question-tools-toggle').click();
+        await page.locator('[data-tool-tab="explore"]').click();
         await page.locator('#save-deeper').click(); await page.locator('#cancel-request').waitFor(); await settle(page);
-        await page.locator('#node-workspace').evaluate(el => { el.scrollTop = el.scrollHeight; });
+        await page.locator('#question-drawer-close').click();
         await page.locator('#request-status').click(); await settle(page);
-        const reveal = await page.locator('#question-tools-body').evaluate(el => {
-          const body = el.getBoundingClientRect(), panel = document.getElementById('node-workspace').getBoundingClientRect();
-          return { top: body.top, panelTop: panel.top, panelBottom: panel.bottom };
-        });
-        expect(reveal.top >= reveal.panelTop && reveal.top < reveal.panelBottom - 36, 'minimum: request navigation reveals the shelf beginning in the outer scroller', reveal);
-        await page.locator('#node-workspace').evaluate(el => { el.scrollTop = el.scrollHeight; });
+        await inspectDrawer(page, 'minimum/request-navigation');
+        expect(await page.locator('[data-tool-tab="explore"]').getAttribute('aria-selected') === 'true', 'minimum: request navigation reveals Explore', {});
+        await page.locator('#question-tools-body').evaluate(el => { el.scrollTop = el.scrollHeight; });
         await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ category: 'Next', question: 'What can we try first?' }] });
         await page.locator('#question-preview').waitFor(); await settle(page);
         const preview = await page.locator('#preview-title').evaluate(el => {
-          const title = el.getBoundingClientRect(), panel = document.getElementById('node-workspace').getBoundingClientRect();
-          return { top: title.top, bottom: title.bottom, panelTop: panel.top, panelBottom: panel.bottom };
+          const title = el.getBoundingClientRect(), body = document.getElementById('question-tools-body').getBoundingClientRect();
+          return { top: title.top, bottom: title.bottom, bodyTop: body.top, bodyBottom: body.bottom };
         });
-        expect(preview.top >= preview.panelTop && preview.bottom <= preview.panelBottom, 'minimum: a new preview reveals its heading in the outer scroller', preview);
+        expect(preview.top >= preview.bodyTop && preview.bottom <= preview.bodyBottom, 'minimum: new preview heading is visible in drawer', preview);
+        await page.locator('#question-drawer-close').click();
         const child = doc.nodes.find(n => n.parentId === parent.id);
-        await page.locator(`#followup-${child.id}`).click(); await settle(page);
+        await page.locator('#outline-toggle').click(); await page.locator(`#outline-list [data-node-id="${child.id}"]`).click();
         expect(await page.locator('#node-workspace').evaluate(el => el.scrollTop) === 0, 'minimum: a different question starts at its heading', {});
       }
       console.log(`${scenario.name}: checked cards, four zoom tiers, folding, menus and editor retention`);

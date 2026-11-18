@@ -1,18 +1,24 @@
-# Card workspace, v0.1.64
+# Card workspace, v0.1.65
 
-Explorer helps people follow branching questions and record their own answers. The visual direction is a calm map with a readable writing surface: keep the existing Segoe UI typography, blue branch connections and restrained light/dark palette. Give the selected question and answer priority. Disclose supporting tools where they are useful. Use spacing and hierarchy rather than decorative effects to distinguish the workspace.
+Explorer helps people follow branching questions and record their own answers. The approved Option A design keeps the existing Segoe UI typography, blue branch connections and restrained light/dark palette. The card is a writing surface; occasional tools occupy the bottom of the Explorer viewport.
 
 ## What changed
 
-- Compact map cards reserve a footer for status and branch buttons. Titles and answer previews keep complete lines, long statuses truncate with the full text in a tooltip and accessible label, and each zoom tier shares the same footer geometry.
-- The expanded card with its shelf closed contains the question, answer, compact Record control, Save, Explore deeper and one bottom Question tools handle. Voice progress and errors follow the answer box. Save actions stay outside the scrolling content in normal panes. Very short panes scroll the whole card so banners cannot make its controls unreachable.
-- Save and Ctrl/Command+Enter commit the answer and state. Only Explore deeper also asks for follow-up questions. Existing pending-request and draft conflict checks still apply.
-- Question tools holds answer state, cleanup, reminders, context, references, research and manual follow-ups. Its scroll position and edits survive normal toggling. Escape closes the shelf and returns focus to its handle. Commands reveal the shelf and relevant disclosure before activating a tool.
-- Explore deeper, request-status navigation and new question previews open the shelf at the work's beginning. Ordinary polling never repeatedly reopens a dismissed shelf. Critical answer conflicts remain beside the editor; reminder conflicts reveal their shelf.
-- The global Settings gear is available from Library, Map and Outline. Voice preferences mount once, independently of an answer, alongside Map and motion, Keyboard, and Local data and diagnostics. Unsaved voice choices survive question switches and dialog close/reopen. Opening Settings cancels dictation; it never starts capture or inference.
-- File holds library/import/recovery/export actions; Tools holds helpers and the dashboard. Journey details contains guidance, mode, progress and AI context controls.
-- The question title is selectable. Typing, draft status updates and map-height changes no longer move the active card vertically. Outline keeps the same mounted editor and gives its stacked layout enough writing space.
-- Menus close before opening dialogs and return focus to their visible launcher. Leaving branch focus returns to visible controls. Close question accurately describes the same action in Map and Outline.
+- The card contains the question, answer, compact Record control, Save & continue and More options. Voice progress and critical answer recovery remain beside the editor. Voice preferences remain in the global Settings gear.
+- More options opens a full-width non-modal drawer outside both the card and transformed map. The drawer takes space from the working view, leaving the map usable above. Expand/reduce and close remain in its header, alongside the selected question. A slim bottom handle reopens the drawer.
+- Explore holds explicit follow-up generation, previews and manual directions. Research holds existing research review, results and research follow-ups. Answer details holds state, cleanup, reminders and draft management. Context holds rationale, help, references and branch navigation. Columns use available width and stack in narrow panes.
+- Save & continue commits text and state without model generation. It opens an eligible existing next question using the local suggestion or map order when guidance supplies no candidate. It stays on the saved answer when none exists. Failed saves, conflicts and stale completions cannot advance the question.
+- The editor stays mounted through drawer toggles, tabs, polling and Map/Outline changes. Answer/state/reminder/manual drafts stay associated with their question. Escape closes the drawer before collapsing the question and returns focus to its launcher.
+- Commands, request status and new previews reveal the appropriate tab. Ordinary polling does not reopen a dismissed drawer. Reminder conflicts reveal Answer details; critical answer conflicts remain visible at the editor.
+- Compact cards retain reserved footers for status and branch buttons. Very short panes retain manual scrolling and reachable actions. Journey chrome and the map share a scrollable stage above the drawer, so a notice cannot squeeze the card below its usable height.
+
+The selected design and implementation decisions are recorded in [the drawer design](superpowers/specs/2026-11-18-question-drawer-design.md).
+
+## Current verification
+
+The final Brave run passes 550 rendered card samples with no layout failures across 1200x900, 460x780, 360x640, 720x480 and 280x640 in light/dark scenarios. It checks full-width drawer placement, expanded/reduced sizing, tabs, editor/reminder retention, voice states, Map/Outline, zoom independence, multiline notices and card actions within all clipping ancestors. Save & continue makes no model request; explicit Explore deeper uses one local fixture request. Independent code review and the scoped short-height correction review have no remaining findings.
+
+The final full suite passes 702/702 tests; npm run check and npm run package pass. The complete package matches all 68 shipped source files. Native Copilot acceptance is recorded separately after the marketplace update. Hardware microphone behavior, live research quality, screen-reader announcements and OS IME input are not established by these fixtures. The historical results below describe their specific earlier versions.
 
 ## Experience verification
 

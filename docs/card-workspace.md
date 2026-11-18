@@ -1,10 +1,11 @@
-# Card workspace, v0.1.63
+# Card workspace, v0.1.64
 
 Explorer helps people follow branching questions and record their own answers. The visual direction is a calm map with a readable writing surface: keep the existing Segoe UI typography, blue branch connections and restrained light/dark palette. Give the selected question and answer priority. Disclose supporting tools where they are useful. Use spacing and hierarchy rather than decorative effects to distinguish the workspace.
 
 ## What changed
 
-- The closed card contains the question, answer, compact Record control, Save, Explore deeper and one bottom Question tools handle. Save actions stay outside the scrolling content.
+- Compact map cards reserve a footer for status and branch buttons. Titles and answer previews keep complete lines, long statuses truncate with the full text in a tooltip and accessible label, and each zoom tier shares the same footer geometry.
+- The expanded card with its shelf closed contains the question, answer, compact Record control, Save, Explore deeper and one bottom Question tools handle. Voice progress and errors follow the answer box. Save actions stay outside the scrolling content in normal panes. Very short panes scroll the whole card so banners cannot make its controls unreachable.
 - Save and Ctrl/Command+Enter commit the answer and state. Only Explore deeper also asks for follow-up questions. Existing pending-request and draft conflict checks still apply.
 - Question tools holds answer state, cleanup, reminders, context, references, research and manual follow-ups. Its scroll position and edits survive normal toggling. Escape closes the shelf and returns focus to its handle. Commands reveal the shelf and relevant disclosure before activating a tool.
 - Explore deeper, request-status navigation and new question previews open the shelf at the work's beginning. Ordinary polling never repeatedly reopens a dismissed shelf. Critical answer conflicts remain beside the editor; reminder conflicts reveal their shelf.
@@ -14,6 +15,23 @@ Explorer helps people follow branching questions and record their own answers. T
 - Menus close before opening dialogs and return focus to their visible launcher. Leaving branch focus returns to visible controls. Close question accurately describes the same action in Map and Outline.
 
 ## Experience verification
+
+### v0.1.64 layout regression checks
+
+The earlier pass concentrated on the expanded writing surface. It missed compact-card overlaps: fixed card heights and an independently positioned branch button occupied the same text space. Long folded/reminder status text also shrank title lines. The new check measures actual rendered text and button rectangles in Brave; DOM-only tests do not catch these CSS failures.
+
+`scripts/check-ui-layout.mjs` uses the real HTTP server/controller with a disposable synthetic journey and voice states. It downloads nothing and starts no model inference. The explicit Explore deeper check reaches one local send fixture and receives a synthetic preview. Run it with an existing Playwright installation and Brave:
+
+```powershell
+$env:EXPLORER_PLAYWRIGHT_PATH = 'C:/path/to/playwright/index.mjs'
+npm run check:ui -- .preview-data/ui-layout --screenshots
+```
+
+`BRAVE_PATH` optionally overrides the standard Windows Brave executable. Screenshots are optional; the JSON report is always written. Check only with the owner's browser-automation permission.
+
+The regression reproduced 214 overlap/line-height failures before the compact-card fix. Additional checks reproduced insufficient status contrast, a hidden answer box when dictation was unavailable, and three banner-height cases where a card could scroll programmatically but not manually. The corrected layout passes 435 rendered card samples across 1200×900, 460×780, 360×640 and 280×640, using light and dark themes, all four zoom tiers, folded branches, answer previews, importance and reminder labels. The same run checks menu bounds, shelf reachability, voice loading/listening/transcribing, draft/editor retention, and closed/open shelves with a multiline error banner. Wheel scrolling, request-status navigation and new previews use the correct scroll container. The smallest measured status-text contrast is 4.66:1. Two focused regressions also verify that adding research at 300% zoom reveals the answer in either scrolling layout without moving the map.
+
+### Earlier v0.1.63 interaction checks
 
 The native pre-publication inspection confirmed Copilot running v0.1.62. Updated shelf/settings rendering and interactions were tested using the installed Brave executable, disposable browser contexts, synthetic journeys, local voice choices and Explorer's real HTTP server/controller. No paid provider or existing user answers were used. Post-publication native acceptance is reported separately from this source verification.
 

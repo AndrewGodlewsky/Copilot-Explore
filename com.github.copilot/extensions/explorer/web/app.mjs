@@ -667,7 +667,7 @@ function focusTop(id, height) {
   // Reserve room for writing before making space for the surrounding branch.
   const node = state.document.nodes.find(n => n.id === id);
   const parent = state.document.nodes.find(n => n.id === node?.parentId);
-  return Math.max(16, Math.min(parent ? (parent.answer ? 150 : 110) + 96 : 24, height - 480));
+  return Math.max(16, Math.min(parent ? compactSize(parent, 'detail').height + 96 : 24, height - 480));
 }
 function select(id, { outlineRow = false } = {}) {
   if (paletteOpen() && id !== selected) closePalette(false);
@@ -779,9 +779,9 @@ function zoomDetail(zoom, previous) {
   if (zoom < .9 || previous !== 'detail' && zoom < 1) return 'question';
   return 'detail';
 }
-function compactSize(node) {
-  return detailTier === 'overview' || detailTier === 'schematic' ? { width: 280, height: 200 } :
-    { width: 220, height: detailTier === 'question' ? 128 : node.answer ? 150 : 110 };
+function compactSize(node, tier = detailTier) {
+  return tier === 'overview' || tier === 'schematic' ? { width: 280, height: 200 } :
+    { width: 220, height: tier === 'question' ? 144 : node.answer ? 176 : 136 };
 }
 function refreshScene(anchor = anchorPoint()) {
   if (closed || outlineMode || !state.document) return;
@@ -794,6 +794,9 @@ function refreshScene(anchor = anchorPoint()) {
   // Panel size must not change merely because the user pans it up or down.
   const height = Math.max(80, rect.height - focusTop(selected, rect.height) - 16);
   panel.style.width = `${width}px`; panel.style.maxHeight = `${height}px`;
+  panel.classList.toggle('short-pane', height < 320);
+  panel.classList.toggle('scroll-pane', height < 240);
+  if (height >= 240) panel.scrollTop = 0;
   panel.style.transform = `scale(${1 / view.zoom})`;
   panel.style.setProperty('--heading-limit', `${Math.max(112, Math.min(180, height * .35))}px`);
   const measuredHeight = expanded ? panel.offsetHeight / view.zoom : 0, logicalWidth = expanded ? width / view.zoom : 0;
@@ -851,14 +854,14 @@ function renderMap() {
       if (card.renderStamp !== stamp) {
         card.renderStamp = stamp;
         card.replaceChildren(el('span', { class: 'category' }, el('span', { class: 'category-text' }, n.category), ...(isQuestion(n) ? [importanceBadge(n)] : [])), el('span', { class: 'question' }, summary && [...n.question].length > 48 ? [...n.question].slice(0, 48).join('') + '\u2026' : n.question),
-          ...(detailTier === 'detail' && n.answer ? [el('span', { class: 'answer-preview' }, n.answer)] : []), el('span', { class: 'status' }, status));
+          ...(detailTier === 'detail' && n.answer ? [el('span', { class: 'answer-preview' }, n.answer)] : []), el('span', { class: 'status', title: status }, status));
       }
       if (branches.parentIds.has(n.id) && (detailTier !== 'schematic' || active?.dataset.branchId === n.id)) {
         let toggle = toggles.get(n.id); toggles.delete(n.id);
         if (!toggle) { toggle = branchButton(n); nodes.append(toggle); }
         const label = `${collapsed.has(n.id) ? 'Expand' : 'Collapse'} branch`;
         toggle.textContent = label; toggle.setAttribute('aria-label', `${label}: ${n.question}`); toggle.setAttribute('aria-expanded', String(!collapsed.has(n.id)));
-        toggle.style.left = `${p.x + p.width - (summary ? 126 : 106)}px`; toggle.style.top = `${p.y + p.height - (summary ? 66 : detailTier === 'question' ? 50 : 36)}px`;
+        toggle.style.left = `${p.x + p.width - 8}px`; toggle.style.top = `${p.y + p.height - 8}px`;
       }
     }
     const edge = geometryCache.value.edges.get(n.id);
@@ -1014,15 +1017,32 @@ function setQuestionTools(open) {
   uiFor(selected).toolsOpen = open;
   scheduleLayout();
 }
+function revealInScrollingWorkspace(target, start = false) {
+  const panel = $('node-workspace');
+  if (outlineMode || !panel.classList.contains('scroll-pane')) return;
+  const rect = target.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+  const top = rect.top - bounds.top - panel.clientTop, bottom = rect.bottom - bounds.bottom + panel.clientTop;
+  // Do not scroll ancestors of the transformed canvas.
+  if (start || top < 0) panel.scrollTop += top;
+  else if (bottom > 0) panel.scrollTop += bottom;
+}
 function revealQuestionTool(target) {
   if (!target || !$('question-tools-body')?.contains(target)) return;
   setQuestionTools(true);
   for (let parent = target.parentElement; parent && parent !== $('question-tools-body'); parent = parent.parentElement) if (parent.tagName === 'DETAILS') parent.open = true;
+  if (!outlineMode) {
+    refreshScene();
+    revealInScrollingWorkspace(target);
+  }
 }
 function revealQuestionWork() {
   setQuestionTools(true);
   if ($('question-tools-body')) $('question-tools-body').scrollTop = 0;
   uiFor(selected).toolsScroll = 0;
+  if (!outlineMode) {
+    refreshScene();
+    revealInScrollingWorkspace($('question-tools-toggle'), true);
+  }
 }
 function renderWorkspace() {
   cleanup.sync();
@@ -1039,7 +1059,7 @@ function renderWorkspace() {
   const current = () => !closed && expanded && !libraryView && workspace === owner && panel.isConnected && selected === next.id;
   const refresh = () => { doc = state.document; node = doc.nodes.find(n => n.id === next.id); pending = !!state.pending; byId = new Map(doc.nodes.map(n => [n.id, n])); };
   refresh();
-  panel.dataset.nodeId = node.id; panel.replaceChildren();
+  panel.dataset.nodeId = node.id; panel.replaceChildren(); panel.scrollTop = 0;
   const headingArea = el('div', { class: 'workspace-region' }), content = el('div', { class: 'node-content' });
   panel.append(headingArea, content);
   const toolsBody = el('div', { id: 'question-tools-body', class: 'question-tools-body' });
@@ -1122,7 +1142,7 @@ function renderWorkspace() {
     const voiceStatus = el('div', { class: 'voice-controls' });
     answer.setAttribute('aria-describedby', 'voice-status');
     voice.bind(answer, voiceStatus);
-    form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), voiceStatus), answer, el('span', { id: 'answer-status', class: 'quiet answer-status' }));
+    form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer')), answer, voiceStatus, el('span', { id: 'answer-status', class: 'quiet answer-status' }));
     toolsBody.append(el('div', { class: 'answer-state-field' }, el('label', { for: 'answer-state' }, 'Answer state'), answerState),
       el('p', { id: 'answer-state-help', class: 'quiet' }, 'Text and state stay a draft until you save. Decided, Tentative and Assumption need text; other states can have no note.'),
       button('Clean My Answer', () => { voice.cancel(); void cleanup.start(); }, { id: 'clean-answer', disabled: !answer.value.trim() }),
@@ -1591,11 +1611,13 @@ function renderResearch(node) {
     if (value.length > 20000) return notice('Your answer is too long to add this suggestion. Shorten it first.');
     voice.cancel(); ui.addition = { before: previous, after: value };
     draftClient.edit(node.id, value); $('answer').value = value; answerStatus(node);
-    const answer = $('answer'), content = answer.closest('.node-content');
+    const answer = $('answer');
     answer.focus({ preventScroll: true }); answer.setSelectionRange(value.length, value.length);
-    // Scroll only the editor, never an ancestor of the transformed map.
-    content.scrollTop += (answer.getBoundingClientRect().top - content.getBoundingClientRect().top) / view.zoom - 40;
     notice('Added to your draft. Edit it before saving, or undo the addition.');
+    if (!outlineMode) refreshScene();
+    const content = !outlineMode && $('node-workspace').classList.contains('scroll-pane') ? $('node-workspace') : answer.closest('.node-content');
+    // Scroll only the editor, never an ancestor of the transformed map.
+    content.scrollTop += answer.getBoundingClientRect().top - content.getBoundingClientRect().top - 40;
   };
   const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'), el('p', { class: 'quiet' }, researchSettingsText(r.settings)), el('p', {}, r.summary));
   const retrieval = source => !source.retrievedAt ? 'Retrieval time unknown.' : `${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt}. Redirect destination and publication date unknown.`;
@@ -1644,6 +1666,7 @@ function setOutlineMode(value) {
   const active = document.activeElement, editorFocus = $('node-workspace').contains(active);
   endDrag(); suppressClick = false; cancelAnimationFrame(layoutFrame); if (value) outlineNavigated = false; outlineMode = value;
   $('working-view').classList.toggle('outline-mode', value);
+  if (value) $('node-workspace').scrollTop = 0;
   $('outline').hidden = !value;
   $('outline-toggle').setAttribute('aria-expanded', String(value));
   $('outline-toggle').textContent = value ? 'Map view' : 'Outline view';

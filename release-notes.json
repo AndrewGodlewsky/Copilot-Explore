@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.64",
+    "summary": "Compact cards reserve a footer for branch buttons and status, keeping question and answer lines clear at every zoom level. Review labels have stronger contrast. Voice feedback follows the answer box. Short panes use a compact heading and scroll when banners leave too little space, keeping Save and Question tools reachable."
+  },
+  {
     "version": "0.1.63",
     "summary": "Simpler question cards keep the answer, Record, Save and Explore deeper up front. Expand one bottom Question tools shelf for state, cleanup, reminders, context and research. A global Settings gear holds voice, map, keyboard and local-data preferences. Drafts, caret and tool edits survive toggles; request status and new previews reveal their controls."
   },

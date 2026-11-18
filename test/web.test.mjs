@@ -701,7 +701,8 @@ test('minimap is optional, navigates without saving and preserves the expanded e
   const section = $('map').parentElement;
   assert.equal(f.window.getComputedStyle(section).overflow, 'auto', 'hiding in a short pane retains a scroll owner for the editor and recovery controls');
   assert.equal(f.window.getComputedStyle($('map')).overflow, 'clip', 'map still owns canvas clipping');
-  assert.equal(f.window.getComputedStyle(f.document.querySelector('.node-content')).overflow, 'auto', 'editor keeps its own scrolling');
+  assert.equal(f.window.getComputedStyle($('node-workspace')).overflowY, 'auto', 'very short editor keeps a manually scrollable workspace');
+  assert.equal(f.window.getComputedStyle(f.document.querySelector('.node-content')).overflow, 'visible', 'answer flows into the whole-card scroll area');
   assert.equal(f.window.getComputedStyle($('map')).minHeight, '120px');
   $('minimap-toggle').focus(); $('minimap-toggle').click(); assert.equal(f.window.getComputedStyle(section).overflow, 'auto');
   assert.equal(f.window.getComputedStyle($('minimap')).height, '96px'); assert.equal(f.window.getComputedStyle($('minimap-map')).height, '80px');
@@ -2405,16 +2406,19 @@ test('late background reads cannot undo a completed save in the UI', async t => 
   assert.equal(f.document.getElementById('progress').textContent.startsWith('1 answered'), true);
 });
 
-test('adding research scrolls only the answer pane, without native scrolling of the map', async t => {
+for (const wholeCard of [false, true]) test(`adding research scrolls only its editor at 300% zoom (${wholeCard ? 'whole card' : 'answer pane'})`, async t => {
   const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id);
   f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research request'); f.resolveResearch(findings);
   await until(() => f.document.getElementById('use-recommendation'), 'research rendered');
-  const answer = f.document.getElementById('answer'), pane = f.document.querySelector('.node-content'), before = viewOf(f);
+  f.window.__updates.zoom(3);
+  if (wholeCard) f.resize(280, 200);
+  const answer = f.document.getElementById('answer'), pane = wholeCard ? f.document.getElementById('node-workspace') : f.document.querySelector('.node-content'), before = viewOf(f);
   answer.scrollIntoView = () => assert.fail('scrollIntoView can scroll hidden ancestors of the map');
-  pane.scrollTop = 400; pane.getBoundingClientRect = () => ({ top: 240 }); answer.getBoundingClientRect = () => ({ top: 0 });
+  pane.scrollTop = 400; pane.getBoundingClientRect = () => ({ top: 240 }); answer.getBoundingClientRect = () => ({ top: 340 - pane.scrollTop });
   f.click('Use recommendation');
   assert.deepEqual(viewOf(f), before); assert.ok(pane.scrollTop < 400); assert.equal(f.document.activeElement, answer);
+  assert.ok(answer.getBoundingClientRect().top >= pane.getBoundingClientRect().top, 'the answer is revealed in the unscaled editor');
 });
 
 test('installed questions expand inside the map, preserve drafts, and collapse to saved previews', async t => {

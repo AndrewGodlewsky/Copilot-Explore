@@ -1,4 +1,5 @@
 import { attachMinimap, projectOverview, overviewPaths } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
+import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import test from 'node:test';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
 import { NextQuestion } from '../com.github.copilot/extensions/explorer/web/next-question.mjs';
@@ -33,6 +34,99 @@ const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', op
   { title: 'One block', description: 'Start with the nearest neighbors.', pros: ['Easy handovers'], cons: ['Fewer tools'] },
   { title: 'Whole neighborhood', description: 'Invite everyone nearby.', pros: ['More tools'], cons: ['More coordination'] },
 ], recommendation: 'Try a small pilot.', uncertainty: 'No external sources consulted.', sources: [] };
+
+test('combined Outline search is private by default and preserves editor and query across polling', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'PRIVATE_SEARCH_CANARY 🌱');
+  const answer = $('answer'); answer.setSelectionRange(3, 7);
+  $('outline-toggle').click();
+  assert.ok($('outline-state'), 'combined saved-state filters are available');
+  f.type('search', 'PRIVATE_SEARCH_CANARY');
+  assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 0);
+  $('outline-draft-text').click();
+  assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 1);
+  assert.match($('outline-list').textContent, /Private draft: PRIVATE_SEARCH_CANARY/);
+  $('outline-drafts').click(); $('outline-state').value = 'unanswered'; $('outline-state').dispatchEvent(new f.window.Event('change'));
+  assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 1, 'state matches saved state, independent from tentative draft');
+  $('search').focus(); const row = $('outline-list').firstChild; $('outline-list').scrollTop = 23;
+  await f.poll(); await f.poll();
+  assert.equal($('search').value, 'PRIVATE_SEARCH_CANARY'); assert.equal(f.document.activeElement, $('search'));
+  assert.equal($('outline-list').firstChild, row); assert.equal($('outline-list').scrollTop, 23); assert.equal($('answer'), answer);
+  $('outline-list').querySelector('[data-node-id]').click(); assert.equal($('answer'), answer); assert.equal(answer.value, 'PRIVATE_SEARCH_CANARY 🌱');
+  $('outline-toggle').click(); $('outline-reset').click();
+  assert.equal($('search').value, ''); assert.equal($('outline-draft-text').checked, false);
+});
+
+test('library node search uses one guarded open, preserves reminder drafts and rejects stale results', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  const doc = structuredClone(f.explorer.doc); doc.id = 'destination-search'; doc.topic = doc.nodes[0].question = 'Search destination';
+  const destination = await f.explorer.library.import(doc);
+  f.open(f.explorer.doc.nodes[1].id); f.type('revisit-condition', 'Keep this reminder');
+  $('library-toggle').click();
+  assert.ok($('library-search-scope'), 'library node search is discoverable');
+  $('library-search-scope').value = 'nodes'; $('library-search-scope').dispatchEvent(new f.window.Event('change'));
+  f.type('library-search', 'Search destination');
+  await until(() => $('library-search-results').querySelector('[data-node-id]'), 'bounded node matches');
+  const button = $('library-search-results').querySelector('[data-node-id]'); button.click();
+  assert.match($('notice').textContent, /reminder edits/); assert.notEqual(f.explorer.activeKey, destination.key);
+  $('library-return').click(); $('reset-revisit').click(); $('library-toggle').click();
+  await until(() => $('library-search-results').querySelector('[data-node-id]'), 'refreshed matches');
+  const stale = $('library-search-results').querySelector('[data-node-id]');
+  const changed = structuredClone(destination.document); changed.nodes[1].answer = 'External edit';
+  await writeFile(destination.file, JSON.stringify(changed)); stale.click();
+  await until(() => /search result changed/.test($('notice').textContent), 'stale source rejected');
+  assert.notEqual(f.explorer.activeKey, destination.key);
+  $('library-refresh').click();
+  await until(() => { const row = $('library-search-results').querySelector('[data-node-id]'); return row && row !== stale; }, 'fresh search');
+  const opens = f.actions.filter(a => a.action === 'open').length;
+  $('library-search-results').querySelector('[data-node-id]').click();
+  await until(() => f.explorer.activeKey === destination.key && $('welcome').hidden, 'search result opens');
+  assert.equal(f.actions.filter(a => a.action === 'open').length - opens, 1);
+});
+
+test('search results cannot navigate after query changes during the awaited answer-draft flush', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  const doc = createDocument('Delayed target'), target = await f.explorer.library.import(doc), original = f.explorer.activeKey;
+  f.open(f.explorer.doc.nodes[1].id);
+  let release; const held = new Promise(resolve => { release = resolve; }); f.pauseDraftWrite(() => held);
+  f.type('answer', 'KEEP_DELAYED_DRAFT');
+  $('library-toggle').click(); $('library-search-scope').value = 'nodes'; $('library-search-scope').dispatchEvent(new f.window.Event('change'));
+  f.type('library-search', 'Delayed target');
+  await until(() => $('library-search-results').querySelector('[data-node-id]'), 'delayed target found');
+  $('library-search-results').querySelector('[data-node-id]').click(); f.type('library-search', 'Other query');
+  release(); await until(() => !$('welcome').inert, 'draft flush completed');
+  assert.equal(f.explorer.activeKey, original, 'invalidated search selection must not attach its old target after a delayed guard');
+  assert.notEqual(f.explorer.activeKey, target.key);
+  $('library-return').click(); assert.equal($('answer').value, 'KEEP_DELAYED_DRAFT');
+});
+
+test('long Outline search pages bound DOM and polling leaves hidden results untouched', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const { document: doc } = makeFixture(fixtureSpecs.find(spec => spec.name === 'medium-wide')); await e.command('import', { revision: e.doc.revision, document: doc });
+  } }), $ = id => f.document.getElementById(id);
+  $('outline-toggle').click(); assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 200); assert.match($('outline-count').textContent, /640 matching nodes/);
+  $('outline-next').click(); assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 200); assert.match($('outline-count').textContent, /201–400/);
+  $('outline-next').click(); $('outline-next').click(); assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 40); assert.equal($('outline-next').disabled, true);
+  const first = $('outline-list').firstChild; $('outline-toggle').click(); await f.poll(); assert.equal($('outline-list').firstChild, first);
+});
+
+test('library search discards delayed responses and does no node scans during repeated polling', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), originalFetch = f.window.fetch;
+  let release, first = true, scans = 0; const held = new Promise(resolve => { release = resolve; });
+  f.window.fetch = async (...args) => {
+    const response = await originalFetch(...args);
+    if (args[0] === 'api/search') { scans++; if (first) { first = false; await held; } }
+    return response;
+  };
+  $('library-toggle').click(); $('library-search-scope').value = 'nodes'; $('library-search-scope').dispatchEvent(new f.window.Event('change'));
+  await until(() => scans === 1, 'first search held'); f.type('library-search', 'ABSENT_QUERY'); release();
+  await until(() => /0 matching nodes/.test($('library-search-status').textContent), 'only latest search renders');
+  assert.equal($('library-search-results').children.length, 0);
+  $('library-search').focus(); const count = scans; await f.poll(); await f.poll();
+  assert.equal(scans, count); assert.equal($('library-search').value, 'ABSENT_QUERY'); assert.equal(f.document.activeElement, $('library-search'));
+  f.type('library-search', 'Do not search after leaving'); $('library-return').click(); await delay(350);
+  assert.equal(scans, count, 'leaving Library before its debounce expires must not start hidden file work');
+});
 
 test('minimap is optional, navigates without saving and preserves the expanded editor in narrow panes', async t => {
   const f = await fixture(t, 340), $ = id => f.document.getElementById(id), ui = f.window.__updates;
@@ -163,7 +257,7 @@ test('minimap uses extreme actual editor geometry with constant DOM and no path 
   assert.equal(mutations.filter(m => m.target.id === 'minimap-viewport').length, 40, 'only four viewport attributes per pan');
   for (const zoom of [.1, 1, 3]) { ui.zoom(zoom / ui.scene().view.zoom); assertOverview(f); assert.equal($('answer'), answer); }
   $('fit').click(); assert.equal(ui.scene().expanded, false); assertOverview(f); assert.equal(ui.scene().view.zoom, initialZoom);
-  $('outline-toggle').click(); f.document.querySelector('#outline-list [data-node-id="node-4949"]').click(); assert.equal($('answer'), answer); assertOverview(f);
+  $('outline-toggle').click(); f.type('search', 'Question 4949:'); f.document.querySelector('#outline-list [data-node-id="node-4949"]').click(); assert.equal($('answer'), answer); assertOverview(f);
   $('minimap-toggle').click(); assert.equal($('minimap-nodes').getAttribute('d'), '');
   $('minimap-toggle').click(); assertOverview(f);
   f.resize(280, 420); f.observers.get('minimap-map')(); assertOverview(f); assert.equal($('answer'), answer);
@@ -668,8 +762,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   Object.assign(window, { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches });
   window.NextQuestion = NextQuestion;
+  Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -3549,7 +3644,10 @@ test('large-map culling retains the focused compact owner then releases it and r
   assert.ok(view.x + box.x * view.zoom >= 15);
   assert.ok(view.y + box.y * view.zoom >= 15);
   d.getElementById('outline-toggle').click();
-  assert.equal(d.querySelectorAll('#outline-list .outline-row').length, 4950, 'full logical outline survives culling');
+  assert.equal(d.querySelectorAll('#outline-list .outline-row').length, 200, 'Outline mounts one bounded page despite the complete logical map');
+  assert.match(d.getElementById('outline-count').textContent, /4950 matching nodes/, 'full logical count survives culling');
+  f.type('search', 'Question 4949:');
+  assert.ok(d.querySelector('#outline-list [data-node-id="node-4949"]'), 'distant logical node remains searchable despite map culling and result paging');
 });
 
 test('large-map geometry invalidates on resize, fonts, expansion, history and journey and releases observers', async t => {
@@ -3630,6 +3728,7 @@ test('large-map near-limit long-text cards stay bounded through zoom, folds and 
   assert.equal(ui.scene().expanded, false); assert.equal(ui.scene().view.zoom, fitZoom);
   assert.equal(d.querySelectorAll('#nodes [data-node-id]').length, 4950);
   d.getElementById('outline-toggle').click();
+  f.type('search', 'Question 4949:');
   d.querySelector('#outline-list [data-node-id="node-4949"]').click();
   assert.equal(ui.scene().view.zoom, 1); assert.equal(d.getElementById('answer'), reopened, 'full source reveal reuses the hidden editor');
   assert.equal(d.activeElement.id, 'expanded-title');

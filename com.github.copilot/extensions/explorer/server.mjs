@@ -19,6 +19,7 @@ const assets = new Map([
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
   ['answer-state.mjs', ['answer-state.mjs', 'text/javascript; charset=utf-8']],
   ['revisit.mjs', ['revisit.mjs', 'text/javascript; charset=utf-8']],
+  ['search.mjs', ['search.mjs', 'text/javascript; charset=utf-8']],
   ['next-question.mjs', ['next-question.mjs', 'text/javascript; charset=utf-8']],
   ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
   ['cleanup.mjs', ['cleanup.mjs', 'text/javascript; charset=utf-8']],
@@ -152,6 +153,11 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/drafts') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.writeDraft(await body(req, 160 * 1024)));
+      }
+      if (req.method === 'POST' && route === 'api/search') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        if (!explorer.library) throw new Error('Library search is unavailable.');
+        return json(200, await explorer.library.search(await body(req, 24 * 1024)));
       }
       if (req.method === 'GET' && route === 'api/library') {
         if (!explorer.library) return json(200, { revision: 0, entries: [], errors: [] });

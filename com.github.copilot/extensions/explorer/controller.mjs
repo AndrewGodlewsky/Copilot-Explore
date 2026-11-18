@@ -355,9 +355,9 @@ export class Explorer {
       throw new Error('The saved question context changed. Dismiss this preview, refresh the saved journey and generate again.');
     }
   }
-  async attach(key) {
+  async attach(key, expected) {
+    const record = await this.library.opened(key, this.binding, expected);
     this.researchReview.clear(); this.followup = null;
-    const record = await this.library.opened(key, this.binding);
     this.file = record.file; this.doc = record.document; this.activeKey = key;
     this.recoveryNotice = null; this.exportObservation = null;
     this.reconcileCleanup();
@@ -780,7 +780,7 @@ export class Explorer {
           break;
         case 'open':
           if (!this.library) throw new Error('The library is unavailable in this preview.');
-          await this.attach(input.key);
+          await this.attach(input.key, input.searchResult);
           break;
         case 'answer':
           if (input.draftRevision !== undefined) {

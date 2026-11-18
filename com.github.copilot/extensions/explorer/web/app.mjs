@@ -11,6 +11,7 @@ import { attachMinimap } from './minimap.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';
 import { NextQuestion } from './next-question.mjs';
+import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';
 
 const $ = id => document.getElementById(id);
 let researchReviewReturn = null, reviewStarting = false;
@@ -33,6 +34,8 @@ function stopPolling() {
 }
 function connectionStatus(message = '') { $('connection-status').textContent = message; $('connection-status').hidden = !message; }
 let libraryView = false, libraryEpoch = 0, libraryRevision = 0, importDocument = null;
+let librarySearchTimer, librarySearchFlight = false, librarySearchQueued = false, librarySearchNext = null;
+let outlinePage = 0, outlineFilterStamp = '';
 let revisitDay = localDate();
 let nextQuestion = new NextQuestion(), nextQuestionOpen = false, nextQuestionStamp = '';
 const revisitLabel = node => revisitStatuses(node.revisit, revisitDay).map(status => REVISIT_FILTERS[status]).join(' · ');
@@ -43,7 +46,7 @@ function refreshRevisitDay() {
   const today = localDate(); if (today === revisitDay) return;
   revisitDay = today;
   if (state.document) { renderWorkspace(); renderMap(); renderOutline(); }
-  if (libraryView) void refreshLibrary();
+  if (libraryView && ($('library-search-scope').value !== 'nodes' || $('library-reminder').value !== 'all')) void refreshLibrary();
 }
 let collapsed = new Set(), branches = null, focusId = null, wholeView = null;
 let historyEpoch = 0, historyReturn = null, historySelection = null, historyRevision = null;
@@ -53,7 +56,7 @@ let previewEdits = null, acceptedIds = new Set(), acceptedParentId = null;
 let references = { journey: null, revision: 0, nodeIds: [], error: '', loading: false, saving: false, retryIds: null, open: false, epoch: 0 };
 const drafts = new Map(), nodeUi = new Map();
 const draftClient = new DraftClient({ fetch: (...args) => fetch(...args), drafts,
-  changed: () => { cleanup.sync(); const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); renderCleanup(); } },
+  changed: () => { cleanup.sync(); const node = state.document?.nodes.find(n => n.id === selected); if (node && !closed) { answerStatus(node); renderDraftRecovery(node); renderDraftSummary(); renderCleanup(); renderOutline(); } },
   restored: (id, value) => { if (id === selected && $('answer') && !composing) { $('answer').value = value; if ($('answer-state')) $('answer-state').value = draftClient.state(id); } } });
 const cleanup = new CleanupClient({ fetch: (...args) => fetch(...args),
   context: () => {
@@ -104,6 +107,66 @@ function el(tag, attrs = {}, ...children) {
 const button = (label, handler, attrs = {}) => el('button', { type: 'button', onclick: handler, ...attrs }, label);
 function notice(message) { $('notice').textContent = message; $('notice').hidden = !message; }
 for (const id of ['library-reminder', 'revisit-filter']) $(id).append(...Object.entries(REVISIT_FILTERS).map(([value, label]) => el('option', { value }, label)));
+function installSearchControls(prefix, host, changed) {
+  const state = el('select', { id: `${prefix}-state` }, el('option', { value: 'all' }, 'All saved answer states'), Object.entries(ANSWER_STATES).map(([value, label]) => el('option', { value }, label)));
+  host.append(el('label', { for: state.id }, 'Saved answer state'), state);
+  if (prefix === 'library') host.append(el('label', { for: 'library-importance' }, 'Importance'), el('select', { id: 'library-importance' }, ['all', 'high', 'medium', 'low', 'unranked'].map(value => el('option', { value }, value === 'all' ? 'All importance levels' : value[0].toUpperCase() + value.slice(1)))));
+  for (const [name, label] of [['research', 'Research available'], ['review', 'Needs review'], ['drafts', 'Has an answer draft'], ['draft-text', 'Include private answer draft text']]) host.append(el('label', {}, el('input', { type: 'checkbox', id: `${prefix}-${name}` }), ` ${label}`));
+  host.append(el('p', { class: 'quiet' }, 'All filters must match. States describe saved answers. Draft text stays local and is searched only when explicitly included. Reminder edits and missing-direction drafts are excluded.'));
+  host.append(button('Reset search and filters', () => {
+    $(prefix === 'outline' ? 'search' : 'library-search').value = '';
+    state.value = 'all'; $(prefix === 'outline' ? 'importance-filter' : 'library-importance').value = 'all';
+    $(prefix === 'outline' ? 'revisit-filter' : 'library-reminder').value = 'all';
+    for (const name of ['research', 'review', 'drafts', 'draft-text']) $(`${prefix}-${name}`).checked = false;
+    if (prefix === 'library') $('library-archived').checked = false;
+    changed();
+  }, { id: `${prefix}-reset` }));
+  host.addEventListener('change', changed);
+}
+const outlineControls = el('div', { class: 'search-filters' }); $('outline-list').before(outlineControls);
+installSearchControls('outline', outlineControls, renderOutline);
+installSearchControls('library', $('library-search-filters'), () => scheduleLibrarySearch());
+$('search').maxLength = 4000;
+$('outline-list').before(el('p', { id: 'outline-count', role: 'status' }));
+$('outline-list').after(button('Previous matches', () => { outlinePage = Math.max(0, outlinePage - 1); renderOutline(); }, { id: 'outline-previous' }), button('Next matches', () => { outlinePage++; renderOutline(); }, { id: 'outline-next' }));
+function currentSearchFilters(prefix) {
+  return searchFilters({ query: $(prefix === 'outline' ? 'search' : 'library-search').value,
+    state: $(`${prefix}-state`).value, importance: $(prefix === 'outline' ? 'importance-filter' : 'library-importance').value,
+    research: $(`${prefix}-research`).checked, review: $(`${prefix}-review`).checked, drafts: $(`${prefix}-drafts`).checked, draftText: $(`${prefix}-draft-text`).checked,
+    reminder: $(prefix === 'outline' ? 'revisit-filter' : 'library-reminder').value, today: revisitDay, archived: prefix === 'library' && $('library-archived').checked });
+}
+function scheduleLibrarySearch() {
+  libraryEpoch++; clearTimeout(librarySearchTimer);
+  // Invalidate old buttons immediately, before the debounce or a slow response completes.
+  $('library-search-results').replaceChildren(); $('library-search-next').disabled = true;
+  librarySearchTimer = setTimeout(() => { if (!closed && !suspended && (libraryView || !state.document)) void refreshLibrary(); }, 250);
+}
+async function refreshLibrarySearch(cursor = null) {
+  const epoch = ++libraryEpoch, page = pageEpoch;
+  if (librarySearchFlight) { librarySearchQueued = true; return; }
+  librarySearchFlight = true; librarySearchQueued = false;
+  const current = () => epoch === libraryEpoch && page === pageEpoch && !closed && !suspended && (libraryView || !state.document) && $('library-search-scope').value === 'nodes';
+  const list = $('library-search-results'), scroll = $('welcome').scrollTop, active = list.contains(document.activeElement) ? document.activeElement : null;
+  const focus = active ? [active.dataset.searchKey, active.dataset.nodeId] : null;
+  list.replaceChildren();
+  $('library-search-next').disabled = true; $('library-search-status').textContent = 'Searching a bounded local page…';
+  try {
+    const response = await fetch('api/search', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ ...currentSearchFilters('library'), cursor }) });
+    const result = await response.json(); if (!current()) return;
+    if (!response.ok) throw new Error(result.error);
+    librarySearchNext = result.next;
+    $('library-errors').replaceChildren(...result.errors.map(error => el('p', { class: 'notice' }, error.message)), ...(result.truncated ? [el('p', { class: 'notice', role: 'alert' }, 'Incomplete discovery: only the first 2,000 directory entries in filesystem order were considered. Additional entries were NOT searched. This is not a complete library search.')] : []));
+    list.replaceChildren(...result.results.map(item => button([el('strong', {}, item.question), el('small', {}, `${item.topic} · ${item.key.slice(0, 8)}`), el('small', {}, item.snippet)], async () => {
+      if (!current()) return;
+      if (await switchJourney('open', { key: item.key, searchResult: { key: item.key, source: item.source, nodeId: item.nodeId } }, current)) select(item.nodeId);
+    }, { 'data-node-id': item.nodeId, 'data-search-key': item.key })));
+    $('library-search-status').textContent = `${result.results.length} matching nodes on this page; ${result.examined} saved files examined. ${result.next ? 'More pages available.' : 'End of this discovered set.'} Counts are for this page only. Refresh from the beginning after files change.`;
+    $('library-search-next').disabled = !result.next;
+    if (focus && document.activeElement === document.body) [...list.querySelectorAll('[data-node-id]')].find(row => row.dataset.searchKey === focus[0] && row.dataset.nodeId === focus[1])?.focus({ preventScroll: true });
+    $('welcome').scrollTop = scroll;
+  } catch (error) { if (current()) { $('library-search-results').replaceChildren(); $('library-search-status').textContent = `Search could not complete: ${error.message}`; } }
+  finally { librarySearchFlight = false; if (librarySearchQueued && !closed && !suspended && (libraryView || !state.document) && $('library-search-scope').value === 'nodes') void refreshLibrarySearch(); }
+}
 async function api(action, input = {}) {
   if (busy || closed || suspended) return null;
   busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort();
@@ -186,7 +249,7 @@ function apply(next, reset = false) {
   }
   if (changedDocument) draftClient.reset(state.activeKey ?? state.document?.id, state.document?.nodes ?? []);
   else draftClient.updateNodes(state.document?.nodes ?? []);
-  if (state.library && !state.document) void refreshLibrary();
+  if (state.library && !state.document && $('library-search-scope').value !== 'nodes') void refreshLibrary();
   const doc = state.document;
   if (doc) {
     const ids = new Set(doc.nodes.map(node => node.id));
@@ -362,6 +425,9 @@ function showView() {
   document.body.classList.toggle('has-library', !!state.library);
 }
 async function refreshLibrary() {
+  const nodeSearch = $('library-search-scope').value === 'nodes';
+  $('library-node-search').hidden = !nodeSearch; $('library-list').hidden = nodeSearch;
+  if (nodeSearch) return refreshLibrarySearch();
   const epoch = ++libraryEpoch;
   try {
     const query = new URLSearchParams({ search: $('library-search').value, archived: String($('library-archived').checked), reminder: $('library-reminder').value, today: localDate() });
@@ -431,12 +497,12 @@ function switchAllowed() {
   if ([...nodeUi.values()].some(ui => ui.revisitDraft)) { notice('Save your reminder edits or choose Use saved reminder before opening another journey.'); return false; }
   return true;
 }
-async function switchJourney(action, input) {
+async function switchJourney(action, input, current = () => true) {
   if (!switchAllowed()) return null;
   voice.cancel();
   $('workspace').inert = true; $('welcome').inert = true;
   let result;
-  try { await draftClient.flush(); result = await api(action, input); }
+  try { await draftClient.flush(); if (current()) result = await api(action, input); }
   catch (error) { notice(`Draft could not be saved. ${error.message} Return to the map to retry or explicitly discard the draft.`); }
   finally { $('workspace').inert = false; $('welcome').inert = false; }
   if (result?.importConflict) {
@@ -1359,18 +1425,23 @@ function renderResearch(node) {
 }
 function renderOutline() {
   if (!state.document || $('outline').hidden) return;
-  const stamp = JSON.stringify([referenceJourney(), $('search').value, $('revisit-filter').value, $('importance-filter').value, revisitDay, state.document.nodes.map(n => [n.id, n.parentId, n.question, n.answer, n.category, n.answerState, n.review, n.revisit, n.importance, collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
+  const filters = currentSearchFilters('outline'), filterStamp = JSON.stringify([referenceJourney(), filters]);
+  if (outlineFilterStamp !== filterStamp) { outlinePage = 0; outlineFilterStamp = filterStamp; }
+  const draft = n => drafts.get(n.id) ?? draftClient.entries.get(n.id)?.conflict?.text ?? null;
+  const stamp = JSON.stringify([filterStamp, outlinePage, state.document.nodes.map(n => [n.id, n.parentId, n.question, n.answer, n.category, n.answerState, n.review, !!n.research, n.revisit, n.importance, filters.draftText ? draft(n) : typeof draft(n) === 'string', collapsed.has(n.id) ? hiddenSummary(n.id) : ''])]);
   if ($('outline-list').renderStamp === stamp) return;
   $('outline-list').renderStamp = stamp;
   const scroll = $('outline-list').scrollTop;
   const focused = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
   const focusedBranch = $('outline-list').contains(document.activeElement) ? document.activeElement.dataset.branchId : null;
-  const query = $('search').value.toLowerCase();
-  const importance = $('importance-filter').value;
-  const nodes = state.document.nodes.filter(n => `${n.question} ${n.answer} ${n.category}`.toLowerCase().includes(query) && revisitMatches(n.revisit, $('revisit-filter').value, revisitDay) && (importance === 'all' || isQuestion(n) && (n.importance ?? 'unranked') === importance));
-  $('outline-list').replaceChildren(...nodes.map(n => el('div', { class: 'outline-row' },
+  const matches = state.document.nodes.flatMap(n => { const match = matchSearch(n, filters, { draft: draft(n) }); return match ? [{ node: n, ...match }] : []; });
+  outlinePage = Math.min(outlinePage, Math.max(0, Math.ceil(matches.length / SEARCH_PAGE_SIZE) - 1));
+  const page = matches.slice(outlinePage * SEARCH_PAGE_SIZE, (outlinePage + 1) * SEARCH_PAGE_SIZE), nodes = page.map(item => item.node);
+  $('outline-count').textContent = `${matches.length} matching nodes${matches.length ? `; showing ${outlinePage * SEARCH_PAGE_SIZE + 1}–${outlinePage * SEARCH_PAGE_SIZE + page.length}` : '. No nodes match these filters.'}`;
+  $('outline-previous').disabled = outlinePage === 0; $('outline-next').disabled = (outlinePage + 1) * SEARCH_PAGE_SIZE >= matches.length;
+  $('outline-list').replaceChildren(...nodes.map((n, index) => el('div', { class: 'outline-row' },
     button([n.question, el('small', {}, `${n.category} · ${nodeStatus(n)}${n.review ? '; needs review' : ''}${collapsed.has(n.id) ? ` · ${hiddenSummary(n.id)}` : ''}${n.revisit ? ` · Reminder: ${revisitLabel(n)}` : ''}`), ...(isQuestion(n) ? [importanceBadge(n)] : [])], () => { select(n.id); $('outline').hidden = true; $('outline-toggle').setAttribute('aria-expanded', 'false'); }, { 'data-node-id': n.id }),
-    branchButton(n))));
+    el('small', { class: 'search-snippet' }, page[index].snippet), branchButton(n))));
   if (focused) [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === focused)?.focus({ preventScroll: true });
   $('outline-list').scrollTop = scroll;
   if (focusedBranch) [...$('outline-list').querySelectorAll('[data-branch-id]')].find(e => e.dataset.branchId === focusedBranch)?.focus({ preventScroll: true });
@@ -1742,8 +1813,10 @@ $('guidance-form').addEventListener('submit', async event => {
   } finally { $('save-guidance').disabled = guidanceNeedsChoice || guidanceNeedsRefresh; }
 });
 $('library-toggle').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); void refreshLibrary(); $('library-search').focus(); });
-$('library-return').addEventListener('click', () => { libraryView = false; showView(); refreshScene(); $('map').focus({ preventScroll: true }); });
-$('library-search').addEventListener('input', refreshLibrary);
+$('library-return').addEventListener('click', () => { libraryEpoch++; libraryView = false; showView(); refreshScene(); $('map').focus({ preventScroll: true }); });
+$('library-search').addEventListener('input', scheduleLibrarySearch);
+$('library-search-scope').addEventListener('change', () => { libraryEpoch++; void refreshLibrary(); });
+$('library-search-next').addEventListener('click', () => { if (librarySearchNext) void refreshLibrarySearch(librarySearchNext); });
 $('library-reminder').addEventListener('change', refreshLibrary);
 $('library-archived').addEventListener('change', refreshLibrary);
 $('library-refresh').addEventListener('click', refreshLibrary);

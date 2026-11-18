@@ -1,3 +1,4 @@
+import { attachDashboard } from './dashboard.mjs';
 import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
@@ -14,6 +15,7 @@ import { NextQuestion } from './next-question.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';
 
 const $ = id => document.getElementById(id);
+attachDashboard({ document, fetch: (...args) => fetch(...args), available: () => !closed && !suspended });
 let researchReviewReturn = null, reviewStarting = false;
 let followupDraft = null;
 const researchReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: () => renderResearchReview() });
@@ -1732,7 +1734,7 @@ async function storageRequest(action) {
     if (action === 'inspect') {
       storageRevision = value.settings.revision; storageSettingsError = !!value.error; $('storage-keep').value = String(storagePreview?.keepHistory ?? value.settings.keepHistory);
       const inventory = value.inventory;
-      const labels = { journeys: 'Journeys', exports: 'Saved Markdown files', library: 'Library metadata', drafts: 'Drafts and tombstones', history: 'History files and manifests', recovery: 'Recovery, staging and locks', usage: 'Usage receipts and lifecycle', preferences: 'Preferences and references', unknown: 'Unknown files (protected)' };
+      const labels = { journeys: 'Journeys', exports: 'Saved Markdown files', library: 'Library metadata', drafts: 'Drafts and tombstones', history: 'History files and manifests', recovery: 'Recovery, staging and locks', usage: 'Usage receipts and lifecycle', analytics: 'Bounded local observations (protected)', preferences: 'Preferences and references', unknown: 'Unknown files (protected)' };
       $('storage-inventory').replaceChildren(el('dl', {}, ...Object.entries(inventory.categories).map(([key, row]) => el('div', {}, el('dt', {}, labels[key]), el('dd', {}, `${row.files} files · ${row.apparentBytes.toLocaleString()} bytes`)))),
         el('p', {}, `${inventory.apparentBytes.toLocaleString()} apparent bytes; ${inventory.uniqueBytes.toLocaleString()} bytes after known file-identity deduplication; ${inventory.duplicateBytes.toLocaleString()} duplicate hardlink bytes. These are file lengths, not allocated disk blocks.`),
         el('p', {}, `${inventory.manifestDeclaredHistoryBytes.toLocaleString()} retained snapshot bytes declared by ${inventory.manifests} readable manifests. File totals also include metadata and unreferenced staging; declared bytes do not verify snapshot health.`),

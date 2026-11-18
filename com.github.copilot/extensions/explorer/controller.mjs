@@ -4,6 +4,8 @@ import { ProjectContext } from './project-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
 import { Library } from './library.mjs';
+import { Dashboard } from './dashboard.mjs';
+import { Analytics } from './analytics.mjs';
 import { validateRevisit } from './web/revisit.mjs';
 import { operationEvidence } from './operation-recovery.mjs';
 import { prepareBrief, captureBrief, briefFreshness, acceptBrief, validateBrief } from './decision-brief.mjs';
@@ -76,6 +78,7 @@ export class Explorer {
     }).catch(() => {});
   }
   requireToolFreeRelease() {
+    this.dashboard?.invalidate();
     if (this.unconfirmedToolFreeRelease) throw new Error('An earlier helper has not confirmed shutdown. Cleanup, question help, decision briefs, answer checks and challenge reviews are blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
   }
   cleanupRequest(input) {
@@ -497,7 +500,7 @@ export class Explorer {
     if (this.pending || this.preview) throw new Error('Cancel the active request or dismiss its preview before recovery.');
     if (action === 'recover-copy') {
       const selected = await this.recoveryView({ action: 'inspect', journey: input.journey, revision: input.revision, candidate: input.candidate });
-      const library = this.library ?? new Library(dirname(this.file)), record = await library.import(selected.document, { asCopy: true });
+      const library = this.library ?? new Library(dirname(this.file)), record = await library.import(selected.document, { asCopy: true }); this.dashboard?.invalidate();
       if (this.library) await this.attach(record.key);
       else { this.file = record.file; this.doc = record.document; this.exportObservation = null; }
       this.error = 'Recovered version opened as a separate copy. Original journey, history and drafts are preserved.';
@@ -542,6 +545,22 @@ export class Explorer {
       return { ...preview, issues: [...(inventory.partial ? ['Inventory is partial; unscanned and unknown data remain protected.'] : []), ...found.issues, ...preview.issues].slice(0, 100) };
     });
   }
+  dashboardRequest(input) {
+    return this.transact(async () => {
+      if (this.closed) throw new Error('Dashboard is closed.');
+      this.dashboard ??= new Dashboard(this.library?.directory ?? dirname(this.file));
+      const helperStatus = JSON.stringify([this.cleanup?.status, this.help?.status, this.briefWork?.status, this.checkWork?.status, this.pending?.kind]);
+      if (this.dashboardHelperStatus !== undefined && this.dashboardHelperStatus !== helperStatus) this.dashboard.invalidate();
+      const result = await this.dashboard.request(input, this.analytics ?? new Analytics(this.library?.directory ?? dirname(this.file)));
+      if (input.action === 'refresh' || this.dashboardHelperStatus === undefined) this.dashboardHelperStatus = helperStatus;
+      return result;
+    });
+  }
+  startObservation() {
+    if (this.analytics || this.closed) return;
+    this.analytics = new Analytics(this.library?.directory ?? dirname(this.file));
+    this.analytics.visit();
+  }
   async fresh() {
     const current = await this.readCurrent();
     if (current.revision !== this.doc.revision) throw new Error('Another canvas updated this file. Refresh the saved journey before retrying.');
@@ -585,7 +604,12 @@ export class Explorer {
     if (!Number.isSafeInteger(next.revision)) throw new Error('Map revision limit reached.');
     next.updatedAt = new Date(Math.max(Date.now(), Date.parse(saved?.updatedAt ?? 0) + 1)).toISOString();
     validateDocument(next);
-    const replace = async () => { accept(); await atomicWrite(this.file, JSON.stringify(next, null, 2)); this.doc = next; this.reconcileCleanup(); this.reconcileResearch(); };
+    const replace = async () => {
+      accept(); await atomicWrite(this.file, JSON.stringify(next, null, 2)); this.doc = next;
+      this.dashboard?.invalidate();
+      try { if (saved?.id === next.id && label !== 'Imported saved map') this.analytics?.commit(saved, next); } catch { /* Observations cannot fail a committed answer. */ }
+      this.reconcileCleanup(); this.reconcileResearch();
+    };
     try {
       if (saved && saved.id === next.id) await (await this.history(this.activeKey ?? this.doc.id)).commit(saved, next, label, replace);
       else await replace(); // New direct-file identity has independent history, like imported library copies.
@@ -627,6 +651,7 @@ export class Explorer {
   clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; }
   reviewResearch(input) { return this.transact(() => this.researchReview.prepare(this, input)); }
   request(kind, nodeId, scope, reviewed) {
+    this.dashboard?.invalidate();
     const id = randomUUID(), webResearch = kind === 'research' || kind === 'research-follow-up';
     if (webResearch && !reviewed) throw new Error('Review research context before starting.');
     const prepared = reviewed ?? this.prepareRequest(kind, nodeId, id, scope);
@@ -724,7 +749,7 @@ export class Explorer {
         this.preview = null; this.questionSource = null; this.error = ''; return this.uiSnapshot();
       }
       if (action === 'library-update' && this.library) {
-        await this.library.update(input.key, input.patch, input.metadataRevision); return this.uiSnapshot();
+        await this.library.update(input.key, input.patch, input.metadataRevision); this.dashboard?.invalidate(); return this.uiSnapshot();
       }
       if (this.pending && !(['research', 'research-follow-up'].includes(this.pending.kind) && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
       if (this.preview && (['start', 'open', 'import', 'restore', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
@@ -763,7 +788,7 @@ export class Explorer {
         case 'start':
           if (this.library) {
             const doc = createDocument(input.topic, input); doc.revision = 1;
-            const record = await this.library.import(doc); await this.attach(record.key);
+            const record = await this.library.import(doc); this.dashboard?.invalidate(); await this.attach(record.key);
             this.request('questions', this.doc.rootId, input.scope); break;
           }
           if (this.doc) throw new Error('Open a new canvas for a new exploration, or import a saved map.');
@@ -772,7 +797,7 @@ export class Explorer {
           break;
         case 'import':
           if (this.library) {
-            const record = await this.library.import(input.document, { asCopy: input.asCopy });
+            const record = await this.library.import(input.document, { asCopy: input.asCopy }); this.dashboard?.invalidate();
             if (record.conflict) return { ...this.snapshot(), importConflict: { entries: record.conflict } };
             await this.attach(record.key); break;
           }
@@ -880,5 +905,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; this.preview = null; this.questionSource = null; }
+  async close() { this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

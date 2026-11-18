@@ -1,3 +1,4 @@
+import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/dashboard.mjs';
 import { attachMinimap, projectOverview, overviewPaths } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import test from 'node:test';
@@ -34,6 +35,39 @@ const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', op
   { title: 'One block', description: 'Start with the nearest neighbors.', pros: ['Easy handovers'], cons: ['Fewer tools'] },
   { title: 'Whole neighborhood', description: 'Invite everyone nearby.', pros: ['More tools'], cons: ['More coordination'] },
 ], recommendation: 'Try a small pilot.', uncertainty: 'No external sources consulted.', sources: [] };
+
+test('dashboard keeps the same Outline editor and private drafts, preserves filter focus and matches chart tables', async t => {
+  const f = await fixture(t, 280), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'DASHBOARD_PRIVATE_DRAFT'); f.type('revisit-condition', 'Private reminder');
+  $('outline-toggle').click(); const answer = $('answer'), editor = $('node-workspace'), camera = JSON.stringify(f.window.__updates.scene().view);
+  assert.ok($('dashboard-open'), 'dashboard is available inside Explorer');
+  $('dashboard-open').click(); await until(() => $('dashboard-results').querySelector('svg'), 'dashboard aggregation');
+  assert.equal(f.document.activeElement, $('dashboard-close'));
+  assert.equal($('answer'), answer); assert.equal($('node-workspace'), editor); assert.equal(answer.value, 'DASHBOARD_PRIVATE_DRAFT');
+  assert.equal($('working-view').classList.contains('outline-mode'), true); assert.equal(JSON.stringify(f.window.__updates.scene().view), camera);
+  assert.ok(!$('dashboard-results').textContent.includes('DASHBOARD_PRIVATE_DRAFT'));
+  for (const chart of $('dashboard-results').querySelectorAll('.dashboard-chart')) {
+    const values = [...chart.querySelectorAll('svg rect[data-value]')].map(row => row.dataset.value);
+    const table = [...chart.querySelectorAll('tbody td[data-value]')].map(row => row.dataset.value);
+    assert.deepEqual(values, table); assert.ok(chart.querySelector('svg[role="img"][aria-label]')); assert.ok(chart.querySelector('table caption'));
+  }
+  $('dashboard-from').value = '2099-01-01'; $('dashboard-to').value = '2099-01-01'; $('dashboard-apply').click(); $('dashboard-from').focus();
+  await until(() => $('dashboard-status').textContent.includes('Cached'), 'cached filtered dashboard');
+  assert.equal(f.document.activeElement, $('dashboard-from')); assert.match($('dashboard-results').textContent, /No observed activity/);
+  $('dashboard-close').click(); assert.equal($('dashboard-dialog').open, false); assert.equal(f.document.activeElement, $('dashboard-open'));
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'DASHBOARD_PRIVATE_DRAFT'); assert.equal($('revisit-condition').value, 'Private reminder');
+});
+test('dashboard explicit modal focus cancels dictation and rejects late audio without replacing drafts', async t => {
+  const voice = voiceFixture(), f = await fixture(t, 280, voice), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep this draft'); $('answer').focus();
+  await until(() => $('voice-status').textContent.includes('Hold Ctrl'), 'voice ready');
+  const start = voice.start; let late; voice.start = id => { start(id); return new Promise(resolve => { late = () => resolve({ id, phase: 'done', text: 'LATE_DASHBOARD_AUDIO' }); }); };
+  $('voice-record').click(); await until(() => voice.counts().starts === 1, 'dictation started');
+  $('dashboard-open').click(); await until(() => voice.counts().cancels === 1, 'modal focus cancelled voice');
+  late(); await until(() => $('dashboard-results').querySelector('svg'), 'dashboard loaded');
+  assert.equal($('answer').value, 'Keep this draft'); assert.equal(f.document.activeElement, $('dashboard-close'));
+  $('dashboard-close').click(); assert.equal($('answer').value, 'Keep this draft');
+});
 
 test('full Outline keeps the same editor, composition and camera through extreme zoom switches', async t => {
   const f = await fixture(t, 340), $ = id => f.document.getElementById(id), ui = f.window.__updates;
@@ -1040,6 +1074,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const storageDialog = document.getElementById('storage-dialog');
   storageDialog.showModal = () => { storageDialog.open = true; };
   storageDialog.close = () => { storageDialog.open = false; };
+  const dashboardDialog = document.getElementById('dashboard-dialog');
+  dashboardDialog.showModal = () => { dashboardDialog.open = true; };
+  dashboardDialog.close = () => { dashboardDialog.open = false; };
   const scriptErrors = []; window.addEventListener('error', event => scriptErrors.push(event.error));
   const briefDialog = document.getElementById('brief-dialog');
   briefDialog.showModal = () => { briefDialog.open = true; };
@@ -1123,7 +1160,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.QuestionHelpClient = QuestionHelpClient;
   window.ResearchReviewClient = ResearchReviewClient;
   window.researchSettingsText = researchSettingsText;
-  window.attachNavigation = attachNavigation; window.attachMinimap = attachMinimap;
+  window.attachDashboard = attachDashboard; window.attachNavigation = attachNavigation; window.attachMinimap = attachMinimap;
   const mini = document.getElementById('minimap-map');
   mini.getBoundingClientRect = () => ({ left: 12, top: height + 8, width: Math.min(180, (width - 24) * .4), height: 80 });
   mini.setPointerCapture = id => captured.add(id); mini.hasPointerCapture = id => captured.has(id); mini.releasePointerCapture = id => captured.delete(id);
@@ -1132,7 +1169,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.NextQuestion = NextQuestion;
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;

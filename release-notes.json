@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.60",
+    "summary": "Open a local Usage dashboard for map distributions, saved answer states, depth and branching, observed visits and question growth, and retained helper outcomes/model usage. UTC filters, accessible charts and tables, bounded scans, explicit missing-data coverage and protected observation retention preserve your editor and drafts."
+  },
+  {
     "version": "0.1.59",
     "summary": "Work in an optional Outline view using the same answer, research and status editor. Browse folded hierarchies or search all nodes in bounded pages, reveal selected sources, and return to the expanding map without losing drafts or camera. Minimap work pauses while hidden; pointer view switches retain active dictation."
   },

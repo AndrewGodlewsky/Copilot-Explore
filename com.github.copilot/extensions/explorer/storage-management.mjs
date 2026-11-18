@@ -18,10 +18,11 @@ const identity = stat => [stat.dev, stat.ino, stat.birthtimeNs].join(':');
 const stamp = stat => [identity(stat), stat.size, stat.mtimeNs, stat.ctimeNs, stat.nlink].join(':');
 const defaults = () => ({ version: 1, revision: 0, keepHistory: 50 });
 const validSettings = value => value?.version === 1 && Number.isSafeInteger(value.revision) && value.revision >= 0 && choices.includes(value.keepHistory) && Object.keys(value).sort().join(',') === 'keepHistory,revision,version';
-const protectedText = 'Only listed old unnamed history snapshots can be removed. All journeys, drafts and tombstones, newest recovery versions, undo versions, named checkpoints, usage receipts, preferences, locks, intents, recovery and unknown files remain protected. Protected versions can exceed the keep target. Removal is irreversible; this is not a backup.';
+const protectedText = 'Only listed old unnamed history snapshots can be removed. All journeys, drafts and tombstones, newest recovery versions, undo versions, named checkpoints, usage receipts, local observations, preferences, locks, intents, recovery and unknown files remain protected. Protected versions can exceed the keep target. Removal is irreversible; this is not a backup.';
 
 function category(parts) {
   const name = parts.at(-1);
+  if (parts.length === 1 && name === 'analytics.json') return 'analytics';
   if (/\.tmp$|\.lock(?:\.recover|\.abandoned)?$/.test(name) || name === 'intent.json' || /^recovery-/.test(name)) return 'recovery';
   if (parts[0] === 'history') return 'history';
   if (parts[0] === 'usage') return 'usage';
@@ -114,7 +115,7 @@ export class StorageManagement {
     } finally { await lock.release(); }
   }
   async inventory() {
-    const categories = Object.fromEntries(['journeys', 'exports', 'library', 'drafts', 'history', 'recovery', 'usage', 'preferences', 'unknown'].map(name => [name, { files: 0, apparentBytes: 0, uniqueBytes: 0 }]));
+    const categories = Object.fromEntries(['journeys', 'exports', 'library', 'drafts', 'history', 'recovery', 'usage', 'analytics', 'preferences', 'unknown'].map(name => [name, { files: 0, apparentBytes: 0, uniqueBytes: 0 }]));
     const result = { categories, apparentBytes: 0, uniqueBytes: 0, duplicateBytes: 0, manifestDeclaredHistoryBytes: 0, manifests: 0, entries: 0, partial: false, issues: [], journeyNames: [], limits: STORAGE_LIMITS, historyLimits: HISTORY_LIMITS, protection: protectedText };
     const seen = new Set(); let stopped = false, metadataBytes = 0;
     const issue = (path, message) => { result.partial = true; if (result.issues.length < 100) result.issues.push({ path, message }); };

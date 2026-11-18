@@ -195,3 +195,23 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .outline-mode .node-head{cursor:auto;user-select:text;touch-action:auto;max-height:40%}
 .outline-mode .node-content{overflow:auto;max-height:none}
 @media(max-width:660px){#working-view.outline-mode{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(150px,35%) minmax(240px,1fr);min-height:440px;padding:8px;gap:8px}.outline-mode .outline{grid-column:1;grid-row:1}.outline-mode #map{grid-column:1;grid-row:2}}
+
+#dashboard-dialog { width: min(760px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; box-sizing: border-box; }
+.dashboard-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#dashboard-results details { border-top: 1px solid var(--line); padding: 12px 0; }
+#dashboard-results summary { cursor: pointer; font-weight: 600; }
+#dashboard-results p { overflow-wrap: anywhere; }
+.dashboard-chart svg { display: block; width: 100%; height: auto; margin-block: 12px; }
+.dashboard-chart svg text { fill: currentColor; font: 12px sans-serif; }
+.dashboard-series-0 { fill: #628e9b; } .dashboard-series-1 { fill: #b58c4c; } .dashboard-series-2 { fill: #947b9a; }
+.dashboard-table { max-height: 260px; overflow: auto; margin-block: 12px; }
+.dashboard-table table { border-collapse: collapse; min-width: 100%; font-size: .85rem; }
+.dashboard-table th, .dashboard-table td { text-align: left; border-bottom: 1px solid var(--line); padding: 6px; overflow-wrap: anywhere; }
+.dashboard-table caption { text-align: left; font-weight: 600; margin-bottom: 6px; }
+#dashboard-dialog input, #dashboard-dialog select { max-width: 100%; box-sizing: border-box; }
+@media (max-width: 400px) { #dashboard-dialog { padding: 12px; } .dashboard-heading { align-items: start; } }
+.dashboard-series-3 { fill: #7a8e62; }
+.dashboard-legend { display: flex; flex-wrap: wrap; gap: 8px; font-size: .8rem; }
+.dashboard-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.dashboard-legend i { display: inline-block; width: 10px; height: 10px; }
+.dashboard-swatch-0 { background: #628e9b; } .dashboard-swatch-1 { background: #b58c4c; } .dashboard-swatch-2 { background: #947b9a; } .dashboard-swatch-3 { background: #7a8e62; }

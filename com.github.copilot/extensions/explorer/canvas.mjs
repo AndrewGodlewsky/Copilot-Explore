@@ -96,6 +96,7 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
           const server = await startServer(explorer, undefined, { readHost: () => readHostReadiness(getSession()) });
           const entry = { explorer, server };
           instances.set(ctx.instanceId, entry);
+          explorer.startObservation();
           try {
             if (!explorer.doc && ctx.input?.topic) await explorer.command('start', { topic: ctx.input.topic });
           } catch (error) { instances.delete(ctx.instanceId); await server.close(); throw error; }

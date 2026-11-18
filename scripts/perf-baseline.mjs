@@ -1,4 +1,5 @@
 import { attachMinimap } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
+import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/dashboard.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import { measureStateTraffic } from './perf-state-polling.mjs';
 import { performance } from 'node:perf_hooks';
@@ -54,6 +55,7 @@ export async function measure(phases, name, operation, work, { count = samples, 
 }
 
 const imports = [
+  "import { attachDashboard } from './dashboard.mjs';",
   "import { attachMinimap } from './minimap.mjs';",
   "import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';",
   "import { ResearchReviewClient } from './research-review-client.mjs';",
@@ -93,7 +95,7 @@ async function domFixture(document) {
       url === 'api/voice' ? { ready: false, error: 'Disabled in synthetic benchmark.' } : {};
     return new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
   };
-  Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
+  Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, attachDashboard, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
     ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   const source = imports.reduce((text, statement) => text.replace(statement, ''), appScript)
     .replace('void poll();', 'window.__perf = { renderMap, renderWorkspace, renderOutline, poll, select, zoom, pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); }, geometry: () => geometryCache.value, stopPoll: () => clearTimeout(pollTimer) }; void poll();');

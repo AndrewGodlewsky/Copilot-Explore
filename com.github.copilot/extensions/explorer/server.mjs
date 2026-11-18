@@ -13,6 +13,7 @@ import { STORAGE_LIMITS } from './storage-management.mjs';
 
 const assets = new Map([
   ['', ['index.html', 'text/html; charset=utf-8']],
+  ['dashboard.mjs', ['dashboard.mjs', 'text/javascript; charset=utf-8']],
   ['app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
   ['layout.mjs', ['layout.mjs', 'text/javascript; charset=utf-8']],
   ['minimap.mjs', ['minimap.mjs', 'text/javascript; charset=utf-8']],
@@ -60,6 +61,14 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       const url = new URL(req.url, origin);
       if (!url.pathname.startsWith(prefix)) return json(404, { error: 'Not found.' });
       const route = url.pathname.slice(prefix.length);
+      if (req.method === 'POST' && route === 'api/dashboard') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        try {
+          const value = await explorer.dashboardRequest(await body(req, 1024));
+          if (Buffer.byteLength(JSON.stringify(value)) > 512 * 1024) throw new Error();
+          return json(200, value);
+        } catch { return json(400, { error: 'Dashboard could not load. Check the date range and refresh; original files are preserved.' }); }
+      }
       if (req.method === 'POST' && route === 'api/storage') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         const value = await explorer.storageRequest(await body(req, 1024));

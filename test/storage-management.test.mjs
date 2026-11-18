@@ -31,6 +31,7 @@ test('storage preview is read-only; explicit cleanup retains checkpoints, undo a
   const f = await fixture(t);
   await f.explorer.command('checkpoint', { revision: f.explorer.doc.revision, journey: f.explorer.doc.id, snapshotRevision: 0, name: 'Protected' });
   await writeFile(join(f.directory, 'drafts.json'), 'draft and tombstone evidence');
+  await writeFile(join(f.directory, 'analytics.json'), 'protected local observation evidence');
   await mkdir(join(f.directory, 'usage')); await writeFile(join(f.directory, 'usage', 'recovery-unknown.json'), 'unreconciled');
   const before = await readFile(f.file, 'utf8'), manifestPath = join(f.directory, 'history', f.key, 'manifest.json');
   const manifest = await readFile(manifestPath, 'utf8');
@@ -41,6 +42,7 @@ test('storage preview is read-only; explicit cleanup retains checkpoints, undo a
   assert.equal(result.results.filter(row => row.status === 'removed').length, 2);
   assert.equal(await readFile(f.file, 'utf8'), before);
   assert.equal(await readFile(join(f.directory, 'drafts.json'), 'utf8'), 'draft and tombstone evidence');
+  assert.equal(await readFile(join(f.directory, 'analytics.json'), 'utf8'), 'protected local observation evidence');
   const after = await f.explorer.readHistory(f.explorer.doc.id);
   assert.ok(after.entries.some(row => row.checkpoints.includes('Protected')));
   assert.ok(after.entries.some(row => row.revision === after.undoRevision));

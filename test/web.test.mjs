@@ -24,6 +24,7 @@ import { parseAnswerCheck } from '../com.github.copilot/extensions/explorer/answ
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { buildScenario } from '../com.github.copilot/extensions/explorer/scenario-fork.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
+import { attributeContributions } from '../com.github.copilot/extensions/explorer/contributors.mjs';
 import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
 import { createDocument, contextFor, addDependency, answerNode } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
@@ -40,6 +41,75 @@ import { draftHash, draftBase } from '../com.github.copilot/extensions/explorer/
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
+
+test('Contributor UI saves, renames and clears only explicit names while preserving answer drafts and conflicts', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Private draft λ'); const editor = $('answer'); editor.setSelectionRange(2, 6);
+  assert.equal((await f.explorer.contributorSettingsRequest({ action: 'read' })).settings.actor, null);
+  $('navigation-open').click(); $('contributor-open').click();
+  await until(() => !$('contributor-save').disabled, 'identity loaded');
+  assert.equal($('contributor-name').value, '');
+  f.type('contributor-name', 'Alice <script>'); assert.match($('contributor-preview').textContent, /Alice <script>/); assert.equal($('contributor-preview').querySelector('script'), null);
+  $('contributor-save').click(); await until(() => /Saved/.test($('contributor-status').textContent), 'identity saved');
+  const first = (await f.explorer.contributorSettingsRequest({ action: 'read' })).settings;
+  f.type('contributor-name', 'Alicia'); $('contributor-save').click(); await until(() => !$('contributor-save').disabled, 'rename saved');
+  assert.equal((await f.explorer.contributorSettingsRequest({ action: 'read' })).settings.actor.id, first.actor.id);
+  await f.explorer.contributorSettingsRequest({ action: 'save', revision: 2, displayName: 'Another canvas' });
+  f.type('contributor-name', 'Keep my typed name'); $('contributor-save').click(); await until(() => /another canvas/.test($('contributor-status').textContent), 'conflict visible');
+  assert.equal($('contributor-name').value, 'Keep my typed name'); assert.equal($('contributor-save').disabled, true);
+  $('contributor-refresh').click(); await until(() => $('contributor-name').value === 'Another canvas', 'refreshed');
+  $('contributor-clear').click(); await until(() => /Cleared/.test($('contributor-status').textContent), 'cleared');
+  assert.equal((await f.explorer.contributorSettingsRequest({ action: 'read' })).settings.actor, null);
+  $('contributor-close').click(); assert.equal($('answer'), editor); assert.equal(editor.value, 'Private draft λ'); assert.equal(editor.selectionStart, 2); assert.equal(editor.selectionEnd, 6);
+});
+
+for (const action of ['read', 'save']) for (const leave of ['hide', 'switch', 'suspend']) test(`Contributor UI ignores late settings ${action} replies after ${leave}`, async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), original = f.window.fetch; let release;
+  f.window.fetch = async (...args) => { const response = await original(...args); if (args[0] === 'api/contributor-settings' && JSON.parse(args[1].body).action === action) await new Promise(resolve => { release = resolve; }); return response; };
+  $('navigation-open').click(); $('contributor-open').click();
+  if (action === 'save') { await until(() => !$('contributor-save').disabled, 'settings loaded'); f.type('contributor-name', 'Saved despite hidden reply'); $('contributor-save').click(); }
+  await until(() => release, 'settings reply held');
+  if (leave === 'hide') $('contributor-close').click();
+  else if (leave === 'switch') { const next = f.explorer.uiSnapshot(); next.document = createDocument('Another journey'); f.window.__updates.apply(next); }
+  else f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  const status = $('contributor-status').textContent; release(); await delay(30);
+  assert.equal($('contributor-dialog').open, false); assert.equal($('contributor-status').textContent, status);
+  if (action === 'save') assert.equal((await f.explorer.contributorSettingsRequest({ action: 'read' })).settings.actor.displayName, 'Saved despite hidden reply');
+});
+
+test('Contributor UI reports unavailable or damaged private settings without assuming an identity', async t => {
+  for (const library of [false, true]) {
+    const f = await fixture(t, 340, undefined, library), $ = id => f.document.getElementById(id);
+    if (library) await writeFile(join(f.explorer.library.directory, 'contributor-settings.json'), '{broken');
+    $('navigation-open').click(); $('contributor-open').click();
+    await until(() => /preserved|unavailable/.test($('contributor-status').textContent), 'identity error shown');
+    assert.equal($('contributor-save').disabled, true); assert.equal($('contributor-name').value, '');
+  }
+});
+
+test('Contributor UI labels current, unknown, historical and AI acceptance literally without replacing editor DOM', async t => {
+  const actor = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', displayName: '<script>Alice λ</script>' }, at = '2026-11-18T12:00:00.000Z';
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    let next = attributeContributions(null, e.doc, { kind: 'new-nodes', ids: [e.doc.nodes[1].id], origin: 'ai' }, actor, at);
+    const before = structuredClone(next); next.nodes[1].answer = 'Saved answer'; next.nodes[1].answerState = 'decided';
+    next = attributeContributions(before, next, { kind: 'answer', id: next.nodes[1].id }, actor, at); await e.save(next);
+  } }), $ = id => f.document.getElementById(id), id = f.explorer.doc.nodes[1].id;
+  f.open(id); const editor = $('answer'); f.type('answer', 'Keep private draft'); editor.setSelectionRange(1, 5);
+  assert.match($('workspace-contributors').textContent, /AI suggestion/); assert.match($('workspace-contributors').textContent, /Accepted by.*Alice/); assert.match($('workspace-contributors').textContent, /First recorded author.*Alice/); assert.match($('workspace-contributors').textContent, /unverified/);
+  assert.equal($('workspace-contributors').querySelector('script'), null);
+  const next = structuredClone(f.explorer.doc); next.nodes[1].answer = 'External edit'; await f.explorer.save(next); await f.poll();
+  assert.match($('workspace-contributors').textContent, /Historical.*current contributor unknown/); assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep private draft'); assert.equal(editor.selectionStart, 1);
+  f.open(f.explorer.doc.nodes[2].id); assert.match($('workspace-contributors').textContent, /Contributor unknown/);
+});
+
+test('Contributor UI shows accepted ADR wording separately from decision approval', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const next = structuredClone(e.doc); next.nodes[1].answer = 'Saved decision'; next.nodes[1].answerState = 'decided'; saveAdrFixture(next);
+    await e.save(attributeContributions(e.doc, next, { kind: 'artifact', field: 'adrDraft' }, { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', displayName: 'Reviewer <b>' }, '2026-11-18T12:00:00.000Z'));
+  } }), $ = id => f.document.getElementById(id);
+  $('adr-draft-open').click(); await until(() => /Reviewer <b>/.test($('brief-contributors').textContent), 'accepter shown');
+  assert.match($('brief-contributors').textContent, /not decision approval/); assert.equal($('brief-contributors').querySelector('b'), null);
+});
 
 test('critical view includes tied decisions through hidden filters and restores prior navigation and drafts', async t => {
   const f=await fixture(t,360,undefined,false,{before:async e=>{
@@ -2021,6 +2091,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const reviewDialog = document.getElementById('research-review-dialog');
   if (reviewDialog) { reviewDialog.showModal = () => { reviewDialog.open = true; }; reviewDialog.close = () => { reviewDialog.open = false; }; }
   const navigationDialog = document.getElementById('navigation-dialog');
+  const contributorDialog = document.getElementById('contributor-dialog');
+  if (contributorDialog) { contributorDialog.showModal = () => { contributorDialog.open = true; }; contributorDialog.close = () => { contributorDialog.open = false; }; }
   navigationDialog.showModal = () => { navigationDialog.open = true; };
   navigationDialog.close = () => { navigationDialog.open = false; };
   const paletteDialog = document.getElementById('palette-dialog');

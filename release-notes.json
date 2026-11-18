@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.97",
+    "summary": "Choose a public contributor name for future shared questions, answers and accepted drafts. Preserve original authors and later editors across copies and merges; distinguish AI suggestions and wording acceptance from user decisions. Unknown legacy authors stay unknown, and changed text labels old attribution historical. Names remain optional and unverified."
+  },
+  {
     "version": "0.1.96",
     "summary": "Preview exact proposed ADR Markdown and its project path, then explicitly save it. Recorded updates show complete before/after text and reject changed files. Interrupted writes report file and exploration association separately, with explicit recovery. Saved decisions stay proposed; source uncertainty and private answer drafts are preserved."
   },

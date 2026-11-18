@@ -1,4 +1,5 @@
 import { isDeepStrictEqual as equal } from 'node:util';
+import { validateArtifactAcceptance } from './contributors.mjs';
 import { prepareAdrScope, validateAdrScope, adrScopeFreshness } from './adr-scope.mjs';
 import { defaultAdrFormat, validateAdrFormat } from './adr-format.mjs';
 import { selectedInputs, HANDOFF_OMISSIONS } from './implementation-handoff.mjs';
@@ -71,10 +72,11 @@ export function parseAdrDraft(content, prepared) {
   return { title: title(value.title), titleEdited: false, status: 'proposed', sections: sections(value.sections, capture, false), ...capture };
 }
 export function validateAdrDraft(value) {
-  if (!keys(value, 'version,acceptedAt,title,titleEdited,status,sections,format,scope,dependencies,coverage,guidance,includeEvidence,evidence' + (Object.hasOwn(value ?? {}, 'readiness') ? ',readiness' : '')) || value.version !== 1 || value.status !== 'proposed' || typeof value.titleEdited !== 'boolean' || typeof value.acceptedAt !== 'string' || value.acceptedAt.length > 40 || !Number.isFinite(Date.parse(value.acceptedAt))) invalid();
+  if (!keys(value, 'version,acceptedAt,title,titleEdited,status,sections,format,scope,dependencies,coverage,guidance,includeEvidence,evidence' + (Object.hasOwn(value ?? {}, 'readiness') ? ',readiness' : '') + (Object.hasOwn(value ?? {}, 'acceptance') ? ',acceptance' : '')) || value.version !== 1 || value.status !== 'proposed' || typeof value.titleEdited !== 'boolean' || typeof value.acceptedAt !== 'string' || value.acceptedAt.length > 40 || !Number.isFinite(Date.parse(value.acceptedAt))) invalid();
   const capture = validateCapture(value);
   const result = { version: 1, acceptedAt: value.acceptedAt, title: title(value.title), titleEdited: value.titleEdited, status: 'proposed', sections: sections(value.sections, capture, true), ...capture };
   if (Object.hasOwn(value, 'readiness')) result.readiness = validateAdrReadinessReceipt(value.readiness);
+  if (Object.hasOwn(value, 'acceptance')) result.acceptance = validateArtifactAcceptance(value.acceptance);
   if (Buffer.byteLength(JSON.stringify({ adrDraft: result }, null, 2)) > BRIEF_ARTIFACT_LIMIT) throw Error('The accepted ADR draft exceeds the 512 KiB saved-artifact limit.');
   return result;
 }

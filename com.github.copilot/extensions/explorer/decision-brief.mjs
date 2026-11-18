@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { validateArtifactAcceptance } from './contributors.mjs';
 import { prepareResearch, identity, framing, record } from './research-context.mjs';
 import { createOwnedHelper } from './owned-helper.mjs';
 import { toolFreeConfig, validateNoTools } from './tool-free.mjs';
@@ -75,9 +76,10 @@ export function validateBriefCapture(dep, coverage, scope = 'journey-summary') {
   return { dependencies: structuredClone(dep), coverage: structuredClone(coverage) };
 }
 export function validateBrief(value) {
-  if (!keys(value, 'version,acceptedAt,sections,dependencies,coverage') || value.version !== 1 || !string(value.acceptedAt, 40) || !Number.isFinite(Date.parse(value.acceptedAt))) invalid();
+  if (!keys(value, 'version,acceptedAt,sections,dependencies,coverage' + (Object.hasOwn(value ?? {}, 'acceptance') ? ',acceptance' : '')) || value.version !== 1 || !string(value.acceptedAt, 40) || !Number.isFinite(Date.parse(value.acceptedAt))) invalid();
   const capture = validateBriefCapture(value.dependencies, value.coverage);
   const result = { version: 1, acceptedAt: value.acceptedAt, sections: briefSections(value.sections, capture.dependencies.records, true), ...capture };
+  if (Object.hasOwn(value, 'acceptance')) result.acceptance = validateArtifactAcceptance(value.acceptance);
   if (Buffer.byteLength(JSON.stringify({ brief: result }, null, 2)) > BRIEF_ARTIFACT_LIMIT) throw new Error('The accepted brief exceeds the 512 KiB saved-artifact limit.');
   return result;
 }

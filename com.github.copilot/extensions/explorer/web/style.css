@@ -451,3 +451,5 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #preference-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 #preference-dialog select, #preference-dialog textarea { max-width: 100%; min-width: 0; }
 #scenario-preference-banner { overflow-wrap: anywhere; }
+#contributor-dialog, #workspace-contributors, #brief-contributors { overflow-wrap: anywhere; }
+#contributor-name { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; }

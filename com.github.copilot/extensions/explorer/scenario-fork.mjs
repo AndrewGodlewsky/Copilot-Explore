@@ -26,7 +26,8 @@ export function buildScenario(source, input, now = new Date().toISOString()) {
     nodes: path.map(n => ({ id: ids.get(n.id), parentId: n.parentId === null ? null : ids.get(n.parentId), ...(n.kind ? { kind: n.kind } : {}), question: n.question, category: n.category,
       answer: n.id === selected.id ? input.answer : n.answer,
       ...(isQuestion(n) && n.id !== source.rootId ? { answerState: n.id === selected.id ? input.answerState : effectiveAnswerState(n) } : {}),
-      research: null, review: n.id !== selected.id && n.review })),
+      research: null, review: n.id !== selected.id && n.review,
+      ...(n.attribution ? { attribution: structuredClone(n.attribution) } : {}) })),
   };
   const internal = (source.dependencies ?? []).filter(link => ids.has(link.dependentId) && ids.has(link.prerequisiteId));
   if (internal.length) document.dependencies = internal.map(link => ({ ...link, dependentId: ids.get(link.dependentId), prerequisiteId: ids.get(link.prerequisiteId) }));

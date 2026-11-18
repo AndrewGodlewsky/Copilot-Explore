@@ -1,6 +1,7 @@
 import { validateHandoff, handoffMarkdown } from './implementation-handoff.mjs';
 import { validateAdrDraft } from './adr-draft.mjs';
 import { validateAdrFiles } from './adr-file.mjs';
+import { validateNodeAttribution } from './contributors.mjs';
 import { validateAdrScope, adrScopeMarkdown } from './adr-scope.mjs';
 import { validateAdrFormat } from './adr-format.mjs';
 import { scenarioOrigin } from './scenario-origin.mjs';
@@ -238,6 +239,7 @@ export function validateDocument(value) {
     category: text(n.category, 'Category', 60), answer: guidanceText(n.answer, 'Answer', 20000),
     ...(Object.hasOwn(n, 'rationale') ? { rationale: text(n.rationale, 'Question rationale', 1000) } : {}),
     ...questionImportance(n),
+    ...(Object.hasOwn(n, 'attribution') ? { attribution: validateNodeAttribution(n.attribution) } : {}),
     ...(Object.hasOwn(n, 'answerState') ? { answerState: n.answerState } : {}),
     research: n.research === null ? null : research(n.research), review: n.review === true,
     ...(Object.hasOwn(n, 'reviewCauses') ? { reviewCauses: reviewCauses(n.reviewCauses) } : {}),

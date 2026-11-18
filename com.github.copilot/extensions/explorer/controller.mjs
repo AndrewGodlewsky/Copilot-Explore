@@ -6,6 +6,8 @@ import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
 import { ScenarioFork } from './scenario-fork.mjs';
+import { ContributorSettings } from './contributor-settings.mjs';
+import { attributeContributions, contributionStatus } from './contributors.mjs';
 import { ScenarioComparison } from './scenario-compare.mjs';
 import { ScenarioPreferences } from './scenario-preference-workflow.mjs';
 import { BranchRestoration } from './branch-restoration.mjs';
@@ -81,6 +83,27 @@ export class Explorer {
   }
   snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, projectChange: this.projectChange ?? null, storage: this.projectStore ? { scope: 'project', path: this.projectStore.context.relativePath } : { scope: 'personal' }, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
   auxiliaryDirectory() { return this.projectStore?.context.directory ?? this.library?.directory ?? dirname(this.file); }
+  contributorSettings() {
+    const context = this.projectStore?.context, directory = this.library?.directory ?? context?.directory;
+    if (!directory) return null;
+    if (this.contributorPreferences?.directory !== directory) this.contributorPreferences = new ContributorSettings({ directory, ...(!this.library && context ? { assertPrivate: () => context.assertPrivate() } : {}) });
+    return this.contributorPreferences;
+  }
+  async contributorSettingsRequest(input) {
+    const keys = input && typeof input === 'object' && !Array.isArray(input) ? Object.keys(input).sort().join(',') : '';
+    if (!(input?.action === 'read' && keys === 'action' || input?.action === 'save' && keys === 'action,displayName,revision')) throw Error('Invalid contributor settings request.');
+    const store = this.contributorSettings();
+    if (!store) {
+      if (input.action === 'save') throw Error('Private contributor settings are unavailable in this preview.');
+      return { available: false, settings: null };
+    }
+    return { available: true, settings: input.action === 'read' ? await store.read() : await store.save(input.displayName, input.revision) };
+  }
+  async attributed(before, next, intent) {
+    const settings = this.contributorSettings();
+    if (!settings) throw Error('Private contributor settings are unavailable. Reopen the shared journey.');
+    return attributeContributions(before, next, intent, (await settings.read()).actor, new Date().toISOString());
+  }
   async changeStorage(store) {
     this.adrFormats.clear();
     this.adrWriter.clear();
@@ -338,7 +361,7 @@ export class Explorer {
               acceptedReadiness = adrReadiness(next.adrDraft, latest, latestScenario);
               captureAdrReadiness(acceptedReadiness, { digest: next.adrDraft.readiness.digest, acknowledged: next.adrDraft.readiness.acknowledged });
             }
-          });
+          }, { kind: 'artifact', field: adr ? 'adrDraft' : handoff ? 'handoff' : 'brief' });
           this.briefWork = null;
         });
         return { id: input.id, status: 'accepted', snapshot: this.uiSnapshot(), ...(adr ? { readiness: acceptedReadiness } : {}) };
@@ -450,7 +473,8 @@ export class Explorer {
     const preview = this.preview ? { ...this.preview, stale } : null;
     const source = this.questionSource;
     const questionRetry = !preview && !this.pending && /saved question context changed/.test(this.error) && source?.journey === (this.activeKey ?? this.doc?.id) ? { purpose: source.purpose ?? 'questions', nodeId: source.nodeId } : null;
-    return { ...this.snapshot(), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
+    if (this.contributionView?.document !== this.doc) this.contributionView = { document: this.doc, value: contributionStatus(this.doc) };
+    return { ...this.snapshot(), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
   }
   async checkQuestionSource(nodeId) {
     const source = this.questionSource;
@@ -874,24 +898,25 @@ export class Explorer {
     }));
   }
   branchRestoreRequest(input) { return this.transact(() => this.withDocumentLock(() => this.branchRestoration.request(this, input))); }
-  async save(next, label = 'Map updated') {
+  async save(next, label = 'Map updated', contribution) {
     const before = this.doc;
-    try { return await this.withDocumentLock(() => this.saveLocked(next, label)); }
+    try { return await this.withDocumentLock(() => this.saveLocked(next, label, contribution)); }
     catch (error) {
       this.recoveryNotice = { kind: 'save', status: this.doc !== before ? 'committed' : 'failed', message: this.doc !== before ? 'Map saved. History finalization needs a retry; the newer saved content is retained.' : 'Save did not commit. Your previous saved journey and local drafts are retained. Retry reading before saving again.' };
       throw error.code ? new Error('Save storage is unavailable. Open Recovery to retry the saved read; previous content and drafts are preserved.') : error;
     }
   }
-  async saveLocked(next, label) {
+  async saveLocked(next, label, contribution) {
     let saved = null;
     try { saved = this.doc ? await this.fresh() : validateDocument(JSON.parse(await readFile(this.file, 'utf8'))); }
     catch (error) { if (error.code !== 'ENOENT' || this.doc) throw error; }
     if (saved && !this.doc) throw new Error('Another canvas created this map. Reopen it.');
-    return this.commitCurrentLocked(saved, next, label);
+    return this.commitCurrentLocked(saved, next, label, undefined, contribution);
   }
-  async commitCurrentLocked(saved, next, label, accept = () => {}) {
+  async commitCurrentLocked(saved, next, label, accept = () => {}, contribution) {
     if (this.projectStore) {
       try {
+        if (contribution) next = await this.attributed(saved, next, contribution);
         const changed = await this.projectStore.saveLocked(next, { baseDigest: this.projectStore.baseDigest, label, beforeWrite: accept });
         this.recoveryNotice = null; return changed;
       } catch (error) {
@@ -1207,7 +1232,7 @@ export class Explorer {
             if (batch.stale) throw new Error('This preview is stale. Dismiss it and generate again.');
             const accepted = acceptQuestions(this.doc, batch.nodeId, batch, input.selected);
             if (batch.purpose === 'adr-questions') validateAdrQuestions(this.doc, batch.nodeId, accepted.ids.map(id => findNode(accepted.document, id)));
-            await this.commitCurrentLocked(await this.fresh(), accepted.document, 'Questions accepted', () => this.checkQuestionSource(batch.nodeId)); acceptedIds = accepted.ids;
+            await this.commitCurrentLocked(await this.fresh(), accepted.document, 'Questions accepted', () => this.checkQuestionSource(batch.nodeId), { kind: 'new-nodes', ids: accepted.ids, origin: 'ai' }); acceptedIds = accepted.ids;
           });
           this.preview = null; this.questionSource = null;
           return { ...this.uiSnapshot(), acceptedIds, acceptedParentId: batch.nodeId };
@@ -1216,7 +1241,8 @@ export class Explorer {
           if (input.storageScope !== undefined && !['personal', 'project'].includes(input.storageScope)) throw Error('Choose Personal or Project storage.');
           if (input.storageScope === 'project') {
             if (!this.projectRepository) throw Error('Project storage requires the installed Explorer library.');
-            await this.attachProject(await this.projectRepository.create(createDocument(input.topic, input), input.projectFolder));
+            const created = createDocument(input.topic, input);
+            await this.attachProject(await this.projectRepository.create(await this.attributed(null, created, { kind: 'new-nodes', ids: [created.rootId], origin: 'user' }), input.projectFolder));
             await this.request('questions', this.doc.rootId, input.scope); break;
           }
           if (this.library) {
@@ -1273,7 +1299,7 @@ export class Explorer {
             if (changedAnswer) {
               if (action === 'restart-branch') await review.checkpoint(this, saved, changeInput, next);
               next.finishedAt = null;
-              await this.commitCurrentLocked(saved, next, action === 'restart-branch' ? 'Branch restarted with protected checkpoint' : action === 'reaffirm-review' ? 'One review cause reaffirmed' : action === 'clear-review-answer' ? 'Reviewed answer cleared' : 'Answer or state changed', async () => { await review.guard(this, saved, changeInput, next); if (expansionPolicy) await this.assertScenarioPolicy(expansionPolicy); });
+              await this.commitCurrentLocked(saved, next, action === 'restart-branch' ? 'Branch restarted with protected checkpoint' : action === 'reaffirm-review' ? 'One review cause reaffirmed' : action === 'clear-review-answer' ? 'Reviewed answer cleared' : 'Answer or state changed', async () => { await review.guard(this, saved, changeInput, next); if (expansionPolicy) await this.assertScenarioPolicy(expansionPolicy); }, { kind: 'answer', id: input.nodeId });
             }
             if (input.answerPreview && review.entry?.token === input.answerPreview) review.entry = null;
           });
@@ -1293,14 +1319,15 @@ export class Explorer {
         case 'add-direction': {
           const policy = await this.scenarioPolicy();
           const direction = addDirection(next, input.nodeId, input.direction); next.finishedAt = null;
-          await this.withDocumentLock(async () => this.commitCurrentLocked(await this.fresh(), next, 'Direction added', () => this.assertScenarioPolicy(policy)));
+          await this.withDocumentLock(async () => this.commitCurrentLocked(await this.fresh(), next, 'Direction added', () => this.assertScenarioPolicy(policy), { kind: 'new-nodes', ids: [direction.id], origin: 'user' }));
           await this.request('questions', direction.id, input.scope);
           return { ...this.uiSnapshot(), directionId: direction.id };
         }
-        case 'add':
-          addQuestions(next, input.nodeId, [{ question: input.question, category: input.category }]); next.finishedAt = null;
-          await this.save(next, 'Question added');
+        case 'add': {
+          const added = addQuestions(next, input.nodeId, [{ question: input.question, category: input.category }]); next.finishedAt = null;
+          await this.save(next, 'Question added', { kind: 'new-nodes', ids: added.map(node => node.id), origin: 'user' });
           break;
+        }
         case 'guidance': {
           if (!next) throw new Error('Start an exploration first.');
           const objective = guidanceText(input.objective, 'Objective', MAX_OBJECTIVE);

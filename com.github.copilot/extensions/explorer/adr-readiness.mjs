@@ -19,7 +19,7 @@ export function adrReadiness(value, doc, scenario) {
     if (!items.some(item => item.id === id)) items.push({ id, code, severity, reason, target });
   };
   const finish = (draft, current) => {
-    const { acceptedAt, version, readiness, ...content } = draft ?? {};
+    const { acceptedAt, version, readiness, acceptance, ...content } = draft ?? {};
     const fingerprint = digest({ draft: content, current, items });
     const advisoryIds = new Set(items.filter(item => item.severity === 'advisory').map(item => item.id));
     return { version: 1, digest: fingerprint, items, blockers: items.filter(item => item.severity === 'blocker').length, advisories: advisoryIds.size,

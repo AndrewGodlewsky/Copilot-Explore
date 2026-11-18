@@ -169,6 +169,54 @@ const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args)
   }, changed: () => scheduleLayout() });
 voice.mountSettings($('voice-settings-host'));
 $('navigation-open').addEventListener('click', () => voice.cancel());
+
+let contributorEpoch = 0, contributorFlight = null, contributorRevision = null;
+function contributorPreview() {
+  $('contributor-preview').textContent = $('contributor-name').value ? `Public name preview: ${$('contributor-name').value} (unverified)` : 'No public name chosen. Future shared contributions will be anonymous.';
+}
+function closeContributors(focus = true) {
+  contributorEpoch++; contributorFlight?.abort(); contributorFlight = null; contributorRevision = null;
+  if ($('contributor-dialog').open) { $('contributor-dialog').close(); if (focus && !closed && !suspended) $('navigation-open').focus({ preventScroll: true }); }
+}
+async function requestContributors(action, displayName) {
+  if (closed || suspended || !$('contributor-dialog').open || contributorFlight || action === 'save' && contributorRevision === null) return;
+  const epoch = ++contributorEpoch, page = pageEpoch, journey = referenceJourney(), abort = new AbortController(); contributorFlight = abort;
+  const current = () => !closed && !suspended && $('contributor-dialog').open && epoch === contributorEpoch && page === pageEpoch && journey === referenceJourney();
+  const input = action === 'read' ? { action } : { action, revision: contributorRevision, displayName };
+  $('contributor-save').disabled = true; $('contributor-clear').disabled = true; $('contributor-refresh').disabled = true; $('contributor-name').disabled = true;
+  $('contributor-status').textContent = action === 'read' ? 'Reading your local choice…' : 'Saving your local choice…';
+  try {
+    const response = await fetch('api/contributor-settings', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+    const result = await response.json(); if (!current()) return;
+    if (!response.ok) throw Error(result.error || 'Contributor settings could not be saved. Refresh to check the saved choice.');
+    if (!result.available) { contributorRevision = null; $('contributor-status').textContent = 'Private contributor settings are unavailable in this preview. Open the installed Explorer library.'; return; }
+    contributorRevision = result.settings.revision; $('contributor-name').value = result.settings.actor?.displayName ?? ''; contributorPreview();
+    $('contributor-status').textContent = action === 'read' ? 'Local choice loaded. Nothing is shared until you save a shared contribution.' : displayName === null ? 'Cleared. Future shared contributions will be anonymous.' : 'Saved. This name applies to future shared contributions.';
+  } catch (error) {
+    if (current()) { contributorRevision = null; $('contributor-status').textContent = `${error.message} Your typed name is retained. Refresh to check the saved choice before trying again.`; }
+  } finally {
+    if (contributorFlight === abort) contributorFlight = null;
+    if (current()) { $('contributor-refresh').disabled = false; $('contributor-name').disabled = contributorRevision === null; $('contributor-save').disabled = contributorRevision === null; $('contributor-clear').disabled = contributorRevision === null; }
+  }
+}
+$('contributor-open').addEventListener('click', () => { if (closed || suspended) return; voice.cancel(); closeContributors(false); $('navigation-dialog').close(); $('contributor-dialog').showModal(); contributorPreview(); void requestContributors('read'); });
+$('contributor-close').addEventListener('click', () => closeContributors());
+$('contributor-dialog').addEventListener('cancel', event => { event.preventDefault(); closeContributors(); });
+$('contributor-dialog').addEventListener('close', () => { if (!$('contributor-dialog').open) closeContributors(false); });
+$('contributor-name').addEventListener('input', contributorPreview);
+$('contributor-save').addEventListener('click', () => { void requestContributors('save', $('contributor-name').value); });
+$('contributor-clear').addEventListener('click', () => { void requestContributors('save', null); });
+$('contributor-refresh').addEventListener('click', () => { void requestContributors('read'); });
+
+const contributorEventText = event => event ? `${event.actor ? `${event.actor.displayName} (unverified)` : 'Anonymous contributor'} · ${event.at}` : 'Contributor unknown; time unknown';
+function contributionText(record, status) {
+  if (!record) return 'Contributor unknown; no recorded attribution.';
+  const parts = [status === 'current' ? 'Recorded attribution matches the saved text.' : 'Historical attribution; current contributor unknown.'];
+  parts.push(record.origin === 'ai' ? 'AI suggestion; no human author claimed.' : `First recorded author: ${contributorEventText(record.author)}.`);
+  if (record.editor) parts.push(`Latest explicit editor: ${contributorEventText(record.editor)}.`);
+  if (record.accepted) parts.push(`Accepted by: ${contributorEventText(record.accepted)}.`);
+  return parts.join(' ');
+}
 const navigation = attachNavigation({ document, window, fetch: (...args) => fetch(...args),
   zoom: (factor, point) => zoom(factor, point),
   pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); } });
@@ -621,6 +669,7 @@ function apply(next, reset = false) {
   const firstQuestions = (state.document ? questionCounts(state.document).total : 0) === 0 && (next.document ? questionCounts(next.document).total : 0) > 0;
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
+    closeContributors(false);
     closePreference(true);
     releaseCritical();
     if ($('project-reconcile-dialog').open) closeProjectReconciliation();
@@ -1966,6 +2015,7 @@ function renderWorkspace() {
   region('references', toolPanels.context);
   for (const name of ['pending', 'preview', 'retry']) region(name);
   region('review', content);
+  region('contributors', toolPanels.details);
   if (root) {
     content.append(el('p', { class: 'quiet' }, 'Pick a connected question to explore it. Each question opens into its own workspace on the map.'), button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
   } else if (!isQuestion(node)) {
@@ -2261,6 +2311,9 @@ function renderWorkspace() {
   workspace.update = () => {
     const focused = panel.contains(document.activeElement) || drawer.contains(document.activeElement) ? document.activeElement : null;
     refresh();
+    update('contributors', [node.attribution, state.contributions?.nodes[node.id]], () => el('section', { id: 'workspace-contributors' },
+      el('h3', {}, 'Contributions'), el('p', { class: 'quiet' }, `Question: ${contributionText(node.attribution?.question, state.contributions?.nodes[node.id]?.question)}`),
+      isQuestion(node) && !root ? el('p', { class: 'quiet' }, `Saved answer: ${contributionText(node.attribution?.answer, state.contributions?.nodes[node.id]?.answer)}`) : null));
     workspaceImpact.hidden = !impactDisplay || !isQuestion(node); workspaceImpact.textContent = impactLabel(node);
     workspaceCritical.hidden = !criticalPrior; workspaceCritical.textContent = criticalLabel(node);
     updateDependencies();
@@ -3769,6 +3822,9 @@ async function requestBrief(action) {
 function renderBrief() {
   const value = briefView, adr = briefOperation === 'adrDraft', liveProposal = value?.status === 'proposal' ? value.proposal : null;
   const proposal = liveProposal ?? (adr && ['pending', 'stale', 'error'].includes(value?.status) ? adrDraftProposal : null), brief = proposal ?? value?.accepted;
+  const acceptance = !proposal && value?.accepted?.acceptance;
+  $('brief-contributors').hidden = !brief || !!proposal;
+  $('brief-contributors').textContent = acceptance ? `${state.contributions?.artifacts[briefOperation] === 'current' && JSON.stringify(value.accepted) === JSON.stringify(state.document?.[briefOperation]) ? 'Recorded acceptance matches this saved wording.' : 'Historical acceptance; current accepter unknown.'} Accepted wording by: ${contributorEventText(acceptance)}. This records acceptance of AI synthesis, not decision approval or human authorship of every statement.` : 'Accepter unknown; no recorded acceptance attribution. This wording is AI synthesis reviewed by a user, not decision approval.';
   $('discard-brief').hidden = !['pending', 'proposal', 'stale', 'error'].includes(value?.status);
   $('accept-brief').hidden = !liveProposal;
   $('generate-brief').disabled = value?.status === 'pending' || !briefReviewReady();
@@ -4218,6 +4274,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  closeContributors(false);
   if ($('history-dialog').open) closeHistory(true);
   closeAnswerChange();
   closeReviewQueue(true);

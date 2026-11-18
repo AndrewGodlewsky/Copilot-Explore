@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { validateArtifactAcceptance } from './contributors.mjs';
 import { identity, framing, record, RESEARCH_CONTEXT_LIMIT, SCENARIO_CONTEXT_GUIDANCE } from './research-context.mjs';
 import { briefInstructions, briefSections, captureBrief, briefFreshness, validateBrief, briefText, BRIEF_OUTPUT_LIMIT, BRIEF_ARTIFACT_LIMIT } from './decision-brief.mjs';
 import { researchEvidence, guidanceText, pinnedConstraints } from './model.mjs';
@@ -58,7 +59,7 @@ export function parseHandoff(content, prepared) {
     coverage: prepared.coverage, guidance: structuredClone(prepared.context.guidance), includeEvidence: prepared.context.includeEvidence, evidence: structuredClone(prepared.context.evidence) };
 }
 export function validateHandoff(value) {
-  if (!keys(value, 'version,acceptedAt,format,formatFingerprint,sections,dependencies,coverage,guidance,includeEvidence,evidence') || !HANDOFF_FORMATS.includes(value.format) || value.formatFingerprint !== hash(value.format) || typeof value.includeEvidence !== 'boolean' ||
+  if (!keys(value, 'version,acceptedAt,format,formatFingerprint,sections,dependencies,coverage,guidance,includeEvidence,evidence' + (Object.hasOwn(value ?? {}, 'acceptance') ? ',acceptance' : '')) || !HANDOFF_FORMATS.includes(value.format) || value.formatFingerprint !== hash(value.format) || typeof value.includeEvidence !== 'boolean' ||
     !Array.isArray(value.evidence) || value.evidence.length > 100 || (!value.includeEvidence && value.evidence.length) || value.dependencies?.records?.length < 1 || value.dependencies?.records?.length > 100 || value.coverage?.scope !== 'selected-records') invalid();
   const evidence = value.evidence.map(item => {
     if (!keys(item, Object.hasOwn(item ?? {}, 'claims') ? 'nodeId,basis,sources,claims' : 'nodeId,basis,sources') || !value.dependencies.records.some(source => source.id === item.nodeId)) invalid();
@@ -75,6 +76,7 @@ export function validateHandoff(value) {
   const withoutEvidence = Object.fromEntries(Object.entries(sections).map(([key, statements]) => [key, statements.map(statement => ({ ...statement, sources: statement.sources.filter(ref => ref.kind !== 'evidence') }))]));
   validateBrief({ version: value.version, acceptedAt: value.acceptedAt, sections: withoutEvidence, dependencies: value.dependencies, coverage: { ...value.coverage, scope: 'journey-summary' } });
   const result = { ...structuredClone(value), sections, evidence };
+  if (Object.hasOwn(value, 'acceptance')) result.acceptance = validateArtifactAcceptance(value.acceptance);
   if (Buffer.byteLength(JSON.stringify({ handoff: result }, null, 2)) > BRIEF_ARTIFACT_LIMIT) throw Error('The accepted handoff exceeds the 512 KiB saved-artifact limit.');
   return result;
 }

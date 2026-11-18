@@ -6,6 +6,7 @@ import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
+import { ProjectMerge } from './project-merge.mjs';
 import { projectDocumentAccess } from './storage-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
@@ -596,6 +597,21 @@ export class Explorer {
     try { await this.readCurrent(); } catch { this.markProjectChanged(); }
   }
   observeProject() { return !this.projectStore ? Promise.resolve() : this.transact(() => this.checkProjectFreshness()); }
+  projectMergeRequest(input) {
+    return this.transact(async () => {
+      const fields = { preview: 'action,journey,ref,revision', resolve: 'action,choices,id,journey,revision', cancel: 'action,id,journey,revision' };
+      if (this.closed || !this.projectStore || !input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(fields, input.action) || Object.keys(input).sort().join(',') !== fields[input.action] || input.journey !== this.activeKey || input.revision !== this.doc.revision) throw Error('The merge selection changed. Preview the current project journey again.');
+      if (input.action === 'cancel') { if (this.projectMerge?.selection?.id === input.id) this.projectMerge.cancel(); return { status: 'cancelled' }; }
+      if (this.pending || this.preview) throw Error('Finish or cancel the pending question/research request and its preview before merging.');
+      await this.readCurrent();
+      if (input.action === 'preview') {
+        this.projectMerge?.cancel(); this.projectMerge = new ProjectMerge(this.projectRepository, this.projectStore);
+        return this.projectMerge.preview(input.ref);
+      }
+      if (this.projectMerge?.store !== this.projectStore) throw Error('Merge preview expired. Preview again.');
+      return this.projectMerge.resolve(input.id, input.choices);
+    });
+  }
   projectGitStatusRequest(input) {
     return this.transact(async () => {
       if (this.closed || !this.projectStore || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).join(',') !== 'journey' || input.journey !== this.activeKey) throw Error('The selected project journey changed. Refresh the current journey.');
@@ -846,6 +862,20 @@ export class Explorer {
   }
   command(action, input = {}) {
     return this.transact(async () => {
+      if (action === 'project-merge-accept') {
+        if (this.closed || !this.projectStore || this.projectMerge?.store !== this.projectStore || input.journey !== this.activeKey || input.revision !== this.doc.revision || this.pending || this.preview || Object.keys(input).filter(key => !['action', 'scope'].includes(key)).sort().join(',') !== 'acknowledged,id,journey,revision,token') throw Error('Merge selection changed. Preview again after finishing pending work.');
+        const before = this.doc;
+        try {
+          await this.projectMerge.accept(input.id, input.token, input.acknowledged); this.recoveryNotice = null;
+        } catch (error) {
+          this.recoveryNotice = { kind: 'save', status: this.projectStore.document !== before ? 'committed' : 'failed', message: this.projectStore.document !== before ? 'Merge saved. History finalization needs a retry; newer content is retained.' : 'Merge did not commit. Previous saved content and private drafts are retained. Preview again or inspect Recovery.' };
+          throw error;
+        } finally {
+          this.doc = this.projectStore.document; this.dashboard?.invalidate(); this.reconcileCleanup(); this.reconcileResearch();
+          try { if (this.doc !== before) this.analytics?.commit(before, this.doc); } catch { /* A receipt cannot fail a saved merge. */ }
+        }
+        return this.uiSnapshot();
+      }
       if (action === 'project-reload') {
         if (!this.projectStore || !this.projectChange || !this.projectReconciliation || input.journey !== this.activeKey || input.revision !== this.doc.revision) throw Error('Project reload selection expired. Review project changes again.');
         const store = await this.projectReconciliation.reload(input.id);

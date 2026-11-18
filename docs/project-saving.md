@@ -31,3 +31,5 @@ Owner-performed native narrow-pane layout, keyboard flow and actual filesystem p
 Existing personal journeys can use the reviewed [Save a project copy](project-copy.md) flow. It preserves the original and private state and offers an explicit continuation in the shared copy.
 
 Use [Review project changes](project-reconciliation.md) to reconcile an external edit, replacement or Git branch change without overwriting incoming content. Private drafts retain their original source bases.
+
+Use [Compare and merge project journey](project-merge.md) to combine saved edits with a locally available Git revision using a real common base and explicit conflict choices.

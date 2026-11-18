@@ -351,6 +351,7 @@ function apply(next, reset = false) {
   const compactFocused = $('nodes').contains(document.activeElement);
   const previousSelection = selected;
   const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
+  if ($('project-merge-dialog').open && (changedDocument || state.document?.revision !== next.document?.revision || next.projectChange)) closeProjectMerge();
   if (!!state.projectChange !== !!next.projectChange) { cancelProjectGitStatus(); projectGitResult = null; projectGitError = ''; }
   if (viewerTarget && (changedDocument || viewerTarget.journey !== (next.activeKey ?? next.document?.id) || viewerTarget.revision !== next.document?.revision)) {
     invalidateViewer('The journey changed. Reopen Export maps and preview again.');
@@ -416,6 +417,7 @@ function apply(next, reset = false) {
   $('visual-export-open').hidden = !doc;
   $('project-copy-open').hidden = !doc || !state.library || state.storage?.scope === 'project';
   $('project-reconcile-open').hidden = !doc || state.storage?.scope !== 'project';
+  $('project-merge-open').hidden = !doc || state.storage?.scope !== 'project';
   $('project-change').hidden = !state.projectChange; $('project-change-text').textContent = state.projectChange?.message ?? '';
   $('edit-guidance').disabled = !!state.pending;
   if (state.contextCoverage && JSON.stringify(state.contextCoverage) !== lastCoverage) { lastCoverage = JSON.stringify(state.contextCoverage); showCoverage(state.contextCoverage, 'Prepared'); }
@@ -782,6 +784,100 @@ $('project-reconcile-reload').addEventListener('click', async () => {
 });
 $('project-reconcile-close').addEventListener('click', closeProjectReconciliation);
 $('project-reconcile-dialog').addEventListener('cancel', event => { event.preventDefault(); closeProjectReconciliation(); });
+let projectMergeEpoch = 0, projectMergeFlight = null, projectMergeData = null, projectMergePlan = null, projectMergeChoices = {};
+function invalidateProjectMergeResult() {
+  projectMergeEpoch++; projectMergeFlight?.abort(); projectMergeFlight = null;
+  if (projectMergePlan) projectMergePlan.token = null;
+  $('project-merge-result').value = ''; $('project-merge-ack').checked = false; $('project-merge-save').disabled = true;
+  $('project-merge-consequences').textContent = ''; $('project-merge-preview').disabled = false; $('project-merge-resolve').disabled = false;
+}
+function clearProjectMerge() {
+  invalidateProjectMergeResult(); projectMergeData = null; projectMergePlan = null; projectMergeChoices = {};
+  $('project-merge-review').hidden = true; $('project-merge-conflict').replaceChildren();
+  for (const id of ['project-merge-source-content', 'project-merge-local', 'project-merge-incoming']) $(id).value = '';
+}
+function closeProjectMerge() {
+  const previous = projectMergeData; clearProjectMerge(); $('project-merge-dialog').close();
+  if (previous) void fetch('api/project-merge', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'cancel', id: previous.id, journey: previous.journey, revision: previous.revision }) }).catch(() => {});
+  $($('project-merge-open').hidden ? 'library-toggle' : 'project-merge-open').focus({ preventScroll: true });
+}
+function renderProjectMergeCandidate() {
+  const id = $('project-merge-conflict').value;
+  for (const side of ['local', 'incoming']) {
+    const doc = projectMergeData?.documents[side]; let value;
+    if (doc && id.startsWith('node:')) value = doc.journey.nodes.find(node => node.id === id.slice(5));
+    else if (doc && id.startsWith('field:')) value = doc.journey[id.slice(6)];
+    else if (doc && id === 'order') value = doc.journey.nodes.map(node => node.id);
+    else if (doc && id === 'extensions') value = doc.extensions;
+    else if (doc && id === 'graph') value = doc;
+    $(`project-merge-${side}`).value = value === undefined ? '(Absent / deleted)' : JSON.stringify(value, null, 2);
+  }
+  $('project-merge-choice').value = projectMergeChoices[id] ?? '';
+}
+function renderProjectMergePlan(plan) {
+  projectMergePlan = plan; const selectedConflict = $('project-merge-conflict').value;
+  $('project-merge-conflicts').hidden = !plan?.conflicts.length;
+  $('project-merge-conflict').replaceChildren(...(plan?.conflicts ?? []).map((row, index) => el('option', { value: row.id }, `${index + 1}. ${row.label.slice(0, 160)}`)));
+  if (plan?.conflicts.some(row => row.id === selectedConflict)) $('project-merge-conflict').value = selectedConflict;
+  renderProjectMergeCandidate(); $('project-merge-result').value = plan?.content ?? ''; $('project-merge-ack').checked = false;
+  $('project-merge-save').disabled = true; $('project-merge-resolve').disabled = !plan;
+  const affected = plan?.affected ?? [];
+  $('project-merge-consequences').textContent = affected.length ? `${affected.length} questions or directions will remain marked for review: ${affected.map(id => projectMergeData.documents.local.journey.nodes.find(n => n.id === id)?.question ?? projectMergeData.documents.incoming.journey.nodes.find(n => n.id === id)?.question ?? id).join('; ')}` : 'No additional downstream review flags.';
+  if (plan) $('project-merge-status').textContent = plan.error ? `These choices do not form a valid map: ${plan.error} Adjust the choices; saving is disabled.` : plan.unresolved.length ? `${plan.unresolved.length} conflicts need explicit choices. Both original candidates remain available.` : 'Review the proposed result, then acknowledge its consequences to save.';
+}
+async function requestProjectMerge(action) {
+  if (closed || suspended || busy) return;
+  invalidateProjectMergeResult(); const epoch = projectMergeEpoch, page = pageEpoch, journey = state.activeKey, revision = state.document?.revision;
+  const abort = new AbortController(); projectMergeFlight = abort;
+  const current = () => !closed && !suspended && page === pageEpoch && epoch === projectMergeEpoch && journey === state.activeKey && revision === state.document?.revision && $('project-merge-dialog').open;
+  const timer = setTimeout(() => abort.abort(), 30000);
+  $('project-merge-preview').disabled = true; $('project-merge-resolve').disabled = true; $('project-merge-status').textContent = action === 'preview' ? 'Reading local Git sources and their common base…' : 'Validating the selected result and its consequences…';
+  try {
+    const input = { action, journey, revision, ...(action === 'preview' ? { ref: $('project-merge-ref').value } : { id: projectMergeData.id, choices: projectMergeChoices }) };
+    const response = await fetch('api/project-merge', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+    const result = await response.json(); if (!current()) return; if (!response.ok) throw Error(result.error);
+    if (action === 'preview') {
+      projectMergeChoices = {}; projectMergeData = { ...result, journey, revision, documents: Object.fromEntries(Object.entries(result.sources).map(([key, source]) => [key, source ? JSON.parse(source.replace(/^\uFEFF/, '')) : null])) };
+      $('project-merge-review').hidden = false; $('project-merge-source').value = 'local'; $('project-merge-source-content').value = result.sources.local;
+      renderProjectMergePlan(result.plan);
+      if (!result.plan) $('project-merge-status').textContent = result.message;
+    } else renderProjectMergePlan(result);
+  } catch (error) { if (current()) $('project-merge-status').textContent = abort.signal.aborted ? 'Comparison timed out. Retry explicitly. No project file was rewritten by this preview.' : error.message; }
+  finally { clearTimeout(timer); if (projectMergeFlight === abort) { projectMergeFlight = null; $('project-merge-preview').disabled = false; $('project-merge-resolve').disabled = !projectMergePlan; } }
+}
+$('project-merge-open').addEventListener('click', () => { clearProjectMerge(); voice.cancel(); $('project-merge-status').textContent = ''; $('project-merge-dialog').showModal(); $('project-merge-ref').focus(); });
+$('project-merge-ref').addEventListener('input', () => { clearProjectMerge(); $('project-merge-status').textContent = 'Source changed. Compare again.'; });
+$('project-merge-preview').addEventListener('click', () => { void requestProjectMerge('preview'); });
+$('project-merge-resolve').addEventListener('click', () => { void requestProjectMerge('resolve'); });
+$('project-merge-conflict').addEventListener('change', renderProjectMergeCandidate);
+$('project-merge-choice').addEventListener('change', () => {
+  const id = $('project-merge-conflict').value, choice = $('project-merge-choice').value; if (!id) return;
+  if (id !== 'graph') delete projectMergeChoices.graph;
+  if (choice) projectMergeChoices[id] = choice; else delete projectMergeChoices[id];
+  invalidateProjectMergeResult(); $('project-merge-status').textContent = 'Choices changed. Preview the chosen result again.';
+});
+$('project-merge-source').addEventListener('change', () => { $('project-merge-source-content').value = projectMergeData?.sources[$('project-merge-source').value] ?? 'No compatible common base available.'; });
+$('project-merge-copy').addEventListener('click', async () => {
+  const content = projectMergeData?.sources[$('project-merge-source').value]; if (!content) return;
+  try { await navigator.clipboard.writeText(content); $('project-merge-status').textContent = 'Selected source copied. Save it separately to retain a recovery copy.'; }
+  catch { $('project-merge-source-content').focus(); $('project-merge-source-content').select(); $('project-merge-status').textContent = 'Copy was unavailable. Copy the selected source text manually.'; }
+});
+$('project-merge-ack').addEventListener('change', () => { $('project-merge-save').disabled = !projectMergePlan?.token || !$('project-merge-ack').checked; });
+$('project-merge-save').addEventListener('click', async () => {
+  const preview = projectMergeData, plan = projectMergePlan, epoch = projectMergeEpoch;
+  if (!preview || !plan?.token || !$('project-merge-ack').checked || busy) return;
+  voice.cancel(); $('workspace').inert = true; $('project-merge-review').inert = true; $('project-merge-ref').disabled = true; $('project-merge-preview').disabled = true; $('project-merge-close').disabled = true; $('project-merge-save').disabled = true;
+  try {
+    await draftClient.flush();
+    if (preview === projectMergeData && plan === projectMergePlan && epoch === projectMergeEpoch && $('project-merge-dialog').open) {
+      const result = await api('project-merge-accept', { id: preview.id, token: plan.token, journey: preview.journey, acknowledged: true });
+      if (result) closeProjectMerge(); else { invalidateProjectMergeResult(); $('project-merge-status').textContent = 'Merge did not complete or its response was lost. Refresh the saved map before comparing again. Your private drafts are retained.'; }
+    }
+  } catch (error) { $('project-merge-status').textContent = `Draft persistence failed: ${error.message}. Retry or recover the draft before merging.`; }
+  finally { $('workspace').inert = false; $('project-merge-review').inert = false; $('project-merge-ref').disabled = false; $('project-merge-preview').disabled = false; $('project-merge-close').disabled = false; }
+});
+$('project-merge-close').addEventListener('click', closeProjectMerge);
+$('project-merge-dialog').addEventListener('cancel', event => { event.preventDefault(); if (!$('project-merge-close').disabled) closeProjectMerge(); });
 let projectCopyEpoch = 0, projectCopyPreview = null, projectCopyFlight = null;
 function clearProjectCopy(message = '') {
   projectCopyEpoch++; projectCopyFlight?.abort(); projectCopyFlight = null; projectCopyPreview = null;
@@ -2813,6 +2909,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  if ($('project-merge-dialog').open) closeProjectMerge();
   if ($('project-reconcile-dialog').open) closeProjectReconciliation();
   if ($('project-copy-dialog').open) closeProjectCopy();
   clearProjectListing('Page suspended. Refresh project journeys before selecting.');

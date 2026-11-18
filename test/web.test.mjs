@@ -29,7 +29,7 @@ import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/
 import { researchSettingsText } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
 import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
-import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs';
+import { draftHash, draftBase } from '../com.github.copilot/extensions/explorer/drafts.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 
@@ -906,8 +906,8 @@ test('minimap focus cancels voice and rejects a late transcript while passive up
   assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep exact draft'); assert.equal(f.explorer.doc.nodes[1].answer, '');
 });
 
-async function until(read, label) {
-  for (let i = 0; i < 250; i++) { const result = read(); if (result) return result; await delay(10); }
+async function until(read, label, attempts = 250) {
+  for (let i = 0; i < attempts; i++) { const result = read(); if (result) return result; await delay(10); }
   assert.fail('Timed out: ' + label);
 }
 
@@ -1003,6 +1003,32 @@ test('Git status refresh separates private drafts from file and Git state withou
   assert.match($('project-git-result').textContent, /Refresh to inspect/); assert.equal($('answer'), editor); assert.equal(editor.value, '  Private draft 日本語  ');
 });
 
+test('project merge requires candidate review and acknowledgment, saves through history and preserves private drafts', async t => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-merge-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
+  const git = (...args) => promisify(execFile)('git', ['-C', project, ...args], { windowsHide: true });
+  await git('init', '-qb', 'main'); await git('config', 'user.name', 'Fixture'); await git('config', 'user.email', 'fixture@example.invalid');
+  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
+    const store = await e.projectRepository.create(e.doc); await git('add', '.'); await git('commit', '-qm', 'Base'); await git('switch', '-qc', 'incoming');
+    const incoming = JSON.parse(await readFile(store.context.file)); incoming.journey.nodes[1].answer = 'Incoming decision';
+    await writeFile(store.context.file, JSON.stringify(incoming)); await git('add', '.'); await git('commit', '-qm', 'Incoming'); await git('switch', '-q', 'main');
+    await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
+    await e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, answer: 'Local decision', answerState: 'tentative' });
+  } }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  assert.ok($('project-merge-open'), 'project merge entry is available');
+  f.open(node.id); f.type('answer', '  Private draft 日本語  '); const editor = $('answer'); editor.focus(); editor.setSelectionRange(3, 8);
+  $('project-merge-open').click(); f.type('project-merge-ref', 'incoming'); $('project-merge-preview').click();
+  await until(() => $('project-merge-conflict').options.length === 1, 'merge conflict preview', 2000);
+  assert.match($('project-merge-local').value, /Local decision/); assert.match($('project-merge-incoming').value, /Incoming decision/);
+  assert.equal($('project-merge-save').disabled, true); $('project-merge-choice').value = 'incoming'; $('project-merge-choice').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  $('project-merge-resolve').click(); await until(() => $('project-merge-result').value.includes('Incoming decision'), 'resolved merge preview', 2000);
+  assert.equal($('project-merge-save').disabled, true); $('project-merge-ack').checked = true; $('project-merge-ack').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  assert.equal($('project-merge-save').disabled, false); $('project-merge-save').click();
+  await until(() => !$('project-merge-dialog').open && f.explorer.doc.nodes[1].answer === 'Incoming decision', 'merge saved', 2000);
+  assert.equal($('answer'), editor); assert.equal(editor.value, '  Private draft 日本語  ');
+  const draft = (await f.explorer.readDrafts(f.explorer.activeKey)).entries.find(entry => entry.nodeId === node.id); assert.equal(draft.text, editor.value); assert.equal(draft.base, draftBase(node)); assert.equal(draft.stale, true);
+  const denied = await fetch(new URL('api/project-merge', f.window.location.href), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: '{}' }); assert.equal(denied.status, 403);
+});
+
 test('project reconciliation reload keeps exact draft text and source bases while preserving incoming bytes', async t => {
   const project = await mkdtemp(join(tmpdir(), 'explorer-reconcile-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
   await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
@@ -1025,6 +1051,23 @@ test('project reconciliation reload keeps exact draft text and source bases whil
   await until(() => !$('project-reconcile-dialog').open && !f.explorer.doc.nodes.some(item => item.id === node.id), 'removed-node reload');
   const orphan = (await f.explorer.readDrafts(key)).entries.find(entry => entry.nodeId === node.id); assert.equal(orphan.orphaned, true); assert.equal(orphan.text, record.text);
   const denied = await fetch(new URL('api/project-reconciliation', f.window.location.href), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: '{}' }); assert.equal(denied.status, 403);
+});
+
+test('closing or suspending a merge preview rejects late responses and keeps the current draft', async t => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-merge-late-')); t.after(() => rm(project, { recursive: true, force: true }));
+  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
+    const store = await e.projectRepository.create(e.doc); await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
+  } }), $ = id => f.document.getElementById(id);
+  const content = JSON.stringify(f.explorer.projectStore.shared), reply = { id: 'preview', plan: { token: 'token', conflicts: [], unresolved: [], affected: [], content }, sources: { local: content, incoming: content, base: content } };
+  let release; f.explorer.projectMergeRequest = input => input.action === 'preview' ? new Promise(resolve => { release = () => resolve(reply); }) : Promise.resolve({ status: 'cancelled' });
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep private draft'); const editor = $('answer');
+  $('project-merge-open').click(); f.type('project-merge-ref', 'incoming'); $('project-merge-preview').click(); await until(() => release, 'preview held');
+  $('project-merge-dialog').dispatchEvent(new f.window.Event('cancel', { cancelable: true })); assert.equal(f.document.activeElement, $('project-merge-open'));
+  release(); await delay(60); assert.equal($('project-merge-dialog').open, false); assert.equal($('project-merge-result').value, '');
+  release = null; $('project-merge-open').click(); $('project-merge-preview').click(); await until(() => release, 'second preview held');
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true })); release(); await delay(60);
+  assert.equal($('project-merge-dialog').open, false); assert.equal($('project-merge-result').value, ''); assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep private draft');
 });
 
 async function startReviewedResearch(f) {
@@ -1421,6 +1464,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const storageDialog = document.getElementById('storage-dialog');
   const copyDialog = document.getElementById('project-copy-dialog');
   const reconcileDialog = document.getElementById('project-reconcile-dialog');
+  const mergeDialog = document.getElementById('project-merge-dialog');
+  mergeDialog.showModal = () => { mergeDialog.open = true; };
+  mergeDialog.close = () => { mergeDialog.open = false; };
   reconcileDialog.showModal = () => { reconcileDialog.open = true; };
   reconcileDialog.close = () => { reconcileDialog.open = false; };
   copyDialog.showModal = () => { copyDialog.open = true; };

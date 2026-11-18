@@ -115,9 +115,10 @@ export class ProjectJourney {
     let prepared = prepareSharedWrite(current.content, next, baseDigest);
     if (!prepared.changed) {
       await this.history.reconcile(current.working);
+      await beforeWrite(); await this.context.assertCurrent();
       const fresh = await this.context.read();
       if (fresh.stamp !== current.stamp || readSharedDocument(fresh.bytes).baseDigest !== current.baseDigest) throw Error('Project document changed before save. Review again.');
-      beforeWrite(); this.accept(current, current.working.revision); return false;
+      this.accept(current, current.working.revision); return false;
     }
     const revision = current.working.revision + 1;
     if (!Number.isSafeInteger(revision)) throw Error('Local revision limit reached.');
@@ -126,9 +127,10 @@ export class ProjectJourney {
     prepared = prepareSharedWrite(current.content, next, baseDigest);
     const read = readSharedDocument(prepared.content), after = working(read.document, revision);
     await this.history.commit(current.working, after, label, async () => {
+      await beforeWrite(); await this.context.assertCurrent();
       const fresh = await this.context.read();
       if (fresh.stamp !== current.stamp || readSharedDocument(fresh.bytes).baseDigest !== current.baseDigest) throw Error('Project document changed before save. Existing content and local recovery are preserved.');
-      await this.context.assertCurrent(); beforeWrite(); await this.write(this.context.file, prepared.content);
+      await this.write(this.context.file, prepared.content);
       await this.acceptWritten(read, revision);
     });
     return true;

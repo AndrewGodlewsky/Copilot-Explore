@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.76",
+    "summary": "Compare a shared journey with a local Git branch or commit. Combine independent edits, choose between conflicting answers, and review downstream effects before saving through normal history. Private drafts stay separate; missing common bases offer comparison and copying without an invented merge."
+  },
+  {
     "version": "0.1.75",
     "summary": "Validate exploration files from the command line without opening Copilot. Check explicit files or a project folder for supported formats, malformed graphs, duplicate identities, conflict markers and size limits. Files stay unchanged; an opt-in CI example helps teams validate pull requests."
   },

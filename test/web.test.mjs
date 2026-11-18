@@ -32,6 +32,54 @@ import { NavigationPreferences } from '../com.github.copilot/extensions/explorer
 import { draftHash, draftBase } from '../com.github.copilot/extensions/explorer/drafts.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
+import { DecisionImpact, impactPath, decisionImpactKey } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
+
+test('impact uses saved full-map context across drafts and folds, explains mixed paths and refreshes after saved dependency changes', async t => {
+  const f = await fixture(t, 360, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc), [a, b] = doc.nodes.slice(1);
+    doc.nodes.push({ id: 'impact-child', parentId: b.id, question: 'Child decision?', category: 'Choice', answer: 'Assumed', answerState: 'assumption', research: null, review: true });
+    doc.dependencies = [{ dependentId: b.id, prerequisiteId: a.id }]; await e.command('import', { revision: e.doc.revision, document: doc });
+  } }), $ = id => f.document.getElementById(id), [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
+  const editor = $('answer'); f.type('answer', 'Private answer draft'); editor.setSelectionRange(3, 9);
+  $('question-tools-toggle').click(); $('question-tab-context').click(); assert.ok($('decision-impact'));
+  $('decision-impact').open = true; $('decision-impact').dispatchEvent(new f.window.Event('toggle'));
+  assert.match($('impact-summary').textContent, /medium.*2 affected/i); assert.match($('impact-counts').textContent, /1 confirmed/); assert.match($('impact-counts').textContent, /1 mixed/);
+  assert.match($('impact-states').textContent, /Assumption: 1/); assert.match($('impact-adr').textContent, /not supported/);
+  const before = $('impact-summary').textContent;
+  f.document.querySelector(`[data-branch-id="${b.id}"]`).click();
+  $('focus-branch').click(); await f.poll(); assert.equal($('impact-summary').textContent, before); assert.equal($('answer'), editor); assert.equal(editor.selectionStart, 3);
+  $('impact-affected').value = 'impact-child'; $('impact-affected').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  assert.match($('impact-path').textContent, /Confirmed dependency step/); assert.match($('impact-path').textContent, /Possible tree exposure/);
+  $('impact-open-question').click(); assert.equal($('node-workspace').dataset.nodeId, 'impact-child'); assert.equal(f.document.activeElement, $('expanded-title'));
+  f.window.__updates.select(a.id); assert.equal($('answer').value, 'Private answer draft');
+  $('decision-impact').open = true; $('decision-impact').dispatchEvent(new f.window.Event('toggle'));
+  await f.explorer.command('remove-dependency', { revision: f.explorer.doc.revision, nodeId: b.id, prerequisiteId: a.id }); await f.poll();
+  assert.match($('impact-summary').textContent, /low.*0 affected/i); assert.equal($('impact-affected').disabled, true); assert.equal($('answer').value, 'Private answer draft');
+  assert.equal(f.explorer.pending, null);
+});
+
+test('impact inspection pages affected questions and long paths while stable updates keep its DOM', async t => {
+  let analyses = 0;
+  const f = await fixture(t, 360, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc), source = doc.nodes[1];
+    for (let i = 0; i < 120; i++) doc.nodes.push({ id: `impact-${String(i).padStart(3, '0')}`, parentId: i ? `impact-${String(i - 1).padStart(3, '0')}` : source.id, question: `Impact question ${i}`, category: 'Choice', answer: '', research: null, review: false });
+    await e.command('import', { revision: e.doc.revision, document: doc });
+  }, beforeApp: window => { window.DecisionImpact = class extends DecisionImpact { analyze(id) { analyses++; return super.analyze(id); } }; } }), $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  $('decision-impact').open = true; $('decision-impact').dispatchEvent(new f.window.Event('toggle'));
+  assert.equal($('impact-affected').options.length, 50); assert.match($('impact-summary').textContent, /120 affected/);
+  $('impact-next').click(); assert.match($('impact-page').textContent, /51–100 of 120/);
+  $('impact-affected').value = 'impact-099'; $('impact-affected').dispatchEvent(new f.window.Event('change'));
+  assert.equal($('impact-path').children.length, 30); assert.match($('impact-path-page').textContent, /1–30 of 101/);
+  $('impact-path-next').click(); assert.match($('impact-path-page').textContent, /31–60 of 101/);
+  const first = $('impact-path').firstChild; f.window.__updates.workspace(); assert.equal($('impact-path').firstChild, first);
+  const count = analyses; f.explorer.error = 'Transient status update'; await f.poll();
+  assert.match($('impact-path-page').textContent, /31–60 of 101/);
+  assert.equal($('impact-path').firstChild, first); assert.equal(analyses, count);
+  assert.equal($('impact-affected').value, 'impact-099'); assert.match($('impact-page').textContent, /51–100 of 120/);
+  $('impact-path-previous').click(); assert.match($('impact-path-page').textContent, /1–30 of 101/);
+  const replacement = f.explorer.snapshot(); replacement.document.nodes.find(n => n.id === 'impact-099').question = 'Externally replaced question';
+  f.window.__updates.apply(replacement); assert.ok(analyses > count); assert.match($('impact-affected').selectedOptions[0].textContent, /Externally replaced question/);
+});
 
 test('confirmed dependencies add and remove across branches without replacing answer drafts, and navigate both directions', async t => {
   const f = await fixture(t, 360), $ = id => f.document.getElementById(id), [a, b] = f.explorer.doc.nodes.slice(1); f.open(b.id);
@@ -1599,10 +1647,11 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   Object.assign(window, { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches });
   window.NextQuestion = NextQuestion;
+  window.DecisionImpact = DecisionImpact; window.impactPath = impactPath; window.decisionImpactKey = decisionImpactKey;
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { DecisionImpact, impactPath, decisionImpactKey } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;

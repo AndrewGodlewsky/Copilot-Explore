@@ -7,6 +7,7 @@ import { effectiveMode, validMode, MODES } from './web/modes.mjs';
 import { validateRevisit } from './web/revisit.mjs';
 export { localDate, revisitStatuses } from './web/revisit.mjs';
 export { effectiveMode } from './web/modes.mjs';
+export { DecisionImpact, impactPath, decisionImpactKey, IMPACT_RULES } from './web/decision-impact.mjs';
 export { effectiveAnswerState, questionCounts, isQuestion, effectiveKind } from './web/answer-state.mjs';
 
 export const FORMAT = 'copilot-explorer';

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.78",
+    "summary": "Inspect downstream decision impact from Question tools. See unique affected questions, answer states, unverified assumptions and explainable tree, dependency or mixed paths. Impact bands use saved-map counts; drafts and folding do not affect them. Historical AI importance remains separate."
+  },
+  {
     "version": "0.1.77",
     "summary": "Record confirmed dependencies between questions across branches. Add explanations, navigate both relationship directions and remove links through normal History. Shared files and exports retain them; invalid references and cycles are rejected while answers, research and private drafts stay intact."
   },

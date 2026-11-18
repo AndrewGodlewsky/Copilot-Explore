@@ -22,6 +22,7 @@ const assets = new Map([
   ['revisit.mjs', ['revisit.mjs', 'text/javascript; charset=utf-8']],
   ['search.mjs', ['search.mjs', 'text/javascript; charset=utf-8']],
   ['next-question.mjs', ['next-question.mjs', 'text/javascript; charset=utf-8']],
+  ['decision-impact.mjs', ['decision-impact.mjs', 'text/javascript; charset=utf-8']],
   ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
   ['cleanup.mjs', ['cleanup.mjs', 'text/javascript; charset=utf-8']],
   ['question-help-client.mjs', ['question-help-client.mjs', 'text/javascript; charset=utf-8']],

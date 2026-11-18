@@ -12,6 +12,7 @@ import { attachMinimap } from './minimap.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';
 import { NextQuestion } from './next-question.mjs';
+import { DecisionImpact, impactPath, decisionImpactKey } from './decision-impact.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';
 
 const $ = id => document.getElementById(id);
@@ -41,6 +42,13 @@ let librarySearchTimer, librarySearchFlight = false, librarySearchQueued = false
 let outlinePage = 0, outlineFilterStamp = '', outlineMode = false, outlineNavigated = false;
 let revisitDay = localDate();
 let nextQuestion = new NextQuestion(), nextQuestionOpen = false, nextQuestionStamp = '';
+let impactDocument = null, impactIndex = null;
+// Received saved snapshots are immutable. Memoize their content keys without retaining old documents.
+const impactKeys = new WeakMap();
+function impactKey(document) {
+  if (!impactKeys.has(document)) impactKeys.set(document, decisionImpactKey(document));
+  return impactKeys.get(document);
+}
 const revisitLabel = node => revisitStatuses(node.revisit, revisitDay).map(status => REVISIT_FILTERS[status]).join(' · ');
 const importanceLabel = node => node.importance ? `${node.importance[0].toUpperCase()}${node.importance.slice(1)} importance` : 'Unranked';
 const importanceBadge = node => el('span', { class: `importance importance-${node.importance ?? 'unranked'}` }, importanceLabel(node));
@@ -1514,7 +1522,7 @@ function renderWorkspace() {
     toolPanels.details.append(answerDetails, revisit);
   }
   toolPanels.context.append(context);
-  let updateDependencies = () => {};
+  let updateDependencies = () => {}, updateImpact = () => {};
   if (isQuestion(node)) {
     const section = el('section', { id: 'decision-dependencies', 'aria-labelledby': 'dependency-title' }, el('h3', { id: 'dependency-title' }, 'Confirmed decision dependencies'),
       el('p', { class: 'quiet' }, 'B depends on A means changing A may affect B. Tree ancestors and children show navigation and possible impact; only listed links are confirmed dependencies. Pinned references are separate.'));
@@ -1559,6 +1567,56 @@ function renderWorkspace() {
       });
     };
   }
+  if (isQuestion(node)) {
+    const section = el('details', { id: 'decision-impact' }, el('summary', {}, 'Downstream decision impact'));
+    section.open = ui.impactOpen ?? false;
+    const summary = el('p', { id: 'impact-summary', role: 'status' }), counts = el('p', { id: 'impact-counts' }), states = el('p', { id: 'impact-states' }), adr = el('p', { id: 'impact-adr', class: 'quiet' }), rules = el('p', { class: 'quiet' });
+    const target = el('select', { id: 'impact-affected' }), kind = el('select', { id: 'impact-path-kind' }), pageLabel = el('p', { id: 'impact-page' }), pathLabel = el('p', { id: 'impact-path-page' }), path = el('ol', { id: 'impact-path' });
+    let source = null, result = null, page = 0, pathPage = 0;
+    const open = button('Open affected question', () => { if (current() && target.value) select(target.value); }, { id: 'impact-open-question' });
+    const previousPath = button('Previous path steps', () => { pathPage--; showPath(); }, { id: 'impact-path-previous' }), nextPath = button('Next path steps', () => { pathPage++; showPath(); }, { id: 'impact-path-next' });
+    const showPath = () => {
+      const steps = result ? impactPath(result, target.value, kind.value) : [], offset = pathPage * 30;
+      const focused = path.contains(document.activeElement) ? document.activeElement.id : null;
+      path.replaceChildren(...steps.slice(offset, offset + 30).map((step, index) => el('li', {}, el('span', {}, step.via === null ? 'Starting question: ' : step.via === 'tree' ? 'Possible tree exposure: ' : 'Confirmed dependency step: '),
+        button(byId.get(step.id).question, () => { if (current()) select(step.id); }, { id: `impact-step-${offset + index}` }))));
+      path.start = offset + 1; pathLabel.textContent = steps.length ? `Path steps ${offset + 1}–${Math.min(offset + 30, steps.length)} of ${steps.length}. A path containing a tree step is possible exposure, not confirmed dependence.` : 'No affected question path.';
+      previousPath.disabled = pathPage === 0; nextPath.disabled = offset + 30 >= steps.length;
+      if (focused) ($(focused) ?? target).focus({ preventScroll: true });
+    };
+    const choose = () => {
+      const item = result?.affected.find(item => item.id === target.value), prior = kind.value;
+      const options = [...(item?.confirmed ? [['dependency', 'Confirmed dependency path']] : []), ...(item?.structural ? [['tree', 'Possible tree path']] : []), ...(item ? [['combined', 'Shortest path across recorded relationships']] : [])];
+      kind.replaceChildren(...options.map(([value, label]) => el('option', { value }, label))); kind.value = options.some(([value]) => value === prior) ? prior : options[0]?.[0] ?? '';
+      kind.disabled = open.disabled = !item; pathPage = 0; showPath();
+    };
+    const previous = button('Previous affected questions', () => { page--; showAffected(); }, { id: 'impact-previous' }), next = button('Next affected questions', () => { page++; showAffected(); }, { id: 'impact-next' });
+    const showAffected = () => {
+      const items = result?.affected ?? [], prior = target.value, offset = page * 50;
+      target.replaceChildren(...items.slice(offset, offset + 50).map(item => el('option', { value: item.id }, `${byId.get(item.id).question} — ${ANSWER_STATES[item.state]}${item.review ? '; needs review' : ''}`)));
+      if (items.slice(offset, offset + 50).some(item => item.id === prior)) target.value = prior;
+      target.disabled = !items.length; previous.disabled = page === 0; next.disabled = offset + 50 >= items.length;
+      pageLabel.textContent = items.length ? `Affected questions ${offset + 1}–${Math.min(offset + 50, items.length)} of ${items.length}. Each question is counted once.` : 'No other saved questions are reachable from this decision.';
+      choose();
+    };
+    target.addEventListener('change', choose); kind.addEventListener('change', () => { pathPage = 0; showPath(); });
+    section.append(summary, counts, states, adr, el('details', {}, el('summary', {}, 'How impact is calculated'), rules,
+      el('p', {}, 'Uses the complete saved map. Tree-only paths are possible structural exposure; explicit-only paths are confirmed recorded dependence. Mixed paths remain possible exposure. Counts can overlap between tree and confirmed categories. Historical model importance is separate. Drafts, folds and viewport do not affect this calculation.')),
+      el('label', { for: target.id }, 'Inspect an affected question'), target, pageLabel, el('div', { class: 'actions' }, previous, next, open), el('label', { for: kind.id }, 'Relationship explanation'), kind, pathLabel, path, el('div', { class: 'actions' }, previousPath, nextPath));
+    toolPanels.context.append(section);
+    updateImpact = () => {
+      if (!section.open) return;
+      const key = impactKey(doc); if (source === key) return;
+      source = key; if (impactDocument !== key) { impactDocument = key; impactIndex = new DecisionImpact(doc); }
+      result = impactIndex.analyze(node.id);
+      const selectedIndex = result.affected.findIndex(item => item.id === target.value); page = selectedIndex < 0 ? 0 : Math.floor(selectedIndex / 50);
+      summary.textContent = `${result.band[0].toUpperCase()}${result.band.slice(1)} recorded impact — ${result.counts.total} affected questions.`;
+      counts.textContent = `${result.counts.structural} possible through tree paths; ${result.counts.confirmed} confirmed dependents; ${result.counts.mixedOnly} mixed-path-only. ${result.counts.assumptions} unverified assumptions; ${result.counts.review} need review.`;
+      states.textContent = Object.entries(result.counts.states).map(([state, count]) => `${ANSWER_STATES[state]}: ${count}`).join(' · ');
+      adr.textContent = result.adrAssociations.reason; rules.textContent = result.rules; showAffected();
+    };
+    section.addEventListener('toggle', () => { if (current()) { ui.impactOpen = section.open; updateImpact(); } });
+  }
   region('research', toolPanels.research);
   region('followup', toolPanels.research);
   region('children', toolPanels.context);
@@ -1593,6 +1651,7 @@ function renderWorkspace() {
     const focused = panel.contains(document.activeElement) || drawer.contains(document.activeElement) ? document.activeElement : null;
     refresh();
     updateDependencies();
+    updateImpact();
     $('question-drawer-context').textContent = node.question;
     const pendingParent = ['research', 'research-follow-up'].includes(state.pending?.kind) ? toolPanels.research : toolPanels.explore;
     if (state.pending && regions.get('pending').area.parentElement !== pendingParent) pendingParent.prepend(regions.get('pending').area);

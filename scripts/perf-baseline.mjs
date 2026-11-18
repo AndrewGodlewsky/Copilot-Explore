@@ -28,6 +28,7 @@ import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/
 import { researchSettingsText } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
 import { NextQuestion } from '../com.github.copilot/extensions/explorer/web/next-question.mjs';
+import { DecisionImpact, impactPath, decisionImpactKey } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const output = resolve(root, '.perf-baseline');
@@ -62,6 +63,7 @@ const imports = [
   "import { researchSettingsText } from './research-policy.mjs';",
   "import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';",
   "import { NextQuestion } from './next-question.mjs';",
+  "import { DecisionImpact, impactPath, decisionImpactKey } from './decision-impact.mjs';",
 
   "import { CleanupClient } from './cleanup.mjs';", "import { QuestionHelpClient } from './question-help-client.mjs';",
   "import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", "import { attachVoice } from './voice.mjs';",
@@ -70,7 +72,7 @@ const imports = [
   "import { effectiveMode, MODES } from './modes.mjs';",
 ];
 let html, appScript;
-async function domFixture(document) {
+export async function domFixture(document) {
   html ??= await readFile(resolve(root, 'com.github.copilot/extensions/explorer/web/index.html'), 'utf8');
   appScript ??= await readFile(resolve(root, 'com.github.copilot/extensions/explorer/web/app.mjs'), 'utf8');
   const dom = new JSDOM(html.replace('{{EXPLORER_VERSION}}', 'benchmark'), { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
@@ -95,7 +97,7 @@ async function domFixture(document) {
       url === 'api/voice' ? { ready: false, error: 'Disabled in synthetic benchmark.' } : {};
     return new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
   };
-  Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, attachDashboard, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
+  Object.assign(window, { DecisionImpact, impactPath, decisionImpactKey, searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, attachDashboard, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
     ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   const source = imports.reduce((text, statement) => text.replace(statement, ''), appScript)
     .replace('void poll();', 'window.__perf = { renderMap, renderWorkspace, renderOutline, poll, select, zoom, pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); }, geometry: () => geometryCache.value, stopPoll: () => clearTimeout(pollTimer) }; void poll();');

@@ -1187,7 +1187,9 @@ function renderWorkspace() {
         return el('div', { class: 'pending', role: 'status' }, el('strong', {}, ['research', 'research-follow-up'].includes(state.pending.kind) ? `${state.pending.progress ?? 'Researching'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, ['research', 'research-follow-up'].includes(state.pending.kind) ? 'Research runs separately from your chat. Cancelling stops its helper.' : 'Cancelling discards the result; the chat turn may still finish.'));
       }
     });
-    update('review', [node.review, isQuestion(node)], () => node.review ? el('p', { class: 'note' }, isQuestion(node) ? 'An earlier answer changed. Review this question and save your answer again when it still fits.' : 'An earlier answer changed. Review this direction and generate fresh questions when needed.') : null);
+    update('review', [node.review, isQuestion(node), pending], () => node.review ? el('div', { class: 'note' },
+      el('p', {}, isQuestion(node) ? 'An earlier answer changed. Review this question and save your answer again when it still fits.' : 'An earlier answer changed. Review this direction and generate fresh questions when needed.'),
+      node.kind === 'direction' ? button('Mark direction reviewed', () => { if (current()) void api('acknowledge-direction', { nodeId: node.id }); }, { id: 'acknowledge-direction', disabled: pending }) : null) : null);
     if ($('revisit-date')) {
       const draft = ui.revisitDraft, conflict = draft && draft.base !== JSON.stringify(node.revisit ?? null);
       if (!draft) { $('revisit-date').value = node.revisit?.date ?? ''; $('revisit-condition').value = node.revisit?.condition ?? ''; }

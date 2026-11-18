@@ -5,6 +5,7 @@ export function matchesShortcut(event, shortcut) {
 export function attachVoice({ document, window, fetch, context, insert, changed }) {
   let settings, binding, recording, message = 'Checking local dictation…', checking = false, pendingRelease = Promise.resolve();
   let options, choices, settingsOpen = false, optionsBusy = false, optionsMessage = '', feedback = { phase: 'idle' };
+  let timer = null, suspended = false, disposed = false;
   const hint = () => settings?.ready ? `${settings.mode === 'toggle' ? 'Press' : 'Hold'} ${settings.label} to dictate · local model` : settings?.error || 'Checking local dictation…';
   const show = (text, result = { phase: 'idle' }) => {
     const resized = message !== text || feedback.phase !== result.phase;
@@ -29,7 +30,7 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     const focused = document.activeElement;
     binding.mic.disabled = binding.model.disabled = binding.save.disabled = optionsBusy || !!recording || !options;
     binding.refresh.disabled = optionsBusy || !!recording;
-    binding.record.disabled = !settings?.ready || optionsBusy || !!recording;
+    binding.record.disabled = suspended || disposed || !settings?.ready || optionsBusy || !!recording;
     binding.stop.disabled = !recording || recording.phase !== 'listening' || !!recording.finishing;
     binding.cancel.disabled = !recording;
     if (focused === binding.record && recording) {
@@ -163,7 +164,7 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     else { job.phase = result.phase; show(result.phase === 'listening' ? `Listening… ${job.initiator === 'button' ? 'Select Stop or press ' + job.settings.label + ' to finish' : job.settings.mode === 'toggle' ? 'Press ' + job.settings.label + ' to finish' : 'Release to finish'} · Esc to cancel · ${job.savedCount} chunks saved locally` : result.phase === 'transcribing' ? 'Finishing captured audio locally… Cancel keeps inserted draft text. ' + (result.note || '') : 'Loading local voice model… Wait for “Listening” before speaking.', result); }
   }
   async function start(initiator = 'shortcut', selection) {
-    if (!settings?.ready || !binding || recording || optionsBusy) return;
+    if (suspended || disposed || !settings?.ready || !binding || recording || optionsBusy) return;
     const answer = binding.answer;
     const start = selection?.start ?? answer.selectionStart, end = selection?.end ?? answer.selectionEnd;
     const job = recording = { id: window.crypto.randomUUID(), settings, initiator, context: context(), value: answer.value, before: answer.value.slice(0, start), after: answer.value.slice(end), caretStart: answer.selectionStart, caretEnd: answer.selectionEnd, transcript: '', lastSequence: 0, savedCount: 0, phase: 'loading' };
@@ -198,17 +199,25 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     }
   }, true);
   window.addEventListener('blur', cancel);
-  window.addEventListener('pagehide', cancel);
   document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); });
-  const timer = window.setInterval(async () => {
+  async function poll() {
     const job = recording; if (!job || job.polling) return;
     if (!sameContext(job)) return cancel();
     job.polling = true;
     try { receive(job, await request('poll', job.id)); }
     catch (error) { if (recording === job) { cancel(); show(error.message); } }
     finally { job.polling = false; }
-  }, 200);
-  window.addEventListener('pagehide', () => window.clearInterval(timer));
+  }
+  const startPolling = () => { if (timer === null && !suspended && !disposed) timer = window.setInterval(poll, 200); };
+  window.addEventListener('pagehide', event => {
+    suspended = true; disposed ||= !event.persisted;
+    window.clearInterval(timer); timer = null; cancel(); lockControls();
+  });
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted || disposed || !suspended) return;
+    suspended = false; startPolling(); lockControls();
+  });
+  startPolling();
   return {
     cancel,
     allowsShortcut(event) {

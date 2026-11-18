@@ -1391,6 +1391,18 @@ Read issue-dashboard.md, dashboard-preflight-notes.md, AGENTS.md and the final p
 - Run npm test/check/package, relevant performance checks and installed local fixtures only for changed host wiring; no paid provider, existing user sessions, real microphone or native UI automation.
 - Synchronize patch metadata/README/release note, publish the data-inventory/metric definitions as useful documentation, self-review and commit; no nested agents, publication or issue closure. Write task-50-report.md with inventory findings, final metrics/events/bounds, evidence, SHA and pending native checks. Controller independently reviews, publishes and then performs the full-roadmap review.
 
+Published task 50: **v0.1.60**, `098917384680b0313b2fc2856f504f02e38cc4a6`, required checks and their pre/post-fix chronology recorded in the task report; independent review approved and remote main verified. See [Usage dashboard](../../usage-dashboard.md) for metrics, observation limits and bounded scans.
+
+## Final roadmap disposition
+
+The selected roadmap has **48 implemented issues, two runtime-blocked tasks and two deferred issues**. The final integration review accepted three focused fixes for v0.1.61: resumed dictation polling, pinned-constraint History summaries and explicit structural-direction review acknowledgment. At the implementation commit, the one scoped independent re-review and publication are still controller follow-up steps; this record does not claim those final steps have occurred.
+
+- Task36 / [issue #41](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/41) remains incomplete and runtime-blocked under the original requirement that marked private text be absent from native tool logs. No narrower search-only mode is accepted as completion.
+- Task35 / [issue #42](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/42) remains incomplete and runtime-blocked under its original public-network transport guarantee. Installed-runtime findings do not prove comprehensive enforcement or universal impossibility; see [research tool findings](../../research-sdk-tools.md).
+- [Issue #44](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/44), scenario forks, and [issue #49](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/49), human review/comments, remain deferred. They are distinct from implemented Task44 and Task49.
+
+Native visual/input/accessibility, microphone/recognizer continuity, live model/source quality, actual export viewers/downloads/printing and fresh-session installation/icon acceptance remain owner checks. Synthetic tests and package-byte verification do not establish those behaviors; see the [README verification checklist](../../../README.md#develop-and-verify) and [integration notes](../../copilot-integration.md).
+
 ## Issue index
 
 Dispatch order (dependencies first). Each row retains the original recommendation identifier.

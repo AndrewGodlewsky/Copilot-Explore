@@ -267,6 +267,11 @@ export function addDirection(doc, parentId, value) {
   doc.nodes.push(node);
   return node;
 }
+export function acknowledgeDirection(doc, id) {
+  const node = findNode(doc, id);
+  if (node.kind !== 'direction') throw new Error('Only structural directions can acknowledge direction review.');
+  node.review = false;
+}
 export function answerNode(doc, id, answer, answerState) {
   const node = findNode(doc, id);
   if (!isQuestion(node)) throw new Error('Only question nodes can have answers.');

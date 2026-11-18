@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.61",
+    "summary": "Dictation resumes after a suspended page returns, with saved transcript chunks and continued polling. History previews now report changes to pinned constraints. Mark a reviewed structural direction explicitly in Map or Outline without changing answers, descendant review flags or local drafts."
+  },
+  {
     "version": "0.1.60",
     "summary": "Open a local Usage dashboard for map distributions, saved answer states, depth and branching, observed visits and question growth, and retained helper outcomes/model usage. UTC filters, accessible charts and tables, bounded scans, explicit missing-data coverage and protected observation retention preserve your editor and drafts."
   },

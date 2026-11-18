@@ -16,6 +16,30 @@ async function fixture(t) {
   const command = (action, input = {}) => e.command(action, { revision: e.doc.revision, journey: e.doc.id, ...input });
   return { dir, file, e, command };
 }
+
+test('history guidance compares effective ordered pins including legacy empty guidance', async t => {
+  const { e, command } = await fixture(t);
+  const pins = [{ id: 'constraint-one-opaque-id', text: 'Keep the garden accessible' }, { id: 'constraint-two-opaque-id', text: 'Use local tools' }];
+  const guidance = value => command('guidance', { objective: '', successCriteria: '', pins: value });
+  const preview = async (revision, changed) => {
+    const result = (await e.readHistory(e.doc.id, revision)).preview;
+    assert.equal(result.guidanceChanged, changed);
+    assert.deepEqual([result.added, result.removed, result.changed], [0, 0, 0]);
+  };
+  await guidance(pins); const added = e.doc.revision;
+  await preview(0, true); // Restoring removes pins.
+  await guidance([{ ...pins[0], text: 'Keep all paths accessible' }, pins[1]]); const edited = e.doc.revision;
+  await preview(added, true);
+  await guidance([pins[1], { ...pins[0], text: 'Keep all paths accessible' }]);
+  await preview(edited, true);
+  const same = e.doc.revision; await guidance(structuredClone(e.doc.pins));
+  assert.equal(e.doc.revision, same);
+  await command('checkpoint', { name: 'Unchanged pins', snapshotRevision: same }); await preview(same, false);
+  await guidance([]); await preview(added, true); await preview(0, false);
+  assert.equal(e.doc.pins, undefined);
+  const legacyEmpty = structuredClone(e.doc); legacyEmpty.pins = [];
+  await command('import', { document: legacyEmpty }); await preview(0, false);
+});
 test('history starts honestly, preserves committed content, checkpoints and monotonic undoable restores', async t => {
   const { e, command } = await fixture(t), original = structuredClone(e.doc);
   assert.equal((await e.readHistory(e.doc.id)).entries.length, 0);

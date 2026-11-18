@@ -13,7 +13,7 @@ import { prepareAnswerCheck, captureCheck, checkFreshness, validateCheck } from 
 import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createDocument, validateDocument, importedDocument, findNode, addQuestions, addDirection, candidateQuestions, acceptQuestions, answerNode, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA, pinnedConstraints } from './model.mjs';
+import { createDocument, validateDocument, importedDocument, findNode, addQuestions, addDirection, acknowledgeDirection, candidateQuestions, acceptQuestions, answerNode, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA, pinnedConstraints } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
 import { History } from './history.mjs';
 import { StorageManagement } from './storage-management.mjs';
@@ -574,7 +574,7 @@ export class Explorer {
         const old = new Map(current.nodes.map(node => [node.id, node])), restored = new Map(result.document.nodes.map(node => [node.id, node]));
         result.preview = { matchesCurrent: JSON.stringify(restoreCandidate(result.document, current)) === JSON.stringify(current), removed: current.nodes.filter(node => !restored.has(node.id)).length, added: result.document.nodes.filter(node => !old.has(node.id)).length,
           changed: result.document.nodes.filter(node => old.has(node.id) && JSON.stringify(node) !== JSON.stringify(old.get(node.id))).length,
-          guidanceChanged: current.objective !== result.document.objective || current.successCriteria !== result.document.successCriteria || effectiveMode(current) !== effectiveMode(result.document) };
+          guidanceChanged: current.objective !== result.document.objective || current.successCriteria !== result.document.successCriteria || effectiveMode(current) !== effectiveMode(result.document) || JSON.stringify(current.pins ?? []) !== JSON.stringify(result.document.pins ?? []) };
       }
       return { ...result, journey, pending: !!this.pending, revision: current.revision, ...(requested !== undefined ? { snapshotRevision: requested } : {}) };
     }));
@@ -757,6 +757,10 @@ export class Explorer {
       const next = structuredClone(this.doc);
       this.error = '';
       switch (action) {
+        case 'acknowledge-direction':
+          acknowledgeDirection(next, input.nodeId);
+          await this.save(next, 'Direction review acknowledged');
+          break;
         case 'set-revisit':
         case 'acknowledge-revisit':
         case 'clear-revisit': {

@@ -446,7 +446,9 @@ test('combined Outline search is private by default and preserves editor and que
   $('outline-draft-text').click();
   assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 1);
   assert.match($('outline-list').textContent, /Private draft: PRIVATE_SEARCH_CANARY/);
-  $('outline-drafts').click(); $('outline-state').value = 'unanswered'; $('outline-state').dispatchEvent(new f.window.Event('change'));
+  $('outline-drafts').click(); $('outline-state').value = 'decided'; $('outline-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 0, 'native select change reaches the delegated filter listener');
+  $('outline-state').value = 'unanswered'; $('outline-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
   assert.equal($('outline-list').querySelectorAll('[data-node-id]').length, 1, 'state matches saved state, independent from tentative draft');
   $('search').focus(); const row = $('outline-list').firstChild; $('outline-list').scrollTop = 23;
   await f.poll(); await f.poll();
@@ -1168,6 +1170,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches });
   window.NextQuestion = NextQuestion;
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
+  options.beforeApp?.(window);
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
   window.eval(script.replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
@@ -4237,6 +4240,77 @@ test('conditional polling aborts old page epochs and resumes one full loop after
   held.resolve(new Response(JSON.stringify({ ...f.explorer.uiSnapshot(), error: 'Obsolete response' }), { headers: { 'X-Explorer-State': '00000000-0000-4000-8000-000000000000' } })); await old;
   assert.equal(f.document.getElementById('notice').textContent, 'Fresh after resume');
   f.window.dispatchEvent(new f.window.Event('pagehide')); const closedCalls = calls; await f.poll(); f.window.dispatchEvent(show); assert.equal(calls, closedCalls);
+});
+
+test('persisted app resume restarts exactly one voice loop, saves and acknowledges chunks and rejects old audio', async t => {
+  const voice = segmentedVoiceFixture(), timers = new Map(); let timerId = 0, polls = 0, starts = 0;
+  const start = voice.start, poll = voice.poll;
+  voice.start = id => { starts++; return start(id); };
+  voice.poll = id => { polls++; return poll(id); };
+  const f = await fixture(t, 340, voice, false, { beforeApp: window => {
+    window.setInterval = callback => { timers.set(++timerId, callback); return timerId; };
+    window.clearInterval = id => timers.delete(id);
+  } }), $ = id => f.document.getElementById(id);
+  const event = (name, persisted) => f.window.dispatchEvent(new f.window.PageTransitionEvent(name, { persisted }));
+  const tick = async () => { await Promise.all([...timers.values()].map(callback => callback())); };
+  f.open(f.explorer.doc.nodes[1].id); const answer = $('answer'); answer.focus();
+  await until(() => !$('voice-record').disabled, 'voice ready');
+  $('voice-record').click(); await until(() => starts === 1 && !$('voice-stop').disabled, 'old recording listening');
+  await tick(); assert.equal(polls, 1);
+  let held, release; const gate = new Promise(resolve => { release = resolve; });
+  f.pauseVoicePoll(() => { held = true; return gate; });
+  voice.publish(1, 'LATE_OLD_AUDIO'); const oldPoll = tick();
+  await until(() => held, 'old segment held after HTTP response');
+  event('pagehide', true); assert.equal(timers.size, 0);
+  await until(() => voice.counts().cancels === 1, 'suspension cancels capture');
+  f.pauseVoicePoll(null);
+  try {
+    event('pageshow', false); assert.equal(timers.size, 0, 'only persisted resume restarts');
+    event('pageshow', true); event('pageshow', true); event('pageshow', true);
+    assert.equal(timers.size, 1, 'one voice poll loop after repeated resume');
+    $('outline-toggle').click(); assert.equal($('answer'), answer);
+    $('voice-record').click(); await until(() => starts === 2 && !$('voice-stop').disabled, 'resumed recording listening');
+    release(); await oldPoll;
+    assert.equal(answer.value, ''); assert.deepEqual(voice.counts().acknowledgments, []);
+    assert.equal($('voice-stop').disabled, false, 'late old response does not cancel the new capture');
+    voice.publish(1, 'New resumed speech 🌱'); await tick();
+    await until(() => voice.counts().acknowledgments.length === 1, 'saved segment acknowledged');
+    assert.equal(answer.value, 'New resumed speech 🌱'); assert.deepEqual(voice.counts().acknowledgments, [1]);
+    const drafts = await f.explorer.readDrafts(f.explorer.doc.id);
+    assert.equal(drafts.entries.find(entry => entry.nodeId === f.explorer.doc.nodes[1].id).text, answer.value);
+    const heartbeats = polls; await tick(); await tick(); assert.equal(polls, heartbeats + 2);
+    $('voice-stop').click(); await until(() => !$('voice-record').disabled, 'resumed recording finished');
+    $('voice-record').click(); await until(() => starts === 3, 'terminal capture started');
+    event('pagehide', false); await until(() => voice.counts().cancels === 2, 'terminal capture cancelled');
+    assert.equal(timers.size, 0); event('pageshow', true); assert.equal(timers.size, 0);
+    $('voice-record').click(); await tick(); await delay(20); assert.equal(starts, 3, 'disposed owner cannot record again');
+    assert.equal($('answer'), answer); assert.equal(answer.value, 'New resumed speech 🌱');
+  } finally { release(); await oldPoll; }
+});
+
+test('direction review action shares the Map and Outline editor and preserves descendant drafts', async t => {
+  let directionId, childId;
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const command = (action, input = {}) => e.command(action, { revision: e.doc.revision, ...input });
+    const parentId = e.doc.nodes[1].id;
+    await command('answer', { nodeId: parentId, answer: 'Us' });
+    await command('add-direction', { nodeId: parentId, direction: 'Safety' }); await command('cancel');
+    directionId = e.doc.nodes.at(-1).id;
+    await command('add', { nodeId: directionId, question: 'Safe enough?', category: 'Safety' }); childId = e.doc.nodes.at(-1).id;
+    await command('answer', { nodeId: parentId, answer: 'Everyone' });
+  } }), $ = id => f.document.getElementById(id);
+  f.window.__updates.select(childId); f.type('answer', 'Unsaved exact child 🌱'); f.type('revisit-condition', 'Keep reminder');
+  f.window.__updates.select(directionId); f.type('manual-question', 'Keep direction draft');
+  const panel = $('node-workspace'), manual = $('manual-question'), ack = $('acknowledge-direction');
+  assert.ok(ack, 'needs-review direction exposes an explicit acknowledgment'); assert.equal($('answer'), null);
+  $('outline-toggle').click(); assert.equal($('node-workspace'), panel); assert.equal($('manual-question'), manual); assert.equal($('acknowledge-direction'), ack);
+  ack.click(); await until(() => !f.explorer.doc.nodes.find(n => n.id === directionId).review && !$('acknowledge-direction'), 'direction review saved');
+  assert.equal(f.actions.filter(a => a.action === 'acknowledge-direction').length, 1);
+  assert.equal($('manual-question'), manual); assert.equal(manual.value, 'Keep direction draft');
+  assert.equal(f.explorer.doc.nodes.find(n => n.id === childId).review, true);
+  $('outline-toggle').click(); assert.equal($('node-workspace'), panel); assert.equal($('acknowledge-direction'), null);
+  f.window.__updates.select(childId); assert.equal($('answer').value, 'Unsaved exact child 🌱'); assert.equal($('revisit-condition').value, 'Keep reminder');
+  assert.match($('node-workspace').textContent, /An earlier answer changed/);
 });
 
 test('conditional polling bounds timeouts and retry delays without replaying failed actions', async t => {

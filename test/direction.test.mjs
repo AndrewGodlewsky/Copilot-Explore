@@ -63,6 +63,43 @@ async function fixture(t) {
   await command('start', { topic: 'Garden' }); await command('cancel');
   return { e, command, sent };
 }
+
+test('direction review acknowledgment commits only its flag with revision, history and disk freshness', async t => {
+  const { e, command } = await fixture(t);
+  await command('add', { nodeId: e.doc.rootId, question: 'Who?', category: 'People' });
+  const parentId = e.doc.nodes.at(-1).id;
+  await command('answer', { nodeId: parentId, answer: 'Us' });
+  await command('add-direction', { nodeId: parentId, direction: '  Safety 🌱  ' }); await command('cancel');
+  const nodeId = e.doc.nodes.at(-1).id;
+  await command('add', { nodeId, question: 'Safe enough?', category: 'Safety' });
+  const childId = e.doc.nodes.at(-1).id;
+  await command('answer', { nodeId: childId, answer: 'Maybe', answerState: 'tentative' });
+  await command('answer', { nodeId: parentId, answer: 'Everyone' });
+  const before = structuredClone(e.doc), revision = before.revision;
+  assert.equal(model.findNode(before, nodeId).review, true); assert.equal(model.findNode(before, childId).review, true);
+  const historyStore = await e.history(e.doc.id), writeHistory = historyStore.write;
+  historyStore.write = async () => { throw new Error('Injected history storage failure'); };
+  await assert.rejects(command('acknowledge-direction', { nodeId }), /Injected history/);
+  assert.deepEqual(e.doc, before); assert.deepEqual(JSON.parse(await readFile(e.file, 'utf8')), before);
+  historyStore.write = writeHistory;
+  await command('acknowledge-direction', { nodeId });
+  const expected = structuredClone(before.nodes); expected.find(n => n.id === nodeId).review = false;
+  assert.deepEqual(e.doc.nodes, expected); assert.equal(e.doc.revision, revision + 1);
+  assert.deepEqual(JSON.parse(await readFile(e.file, 'utf8')), e.doc);
+  assert.equal((await e.readHistory(e.doc.id)).current.label, 'Direction review acknowledged');
+  assert.deepEqual((await e.readHistory(e.doc.id, revision)).document, before);
+  await assert.rejects(command('acknowledge-direction', { nodeId, revision }), /map changed/i);
+  const stable = structuredClone(e.doc), history = await e.readHistory(e.doc.id);
+  await command('acknowledge-direction', { nodeId });
+  assert.deepEqual(e.doc, stable); assert.deepEqual(await e.readHistory(e.doc.id), history);
+  for (const id of [e.doc.rootId, parentId, childId]) await assert.rejects(command('acknowledge-direction', { nodeId: id }), /direction/i);
+  await command('questions', { nodeId });
+  await assert.rejects(command('acknowledge-direction', { nodeId }), /Wait for Copilot/); await command('cancel');
+  const other = await new Explorer({ file: e.file }).load(); t.after(() => other.close());
+  await other.command('guidance', { revision: other.doc.revision, objective: 'Other canvas', successCriteria: '' });
+  await assert.rejects(command('acknowledge-direction', { nodeId }), /Another canvas/i);
+  assert.deepEqual(e.doc, stable); assert.equal(JSON.parse(await readFile(e.file, 'utf8')).objective, 'Other canvas');
+});
 test('direction commits before no-answer generation, stages acceptance, retains cancellation and failure retries', async t => {
   const { e, command, sent } = await fixture(t), before = e.doc.revision;
   const result = await command('add-direction', { nodeId: e.doc.rootId, direction: '  Safety 🌱  ' });

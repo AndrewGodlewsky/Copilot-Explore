@@ -310,17 +310,19 @@ test('navigation settings HTTP uses token, origin and bounded writes with recove
 });
 test('canvas instances are independent, reopen from disk and reject cross-session actions', async t => {
   const { dir } = await fixture(t);
-  const extension = explorerCanvas({ createCanvas: options => options, getSession: () => ({ sessionId: 'session', send: async () => {} }), directory: dir }); t.after(() => extension.close());
-  const ctx = { sessionId: 'session', extensionId: 'plugin:explorer:explorer', canvasId: 'explorer', instanceId: 'one', input: {} };
-  const first = await extension.canvas.open(ctx), second = await extension.canvas.open({ ...ctx, instanceId: 'two' });
-  assert.notEqual(first.url, second.url);
-  const result = await fetch(first.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'start', topic: 'First' }) });
-  assert.equal(result.status, 200);
-  const read = extension.canvas.actions.find(a => a.name === 'get_exploration').handler;
-  assert.equal(read({ ...ctx, instanceId: 'two' }).document, null);
-  assert.throws(() => read({ ...ctx, sessionId: 'wrong' }), /different session/);
-  await extension.canvas.onClose(ctx);
-  const reopened = await extension.canvas.open(ctx); assert.notEqual(first.url, reopened.url); assert.equal(read(ctx).document.topic, 'First');
+  const extension = explorerCanvas({ createCanvas: options => options, getSession: () => ({ sessionId: 'session', send: async () => {} }), directory: dir });
+  try {
+    const ctx = { sessionId: 'session', extensionId: 'plugin:explorer:explorer', canvasId: 'explorer', instanceId: 'one', input: {} };
+    const first = await extension.canvas.open(ctx), second = await extension.canvas.open({ ...ctx, instanceId: 'two' });
+    assert.notEqual(first.url, second.url);
+    const result = await fetch(first.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'start', topic: 'First' }) });
+    assert.equal(result.status, 200);
+    const read = extension.canvas.actions.find(a => a.name === 'get_exploration').handler;
+    assert.equal(read({ ...ctx, instanceId: 'two' }).document, null);
+    assert.throws(() => read({ ...ctx, sessionId: 'wrong' }), /different session/);
+    await extension.canvas.onClose(ctx);
+    const reopened = await extension.canvas.open(ctx); assert.notEqual(first.url, reopened.url); assert.equal(read(ctx).document.topic, 'First');
+  } finally { await extension.close(); } // Close canvas writers before fixture(t) removes their directory.
 });
 test('tree layout keeps siblings separated and branches connected below the idea', () => {
   const doc = createDocument('Garden'); const children = addQuestions(doc, doc.rootId, [question, { question: 'What will it cost?', category: 'Cost' }, { question: 'How much space?', category: 'Space' }]);

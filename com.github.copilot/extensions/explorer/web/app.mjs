@@ -281,7 +281,8 @@ $('palette-dialog').addEventListener('keydown', event => {
   const rows = [...$('palette-dialog').querySelectorAll('#palette-commands button, #palette-results button')];
   if (['ArrowDown', 'ArrowUp'].includes(event.key) && (event.target === $('palette-query') || rows.includes(event.target))) {
     event.preventDefault(); const index = rows.indexOf(document.activeElement);
-    rows[index < 0 ? (event.key === 'ArrowDown' ? 0 : rows.length - 1) : (index + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length]?.focus({ preventScroll: true }); return;
+    const target = rows[index < 0 ? (event.key === 'ArrowDown' ? 0 : rows.length - 1) : (index + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length];
+    target?.focus({ preventScroll: true }); target?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); return;
   }
   if (event.key === 'Enter' && (event.target === $('palette-query') || rows.includes(event.target))) {
     event.preventDefault(); if (!event.repeat) (rows.includes(event.target) ? event.target : rows[0])?.click(); return;

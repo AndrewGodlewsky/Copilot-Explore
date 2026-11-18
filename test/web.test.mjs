@@ -58,6 +58,31 @@ test('command palette keeps the same drafts and editor, traps focus and activate
   $('palette-open').click(); f.type('palette-query', 'Hide minimap'); assert.equal($('palette-commands').children.length, 1); $('palette-commands').firstChild.click(); assert.equal($('minimap').hidden, true);
 });
 
+test('command palette arrows reveal the last row and rows beyond the viewport edge', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id);
+  $('palette-open').click();
+  const dialog = $('palette-dialog'), rows = [...dialog.querySelectorAll('#palette-commands button, #palette-results button')], reveals = [];
+  // jsdom cannot scroll or paint. Synthetic bounds identify off-screen targets;
+  // verify the real handler delegates their reveal to the browser, not visibility.
+  dialog.getBoundingClientRect = () => ({ top: 0, bottom: 160, height: 160 });
+  rows.forEach((row, index) => {
+    row.getBoundingClientRect = () => ({ top: index * 40, bottom: (index + 1) * 40, height: 40 });
+    row.scrollIntoView = options => reveals.push({ row, block: options.block, inline: options.inline });
+  });
+  const arrow = key => paletteKey(f, f.document.activeElement, { key, code: key, ctrlKey: false, shiftKey: false });
+  arrow('ArrowUp');
+  assert.equal(f.document.activeElement, rows.at(-1));
+  assert.ok(rows.at(-1).getBoundingClientRect().top > dialog.getBoundingClientRect().bottom);
+  assert.deepEqual(reveals, [{ row: rows.at(-1), block: 'nearest', inline: 'nearest' }], 'ArrowUp from query reveals its far-away destination');
+  reveals.length = 0; $('palette-query').focus();
+  for (let i = 0; i < 5; i++) arrow('ArrowDown');
+  assert.equal(f.document.activeElement, rows[4]);
+  assert.equal(rows[3].getBoundingClientRect().bottom, dialog.getBoundingClientRect().bottom);
+  assert.ok(rows[4].getBoundingClientRect().bottom > dialog.getBoundingClientRect().bottom);
+  assert.deepEqual(reveals.map(({ row }) => row), rows.slice(0, 5), 'every arrow-selected row asks to remain visible, including the edge crossing');
+  assert.ok(reveals.every(({ block, inline }) => block === 'nearest' && inline === 'nearest'));
+});
+
 test('command palette saved search rejects a closed selection after awaited draft flush', async t => {
   const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
   await f.explorer.library.import(createDocument('Palette target')); const original = f.explorer.activeKey;

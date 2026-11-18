@@ -57,6 +57,9 @@ function currentImpact(doc = state.document) {
   if (impactDocument !== key) { impactDocument = key; impactIndex = new DecisionImpact(doc); }
   return impactIndex;
 }
+function journeyDescription(doc = state.document) {
+  return `${doc.forkOrigin ? 'Alternative scenario' : 'Journey'}: ${doc.topic} (${doc.id})${state.storage?.scope === 'project' ? `, project file ${state.storage.path}` : ', personal storage'}`;
+}
 function impactLabel(node) {
   if (!impactDisplay || !isQuestion(node)) return '';
   const value = currentImpact().bandFor(node.id);
@@ -257,6 +260,7 @@ const paletteCommands = [
   ['edit-guidance', 'Edit guidance'], ['history-open', 'History'], ['recovery-open', 'Recovery'],
   ['visual-export-open', 'Export maps'], ['decision-brief', 'Decision brief'], ['implementation-handoff', 'Implementation handoff'],
   ['check-answers', 'Check answers'], ['challenge-decisions', 'Challenge decisions'], ['research-request', 'Research options'],
+  ['revisit-answer', 'Revisit this answer'],
 ];
 let paletteEpoch = 0, paletteTimer, paletteFlight = false, paletteQueued = false, paletteNext = null;
 let palettePage = 0, paletteReturn = null, paletteOrigin = '', paletteActing = false;
@@ -406,6 +410,7 @@ function renderAnswerChange() {
   const restart = p.operation === 'restart-branch';
   $('answer-change-title').textContent = restart ? 'Restart this branch' : 'Review this answer change';
   $('answer-change-intention').textContent = restart ? 'Remove only the selected question’s tree descendants after preserving a checkpoint. Outside branches survive. No new questions will be generated.' : 'These are recorded reasoning relationships, not a prediction of real-world damage. Affected answers are retained and marked for review.';
+  $('answer-change-intention').prepend(`${answerChange.destination}. `);
   $('answer-change-summary').textContent = `${p.acknowledgment ? 'This acknowledges current review causes without changing answer text or state. Captured work still needs reconsideration. ' : ''}${p.counts.total} affected questions: ${p.counts.structural} reachable through the tree, ${p.counts.confirmed} through explicit dependencies, ${p.counts.mixedOnly} through mixed paths only. Tree and dependency counts may overlap. ${p.directions} structural directions also need review.`;
   $('answer-change-confirm').textContent = p.acknowledgment ? 'Acknowledge review and update captured work' : 'Save and mark affected items for review';
   if (p.reviewResolution) {
@@ -450,14 +455,14 @@ async function pageAnswerChange(page, targetId = null, pathPage = 0, linkPage = 
   } catch (error) { if (answerChange === review && sequence === review.sequence) { $('answer-change-error').textContent = error.message; $('answer-change-confirm').disabled = true; } }
 }
 async function reviewAnswerChange(input, generation, stillCurrent) {
-  const journey = referenceJourney(), page = pageEpoch, base = JSON.stringify(state.document), work = answerChangeWork(), focus = document.activeElement;
+  const journey = referenceJourney(), page = pageEpoch, base = JSON.stringify(state.document), destination = journeyDescription(), work = answerChangeWork(), focus = document.activeElement;
   const savedCurrent = () => !closed && !suspended && page === pageEpoch && journey === referenceJourney() && (stillCurrent ? stillCurrent() : selected === input.nodeId) && JSON.stringify(state.document) === base && answerChangeWork() === work;
   const current = () => savedCurrent() && (!!stillCurrent || draftClient.entries.get(input.nodeId)?.edits === generation);
   const value = await answerChangeRequest({ action: 'prepare', journey, revision: state.document.revision, ...input });
   if (!savedCurrent() || value.requiresConfirmation && !current()) { void answerChangeRequest({ action: 'discard', token: value.token }).catch(() => {}); notice('The answer or its sources changed. Save again to review the current edit.'); return null; }
   if (!value.requiresConfirmation) return value;
   return new Promise(resolve => {
-    answerChange = { value, current, resolve, focus, sequence: 0 }; renderAnswerChange();
+    answerChange = { value, current, resolve, focus, destination, sequence: 0 }; renderAnswerChange();
     $('answer-change-dialog').showModal(); $('answer-change-cancel').focus();
   });
 }
@@ -1744,6 +1749,7 @@ function renderWorkspace() {
   region('navigation', context);
   region('rationale', context);
   region('importance', context);
+  let updateRevisit = () => {};
   if (!root && isQuestion(node)) {
     const help = el('details', { id: 'question-help', class: 'question-help' }, el('summary', { id: 'question-help-summary' }, 'Help with this question'),
       el('p', { class: 'quiet' }, 'Model help explains this saved question. Your question and answer stay unchanged. For sourced or current information, use the Research tab.'),
@@ -1832,6 +1838,51 @@ function renderWorkspace() {
     const savebar = el('div', { class: 'workspace-savebar' }, toolsToggle,
       button('Save & continue', () => { voice.cancel(); void save(false); }, { id: 'save-answer', class: 'primary', 'aria-label': 'Save & continue', title: 'Save and open an existing useful question; Ctrl/Command + Enter', disabled: pending && !['research', 'research-follow-up'].includes(state.pending.kind) }));
     toolPanels.explore.append(el('p', { class: 'quiet' }, 'Save this answer and ask Copilot for follow-up questions to review.'), button('Explore deeper', () => { voice.cancel(); void save(true); }, { id: 'save-deeper', title: 'Save this answer and ask Copilot for follow-up questions', 'aria-label': 'Save answer and explore deeper', disabled: pending }));
+    const revisitChooser = el('section', { id: 'answer-revisit', class: 'answer-revisit', hidden: true, 'aria-labelledby': 'answer-revisit-title' });
+    let revisitBase = null, revisitObserved = null, revisitStale = false, revisitPage = null, routing = false;
+    const choice = () => ui.revisitChoice ?? 'retain';
+    const blocked = () => routing || busy || draftClient.savingAnswer ? 'Wait for the current save or review to finish.' :
+      revisitStale ? 'Saved context changed or the page resumed. Refresh choices before continuing; your proposed answer stays in the editor.' :
+      state.pending ? 'Cancel or finish the current Copilot request before revisiting this answer.' : state.preview ? 'Accept or dismiss the unsaved question preview before revisiting this answer.' :
+      choice() === 'fork' && !state.library ? 'Alternative scenarios require the installed personal library. Retain or restart is available here.' : '';
+    updateRevisit = () => {
+      if (revisitChooser.hidden) return;
+      if (revisitObserved !== state.document || revisitPage !== pageEpoch) {
+        revisitStale = revisitPage !== pageEpoch || revisitBase !== JSON.stringify(state.document); revisitObserved = state.document;
+      }
+      $('answer-revisit-status').textContent = blocked() || 'Edit the proposed answer and state in the existing editor. Continue opens the selected workflow; it never generates questions.';
+      $('revisit-continue').disabled = !!blocked(); $('revisit-refresh').disabled = routing;
+      $('revisit-cancel').disabled = routing;
+      for (const value of ['retain', 'fork', 'restart']) { $(`revisit-${value}`).disabled = routing || value === 'fork' && !state.library; $(`revisit-${value}`).checked = choice() === value; }
+    };
+    const refreshRevisit = () => {
+      if (!current() || routing) return;
+      refresh(); revisitBase = JSON.stringify(doc); revisitObserved = doc; revisitPage = pageEpoch; revisitStale = false;
+      const impact = currentImpact(doc).analyze(node.id);
+      $('revisit-destination').textContent = `${journeyDescription(doc)}. Retain and restart modify this saved journey; fork leaves it intact and saves a separate personal scenario.`;
+      $('revisit-impact').textContent = `${impact.counts.total} affected questions if this answer changes: ${impact.counts.structural} through the tree, ${impact.counts.confirmed} through explicit dependencies, ${impact.counts.mixedOnly} through mixed paths only. Counts can overlap; they describe recorded relationships. The next preview shows exact retained or removed items and research consequences.`;
+      updateRevisit();
+    };
+    const closeRevisit = () => { if (!current() || routing) return; revisitChooser.hidden = true; revisitBase = revisitObserved = null; $('revisit-answer').setAttribute('aria-expanded', 'false'); answer.focus({ preventScroll: true }); };
+    const choices = el('fieldset', {}, el('legend', {}, 'What should happen to this answer?'));
+    for (const [value, title, description] of [
+      ['retain', 'Change and retain descendants', 'Save the proposed answer here; keep affected descendants and flag their reasoning for review.'],
+      ['fork', 'Explore an alternative scenario', 'Copy ancestor context and the alternative to a separate personal journey. Keep this original intact.'],
+      ['restart', 'Change and restart below this question', 'Confirm exact descendant removals and preserve a protected History checkpoint before saving here.'],
+    ]) {
+      const radio = el('input', { id: `revisit-${value}`, type: 'radio', name: 'answer-revisit-choice', value, 'aria-describedby': `revisit-${value}-help` });
+      radio.addEventListener('change', () => { if (!current() || routing) return; ui.revisitChoice = value; updateRevisit(); });
+      choices.append(el('label', { class: 'revisit-choice', for: `revisit-${value}` }, radio, el('span', {}, title)), el('p', { id: `revisit-${value}-help`, class: 'quiet' }, description + (value === 'fork' && !state.library ? ' Unavailable in this file-only preview: open the installed personal library to fork.' : '')));
+    }
+    const continueRevisit = async () => {
+      if (!current()) return; updateRevisit(); if (blocked()) return;
+      const selectedChoice = choice(); routing = true; updateRevisit(); voice.cancel();
+      try { if (selectedChoice === 'fork') await openScenarioFork(node, answer.value, draftClient.state(node.id)); else await save(false, selectedChoice === 'restart'); }
+      finally { routing = false; if (current()) updateRevisit(); }
+    };
+    revisitChooser.append(el('h3', { id: 'answer-revisit-title' }, 'Revisit this answer'), el('p', { id: 'revisit-destination' }), el('p', { id: 'revisit-impact' }), choices,
+      el('p', { id: 'answer-revisit-status', role: 'status', 'aria-live': 'polite' }), el('div', { class: 'actions' }, button('Back to editing', closeRevisit, { id: 'revisit-cancel' }), button('Refresh choices', refreshRevisit, { id: 'revisit-refresh' }), button('Continue to review…', () => { void continueRevisit(); }, { id: 'revisit-continue' })));
+    toolPanels.explore.append(button('Revisit this answer', () => { if (!current()) return; revisitChooser.hidden = false; $('revisit-answer').setAttribute('aria-expanded', 'true'); refreshRevisit(); revealQuestionTool(revisitChooser); $(`revisit-${choice()}`).focus({ preventScroll: true }); }, { id: 'revisit-answer', 'aria-expanded': 'false', 'aria-controls': 'answer-revisit' }), revisitChooser);
     toolPanels.explore.append(el('p', { class: 'quiet' }, 'Correct an assumption and restart below this question. Review exact removals first; a protected History checkpoint keeps the old branch recoverable.'), button('Restart branch…', () => { voice.cancel(); void save(false, true); }, { id: 'restart-branch', disabled: pending || !!state.preview }));
     if (state.library) toolPanels.explore.append(el('p', { class: 'quiet' }, 'Try an alternative in a separate saved scenario. Review copied ancestor context; the original stays intact.'), button('Fork alternative…', () => { void openScenarioFork(node, answer.value, draftClient.state(node.id)); }, { id: 'fork-scenario', disabled: pending || !!state.preview }));
     panel.append(savebar);
@@ -1875,6 +1926,7 @@ function renderWorkspace() {
   }
   toolPanels.context.append(context);
   let updateDependencies = () => {}, updateImpact = () => {};
+  owner.refreshRevisit = () => { if (current()) updateRevisit(); };
   if (isQuestion(node)) {
     const section = el('section', { id: 'decision-dependencies', 'aria-labelledby': 'dependency-title' }, el('h3', { id: 'dependency-title' }, 'Confirmed decision dependencies'),
       el('p', { class: 'quiet' }, 'B depends on A means changing A may affect B. Tree ancestors and children show navigation and possible impact; only listed links are confirmed dependencies. Pinned references are separate.'));
@@ -2005,6 +2057,7 @@ function renderWorkspace() {
     workspaceCritical.hidden = !criticalPrior; workspaceCritical.textContent = criticalLabel(node);
     updateDependencies();
     updateImpact();
+    updateRevisit();
     $('question-drawer-context').textContent = node.question;
     const pendingParent = ['research', 'research-follow-up'].includes(state.pending?.kind) ? toolPanels.research : toolPanels.explore;
     if (state.pending && regions.get('pending').area.parentElement !== pendingParent) pendingParent.prepend(regions.get('pending').area);
@@ -3285,6 +3338,7 @@ document.addEventListener('click', event => {
 $('question-drawer-handle').addEventListener('click', () => { setQuestionTools(true); $('question-drawer-close').focus({ preventScroll: true }); });
 $('workspace').addEventListener('keydown', event => {
   if (event.key !== 'Escape' || event.isComposing || $('question-drawer').hidden) return;
+  if ($('answer-revisit') && !$('answer-revisit').closest('[hidden]')) { event.preventDefault(); event.stopPropagation(); $('revisit-cancel').click(); return; }
   event.preventDefault(); event.stopPropagation(); setQuestionTools(false); $('question-tools-toggle').focus({ preventScroll: true });
 }, true);
 $('fit').addEventListener('click', () => { collapseNode(false); fit(); }); $('center-question').addEventListener('click', centerSelected);
@@ -3398,7 +3452,7 @@ window.addEventListener('pagehide', event => {
 });
 window.addEventListener('pageshow', event => {
   if (!event.persisted || closed || !suspended) return;
-  suspended = false; pageEpoch++; pollFailures = 0; stateCursor = null; void (poll());
+  suspended = false; pageEpoch++; pollFailures = 0; stateCursor = null; workspace?.refreshRevisit?.(); void (poll());
   minimap.update();
 });
 async function poll() {

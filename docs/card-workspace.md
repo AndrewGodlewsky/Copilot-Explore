@@ -8,11 +8,13 @@ Explorer helps people follow branching questions and record their own answers. T
 - More options opens a full-width non-modal drawer outside both the card and transformed map. The drawer takes space from the working view, leaving the map usable above. Expand/reduce and close remain in its header, alongside the selected question. A slim bottom handle reopens the drawer.
 - Explore holds explicit follow-up generation, previews and manual directions. Research holds existing research review, results and research follow-ups. Answer details holds state, cleanup, reminders and draft management. Context holds rationale, help, references and branch navigation. Columns use available width and stack in narrow panes.
 - Save & continue commits text and state without model generation. It opens an eligible existing next question using the local suggestion or map order when guidance supplies no candidate. It stays on the saved answer when none exists. Failed saves, conflicts and stale completions cannot advance the question.
-- The editor stays mounted through drawer toggles, tabs, polling and Map/Outline changes. Answer/state/reminder/manual drafts stay associated with their question. Escape closes the drawer before collapsing the question and returns focus to its launcher.
+- The editor stays mounted through drawer toggles, tabs, polling and Map/Outline changes. Answer/state/reminder/manual drafts stay associated with their question. Escape exits an open Revisit this answer chooser first, returning focus to the editor; otherwise it closes the drawer before collapsing the question and returns focus to its launcher.
 - Commands, request status and new previews reveal the appropriate tab. Ordinary polling does not reopen a dismissed drawer. Reminder conflicts reveal Answer details; critical answer conflicts remain visible at the editor.
 - Compact cards retain reserved footers for status and branch buttons. Very short panes retain manual scrolling and reachable actions. Journey chrome and the map share a scrollable stage above the drawer, so a notice cannot squeeze the card below its usable height.
 
 The selected design and implementation decisions are recorded in [the drawer design](superpowers/specs/2026-11-18-question-drawer-design.md).
+
+[Revisit this answer](revisiting-answers.md) coordinates retaining affected descendants, forking a separate scenario, and restarting a branch. Its bottom-drawer chooser preserves the editor and uses each existing domain workflow; temporarily unavailable or stale choices provide a reason and a recovery action.
 
 ## Current verification
 

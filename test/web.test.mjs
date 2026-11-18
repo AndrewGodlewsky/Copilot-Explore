@@ -1161,6 +1161,82 @@ test('project library refresh and pin preserve an answer draft, and listed openi
   assert.equal(f.explorer.pending, null); assert.equal($('workspace').hidden, false);
 });
 
+test('revisit chooser is available through Commands and preserves editor state through choices and Escape', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), e = f.explorer, node = e.doc.nodes[1], before = JSON.stringify(e.doc);
+  f.open(node.id); f.type('answer', '  Proposed 🦞 answer\n'); const editor = $('answer'); editor.setSelectionRange(2, 8, 'backward');
+  $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change'));
+  $('palette-open').click(); f.type('palette-query', 'Revisit this answer');
+  const command = f.document.querySelector('[data-command="revisit-answer"]'); assert.ok(command); command.click();
+  assert.equal($('answer-revisit').hidden, false); assert.equal($('question-tools-explore').hidden, false); assert.match($('revisit-destination').textContent, new RegExp(e.doc.id));
+  for (const choice of ['restart', 'fork', 'retain']) { $(`revisit-${choice}`).click(); assert.equal($('answer'), editor); assert.equal(editor.value, '  Proposed 🦞 answer\n'); assert.equal(editor.selectionStart, 2); assert.equal($('answer-state').value, 'assumption'); }
+  $('revisit-retain').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.equal($('answer-revisit').hidden, true); assert.equal(f.document.activeElement, editor); assert.equal(editor.selectionEnd, 8); assert.equal(JSON.stringify(e.doc), before);
+});
+
+test('revisit retain and restart route through existing consequence proofs and never generate questions', async t => {
+  for (const choice of ['retain', 'restart']) {
+    const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[2].parentId = doc.nodes[1].id; doc.nodes[2].answer = 'Old detail'; await e.save(doc); } }), $ = id => f.document.getElementById(id), e = f.explorer, [source, child] = e.doc.nodes.slice(1);
+    f.open(source.id); f.type('answer', 'Revised premise'); $('revisit-answer').click(); $(`revisit-${choice}`).click();
+    assert.match($('revisit-impact').textContent, /1 affected question/); $('revisit-continue').click();
+    await until(() => $('answer-change-dialog').open, `${choice} consequence proof`);
+    assert.match($('answer-change-intention').textContent, new RegExp(e.doc.id)); assert.equal($('answer-change-new').textContent, 'Revised premise');
+    assert.match($('answer-change-title').textContent, choice === 'restart' ? /Restart/ : /Review this answer/);
+    $('answer-change-cancel').click(); await until(() => !$('revisit-continue').disabled, 'cancel returns to chooser');
+    assert.equal($('answer').value, 'Revised premise'); assert.ok(e.doc.nodes.some(n => n.id === child.id));
+    $('revisit-continue').click(); await until(() => $('answer-change-dialog').open, 'fresh confirmation'); $('answer-change-confirm').click();
+    await until(() => e.doc.nodes.find(n => n.id === source.id).answer === 'Revised premise', 'reviewed mutation');
+    if (choice === 'retain') { assert.equal(e.doc.nodes.find(n => n.id === child.id).answer, 'Old detail'); assert.equal(e.doc.nodes.find(n => n.id === child.id).review, true); }
+    else { assert.equal(e.doc.nodes.some(n => n.id === child.id), false); assert.ok((await e.readHistory(e.doc.id)).entries.some(row => row.checkpoints.length)); }
+    assert.equal(e.pending, null);
+  }
+});
+
+test('revisit fork seeds the separate alternative workflow and keeps original proposal through cancellation', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), e = f.explorer, node = e.doc.nodes[1], before = JSON.stringify(e.doc);
+  f.open(node.id); f.type('answer', 'Hypothetical premise'); const editor = $('answer'); $('revisit-answer').click(); $('revisit-fork').click(); $('revisit-continue').click();
+  await until(() => $('scenario-fork-dialog').open, 'fork workflow'); assert.equal($('scenario-fork-answer').value, 'Hypothetical premise');
+  $('scenario-fork-close').click(); assert.equal($('answer'), editor); assert.equal(editor.value, 'Hypothetical premise'); assert.equal($('revisit-fork').checked, true); assert.equal(JSON.stringify(e.doc), before);
+  $('revisit-continue').click(); await until(() => $('scenario-fork-dialog').open, 'fork retry'); $('scenario-fork-preview').click();
+  await until(() => !$('scenario-fork-confirm').hidden && !$('scenario-fork-confirm').disabled, 'fork source proof'); $('scenario-fork-confirm').click();
+  await until(() => !$('scenario-fork-open').hidden, 'separate scenario saved'); assert.equal(JSON.stringify(e.doc), before); assert.equal(e.pending, null); assert.equal((await e.library.list()).entries.length, 2);
+});
+
+test('revisit explains unavailable choices, blocks active work and requires refresh after source changes', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id), e = f.explorer, node = e.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Keep this proposed answer'); const editor = $('answer'); $('revisit-answer').click();
+  assert.equal($('revisit-fork').disabled, true); assert.match($('revisit-fork-help').textContent, /installed personal library/);
+  await e.command('questions', { revision: e.doc.revision, nodeId: e.doc.rootId }); await f.poll();
+  assert.equal($('revisit-continue').disabled, true); assert.match($('answer-revisit-status').textContent, /Cancel or finish/);
+  const requestId = e.pending.id; await e.receive('questions', { requestId, questions: [{ question: 'Staged?', category: 'Scope' }] }); await f.poll();
+  assert.equal($('revisit-continue').disabled, true); assert.match($('answer-revisit-status').textContent, /Accept or dismiss/);
+  await e.command('dismiss-questions', { batchId: requestId }); await f.poll(); assert.equal($('revisit-continue').disabled, false);
+  await e.save({ ...e.doc, objective: 'Changed saved guidance' }); await f.poll();
+  assert.equal($('revisit-continue').disabled, true); assert.match($('answer-revisit-status').textContent, /Refresh choices/);
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep this proposed answer');
+  $('revisit-refresh').click(); assert.equal($('revisit-continue').disabled, false); assert.equal(editor.value, 'Keep this proposed answer');
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true })); f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await f.poll();
+  await until(() => $('revisit-continue').disabled, 'resumed source requires refresh'); $('revisit-refresh').click(); assert.equal($('revisit-continue').disabled, false);
+});
+
+test('revisit restart reports protected history capacity without removing descendants or draft text', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[2].parentId = doc.nodes[1].id; await e.save(doc); } }), $ = id => f.document.getElementById(id), e = f.explorer, node = e.doc.nodes[1], original = JSON.stringify(e.doc);
+  const history = await e.history(e.doc.id); for (let i = 0; i < 10; i++) await history.checkpoint(e.doc, e.doc.revision, `Protected ${i}`);
+  f.open(node.id); f.type('answer', 'Retry this revised premise'); $('revisit-answer').click(); $('revisit-restart').click(); $('revisit-continue').click();
+  await until(() => $('answer-change-dialog').open, 'restart with full history'); $('answer-change-confirm').click();
+  await until(() => /checkpoint/i.test($('notice').textContent) && !$('revisit-continue').disabled, 'history capacity error');
+  assert.match($('notice').textContent, /10|limit|full/i); assert.equal(JSON.stringify(e.doc), original); assert.equal($('answer').value, 'Retry this revised premise'); assert.equal($('answer-revisit').hidden, false);
+});
+
+test('revisit save reports storage errors and detached routing controls cannot change a later selection', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id), e = f.explorer, node = e.doc.nodes[1], original = JSON.stringify(e.doc);
+  f.open(node.id); f.type('answer', 'Keep draft after failed save'); $('revisit-answer').click(); const previousContinue = $('revisit-continue'), command = e.command.bind(e);
+  e.command = async (action, input) => { if (action === 'answer') throw Error('The project file is read-only. Restore write access and retry; your saved map is preserved.'); return command(action, input); };
+  previousContinue.click(); await until(() => /read-only/.test($('notice').textContent) && !$('revisit-continue').disabled, 'storage failure');
+  assert.equal(JSON.stringify(e.doc), original); assert.equal($('answer').value, 'Keep draft after failed save'); e.command = command;
+  f.window.__updates.select(e.doc.nodes[2].id); previousContinue.click(); await delay(40);
+  assert.equal(JSON.stringify(e.doc), original); assert.equal($('node-workspace').dataset.nodeId, e.doc.nodes[2].id);
+});
+
 test('scenario fork reviews an alternative, keeps the source editor and opens its saved journey only by choice', async t => {
   const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), e = f.explorer, node = e.doc.nodes[1];
   const key = e.activeKey, original = await readFile(e.file), file = e.file;

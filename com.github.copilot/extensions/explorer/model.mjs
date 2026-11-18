@@ -1,5 +1,6 @@
 import { validateHandoff, handoffMarkdown } from './implementation-handoff.mjs';
 import { validateAdrScope, adrScopeMarkdown } from './adr-scope.mjs';
+import { validateAdrFormat } from './adr-format.mjs';
 import { scenarioOrigin } from './scenario-origin.mjs';
 import { validateBrief, briefMarkdown } from './decision-brief.mjs';
 import { randomUUID } from 'node:crypto';
@@ -286,6 +287,7 @@ export function validateDocument(value) {
     ...(Object.hasOwn(value, 'brief') ? { brief: validateBrief(value.brief) } : {}),
     ...(Object.hasOwn(value, 'handoff') ? { handoff: validateHandoff(value.handoff) } : {}),
     ...(Object.hasOwn(value, 'adrScope') ? { adrScope: validateAdrScope(value.adrScope) } : {}),
+    ...(Object.hasOwn(value, 'adrFormat') ? { adrFormat: validateAdrFormat(value.adrFormat) } : {}),
     finishedAt: value.finishedAt === null ? null : date(value.finishedAt, 'finish date'), nodes };
   if (Buffer.byteLength(JSON.stringify(document, null, 2)) > MAX_DOCUMENT_BYTES) throw new Error('This map has reached the 9 MiB saved-data limit. Export it and continue in a new exploration.');
   return document;

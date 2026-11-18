@@ -172,6 +172,22 @@ try {
   assert.equal(changedRootReview.prepared.context.projectSources[0].excerpt, projectCanary);
   await session.rpc.metadata.setWorkingDirectory({ workingDirectory: project });
   console.log('Installed metadata cwd selected the explicit project file; artifact workspace, native context and exports excluded it.');
+  const templateCanary = 'INSTALLED-ADR-TEMPLATE-BODY-CANARY';
+  await writeFile(join(project, 'adr-template.md'), `# Example title\n## Context\n${templateCanary}\n## Decision\nExample decision\n`);
+  const formatRequest = async input => fetch(opened.url + 'api/adr-format', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify(input) });
+  const formatInput = { action: 'prepare', journey: snapshot.activeKey ?? snapshot.document.id, clientId: 'fixture-adr-format-00000001', sequence: 1, selection: { directory: 'docs/decisions', naming: 'numbered', digits: 4, templatePath: 'adr-template.md' } };
+  const formatResponse = await formatRequest(formatInput); assert.equal(formatResponse.status, 200); const formatPreview = await formatResponse.json();
+  assert.equal(formatPreview.format.template.path, 'adr-template.md'); assert.equal(formatPreview.format.layout.sections[0].key, 'context');
+  assert.ok(!JSON.stringify(formatPreview).includes(templateCanary)); assert.ok(!JSON.stringify(formatPreview).includes(JSON.stringify(project).slice(1, -1)));
+  await session.rpc.metadata.setWorkingDirectory({ workingDirectory: otherProject });
+  const formatStale = await formatRequest({ action: 'save', journey: formatInput.journey, token: formatPreview.token, revision: (await state()).document.revision }); assert.notEqual(formatStale.status, 200);
+  assert.equal((await state()).document.adrFormat, undefined);
+  await session.rpc.metadata.setWorkingDirectory({ workingDirectory: project });
+  const refreshedFormatResponse = await formatRequest({ ...formatInput, sequence: 2 }); assert.equal(refreshedFormatResponse.status, 200); const refreshedFormat = await refreshedFormatResponse.json();
+  const formatSaved = await formatRequest({ action: 'save', journey: formatInput.journey, token: refreshedFormat.token, revision: (await state()).document.revision }); assert.equal(formatSaved.status, 200);
+  assert.ok(!JSON.stringify(await session.rpc.canvas.action.invoke({ instanceId, actionName: 'get_exploration', input: {} })).includes(templateCanary));
+  assert.ok(!(await (await fetch(opened.url + 'export.json')).text()).includes(templateCanary)); assert.ok(!JSON.stringify(requests).includes(templateCanary));
+  console.log('Installed metadata cwd explicitly read ADR template structure; changed cwd rejected saving and raw template text stayed out of native context and exports.');
   const reviewed = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin },
     body: JSON.stringify({ action: 'prepare', clientId: 'fixture-review-000000000001', sequence: 1, journey: snapshot.activeKey ?? snapshot.document.id, nodeId, scope: 'decisions', excluded: [] }) });
   assert.equal(reviewed.status, 200); const review = await reviewed.json(); assert.ok(review.prepared.prompt.includes('Neighbors'));

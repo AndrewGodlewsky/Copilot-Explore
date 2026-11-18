@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.92",
+    "summary": "Choose an ADR directory, filename convention and bundled or selected repository template. Preview supported structure and sample Markdown, then save portable preferences. Template examples and instructions are discarded; changed files and stale reviews reject saves. Drafts stay intact. No ADR is generated or written, and no filename is reserved."
+  },
+  {
     "version": "0.1.91",
     "summary": "Select a focal question and supporting records for an ADR. Review exact saved context, global guidance and optional recorded evidence, then save a portable scope reference. Partial answers remain uncertain; stale or missing sources stay visible. Existing drafts and artifacts are preserved. This step performs no inference or ADR file writing."
   },

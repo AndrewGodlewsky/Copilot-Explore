@@ -22,6 +22,7 @@ function paths(values) {
   if (new Set(names.map(name => process.platform === 'win32' ? name.toLowerCase() : name)).size !== names.length) throw new Error('Duplicate project files are not allowed.');
   return names;
 }
+export { paths as validateProjectPaths };
 
 // Cooperative local filesystem: observed replacements reject. Portable Node cannot
 // atomically bind every ancestor against a hostile concurrent directory swap.

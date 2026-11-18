@@ -51,7 +51,7 @@ test('start consumes one reviewed immutable payload, rejects legacy starts and p
   assert.deepEqual(f.e.snapshot(), native); assert.equal(f.runs.length, 0);
   const disk = structuredClone(f.doc); disk.nodes[2].answer = 'UNRELATED'; disk.revision++;
   await writeFile(f.file, JSON.stringify(disk));
-  await f.start(review); await new Promise(setImmediate);
+  await f.start(review); await waitFor(() => f.runs.length === 1);
   assert.equal(f.runs[0].prepared.prompt, review.prepared.prompt);
   assert.equal(f.runs[0].prepared.instructions, review.prepared.instructions);
   assert.ok(Object.isFrozen(f.runs[0].prepared.context));
@@ -65,7 +65,7 @@ test('settings replace reviewed tokens, are frozen with exact strings and reject
   await assert.rejects(f.start(previous), /review/); assert.equal(f.runs.length, 0);
   assert.equal(reviewed.prepared.settings.depth, 'quick'); assert.equal(reviewed.prepared.limits.timeLimitMs, 60000);
   assert.match(reviewed.prepared.instructions, /Quick: 60 seconds/);
-  await f.start(reviewed); await new Promise(setImmediate);
+  await f.start(reviewed); await waitFor(() => f.runs.length === 1);
   assert.deepEqual(f.runs[0].prepared.settings, reviewed.prepared.settings); assert.ok(Object.isFrozen(f.runs[0].prepared.settings));
   assert.ok(Object.isFrozen(f.runs[0].prepared)); assert.ok(Object.isFrozen(f.runs[0].prepared.limits));
   await f.e.command('cancel');
@@ -114,8 +114,15 @@ test('cancel before prepare arrival leaves a bounded tombstone; a newer prepare 
   const f = await fixture(t), late = f.input(), cancel = f.input({ action: 'cancel' });
   await f.e.reviewResearch(cancel); await assert.rejects(f.e.reviewResearch(late), /obsolete/);
   const review = await f.review(); assert.ok(review.token);
-  await assert.rejects(f.e.reviewResearch(cancel), /obsolete/); await f.start(review);
-  await new Promise(setImmediate); assert.equal(f.runs.length, 1);
+  await assert.rejects(f.e.reviewResearch(cancel), /obsolete/);
+  const original = f.e.assertScenarioPolicy.bind(f.e); let checks = 0, reached = false, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  f.e.assertScenarioPolicy = async policy => { await original(policy); if (++checks === 3) { reached = true; await gate; } };
+  await f.start(review);
+  try { await waitFor(() => reached); await new Promise(setImmediate); assert.equal(f.runs.length, 0); }
+  finally { release(); }
+  await waitFor(() => f.runs.length === 1);
+  assert.equal(f.runs.length, 1);
 });
 test('expiry, destination changes, closed preparation and in-flight cancellation never authorize research', async t => {
   const f = await fixture(t), expired = await f.review();

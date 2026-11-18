@@ -152,6 +152,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.adrScopeRequest(await body(req, 2048)));
       }
+      if (req.method === 'POST' && route === 'api/adr-format') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.adrFormatRequest(await body(req, 16 * 1024)));
+      }
       if (req.method === 'POST' && route === 'api/branch-restore') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.branchRestoreRequest(await body(req, 2048)));

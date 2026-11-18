@@ -1993,6 +1993,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const briefDialog = document.getElementById('brief-dialog');
   const adrScopeDialog = document.getElementById('adr-scope-dialog');
   if (adrScopeDialog) { adrScopeDialog.showModal = () => { adrScopeDialog.open = true; }; adrScopeDialog.close = () => { adrScopeDialog.open = false; }; }
+  const adrFormatDialog = document.getElementById('adr-format-dialog');
+  if (adrFormatDialog) { adrFormatDialog.showModal = () => { adrFormatDialog.open = true; }; adrFormatDialog.close = () => { adrFormatDialog.open = false; }; }
   briefDialog.showModal = () => { briefDialog.open = true; };
   briefDialog.close = () => { briefDialog.open = false; };
   const checkDialog = document.getElementById('check-dialog');
@@ -5653,6 +5655,63 @@ test('cold damaged binding reaches recovery controls with no active map and open
   assert.equal(await readFile(originalFile, 'utf8'), '{truncated private'); assert.notEqual(f.explorer.file, originalFile);
 });
 
+
+async function adrFormatFixture(t) {
+  const root = await mkdtemp(join(tmpdir(), 'explorer-format-ui-')); t.after(() => rm(root, { recursive: true, force: true })); let reads = 0;
+  await writeFile(join(root, 'template.md'), '# Example\n## Context\nFORMAT_BODY_CANARY <script> λ\n## Decision\nExample decision\n## Consequences\n');
+  const f = await fixture(t, 340, undefined, false, { projectRoot: async () => { reads++; return root; } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Private format draft λ'); const editor = $('answer'); editor.focus(); editor.setSelectionRange(2, 7);
+  const open = async () => { $('adr-format-open').click(); await until(() => !$('adr-format-review').disabled, 'format preferences loaded'); };
+  const change = (id, value) => { $(id).value = value; $(id).dispatchEvent(new f.window.Event('change', { bubbles: true })); };
+  const review = async () => { $('adr-format-review').click(); await until(() => !$('adr-format-save').disabled, 'format preview ready'); };
+  return { ...f, $, editor, root, reads: () => reads, openFormat: open, change, reviewFormat: review };
+}
+test('ADR format UI reviews and saves the bundled convention while preserving drafts and optional unknowns', async t => {
+  const f = await adrFormatFixture(t), $ = f.$, before = structuredClone(f.explorer.doc.nodes); await f.openFormat();
+  assert.equal(f.reads(), 0); assert.equal($('adr-format-directory').value, 'docs/decisions'); assert.equal($('adr-format-save').disabled, true);
+  await f.reviewFormat(); assert.match($('adr-format-sample').textContent, /Unspecified/); assert.match($('adr-format-example').textContent, /0001-sample-decision/);
+  assert.match($('adr-format-preview-notes').textContent, /not reserved/); assert.equal(f.explorer.doc.adrFormat, undefined);
+  $('adr-format-save').click(); await until(() => $('adr-format-status').textContent.includes('Preferences saved'), 'format saved');
+  assert.equal(f.explorer.doc.adrFormat.template.kind, 'bundled'); assert.equal(f.reads(), 0);
+  $('adr-format-close').click(); assert.equal($('answer'), f.editor); assert.equal(f.editor.value, 'Private format draft λ'); assert.equal(f.editor.selectionStart, 2); assert.equal(f.editor.selectionEnd, 7);
+  assert.deepEqual(f.explorer.doc.nodes, before); await f.openFormat(); assert.match($('adr-format-status').textContent, /Saved preferences/); assert.equal($('adr-format-save').disabled, true);
+});
+test('ADR format UI reads an explicit template only on review and invalidates changed preferences without saving', async t => {
+  const f = await adrFormatFixture(t), $ = f.$; await f.openFormat(); f.change('adr-format-template', 'repository'); f.type('adr-format-path', 'template.md');
+  assert.equal(f.reads(), 0); await f.reviewFormat(); assert.ok(f.reads() > 0);
+  assert.match($('adr-format-structure').textContent, /Context/); assert.doesNotMatch($('adr-format-dialog').textContent, /FORMAT_BODY_CANARY|Example decision/); assert.equal($('adr-format-dialog').querySelector('script'), null);
+  f.type('adr-format-directory', 'records/adr'); assert.equal($('adr-format-save').disabled, true); assert.equal($('adr-format-preview').hidden, true);
+  await f.reviewFormat(); assert.match($('adr-format-example').textContent, /records\/adr/); $('adr-format-close').click(); assert.equal(f.explorer.doc.adrFormat, undefined);
+  await f.openFormat(); f.change('adr-format-template', 'repository'); f.type('adr-format-path', '../template.md'); $('adr-format-review').click();
+  await until(() => !$('adr-format-review').disabled && $('adr-format-status').textContent.includes('path'), 'invalid path recoverable');
+  assert.equal($('adr-format-save').disabled, true); f.type('adr-format-path', 'template.md'); await f.reviewFormat();
+  $('adr-format-save').click(); await until(() => f.explorer.doc.adrFormat && !$('adr-format-review').disabled, 'repository preference saved');
+  assert.equal(f.explorer.doc.adrFormat.template.path, 'template.md'); assert.equal(f.editor.value, 'Private format draft λ');
+});
+test('ADR format UI rejects a changed template and a changed saved map before accepting preferences', async t => {
+  const f = await adrFormatFixture(t), $ = f.$; await f.openFormat(); f.change('adr-format-template', 'repository'); f.type('adr-format-path', 'template.md'); await f.reviewFormat();
+  await writeFile(join(f.root, 'template.md'), '# New\n## Context\n## Decision\n'); $('adr-format-save').click();
+  await until(() => !$('adr-format-review').disabled && $('adr-format-save').disabled, 'changed template rejected'); assert.equal(f.explorer.doc.adrFormat, undefined);
+  await f.reviewFormat(); const changed = structuredClone(f.explorer.doc); changed.objective = 'New objective'; await f.explorer.save(changed); await f.poll();
+  await until(() => $('adr-format-save').disabled, 'saved map invalidated'); assert.match($('adr-format-status').textContent, /changed/i); assert.equal($('answer'), f.editor);
+  $('adr-format-close').click(); assert.equal(f.editor.value, 'Private format draft λ');
+});
+test('ADR format UI ignores a preview response from a suspended page and requires another explicit review', async t => {
+  const f = await adrFormatFixture(t), $ = f.$; await f.openFormat(); const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-format' && JSON.parse(options.body).action === 'prepare') await new Promise(resolve => { release = resolve; }); return response; };
+  $('adr-format-review').click(); await until(() => release, 'preview response held'); f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  release(); await delay(30); f.window.fetch = fetch; f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await f.poll();
+  await f.openFormat(); assert.equal($('adr-format-save').disabled, true); assert.equal($('adr-format-preview').hidden, true); assert.equal(f.explorer.doc.adrFormat, undefined);
+  await f.reviewFormat(); assert.equal($('answer'), f.editor); assert.equal(f.editor.value, 'Private format draft λ');
+});
+test('ADR format UI ignores a late save reply but reopening reports the actually saved configuration', async t => {
+  const f = await adrFormatFixture(t), $ = f.$; await f.openFormat(); await f.reviewFormat(); const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-format' && JSON.parse(options.body).action === 'save') await new Promise(resolve => { release = resolve; }); return response; };
+  $('adr-format-save').click(); await until(() => release, 'save reply held'); f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  release(); await delay(30); f.window.fetch = fetch; f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await f.poll();
+  await f.openFormat(); assert.match($('adr-format-status').textContent, /Saved preferences/); assert.equal($('adr-format-save').disabled, true); assert.equal(f.explorer.doc.adrFormat.template.kind, 'bundled');
+  assert.equal($('answer'), f.editor); assert.equal(f.editor.value, 'Private format draft λ');
+});
 
 async function adrScopeFixture(t) {
   const f = await fixture(t, 340, undefined, false, { before: async e => {

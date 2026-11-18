@@ -262,6 +262,7 @@ const paletteCommands = [
   ['edit-guidance', 'Edit guidance'], ['history-open', 'History'], ['recovery-open', 'Recovery'],
   ['visual-export-open', 'Export maps'], ['decision-brief', 'Decision brief'], ['implementation-handoff', 'Implementation handoff'],
   ['adr-scope-open', 'ADR scope'],
+  ['adr-format-open', 'ADR format'],
   ['check-answers', 'Check answers'], ['challenge-decisions', 'Challenge decisions'], ['research-request', 'Research options'],
   ['revisit-answer', 'Revisit this answer'], ['scenario-preference-open', 'Scenario preference'],
 ];
@@ -600,6 +601,7 @@ function apply(next, reset = false) {
   const compactFocused = $('nodes').contains(document.activeElement);
   const previousSelection = selected;
   const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
+  if (adrFormat && (adrFormat.value || adrFormat.action === 'prepare') && !changedDocument && JSON.stringify(state.document) !== JSON.stringify(next.document)) invalidateAdrFormat('Saved journey changed. Review the format again before saving.');
   if ($('adr-scope-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) {
     invalidateAdrPreview('Saved inputs or scenario changed. Review the current selection again.');
     $('adr-scope-status').textContent = 'Saved inputs changed. Refresh scope status before relying on the previous check.';
@@ -626,6 +628,7 @@ function apply(next, reset = false) {
     closeResearchReview();
     closeBrief();
     closeAdrScope();
+    closeAdrFormat();
     closeCheck();
     lastCoverage = ''; $('context-coverage').textContent = 'Check the selected node or start a request to see coverage.';
     cleanup.cancel();
@@ -677,6 +680,7 @@ function apply(next, reset = false) {
   $('review-affected').hidden = !doc;
   $('implementation-handoff').hidden = !doc;
   $('adr-scope-open').hidden = !doc;
+  $('adr-format-open').hidden = !doc;
   $('check-answers').hidden = !doc; $('challenge-decisions').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
   $('visual-export-open').hidden = !doc;
@@ -3290,6 +3294,80 @@ $('file').addEventListener('change', async () => {
   try { const document = JSON.parse(await file.text()); await switchJourney('import', { document }); }
   catch (error) { notice(`Could not open that file: ${error.message}`); }
 });
+let adrFormat = null;
+const adrFormatCurrent = f => !!f && adrFormat === f && !closed && !suspended && f.page === pageEpoch && f.journey === (state.activeKey ?? state.document?.id) && $('adr-format-dialog').open;
+function adrFormatControls() {
+  const f = adrFormat, locked = !adrFormatCurrent(f) || !!f.flight;
+  for (const id of ['directory', 'naming', 'digits', 'template', 'path', 'review', 'refresh']) $(`adr-format-${id}`).disabled = locked;
+  $('adr-format-digits').disabled = locked || $('adr-format-naming').value === 'slug';
+  $('adr-format-path-fields').hidden = $('adr-format-template').value !== 'repository';
+  $('adr-format-save').disabled = locked || busy || !f.value || Date.now() >= f.value.expiresAt;
+}
+function cancelAdrFormat(f) {
+  if (!f) return;
+  f.sequence++; f.flight?.abort(); f.value = null;
+  void fetch('api/adr-format', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'cancel', journey: f.journey, clientId: f.clientId, sequence: f.sequence }) }).catch(() => {});
+}
+function invalidateAdrFormat(message = 'Preferences changed. Review the format again before saving.') {
+  cancelAdrFormat(adrFormat); $('adr-format-preview').hidden = true; $('adr-format-status').textContent = message; adrFormatControls();
+}
+function closeAdrFormat(focus = false) {
+  const f = adrFormat; adrFormat = null; cancelAdrFormat(f);
+  $('adr-format-preview').hidden = true;
+  if ($('adr-format-dialog').open) $('adr-format-dialog').close();
+  if (focus) $('adr-format-open').focus();
+}
+function loadAdrFormat(format) {
+  $('adr-format-directory').value = format.directory; $('adr-format-naming').value = format.naming; $('adr-format-digits').value = format.digits;
+  $('adr-format-template').value = format.template.kind; $('adr-format-path').value = format.template.path ?? '';
+}
+async function requestAdrFormat(action) {
+  const f = adrFormat; if (!adrFormatCurrent(f) || f.flight || action === 'save' && busy) return;
+  const writes = action === 'save', reviewed = f.value;
+  if (writes && (!reviewed || Date.now() >= reviewed.expiresAt)) return invalidateAdrFormat('The format preview expired. Read and review again.');
+  const abort = new AbortController(), sequence = ++f.sequence; f.flight = abort; f.action = action;
+  if (writes) { busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); }
+  const epoch = actionEpoch, timer = setTimeout(() => abort.abort(), 10000);
+  const input = { action, journey: f.journey, ...(writes ? { token: reviewed.token, revision: state.document.revision } : action === 'prepare' ? { clientId: f.clientId, sequence, selection: {
+    directory: $('adr-format-directory').value, naming: $('adr-format-naming').value, digits: Number($('adr-format-digits').value), templatePath: $('adr-format-template').value === 'repository' ? $('adr-format-path').value : '',
+  } } : {}) };
+  f.value = null; $('adr-format-preview').hidden = true; adrFormatControls();
+  $('adr-format-status').textContent = writes ? 'Saving reviewed preferences…' : action === 'prepare' ? 'Reading and reviewing the selected format…' : 'Loading saved preferences; no template file is read…';
+  try {
+    const response = await fetch('api/adr-format', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+    const result = await response.json();
+    if (!adrFormatCurrent(f) || sequence !== f.sequence || writes && epoch !== actionEpoch) return;
+    if (!response.ok) throw Error(result.error);
+    if (result.journey !== f.journey || action === 'prepare' && (result.clientId !== f.clientId || result.sequence !== sequence)) throw Error('ADR format response changed. Review again.');
+    if (writes) { apply(result.snapshot); $('adr-format-status').textContent = 'Preferences saved. No ADR file was written. A new review is required before replacing these preferences.'; }
+    else if (action === 'status') { loadAdrFormat(result.format); $('adr-format-status').textContent = `${result.saved ? 'Saved preferences' : 'Bundled defaults'}. ${result.templateState === 'not-checked' ? 'The saved template reference has not been read or checked in this session. Review explicitly to read it.' : 'No repository template selected.'}`; }
+    else {
+      f.value = result; $('adr-format-preview').hidden = false; $('adr-format-preview-notes').textContent = result.notes;
+      $('adr-format-example').textContent = `Example path: ${result.pathExample}`;
+      const template = result.format.template, layout = result.format.layout;
+      $('adr-format-structure').textContent = `${template.kind === 'repository' ? `Selected: ${template.path}\nSHA-256: ${template.sha256}\n${result.templateBytes}/32768 bytes` : 'Bundled simple MADR format'}\nMetadata: ${layout.metadata.join(', ') || '(none)'}\n# Title\n${layout.sections.map(s => `${'#'.repeat(s.level)} ${s.label}`).join('\n')}`;
+      $('adr-format-sample').textContent = result.sample; $('adr-format-status').textContent = 'Format reviewed. Check the structure and sample, then save these preferences if they fit.';
+    }
+  } catch (error) {
+    if (adrFormatCurrent(f) && sequence === f.sequence) $('adr-format-status').textContent = abort.signal.aborted ? 'Request timed out. Reload saved preferences to check whether a save completed.' : error.message;
+  } finally {
+    clearTimeout(timer); if (writes && epoch === actionEpoch) busy = false;
+    if (adrFormatCurrent(f) && f.flight === abort) { f.flight = null; f.action = null; adrFormatControls(); }
+  }
+}
+$('adr-format-open').addEventListener('click', () => {
+  if (!state.document || !switchAllowed('choosing ADR formatting')) return;
+  closeAdrFormat(); adrFormat = { journey: state.activeKey ?? state.document.id, page: pageEpoch, clientId: crypto.randomUUID(), sequence: 0, value: null, flight: null, action: null };
+  $('adr-format-dialog').showModal(); void requestAdrFormat('status');
+});
+for (const id of ['directory', 'naming', 'digits', 'template', 'path']) for (const event of ['input', 'change']) $(`adr-format-${id}`).addEventListener(event, () => { if (adrFormatCurrent(adrFormat) && !adrFormat.flight) invalidateAdrFormat(); });
+$('adr-format-review').addEventListener('click', () => void requestAdrFormat('prepare'));
+$('adr-format-save').addEventListener('click', () => void requestAdrFormat('save'));
+$('adr-format-refresh').addEventListener('click', async () => { const f = adrFormat; if (adrFormatCurrent(f) && !f.flight && await api('refresh-answer') && adrFormatCurrent(f)) { invalidateAdrFormat(); await requestAdrFormat('status'); } });
+$('adr-format-close').addEventListener('click', () => closeAdrFormat(true));
+$('adr-format-dialog').addEventListener('cancel', event => { event.preventDefault(); closeAdrFormat(true); });
+$('adr-format-dialog').addEventListener('close', () => { if (adrFormat) closeAdrFormat(); });
+
 let adrEpoch = 0, adrJourney = null, adrBusy = false, adrAbort = null, adrSelected = new Set(), adrSaved = null, adrPreviewMessage = '';
 const adrReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: renderAdrPreview });
 const adrCurrent = (epoch = adrEpoch) => epoch === adrEpoch && !closed && !suspended && $('adr-scope-dialog').open && adrJourney === (state.activeKey ?? state.document?.id);
@@ -3856,6 +3934,7 @@ window.addEventListener('pagehide', event => {
   closeBrief();
   closeCheck();
   closeAdrScope();
+  closeAdrFormat();
   questionHelp.dispose();
   void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;

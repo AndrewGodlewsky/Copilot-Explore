@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.91.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.92.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 
 **Usage dashboard** compares current maps, saved answer states and structure, newly observed canvas visits/committed question growth, and retained owned-helper outcomes and usage. UTC date filters apply to observations and receipts, not current stock. Scans are bounded and explicitly refreshed; missing usage and incomplete coverage stay visible. It preserves your editor and drafts. See [metric definitions, inventory, privacy and retention](docs/usage-dashboard.md).
 
@@ -18,6 +18,8 @@ Save a local-calendar **review date** and/or **manual revisit condition** on a q
 ## Reviewed implementation handoff
 
 **Tools → ADR scope** selects one focal question and explicit supporting records from any branch. Preview the exact saved input, including global guidance and optional recorded evidence, then save a source reference for later ADR work. Partial answers keep their uncertainty; drafts and existing artifacts stay intact. This step performs no inference or ADR file writing. See [ADR scope, freshness and compatibility](docs/adr-scope.md).
+
+**Tools → ADR format** selects an ADR directory, numbered or title-only filenames, and a bundled MADR-based or explicit repository Markdown template. Review the recognized structure and sample, then save preferences. Template examples and instructions are discarded; no decision is generated, file written or number reserved. See [supported templates, path limits and naming](docs/adr-format.md).
 
 Choose **Implementation handoff**, explicitly select saved decisions or open questions, and choose **Brief**, **Specification**, **Plan**, **Prompt** or **Tasks**. Optionally include recorded research sources and structured claims; these remain unverified AI interpretation with their original provenance and limitations. Preview the exact input before generating, then edit and explicitly accept the proposal before copying or exporting its Markdown. Your map and answer drafts stay intact.
 
@@ -311,7 +313,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.91, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.91**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.92, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.92**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Settings > Map and motion** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

@@ -194,7 +194,7 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .outline-mode #node-workspace{position:relative;left:auto!important;top:auto!important;transform:none!important;width:100%!important;height:100%;max-height:100%!important;min-height:0;box-shadow:none;overflow:hidden}
 .outline-mode .node-head{cursor:auto;user-select:text;touch-action:auto;max-height:40%}
 .outline-mode .node-content{overflow:auto;max-height:none}
-@media(max-width:660px){#working-view.outline-mode{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(150px,35%) minmax(240px,1fr);min-height:440px;padding:8px;gap:8px}.outline-mode .outline{grid-column:1;grid-row:1}.outline-mode #map{grid-column:1;grid-row:2}}
+@media(max-width:660px){#working-view.outline-mode{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(150px,35%) minmax(340px,1fr);min-height:560px;padding:8px;gap:8px}.outline-mode .outline{grid-column:1;grid-row:1}.outline-mode #map{grid-column:1;grid-row:2}}
 
 #dashboard-dialog { width: min(760px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; box-sizing: border-box; }
 .dashboard-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -215,3 +215,65 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .dashboard-legend span { display: inline-flex; align-items: center; gap: 4px; }
 .dashboard-legend i { display: inline-block; width: 10px; height: 10px; }
 .dashboard-swatch-0 { background: #628e9b; } .dashboard-swatch-1 { background: #b58c4c; } .dashboard-swatch-2 { background: #947b9a; } .dashboard-swatch-3 { background: #7a8e62; }
+
+/* Keep the writing surface visible; secondary actions disclose in place. */
+.topbar { min-height: 56px; padding: 8px 16px; gap: 8px; }
+.topbar .brand { gap: 8px; font-size: 17px; }
+.topbar .brand svg { width: 24px; height: 24px; }
+.topbar nav { position: relative; margin-left: auto; gap: 4px; }
+.topbar nav > button, .app-menu > summary { min-height: 36px; padding: 8px; font-size: 12px; font-weight: 500; }
+.app-menu > summary { border: 1px solid var(--line); border-radius: 6px; color: inherit; background: var(--paper); }
+.app-menu > summary:hover, .app-menu[open] > summary { border-color: var(--blue); }
+.menu-items { position: absolute; z-index: 30; top: calc(100% + 8px); right: 0; width: min(256px, calc(100vw - 32px)); max-height: calc(100dvh - 120px); overflow: auto; display: grid; gap: 4px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); box-shadow: 0 8px 24px #00000014; }
+.menu-items button, .menu-items a { justify-content: flex-start; min-height: 36px; font-size: 13px; font-weight: 400; border-color: transparent; }
+.app-version { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 44px; min-height: 44px; padding: 8px 12px; }
+.app-version > span { flex: none; }
+.app-version #draft-summary { display: block; flex: 1; min-width: 0; max-height: 28px; overflow: auto; margin: 0; padding: 0; border: 0; font-size: 11px; line-height: 14px; text-align: left; }
+.expanded-node { border-width: 1px; border-radius: 12px; box-shadow: 0 4px 16px #0000000d; }
+.node-head { padding: 12px 16px; }
+.node-meta { gap: 8px; }
+.node-meta button { min-height: 28px; padding: 4px 8px; font-size: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.question-title { margin: 8px 0 0; font-size: 20px; line-height: 1.35; font-weight: 500; cursor: text; user-select: text; touch-action: pan-y; }
+.node-content { padding: 16px; }
+.answer-label { margin-bottom: 8px; flex-wrap: wrap; }
+.answer-label label { font-size: 14px; }
+.answer-form textarea { min-height: 112px; font-size: 14px; padding: 12px; }
+.workspace-savebar { flex: none; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--paper); }
+.workspace-savebar .answer-state-field { display: block; flex: 1 1 128px; min-width: 0; margin: 0; }
+.workspace-savebar label { font-size: 12px; margin: 0 0 4px; }
+.workspace-savebar select { width: 100%; min-height: 36px; padding: 6px 8px; font-size: 12px; }
+.workspace-savebar .actions { flex: 0 1 auto; gap: 8px; margin: 0; }
+.workspace-savebar button { min-height: 36px; font-weight: 500; padding: 8px; }
+.question-context, .revisit-editor, .research-disclosure, .manual, .followups { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.question-context > summary, .revisit-editor > summary, .research-disclosure > summary, .manual > summary { min-height: 28px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.question-context[open] > summary, .research-disclosure[open] > summary { margin-bottom: 12px; }
+.question-context .node-head-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.question-context .node-head-actions button { font-size: 12px; font-weight: 400; }
+.question-context .references-area { margin: 12px 0 0; padding: 12px 0 0; border-bottom: 0; border-top: 1px solid var(--line); }
+.question-context .crumbs { margin: 0; }
+#clean-answer { min-height: 32px; margin-top: 8px; padding: 4px 8px; font-size: 12px; font-weight: 400; }
+#voice-stop:disabled, #voice-cancel:disabled { display: none; }
+@container(max-width:400px) {
+  .node-head, .node-content { padding: 12px; }
+  .question-title { font-size: 18px; }
+  .workspace-savebar { padding: 8px 12px; }
+  .workspace-savebar .answer-state-field { flex: 1 1 96px; }
+  .workspace-savebar label { white-space: nowrap; }
+  .workspace-savebar .actions { gap: 4px; justify-content: flex-end; }
+  .workspace-savebar button { font-size: 12px; }
+}
+@media(max-width:660px) {
+  .topbar { padding: 8px 12px; }
+  .map-heading { padding: 12px; gap: 8px; }
+  .map-heading > div:first-child { flex: 1 0 100%; }
+  .map-heading > .history-access { margin-left: auto; }
+  #context-controls { margin: 0 12px 8px; padding: 4px 0; }
+  .map-controls { padding: 8px 12px; gap: 4px; }
+  .map-controls button { font-size: 11px; padding: 6px; min-height: 32px; }
+  .navigation-hint { display: none; }
+}
+@media(prefers-color-scheme:dark) {
+  .expanded-node, .menu-items { box-shadow: none; }
+  .workspace-savebar .primary { background: #dbe7ee; border-color: #dbe7ee; color: #16232d; }
+  .workspace-savebar .primary:hover { background: #c6d9e4; }
+}

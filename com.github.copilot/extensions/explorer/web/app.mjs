@@ -333,6 +333,8 @@ function captureWorkspace() {
     ui.importanceOpen = panel.querySelector('#question-importance')?.open ?? false;
     ui.helpOpen = panel.querySelector('#question-help')?.open ?? false;
     ui.manualOpen = panel.querySelector('.manual')?.open ?? false;
+    ui.contextOpen = panel.querySelector('#question-context')?.open ?? false;
+    ui.revisitOpen = panel.querySelector('#revisit-editor')?.open ?? false;
     if (!references.error) references.open = panel.querySelector('#references')?.open ?? references.open;
   }
 }
@@ -560,6 +562,7 @@ function showView() {
   questionHelp.sync();
   const home = !state.document || libraryView;
   $('storage-home').hidden = !home;
+  $('navigation-open').hidden = home || outlineMode;
   $('welcome').hidden = !home; $('workspace').hidden = home;
   $('library-toggle').hidden = !state.library;
   $('library-home').hidden = !state.library;
@@ -658,9 +661,10 @@ async function switchJourney(action, input, current = () => true) {
   return result;
 }
 function focusTop(id, height) {
+  // Reserve room for writing before making space for the surrounding branch.
   const node = state.document.nodes.find(n => n.id === id);
   const parent = state.document.nodes.find(n => n.id === node?.parentId);
-  return Math.max(16, Math.min(parent ? (parent.answer ? 150 : 110) + 72 + 24 : 24, height - 320));
+  return Math.max(16, Math.min(parent ? (parent.answer ? 150 : 110) + 96 : 24, height - 480));
 }
 function select(id, { outlineRow = false } = {}) {
   if (paletteOpen() && id !== selected) closePalette(false);
@@ -744,7 +748,8 @@ function showWholeMap() {
   updateFocusStatus();
   refreshScene(null);
   revealNode(selected);
-  (expanded ? $('focus-branch') : $('map')).focus({ preventScroll: true });
+  const focusTarget = expanded ? ($('question-context').open ? $('focus-branch') : $('question-context').querySelector('summary')) : $('map');
+  focusTarget.focus({ preventScroll: true });
 }
 function focusBranch(id) {
   if (id === state.document.rootId) { showWholeMap(); return; }
@@ -787,7 +792,7 @@ function refreshScene(anchor = anchorPoint()) {
   const height = Math.max(80, rect.height - focusTop(selected, rect.height) - 16);
   panel.style.width = `${width}px`; panel.style.maxHeight = `${height}px`;
   panel.style.transform = `scale(${1 / view.zoom})`;
-  panel.style.setProperty('--heading-limit', `${Math.min(190, height * .42)}px`);
+  panel.style.setProperty('--heading-limit', `${Math.max(112, Math.min(180, height * .35))}px`);
   const measuredHeight = expanded ? panel.offsetHeight / view.zoom : 0, logicalWidth = expanded ? width / view.zoom : 0;
   if (fitBranches !== branches) {
     // A compact upper bound, independent of zoom and the counter-scaled editor.
@@ -1027,8 +1032,12 @@ function renderWorkspace() {
     if (focused) ($(focused) ?? $('expanded-title'))?.focus({ preventScroll: true });
   };
   workspace = owner;
-  region('rationale');
-  region('importance');
+  const context = el('details', { id: 'question-context', class: 'question-context' }, el('summary', {}, 'Question context & tools'));
+  context.open = ui.contextOpen ?? false;
+  context.addEventListener('toggle', () => { if (context.isConnected) ui.contextOpen = context.open; });
+  region('navigation', context);
+  region('rationale', context);
+  region('importance', context);
   if (!root && isQuestion(node)) {
     const help = el('details', { id: 'question-help', class: 'question-help' }, el('summary', { id: 'question-help-summary' }, 'Help with this question'),
       el('p', { class: 'quiet' }, 'Model help explains this saved question. Your question and answer stay unchanged. For sourced or current information, use Explore options.'),
@@ -1039,15 +1048,16 @@ function renderWorkspace() {
       el('div', { id: 'question-help-results', 'aria-live': 'polite' }));
     help.open = ui.helpOpen;
     help.addEventListener('toggle', () => { if (help.isConnected) ui.helpOpen = help.open; });
-    content.append(help);
+    context.append(help);
   }
-  for (const name of ['references', 'pending', 'review', 'preview', 'retry']) region(name);
+  region('references', context);
+  for (const name of ['pending', 'review', 'preview', 'retry']) region(name);
   if (root) {
     content.append(el('p', { class: 'quiet' }, 'Pick a connected question to explore it. Each question opens into its own workspace on the map.'), button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
   } else if (!isQuestion(node)) {
     content.append(el('p', { class: 'quiet' }, 'Your original direction guides the next questions. It is not an answer or a decision.'), button('Explore this direction', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
   } else {
-    const form = el('form', { class: 'answer-form' }), answer = el('textarea', { id: 'answer', rows: '4', maxlength: '20000', placeholder: 'A decision, a hunch, or what you know so far…' });
+    const form = el('form', { id: 'answer-form', class: 'answer-form' }), answer = el('textarea', { id: 'answer', rows: '4', maxlength: '20000', placeholder: 'A decision, a hunch, or what you know so far…' });
     answer.value = drafts.get(node.id) ?? node.answer;
     const answerState = el('select', { id: 'answer-state', 'aria-describedby': 'answer-state-help' }, Object.entries(ANSWER_STATES).map(([value, label]) => el('option', { value }, label)));
     answerState.value = draftClient.state(node.id);
@@ -1077,17 +1087,24 @@ function renderWorkspace() {
         }
       } catch (error) { notice(error.message); }
     };
-    form.addEventListener('submit', event => { event.preventDefault(); void save(true); });
-    form.addEventListener('keydown', event => { if (!event.isComposing && event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void save(true); } });
+    form.addEventListener('submit', event => { event.preventDefault(); void save(false); });
+    const saveKey = event => { if (current() && !event.isComposing && event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void save(false); } };
+    form.addEventListener('keydown', saveKey);
     const voiceStatus = el('div', { class: 'voice-controls' });
     answer.setAttribute('aria-describedby', 'voice-status');
     voice.bind(answer, voiceStatus);
     form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), el('span', { id: 'answer-status', class: 'quiet' })), answer, voiceStatus,
       button('Clean My Answer', () => { voice.cancel(); void cleanup.start(); }, { id: 'clean-answer', disabled: !answer.value.trim() }),
-      el('div', { id: 'cleanup-review', 'aria-live': 'polite' }),
-      el('div', { class: 'answer-state-field' }, el('label', { for: 'answer-state' }, 'Answer state'), answerState), el('p', { id: 'answer-state-help', class: 'quiet' }, 'Text and state stay a draft until you save. Decided, Tentative and Assumption need text; other states can have no note.'),
-      el('div', { class: 'actions' }, button('Save answer', () => { voice.cancel(); void save(false); }, { id: 'save-answer', disabled: pending && !['research', 'research-follow-up'].includes(state.pending.kind) }), el('button', { type: 'submit', id: 'save-deeper', class: 'primary', disabled: pending }, 'Save & explore deeper')));
-    const researchNote = el('p', { id: 'research-save-note', class: 'quiet' }, 'Save answer is available during research. Saving its source context discards that research. Wait or cancel research before Save & explore deeper.'); form.append(researchNote);
+      el('div', { id: 'cleanup-review', 'aria-live': 'polite' }));
+    const savebar = el('div', { class: 'workspace-savebar' },
+      el('div', { class: 'answer-state-field' }, el('label', { for: 'answer-state' }, 'Answer state'), answerState),
+      el('div', { class: 'actions' },
+        button('Save', () => { voice.cancel(); void save(false); }, { id: 'save-answer', class: 'primary', 'aria-label': 'Save answer', title: 'Save answer · Ctrl/Command + Enter', disabled: pending && !['research', 'research-follow-up'].includes(state.pending.kind) }),
+        button('Explore deeper', () => { voice.cancel(); void save(true); }, { id: 'save-deeper', title: 'Save this answer and ask Copilot for follow-up questions', 'aria-label': 'Save answer and explore deeper', disabled: pending })));
+    panel.append(savebar);
+    savebar.addEventListener('keydown', saveKey);
+    context.append(el('p', { id: 'answer-state-help', class: 'quiet' }, 'Text and state stay a draft until you save. Decided, Tentative and Assumption need text; other states can have no note. Ctrl/Command + Enter saves without generating questions.'));
+    const researchNote = el('p', { id: 'research-save-note', class: 'quiet' }, 'Save is available during research. Saving its source context discards that research. Wait or cancel research before Explore deeper.'); form.append(researchNote);
     form.append(button('Undo addition', () => {
       const addition = ui.addition;
       if (!addition || (drafts.get(node.id) ?? node.answer) !== addition.after) return;
@@ -1096,8 +1113,10 @@ function renderWorkspace() {
     }, { id: 'undo-addition', class: 'undo-addition' }));
     form.append(el('div', { id: 'draft-recovery', 'aria-live': 'polite' }));
     content.append(form); answerStatus(node); renderDraftRecovery(node); renderCleanup(); renderQuestionHelp();
-    const revisit = el('section', { class: 'revisit-editor', 'aria-labelledby': 'revisit-title' }, el('h3', { id: 'revisit-title' }, 'Revisit this question'),
+    const revisit = el('details', { id: 'revisit-editor', class: 'revisit-editor' }, el('summary', { id: 'revisit-title' }, 'Revisit this question'),
       el('p', { id: 'revisit-status', role: 'status' }), el('p', { class: 'quiet' }, 'Optional local-calendar date or condition you evaluate yourself. No monitoring or notifications. Acknowledging records a review; it does not change your answer, certainty or ancestor review flag.'));
+    revisit.open = ui.revisitOpen ?? !!(node.revisit || ui.revisitDraft);
+    revisit.addEventListener('toggle', () => { if (revisit.isConnected) ui.revisitOpen = revisit.open; });
     const date = el('input', { id: 'revisit-date', type: 'date', min: '0001-01-01', max: '9999-12-31' }), condition = el('textarea', { id: 'revisit-condition', maxlength: '1000', rows: '2' });
     const edit = event => {
       ui.revisitDraft = { question: ui.revisitDraft?.question ?? node.question, date: date.value, condition: event.target === condition ? condition.value : ui.revisitDraft?.condition ?? node.revisit?.condition ?? '', base: ui.revisitDraft?.base ?? JSON.stringify(node.revisit ?? null) };
@@ -1120,6 +1139,7 @@ function renderWorkspace() {
         button('Keep my reminder edits', () => { if (ui.revisitDraft) { ui.revisitDraft.base = JSON.stringify(node.revisit ?? null); workspace.update(); } }, { id: 'keep-revisit' })));
     content.append(revisit);
   }
+  content.append(context);
   region('research');
   region('followup');
   region('children');
@@ -1148,7 +1168,7 @@ function renderWorkspace() {
     refresh();
     const ancestors = [];
     for (let n = byId.get(node.parentId); n; n = byId.get(n.parentId)) ancestors.push([n.id, n.category, n.question]);
-    update('heading', [node.question, node.category, node.kind, focusId, collapsed.has(node.id), branches.parentIds.has(node.id), collapsed.has(node.id) ? hiddenSummary(node.id) : '', ancestors], () => {
+    update('navigation', [node.question, focusId, collapsed.has(node.id), branches.parentIds.has(node.id), ancestors], () => {
       const path = [], byId = new Map(doc.nodes.map(n => [n.id, n]));
       for (let n = node; n; n = byId.get(n.parentId)) path.push(n);
       const crumbs = el('nav', { class: 'crumbs', 'aria-label': 'Question ancestors' });
@@ -1156,7 +1176,10 @@ function renderWorkspace() {
         if (crumbs.childNodes.length) crumbs.append(el('span', {}, '/'));
         crumbs.append(button(n.id === doc.rootId ? 'Your idea' : n.category, () => select(n.id), { id: `ancestor-${n.id}`, title: n.question }));
       }
-      const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.kind === 'direction' ? nodeStatus(node) : node.category), el('div', { class: 'node-head-actions' }, button('Focus branch', () => focusBranch(node.id), { id: 'focus-branch', 'aria-pressed': String(focusId === node.id), 'aria-label': `Focus branch: ${node.question}` }), branchButton(node, true), button('Collapse node', () => collapseNode(), { id: 'collapse-node' }))), crumbs, el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
+      return [crumbs, el('div', { class: 'node-head-actions' }, button('Focus branch', () => focusBranch(node.id), { id: 'focus-branch', 'aria-pressed': String(focusId === node.id), 'aria-label': `Focus branch: ${node.question}` }), branchButton(node, true))];
+    });
+    update('heading', [node.question, node.category, node.kind, collapsed.has(node.id), collapsed.has(node.id) ? hiddenSummary(node.id) : ''], () => {
+      const heading = el('header', { class: 'node-head' }, el('div', { class: 'node-meta' }, el('span', { class: 'category-label' }, node.kind === 'direction' ? nodeStatus(node) : node.category), button('Close question', () => collapseNode(), { id: 'collapse-node' })), el('h2', { id: 'expanded-title', class: 'question-title', tabindex: '-1' }, node.question));
       if (collapsed.has(node.id)) heading.append(el('p', { class: 'branch-count' }, hiddenSummary(node.id)));
       return heading;
     });
@@ -1192,6 +1215,7 @@ function renderWorkspace() {
       node.kind === 'direction' ? button('Mark direction reviewed', () => { if (current()) void api('acknowledge-direction', { nodeId: node.id }); }, { id: 'acknowledge-direction', disabled: pending }) : null) : null);
     if ($('revisit-date')) {
       const draft = ui.revisitDraft, conflict = draft && draft.base !== JSON.stringify(node.revisit ?? null);
+      if (conflict) $('revisit-editor').open = true;
       if (!draft) { $('revisit-date').value = node.revisit?.date ?? ''; $('revisit-condition').value = node.revisit?.condition ?? ''; }
       else { if ($('revisit-date').value !== draft.date) $('revisit-date').value = draft.date; if ($('revisit-condition').value !== draft.condition) $('revisit-condition').value = draft.condition; }
       $('revisit-status').textContent = node.revisit ? `${revisitLabel(node)}${node.revisit.date ? ` · ${node.revisit.date}` : ''}${node.revisit.acknowledgedAt ? ` · Reviewed ${new Date(node.revisit.acknowledgedAt).toLocaleString()}` : ''}` : 'No reminder saved.';
@@ -1582,6 +1606,7 @@ function setOutlineMode(value) {
   const active = document.activeElement, editorFocus = $('node-workspace').contains(active);
   endDrag(); suppressClick = false; cancelAnimationFrame(layoutFrame); if (value) outlineNavigated = false; outlineMode = value;
   $('working-view').classList.toggle('outline-mode', value);
+  $('navigation-open').hidden = value || libraryView || !state.document;
   $('outline').hidden = !value;
   $('outline-toggle').setAttribute('aria-expanded', String(value));
   $('outline-toggle').textContent = value ? 'Map view' : 'Outline view';
@@ -2377,6 +2402,23 @@ $('request-status').addEventListener('click', () => {
     select(state.document.nodes.some(n => n.id === id) ? id : state.document.rootId);
   }
 });
+for (const menu of document.querySelectorAll('.app-menu')) {
+  menu.addEventListener('click', event => {
+    if (event.target.closest('summary')) {
+      for (const other of document.querySelectorAll('.app-menu')) if (other !== menu) other.open = false;
+    } else if (menu.open && event.target.closest('button,a')) {
+      // Dismiss before opening a dialog so native focus returns to its visible launcher.
+      menu.open = false; menu.querySelector('summary').focus({ preventScroll: true });
+    }
+  }, true);
+  menu.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !menu.open) return;
+    event.preventDefault(); event.stopPropagation(); menu.open = false; menu.querySelector('summary').focus({ preventScroll: true });
+  });
+}
+document.addEventListener('click', event => {
+  for (const menu of document.querySelectorAll('.app-menu[open]')) if (!menu.contains(event.target)) menu.open = false;
+});
 $('fit').addEventListener('click', () => { collapseNode(false); fit(); }); $('center-question').addEventListener('click', centerSelected);
 $('show-whole-map').addEventListener('click', showWholeMap);
 $('zoom-in').addEventListener('click', () => zoom(1.2)); $('zoom-out').addEventListener('click', () => zoom(1 / 1.2));
@@ -2390,7 +2432,7 @@ $('map').addEventListener('pointerdown', event => {
   if (outlineMode || drag || event.isPrimary === false || ![0, 1].includes(event.button)) return;
   suppressClick = false;
   const card = event.target.closest('.node'), control = event.target.closest('button,a,input,textarea,select,summary');
-  if (event.button === 0 && ((control && control !== card) || (event.target.closest('.expanded-node') && !event.target.closest('.node-head')))) return;
+  if (event.button === 0 && ((control && control !== card) || event.target.closest('.question-title') || (event.target.closest('.expanded-node') && !event.target.closest('.node-head')))) return;
   event.preventDefault();
   if (!card && !event.target.closest('.expanded-node')) $('map').focus({ preventScroll: true });
   drag = { id: event.pointerId, x: event.clientX, y: event.clientY, active: false };
@@ -2448,9 +2490,13 @@ const mapObserver = new ResizeObserver(() => {
   if (firstFit) { viewportSize = { width: rect.width, height: rect.height }; refreshScene(null); expanded ? centerSelected() : fit(); firstFit = false; return; }
   if (viewportSize && rect.width === viewportSize.width && rect.height === viewportSize.height) return;
   endDrag();
-  if (viewportSize) { view.x += (rect.width - viewportSize.width) / 2; view.y += (rect.height - viewportSize.height) / 2; }
+  if (viewportSize) {
+    view.x += (rect.width - viewportSize.width) / 2;
+    if (!expanded) view.y += (rect.height - viewportSize.height) / 2;
+  }
   viewportSize = { width: rect.width, height: rect.height };
   refreshScene();
+  if (expanded) revealNode(selected);
 });
 mapObserver.observe($('map'));
 const workspaceObserver = new ResizeObserver(() => { if (expanded) scheduleLayout(); });

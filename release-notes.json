@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.62",
+    "summary": "Answer first in expandable cards, with Save and answer state always within reach. Save and Ctrl/Command+Enter no longer start follow-up questions; Explore deeper does. Compact File/Tools menus and optional context/reminders free room in narrow panes. Typing stays anchored, question text is selectable, and keyboard focus survives menu and branch navigation."
+  },
+  {
     "version": "0.1.61",
     "summary": "Dictation resumes after a suspended page returns, with saved transcript chunks and continued polling. History previews now report changes to pinned constraints. Mark a reviewed structural direction explicitly in Map or Outline without changing answers, descendant review flags or local drafts."
   },

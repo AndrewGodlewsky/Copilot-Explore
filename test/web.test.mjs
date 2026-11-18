@@ -31,6 +31,86 @@ import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs'
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 
+test('card workspace prioritizes the answer and keeps save controls outside the scrolling content', async t => {
+  const f = await fixture(t, 460), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id);
+  const content = $('node-workspace').querySelector('.node-content');
+  assert.equal([...content.children].find(child => child.textContent.trim()).className, 'answer-form');
+  assert.equal(content.contains($('save-answer')), false);
+  assert.equal($('save-answer').closest('.workspace-savebar').parentElement, $('node-workspace'));
+  assert.equal($('answer-state').closest('.workspace-savebar').parentElement, $('node-workspace'));
+  assert.equal($('question-context').open, false);
+  assert.equal($('revisit-editor').open, false);
+  const answer = $('answer'), form = answer.closest('form');
+  f.type('answer', 'Start with twenty neighbors.');
+  $('question-context').open = true; $('revisit-editor').open = true;
+  f.type('revisit-condition', 'After the first month');
+  $('outline-toggle').click(); $('outline-toggle').click();
+  await f.poll();
+  assert.equal($('answer'), answer); assert.equal(answer.closest('form'), form);
+  assert.equal(answer.value, 'Start with twenty neighbors.');
+  assert.equal($('revisit-condition').value, 'After the first month');
+});
+
+test('card save shortcut commits the answer without starting an AI request', async t => {
+  const f = await fixture(t, 460), $ = id => f.document.getElementById(id);
+  const node = f.explorer.doc.nodes[1]; f.open(node.id);
+  const commands = [], command = f.explorer.command.bind(f.explorer);
+  f.explorer.command = (action, input) => { if (action === 'answer') commands.push(input.expand); return command(action, input); };
+  f.type('answer', 'Use the community center.');
+  $('answer').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }));
+  await until(() => f.explorer.doc.nodes.find(n => n.id === node.id).answer === 'Use the community center.', 'answer saved');
+  assert.equal(f.explorer.pending, null, 'saving does not silently generate follow-up questions');
+  assert.deepEqual(commands, [false]);
+  assert.equal($('save-answer').classList.contains('primary'), true);
+});
+
+test('application menus dismiss before an action and Escape returns focus without collapsing the question', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id);
+  const answer = $('answer'); f.type('answer', 'Keep my draft');
+  const menu = $('tools-menu'), trigger = menu.querySelector('summary');
+  menu.open = true; $('dashboard-open').click();
+  assert.equal(menu.open, false); assert.equal($('dashboard-dialog').open, true);
+  $('dashboard-close').click();
+  menu.open = true; $('dashboard-open').focus();
+  $('dashboard-open').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal(menu.open, false); assert.equal(f.document.activeElement, trigger);
+  assert.equal($('node-workspace').hidden, false); assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep my draft');
+});
+
+test('leaving branch focus returns to visible context controls when the disclosure is closed', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id);
+  $('question-context').open = true; $('focus-branch').click();
+  $('question-context').open = false; $('show-whole-map').focus(); $('show-whole-map').click();
+  assert.equal($('focus-access').hidden, true);
+  assert.equal(f.document.activeElement, $('question-context').querySelector('summary'));
+  assert.equal($('node-workspace').hidden, false);
+});
+
+test('question text selection does not start map dragging and the state selector keeps the save shortcut', async t => {
+  const f = await fixture(t, 360), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); const camera = JSON.stringify(f.window.__updates.scene().view);
+  const down = new f.window.MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: 30, clientY: 40 });
+  Object.defineProperty(down, 'pointerId', { value: 91 }); $('expanded-title').dispatchEvent(down);
+  const move = new f.window.MouseEvent('pointermove', { bubbles: true, cancelable: true, buttons: 1, clientX: 100, clientY: 60 });
+  Object.defineProperty(move, 'pointerId', { value: 91 }); f.window.dispatchEvent(move);
+  assert.equal(down.defaultPrevented, false); assert.equal(move.defaultPrevented, false);
+  assert.equal(JSON.stringify(f.window.__updates.scene().view), camera);
+  chooseState(f, 'revisit-later');
+  $('answer-state').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }));
+  await until(() => f.explorer.doc.nodes.find(n => n.id === node.id).answerState === 'revisit-later', 'state-only save');
+  assert.equal(f.explorer.pending, null);
+});
+
+test('viewport height changes keep the expanded writing card anchored instead of recentering it', async t => {
+  const f = await fixture(t, 460); f.open(f.explorer.doc.nodes[1].id);
+  const top = () => { const scene = f.window.__updates.scene(); return scene.view.y + scene.positions.get(scene.selected).y * scene.view.zoom; };
+  const before = top(); f.resize(460, 760);
+  assert.equal(top(), before, 'a taller map does not move the current question away from the pointer');
+});
+
 const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', options: [
   { title: 'One block', description: 'Start with the nearest neighbors.', pros: ['Easy handovers'], cons: ['Fewer tools'] },
   { title: 'Whole neighborhood', description: 'Invite everyone nearby.', pros: ['More tools'], cons: ['More coordination'] },
@@ -188,8 +268,8 @@ test('full Outline layout rules neutralize the counter-scaled editor and keep na
   const rules = [...style.sheet.cssRules], world = rules.find(rule => rule.selectorText === '.outline-mode #world'), editor = rules.find(rule => rule.selectorText === '.outline-mode #node-workspace');
   assert.equal(world.style.getPropertyValue('transform'), 'none'); assert.equal(world.style.getPropertyPriority('transform'), 'important');
   for (const [property, expected] of [['transform', 'none'], ['left', 'auto'], ['top', 'auto'], ['width', '100%'], ['max-height', '100%']]) { assert.equal(editor.style.getPropertyValue(property), expected); assert.equal(editor.style.getPropertyPriority(property), 'important'); }
-  const narrow = rules.filter(rule => rule.conditionText === '(max-width:660px)').at(-1);
-  assert.ok(narrow.cssText.includes('minmax(150px,35%) minmax(240px,1fr)')); assert.equal($('map-controls').hidden, true); assert.equal($('nodes').hidden, true); assert.equal($('edges').style.display, 'none');
+  const narrow = rules.find(rule => rule.conditionText === '(max-width:660px)' && rule.cssText.includes('.outline-mode'));
+  assert.ok(narrow.cssText.includes('minmax(150px,35%) minmax(340px,1fr)')); assert.equal($('map-controls').hidden, true); assert.equal($('nodes').hidden, true); assert.equal($('edges').style.display, 'none');
   $('outline-toggle').click(); assert.equal(f.window.getComputedStyle($('map')).overflow, 'clip'); assert.equal($('map-controls').hidden, false);
 });
 
@@ -1180,7 +1260,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     assert.ok(button, 'compact node exists: ' + question); button.click();
   };
   const type = (id, value) => { const e = document.getElementById(id); assert.ok(e, id); e.value = value; e.dispatchEvent(new window.Event('input', { bubbles: true })); };
-  const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => e.textContent === text); assert.ok(b, text); b.click(); };
+  const click = text => { const b = [...document.querySelectorAll('#node-workspace button')].find(e => (e.getAttribute('aria-label') ?? e.textContent) === text || e.textContent === text); assert.ok(b, text); b.click(); };
   return { explorer, window, document, open, type, click, actions, observers, resizeWorkspace: value => { workspaceHeight = value; observers.get('node-workspace')(); }, poll: () => window.__updates.poll(), resolveResearch: value => resolveResearch(value), captures: () => captures, motion: value => { motionMedia.matches = value; for (const fn of motionListeners) fn(); }, pauseAnswer: fn => { holdAnswer = fn; },
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
@@ -1412,7 +1492,7 @@ test('research allows independent answer save through HTTP and preserves editor 
   $('answer').focus(); $('answer').setSelectionRange(6, 10);
   await until(() => $('save-deeper').disabled, 'research contention reflected');
   assert.equal($('save-answer').disabled, false);
-  assert.match(f.document.querySelector('#node-workspace').textContent, /Wait or cancel research before Save & explore deeper/);
+  assert.match(f.document.querySelector('#node-workspace').textContent, /Wait or cancel research before Explore deeper/);
   assert.equal($('answer').selectionStart, 6); assert.equal($('answer').selectionEnd, 10);
   assert.equal(f.document.activeElement.id, 'answer');
   assert.ok($('voice-status')); assert.ok($('help-rephrase')); assert.ok($('question-rationale'));
@@ -2096,10 +2176,10 @@ test('dragging cards pans without selecting text or opening a question; clicks s
   assert.equal(f.document.getElementById('node-workspace').hidden, false, 'normal click still activates');
 });
 
-test('an expanded heading can pull the map back while answer selection stays native', async t => {
+test('empty space in an expanded heading can pull the map back while answer selection stays native', async t => {
   const f = await fixture(t); f.open(f.explorer.doc.nodes[1].id);
-  const map = f.document.getElementById('map'), title = f.document.getElementById('expanded-title'), before = viewOf(f);
-  pointer(f, 'pointerdown', title, 400, 250); pointer(f, 'pointermove', map, 460, 300); pointer(f, 'pointerup', map, 460, 300);
+  const map = f.document.getElementById('map'), heading = f.document.querySelector('.node-head'), before = viewOf(f);
+  pointer(f, 'pointerdown', heading, 400, 250); pointer(f, 'pointermove', map, 460, 300); pointer(f, 'pointerup', map, 460, 300);
   assert.equal(viewOf(f).x, before.x + 60);
   const answer = f.document.getElementById('answer'), after = viewOf(f);
   assert.equal(pointer(f, 'pointerdown', answer, 400, 350).defaultPrevented, false);
@@ -2108,7 +2188,7 @@ test('an expanded heading can pull the map back while answer selection stays nat
   pointer(f, 'pointerdown', map, 100, 100); pointer(f, 'pointermove', map, 100000, 100000); pointer(f, 'pointerup', map, 100000, 100000);
   assert.ok(Math.abs(viewOf(f).x) < 3000 && Math.abs(viewOf(f).y) < 3000, 'map cannot be thrown arbitrarily far away');
   const edge = viewOf(f);
-  pointer(f, 'pointerdown', title, 100, 100); pointer(f, 'pointermove', map, 80, 80); pointer(f, 'pointerup', map, 80, 80);
+  pointer(f, 'pointerdown', heading, 100, 100); pointer(f, 'pointermove', map, 80, 80); pointer(f, 'pointerup', map, 80, 80);
   assert.equal(viewOf(f).x, edge.x - 20, 'reverse dragging responds immediately at the boundary');
 });
 
@@ -2288,7 +2368,7 @@ test('installed questions expand inside the map, preserve drafts, and collapse t
   assert.equal(f.document.getElementById('answer').value, 'Neighbors on our block');
   f.click('Save answer'); await until(() => f.explorer.doc.nodes[1].answer, 'answer saved');
   await until(() => f.document.getElementById('answer-status')?.textContent === 'Answer saved', 'save rendered');
-  f.click('Collapse node');
+  f.click('Close question');
   assert.ok(f.document.getElementById('node-workspace').hidden);
   assert.match(f.document.getElementById('nodes').textContent, /Neighbors on our block/);
   f.open(a.id); assert.equal(f.document.getElementById('answer').value, 'Neighbors on our block');
@@ -2393,7 +2473,7 @@ test('research callbacks and follow-ups work inside a narrow expanded node witho
   f.click('Use this option');
   assert.match(f.document.getElementById('answer').value, /^My own thought, still editing\n\nOne block/);
   assert.equal(f.explorer.doc.nodes[1].answer, '');
-  f.click('Save & explore deeper'); await until(() => f.explorer.pending?.kind === 'questions', 'follow-ups requested');
+  f.click('Save answer and explore deeper'); await until(() => f.explorer.pending?.kind === 'questions', 'follow-ups requested');
   await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [{ category: 'People', question: 'How will you invite them?' }] });
   await until(() => f.document.getElementById('accept-questions'), 'review follow-ups'); f.document.getElementById('accept-questions').click();
   await until(() => [...f.document.querySelectorAll('#node-workspace .followup')].length, 'follow-up link');
@@ -2661,7 +2741,8 @@ test('keyboard answer save clears its draft without treating restored focus as t
   const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id); const editor = f.document.getElementById('answer');
   editor.focus(); f.type('answer', 'Committed keyboard answer');
   editor.dispatchEvent(new f.window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter', ctrlKey: true }));
-  await until(() => f.explorer.pending?.kind === 'questions', 'keyboard answer saved');
+  await until(() => f.explorer.doc.nodes.find(n => n.id === node.id).answer === 'Committed keyboard answer', 'keyboard answer saved');
+  assert.equal(f.explorer.pending, null, 'the save shortcut does not start generation');
   await delay(100);
   assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, null);
   assert.equal(f.document.getElementById('answer-status').textContent, 'Answer saved');

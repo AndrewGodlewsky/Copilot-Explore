@@ -6,7 +6,7 @@
     <div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 16 5 6M16 16 27 6M16 16 5 27M16 16 27 27"/><circle cx="16" cy="16" r="5"/><circle cx="5" cy="6" r="2"/><circle cx="27" cy="6" r="2"/><circle cx="5" cy="27" r="2"/><circle cx="27" cy="27" r="2"/></svg><strong>Explorer</strong><span class="poc">Preview</span></div>
     <nav aria-label="Exploration actions">
       <details id="file-menu" class="app-menu"><summary>File</summary><div class="menu-items"><button id="library-toggle" hidden>Library</button><button id="import">Open file</button><button id="project-open" hidden>Open project journey</button><button id="recovery-open">Recovery</button><button id="storage-home" hidden>Local storage</button><a id="save-file" href="export.json" download hidden>Save file</a><button id="visual-export-open" hidden>Export maps</button><button id="project-copy-open" hidden>Save a project copy</button><button id="project-reconcile-open" hidden>Review project changes</button><button id="project-merge-open" hidden>Compare and merge project journey</button><button id="finish" hidden>Finish exploration</button></div></details>
-      <details id="tools-menu" class="app-menu"><summary>Tools</summary><div class="menu-items"><button id="decision-brief" hidden>Decision brief</button><button id="implementation-handoff" hidden>Implementation handoff</button><button id="check-answers" hidden>Check answers</button><button id="challenge-decisions" hidden>Challenge decisions</button><button id="dashboard-open" type="button" aria-haspopup="dialog">Usage dashboard</button></div></details>
+      <details id="tools-menu" class="app-menu"><summary>Tools</summary><div class="menu-items"><button id="review-affected" hidden>Review affected answers</button><button id="decision-brief" hidden>Decision brief</button><button id="implementation-handoff" hidden>Implementation handoff</button><button id="check-answers" hidden>Check answers</button><button id="challenge-decisions" hidden>Challenge decisions</button><button id="dashboard-open" type="button" aria-haspopup="dialog">Usage dashboard</button></div></details>
       <button id="palette-open" type="button" aria-haspopup="dialog">Commands</button>
       <button id="navigation-open" class="settings-gear" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m9 3-.5 2-2 1.2-2-.6-2 3.4L4 10.5v3L2.5 15l2 3.4 2-.6 2 1.2.5 2h4l.5-2 2-1.2 2 .6 2-3.4-1.5-1.5v-3L20 9l-2-3.4-2 .6-2-1.2-.5-2Z"/><circle cx="11.25" cy="12" r="3"/></svg></button>
     </nav>
@@ -173,6 +173,18 @@
     <div class="actions"><button id="palette-refresh">Refresh from beginning</button><button id="palette-next" disabled>Next matches</button></div>
     <p class="quiet">Off by default. Works outside text fields only when the configured voice shortcut is known and different. Copilot or the OS may reserve it; use Commands if it conflicts.</p>
     <button id="palette-close">Close</button>
+  </dialog>
+  <dialog id="review-queue-dialog" aria-labelledby="review-queue-title">
+    <h2 id="review-queue-title">Review affected answers</h2>
+    <p>Inspect the saved answer and changed premises. Reaffirm one cause at a time, revise your answer, or explicitly clear it. Reaffirming records your judgment against current sources; it does not verify their correctness.</p>
+    <p id="review-queue-status" role="status" aria-live="polite"></p>
+    <div class="guidance-actions"><button id="review-queue-prev">Previous answer</button><button id="review-queue-next">Next answer</button><button id="review-queue-refresh">Refresh queue</button></div>
+    <section id="review-queue-content"><h3 id="review-queue-question"></h3><h4 id="review-queue-answer-label"></h4><pre id="review-queue-answer"></pre>
+      <label for="review-queue-cause">Cause to review</label><select id="review-queue-cause"></select>
+      <p id="review-queue-provenance"></p><pre id="review-queue-source"></pre><p id="review-queue-path"></p><p id="review-queue-research"></p>
+      <p>Revise opens your existing editor and keeps its draft. Clearing changes only the saved answer to Unanswered; any private draft stays recoverable. Saving a revised or cleared answer explicitly acknowledges all its current review causes.</p>
+      <div class="guidance-actions"><button id="review-queue-reaffirm">Reaffirm for selected cause…</button><button id="review-queue-revise">Revise in editor</button><button id="review-queue-clear">Clear saved answer…</button></div>
+    </section><button id="review-queue-close">Close review</button>
   </dialog>
   <dialog id="answer-change-dialog" aria-labelledby="answer-change-title">
     <h2 id="answer-change-title">Review this answer change</h2>

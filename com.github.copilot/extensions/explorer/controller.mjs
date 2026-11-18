@@ -7,8 +7,8 @@ import { ProjectCopy } from './project-copy.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
 import { ProjectMerge } from './project-merge.mjs';
-import { AnswerChanges } from './answer-changes.mjs';
-import { addDependency, removeDependency, restartBranch } from './model.mjs';
+import { AnswerChanges, applyAnswerChange } from './answer-changes.mjs';
+import { changeDependency } from './model.mjs';
 import { projectDocumentAccess } from './storage-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
@@ -924,8 +924,7 @@ export class Explorer {
         case 'remove-dependency': {
           const allowed = ['action', 'scope', 'revision', 'nodeId', 'prerequisiteId', ...(action === 'add-dependency' ? ['explanation'] : [])];
           if (Object.keys(input).some(key => !allowed.includes(key))) throw Error('Invalid dependency action fields.');
-          if (action === 'add-dependency') addDependency(next, input.nodeId, input.prerequisiteId, input.explanation);
-          else removeDependency(next, input.nodeId, input.prerequisiteId);
+          changeDependency(next, action === 'add-dependency' ? 'add' : 'remove', input.nodeId, input.prerequisiteId, input.explanation);
           await this.save(next, action === 'add-dependency' ? 'Dependency added' : 'Dependency removed');
           break;
         }
@@ -1003,13 +1002,16 @@ export class Explorer {
           break;
         case 'answer':
         case 'restart-branch':
+        case 'reaffirm-review':
+        case 'clear-review-answer':
           if (input.draftRevision !== undefined) {
             if (!Number.isSafeInteger(input.draftRevision) || input.draftRevision < 0) throw new Error('Invalid draft revision.');
             await this.draftIdentity(input.draftJourney);
           }
-          if (action === 'restart-branch' && input.expand === true) throw Error('Restart does not generate questions. Explore deeper explicitly afterward.');
+          if (action !== 'answer' && input.expand === true) throw Error('This operation does not generate questions. Explore deeper explicitly afterward.');
+          if (['reaffirm-review', 'clear-review-answer'].includes(action) && (input.draftRevision !== undefined || input.draftJourney !== undefined)) throw Error('Guided review preserves private drafts separately.');
           const changeInput = { ...input, operation: action };
-          const changedAnswer = (action === 'restart-branch' ? restartBranch : answerNode)(next, input.nodeId, input.answer, input.answerState);
+          const changedAnswer = applyAnswerChange(next, changeInput);
           if (input.expand === true && effectiveAnswerState(findNode(next, input.nodeId)) === 'unanswered') throw new Error('Choose a state or write an answer before exploring deeper.');
           await this.withDocumentLock(async () => {
             const saved = await this.fresh(), review = this.answerChanges ??= new AnswerChanges();
@@ -1017,7 +1019,7 @@ export class Explorer {
             if (changedAnswer) {
               if (action === 'restart-branch') await review.checkpoint(this, saved, changeInput, next);
               next.finishedAt = null;
-              await this.commitCurrentLocked(saved, next, action === 'restart-branch' ? 'Branch restarted with protected checkpoint' : 'Answer or state changed', () => review.guard(this, saved, changeInput, next));
+              await this.commitCurrentLocked(saved, next, action === 'restart-branch' ? 'Branch restarted with protected checkpoint' : action === 'reaffirm-review' ? 'One review cause reaffirmed' : action === 'clear-review-answer' ? 'Reviewed answer cleared' : 'Answer or state changed', () => review.guard(this, saved, changeInput, next));
             }
             if (input.answerPreview && review.entry?.token === input.answerPreview) review.entry = null;
           });

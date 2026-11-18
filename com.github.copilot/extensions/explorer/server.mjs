@@ -23,6 +23,7 @@ const assets = new Map([
   ['search.mjs', ['search.mjs', 'text/javascript; charset=utf-8']],
   ['next-question.mjs', ['next-question.mjs', 'text/javascript; charset=utf-8']],
   ['decision-impact.mjs', ['decision-impact.mjs', 'text/javascript; charset=utf-8']],
+  ['review-queue.mjs', ['review-queue.mjs', 'text/javascript; charset=utf-8']],
   ['drafts.mjs', ['drafts.mjs', 'text/javascript; charset=utf-8']],
   ['cleanup.mjs', ['cleanup.mjs', 'text/javascript; charset=utf-8']],
   ['question-help-client.mjs', ['question-help-client.mjs', 'text/javascript; charset=utf-8']],
@@ -204,7 +205,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req);
-        if ((input.answerPreview || ['research', 'research-follow-up', 'restore', 'restart-branch', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry', 'project-merge-accept', 'add-dependency', 'remove-dependency'].includes(input.action)) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        if ((input.answerPreview || ['research', 'research-follow-up', 'restore', 'restart-branch', 'reaffirm-review', 'clear-review-answer', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry', 'project-merge-accept', 'add-dependency', 'remove-dependency'].includes(input.action)) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
       if (req.method === 'POST' && route === 'api/viewer-export') {

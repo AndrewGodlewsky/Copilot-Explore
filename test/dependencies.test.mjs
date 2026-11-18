@@ -65,7 +65,9 @@ test('controller saves dependency edits through history, rejects stale writes an
   const e = await new Explorer({ file }).load(); t.after(() => e.close());
   const command = (action, data = {}) => e.command(action, { revision: e.doc.revision, nodeId: b, prerequisiteId: a, ...data });
   await command('add-dependency', { explanation: 'Shared requirement' }); const saved = structuredClone(e.doc), snapshotRevision = saved.revision;
-  assert.deepEqual(e.doc.nodes, doc.nodes); assert.deepEqual(JSON.parse(await readFile(file)).dependencies, [edge(b, a, 'Shared requirement')]);
+  assert.deepEqual(e.doc.nodes.map(n => [n.id, n.answer, n.answerState]), doc.nodes.map(n => [n.id, n.answer, n.answerState]));
+  assert.equal(e.doc.nodes.find(n => n.id === b).reviewCauses.changes[0].kind, 'dependency-added');
+  assert.deepEqual(JSON.parse(await readFile(file)).dependencies, [edge(b, a, 'Shared requirement')]);
   await assert.rejects(command('add-dependency'), /duplicate|already/i); assert.deepEqual(e.doc, saved);
   await assert.rejects(command('remove-dependency', { inferred: true }), /field/i);
   await command('remove-dependency'); assert.equal(Object.hasOwn(e.doc, 'dependencies'), false);

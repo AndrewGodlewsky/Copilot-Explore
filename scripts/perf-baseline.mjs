@@ -28,6 +28,7 @@ import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/
 import { researchSettingsText } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
 import { NextQuestion } from '../com.github.copilot/extensions/explorer/web/next-question.mjs';
+import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
 import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -56,6 +57,7 @@ export async function measure(phases, name, operation, work, { count = samples, 
 }
 
 const imports = [
+  "import { reviewQueue, reviewContext } from './review-queue.mjs';",
   "import { attachDashboard } from './dashboard.mjs';",
   "import { attachMinimap } from './minimap.mjs';",
   "import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';",
@@ -99,6 +101,7 @@ export async function domFixture(document) {
   };
   Object.assign(window, { DecisionImpact, impactPath, decisionImpactKey, criticalPaths, searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, attachDashboard, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
     ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
+  Object.assign(window, { reviewQueue, reviewContext });
   const source = imports.reduce((text, statement) => text.replace(statement, ''), appScript)
     .replace('void poll();', 'window.__perf = { renderMap, renderWorkspace, renderOutline, poll, select, zoom, pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); }, geometry: () => geometryCache.value, stopPoll: () => clearTimeout(pollTimer) }; void poll();');
   window.eval(source);

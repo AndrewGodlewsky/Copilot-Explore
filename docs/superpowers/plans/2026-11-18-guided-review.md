@@ -1,0 +1,11 @@
+# Issue #69: guided review of affected answers
+
+Use a deterministic tree-order queue of ordinary questions carrying review flags, listing each once even when tree and explicit-dependency paths overlap. Show the saved answer/state, retained change identities and current upstream context. Recorded bases are historical fingerprints, not proof of correctness; unavailable old content and legacy/overflow causes must be explicit. Structural directions retain their existing separate review action.
+
+Extend bounded review provenance with dependency-added/removed causes, including both endpoints. User dependency edits mark the dependent question and its reachable downstream reasoning; pure dependency construction remains suitable for imports/fixtures. Keep all user answers intact and retained research stale until explicitly refreshed.
+
+Reaffirm one selected cause (or the explicit legacy/earlier remainder) using the existing AnswerChanges proof, bound to the entire current map and captured work. Remove only that cause; never clear another outstanding cause. Keep answer text/state and private drafts untouched. Revise opens the existing editor; clear explicitly previews saving an empty unanswered answer without discarding a private draft. Ordinary saves of reviewed answers explicitly confirm acknowledgment of all current causes. Reaffirming is a user judgment against current sources, not external verification.
+
+The queue holds a read-only snapshot and becomes stale on saved-map/journey changes. Refresh is explicit; navigation and all mutations reject obsolete context. Show one question/cause at a time to bound DOM and preserve the connected editor. Reuse existing history, atomic writer lock and final consequence guard; no automatic research or generation.
+
+First add failing model/queue tests, then model implementation; add controller proof/history/failure tests and UI workflows before wiring each layer. Include strict validation/shared round trips, multiple causes, link removal, legacy fallback, stale source/preview, exact private draft preservation and deep iteration. Run full tests, check, package and installed local runtime fixture; one independent final review. Bump to 0.1.84 and publish verified main. Native keyboard/narrow-pane checks remain pending owner review.

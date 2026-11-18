@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.84",
+    "summary": "Review affected answers in an ordered queue with upstream change context. Reaffirm one cause at a time, revise in your retained editor, or explicitly clear the saved answer. Other causes, private drafts and stale research stay visible. Dependency edits now record both endpoints; changed sources require fresh confirmation."
+  },
+  {
     "version": "0.1.83",
     "summary": "Restart a branch from a corrected answer. Preview every removed descendant and dependency link, preserve a protected History checkpoint, then save the revision together. Outside dependent answers survive with review flags; removed-node drafts remain recoverable. Cancel keeps your proposed answer, and regeneration stays explicit."
   },

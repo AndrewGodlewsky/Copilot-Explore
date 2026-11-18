@@ -2,7 +2,7 @@ import { validateHandoff, handoffMarkdown } from './implementation-handoff.mjs';
 import { validateBrief, briefMarkdown } from './decision-brief.mjs';
 import { randomUUID } from 'node:crypto';
 import { DecisionImpact } from './web/decision-impact.mjs';
-import { savedDigest, reviewCauses, addReviewCause } from './review-causes.mjs';
+import { savedDigest, reviewCauses, addReviewCause, reviewCauseKey } from './review-causes.mjs';
 import { researchSettings, researchSettingsText } from './web/research-policy.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './web/answer-state.mjs';
 import { effectiveMode, validMode, MODES } from './web/modes.mjs';
@@ -46,6 +46,15 @@ export function removeDependency(doc, dependentId, prerequisiteId) {
   if (dependencies.length === (doc.dependencies ?? []).length) throw Error('That dependency no longer exists.');
   validateDocument({ ...doc, dependencies });
   if (dependencies.length) doc.dependencies = dependencies; else delete doc.dependencies;
+}
+export function changeDependency(doc, action, dependentId, prerequisiteId, explanation) {
+  if (!['add', 'remove'].includes(action)) throw Error('Invalid dependency change.');
+  const cause = { sourceId: prerequisiteId, baseDigest: savedDigest(doc), revision: doc.revision, kind: action === 'add' ? 'dependency-added' : 'dependency-removed', dependentId };
+  const previous = action === 'remove' ? new DecisionImpact(doc).analyze(dependentId) : null;
+  if (action === 'add') addDependency(doc, dependentId, prerequisiteId, explanation); else removeDependency(doc, dependentId, prerequisiteId);
+  const impact = previous ?? new DecisionImpact(doc).analyze(dependentId);
+  for (const node of doc.nodes) if (impact.predecessors.combined.has(node.id)) addReviewCause(node, cause);
+  for (const node of doc.nodes) if (node.research) node.researchStale = true;
 }
 export function pinnedConstraints(value) {
   const seen = new Set();
@@ -334,6 +343,23 @@ export function answerNode(doc, id, answer, answerState) {
   delete node.reviewCauses;
   return true;
 }
+export function reaffirmReview(doc, id, selected) {
+  const node = findNode(doc, id);
+  if (!isQuestion(node) || !node.review) throw Error('Choose an answer that needs review.');
+  const causes = node.reviewCauses ?? { changes: [], earlier: true };
+  let changes = causes.changes, earlier = causes.earlier;
+  if (selected === 'earlier') {
+    if (!earlier) throw Error('That earlier review cause is no longer outstanding.');
+    earlier = false;
+  } else {
+    const valid = reviewCauses({ changes: [selected], earlier: false }).changes[0];
+    if (!changes.some(cause => reviewCauseKey(cause) === reviewCauseKey(valid) && cause.revision === valid.revision)) throw Error('That review cause is no longer outstanding.');
+    changes = changes.filter(cause => reviewCauseKey(cause) !== reviewCauseKey(valid));
+  }
+  node.review = !!(changes.length || earlier);
+  if (changes.length) node.reviewCauses = { changes, earlier }; else delete node.reviewCauses;
+  return true;
+}
 export function restartBranch(doc, id, answer, answerState) {
   const impact = new DecisionImpact(doc).analyze(id), removed = new Set([...impact.predecessors.tree.keys()].filter(nodeId => nodeId !== id));
   const cause = { sourceId: id, baseDigest: savedDigest(doc), revision: doc.revision };
@@ -386,7 +412,7 @@ export function toMarkdown(doc) {
     if (n.id === doc.rootId) continue;
     lines.push('', `## ${ids.get(n.id)}: ${md(n.question)}`, '', `Category: ${md(n.category)}. Parent: ${ids.get(n.parentId)}.`, '');
     if (n.review) lines.push('**Needs review:** recorded upstream reasoning changed, or a legacy review remains unresolved.', '');
-    if (n.reviewCauses) { for (const cause of n.reviewCauses.changes) lines.push(`- Review cause: source ${md(cause.sourceId)}, saved base ${cause.baseDigest}, revision ${cause.revision}.`); if (n.reviewCauses.earlier) lines.push('- Additional earlier or legacy review causes are not individually retained.'); lines.push(''); }
+    if (n.reviewCauses) { for (const cause of n.reviewCauses.changes) lines.push(`- Review cause: ${cause.kind ? `${cause.kind}, dependent ${md(cause.dependentId)}, ` : ''}source ${md(cause.sourceId)}, saved base ${cause.baseDigest}, revision ${cause.revision}.`); if (n.reviewCauses.earlier) lines.push('- Additional earlier or legacy review causes are not individually retained.'); lines.push(''); }
     if (n.researchStale) lines.push('**Retained research needs reconsideration after saved reasoning changed.** It has not been refreshed.', '');
     if (!isQuestion(n)) { lines.push('Direction (user supplied). Original direction text; not an answer or decision.', ''); continue; }
     lines.push('### User answer', '', `State: ${ANSWER_STATES[effectiveAnswerState(n)]}.`, '', n.answer ? md(n.answer) : '_No answer text._', '');

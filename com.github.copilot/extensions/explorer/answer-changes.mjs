@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { answerNode, restartBranch, findNode, validateDocument } from './model.mjs';
+import { answerNode, restartBranch, reaffirmReview, findNode, validateDocument } from './model.mjs';
 import { DecisionImpact, impactPath } from './web/decision-impact.mjs';
 import { effectiveAnswerState } from './web/answer-state.mjs';
 import { sameResearchSources } from './research-context.mjs';
@@ -28,7 +28,17 @@ function affectedArtifacts(e, doc, next) {
   if (check && ['pending', 'result'].includes(check.status) && checkFreshness(check.dependencies, doc) && !checkFreshness(check.dependencies, next)) artifacts.push({ kind: check.operation, state: check.status });
   return artifacts;
 }
-const proposal = (input, next) => ({ operation: input.operation ?? 'answer', nodeId: input.nodeId, answer: input.answer, answerState: effectiveAnswerState(findNode(next, input.nodeId)), expand: input.expand === true, draftRevision: input.draftRevision ?? null, draftJourney: input.draftJourney ?? null });
+const proposal = (input, next) => ({ operation: input.operation ?? 'answer', nodeId: input.nodeId, answer: input.answer, answerState: effectiveAnswerState(findNode(next, input.nodeId)), expand: input.expand === true, draftRevision: input.draftRevision ?? null, draftJourney: input.draftJourney ?? null, reviewCause: input.reviewCause ?? null });
+export function applyAnswerChange(doc, input) {
+  if (input.operation === 'reaffirm-review') {
+    const node = findNode(doc, input.nodeId);
+    if (input.answer !== node.answer || input.answerState !== effectiveAnswerState(node)) throw Error('Reaffirm preserves the saved answer and state.');
+    return reaffirmReview(doc, input.nodeId, input.reviewCause);
+  }
+  if (input.reviewCause !== undefined) throw Error('Select a review cause only when reaffirming.');
+  if (input.operation === 'clear-review-answer' && (input.answer !== '' || input.answerState !== 'unanswered' || !findNode(doc, input.nodeId).review)) throw Error('Choose a reviewed answer to clear to unanswered.');
+  return (input.operation === 'restart-branch' ? restartBranch : answerNode)(doc, input.nodeId, input.answer, input.answerState);
+}
 async function references(e) {
   const key = await e.draftIdentity(e.activeKey ?? e.doc.id);
   e.referenceStore ??= new References(e.auxiliaryDirectory());
@@ -37,7 +47,7 @@ async function references(e) {
 function analyze(e, doc, input) {
   const next = structuredClone(doc), source = findNode(doc, input.nodeId);
   const restart = input.operation === 'restart-branch';
-  const savedChange = (restart ? restartBranch : answerNode)(next, input.nodeId, input.answer, input.answerState);
+  const savedChange = applyAnswerChange(next, input);
   const target = findNode(next, input.nodeId), changed = source.answer !== target.answer || effectiveAnswerState(source) !== effectiveAnswerState(target);
   const impact = new DecisionImpact(doc).analyze(input.nodeId);
   const retained = new Set(next.nodes.map(n => n.id)), removedIds = doc.nodes.filter(n => !retained.has(n.id)).map(n => n.id), removed = new Set(removedIds);
@@ -51,7 +61,7 @@ function analyze(e, doc, input) {
   const followup = !!(e.followup && !e.followup.historical && !sameFollowup(e.followup.dependencies, next, e.followup.nodeId));
   const artifacts = affectedArtifacts(e, doc, next);
   return { next, savedChange, changed, invalidates, restart, impact, removedIds, removedLinks, affectedIds, researchIds, generated, staged, running, followup, artifacts,
-    requiresConfirmation: !!(restart || affectedIds.length || researchIds.length || savedChange && (staged || running || followup || artifacts.length)) };
+    requiresConfirmation: !!(restart || source.review || affectedIds.length || researchIds.length || savedChange && (staged || running || followup || artifacts.length)) };
 }
 
 /** One bounded, transient preview; no user draft or preview is stored in the shared map. */
@@ -59,12 +69,12 @@ export class AnswerChanges {
   entry = null;
   async request(e, input) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw Error('Invalid answer preview request.');
-    const fields = { prepare: ['action', 'operation', 'journey', 'revision', 'nodeId', 'answer', 'answerState', 'expand', 'draftRevision', 'draftJourney'], page: ['action', 'token', 'page', 'targetId', 'pathPage', 'linkPage'], discard: ['action', 'token'] };
+    const fields = { prepare: ['action', 'operation', 'journey', 'revision', 'nodeId', 'answer', 'answerState', 'expand', 'draftRevision', 'draftJourney', 'reviewCause'], page: ['action', 'token', 'page', 'targetId', 'pathPage', 'linkPage'], discard: ['action', 'token'] };
     if (!fields[input.action] || Object.keys(input).some(key => !fields[input.action].includes(key))) throw Error('Invalid answer preview fields.');
     if (input.action === 'discard') { if (this.entry?.token === input.token) this.entry = null; return { discarded: true }; }
     const doc = await e.readCurrent();
     if (input.action === 'prepare') {
-      if (input.operation !== undefined && !['answer', 'restart-branch'].includes(input.operation) || input.operation === 'restart-branch' && input.expand === true) throw Error('Invalid answer preview operation.');
+      if (input.operation !== undefined && !['answer', 'restart-branch', 'reaffirm-review', 'clear-review-answer'].includes(input.operation) || input.operation && input.operation !== 'answer' && input.expand === true) throw Error('Invalid answer preview operation.');
       if (input.operation === 'restart-branch' && (e.pending || e.preview)) throw Error('Cancel the pending request and dismiss any unsaved question proposal before restarting a branch.');
       if (e.closed || input.journey !== (e.activeKey ?? e.doc.id)) throw stale();
       if (input.revision !== doc.revision || doc.revision !== e.doc.revision) throw Error('The map changed. Refresh the saved journey before reviewing this answer; your draft is retained.');
@@ -124,7 +134,8 @@ export class AnswerChanges {
     counts.assumptions = surviving.filter(n => n.state === 'assumption').length;
     counts.states = Object.fromEntries(Object.keys(counts.states).map(state => [state, surviving.filter(n => n.state === state).length]));
     return { token: entry.token, requiresConfirmation: entry.requiresConfirmation, changed: entry.changed, acknowledgment: !entry.restart && !entry.changed && entry.savedChange,
-      operation: entry.restart ? 'restart-branch' : 'answer', removed: removed.size, removedResearch: doc.nodes.filter(n => removed.has(n.id) && n.research).length, removedReferences: entry.selectedReferences?.nodeIds.filter(id => removed.has(id)).length ?? 0, checkpoint: entry.checkpoint,
+      operation: entry.proposal.operation, reviewResolution: source.review ? { total: (source.reviewCauses?.changes.length ?? 0) + (!source.reviewCauses || source.reviewCauses.earlier ? 1 : 0), remaining: (findNode(entry.next, source.id).reviewCauses?.changes.length ?? 0) + (findNode(entry.next, source.id).review && (!findNode(entry.next, source.id).reviewCauses || findNode(entry.next, source.id).reviewCauses.earlier) ? 1 : 0), selected: entry.proposal.reviewCause } : null,
+      removed: removed.size, removedResearch: doc.nodes.filter(n => removed.has(n.id) && n.research).length, removedReferences: entry.selectedReferences?.nodeIds.filter(id => removed.has(id)).length ?? 0, checkpoint: entry.checkpoint,
       linkPage, linkTotal: entry.removedLinks.length, links: entry.removedLinks.slice(linkPage * 25, linkPage * 25 + 25).map(link => ({ ...link, dependent: byId.get(link.dependentId).question, prerequisite: byId.get(link.prerequisiteId).question, external: removed.has(link.dependentId) !== removed.has(link.prerequisiteId) })),
       current: { answer: source.answer, state: effectiveAnswerState(source) }, proposed: { answer: entry.proposal.answer, state: entry.proposal.answerState },
       counts, directions: entry.affectedIds.filter(id => byId.get(id).kind === 'direction').length,

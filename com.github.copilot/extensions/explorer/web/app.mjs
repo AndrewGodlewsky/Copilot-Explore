@@ -12,6 +12,7 @@ import { attachMinimap } from './minimap.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';
 import { NextQuestion } from './next-question.mjs';
+import { reviewQueue, reviewContext } from './review-queue.mjs';
 import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';
 
@@ -406,6 +407,12 @@ function renderAnswerChange() {
   $('answer-change-intention').textContent = restart ? 'Remove only the selected question’s tree descendants after preserving a checkpoint. Outside branches survive. No new questions will be generated.' : 'These are recorded reasoning relationships, not a prediction of real-world damage. Affected answers are retained and marked for review.';
   $('answer-change-summary').textContent = `${p.acknowledgment ? 'This acknowledges current review causes without changing answer text or state. Captured work still needs reconsideration. ' : ''}${p.counts.total} affected questions: ${p.counts.structural} reachable through the tree, ${p.counts.confirmed} through explicit dependencies, ${p.counts.mixedOnly} through mixed paths only. Tree and dependency counts may overlap. ${p.directions} structural directions also need review.`;
   $('answer-change-confirm').textContent = p.acknowledgment ? 'Acknowledge review and update captured work' : 'Save and mark affected items for review';
+  if (p.reviewResolution) {
+    const r = p.reviewResolution;
+    $('answer-change-summary').prepend(p.operation === 'reaffirm-review' ? `Acknowledge only the selected cause against the current saved sources; ${r.remaining} other cause groups remain. Your saved answer, state and private draft stay unchanged. This is not external verification. ` : `Saving acknowledges all ${r.total} current review cause groups for this answer, including any earlier/legacy remainder. Review each cause in Review affected answers before confirming. `);
+    if (p.operation === 'reaffirm-review') { $('answer-change-title').textContent = 'Reaffirm this answer for one cause'; $('answer-change-confirm').textContent = 'Reaffirm for this cause only'; }
+    if (p.operation === 'clear-review-answer') { $('answer-change-title').textContent = 'Clear this saved answer'; $('answer-change-confirm').textContent = 'Clear saved answer and acknowledge all causes'; }
+  }
   if (restart) {
     $('answer-change-summary').prepend(`${p.removed} descendants will be removed, including ${p.removedResearch} research results. ${p.removedReferences} local reference selections will remain unavailable until restored. ${p.checkpoint ? `Protected checkpoint: ${p.checkpoint}.` : 'No saved change; no checkpoint or revision will be created.'} Surviving reasoning: `);
     $('answer-change-confirm').textContent = `Restart and remove ${p.removed} descendants`;
@@ -441,10 +448,10 @@ async function pageAnswerChange(page, targetId = null, pathPage = 0, linkPage = 
     review.value = value; renderAnswerChange();
   } catch (error) { if (answerChange === review && sequence === review.sequence) { $('answer-change-error').textContent = error.message; $('answer-change-confirm').disabled = true; } }
 }
-async function reviewAnswerChange(input, generation) {
+async function reviewAnswerChange(input, generation, stillCurrent) {
   const journey = referenceJourney(), page = pageEpoch, base = JSON.stringify(state.document), work = answerChangeWork(), focus = document.activeElement;
-  const savedCurrent = () => !closed && !suspended && page === pageEpoch && journey === referenceJourney() && selected === input.nodeId && JSON.stringify(state.document) === base && answerChangeWork() === work;
-  const current = () => savedCurrent() && draftClient.entries.get(input.nodeId)?.edits === generation;
+  const savedCurrent = () => !closed && !suspended && page === pageEpoch && journey === referenceJourney() && (stillCurrent ? stillCurrent() : selected === input.nodeId) && JSON.stringify(state.document) === base && answerChangeWork() === work;
+  const current = () => savedCurrent() && (!!stillCurrent || draftClient.entries.get(input.nodeId)?.edits === generation);
   const value = await answerChangeRequest({ action: 'prepare', journey, revision: state.document.revision, ...input });
   if (!savedCurrent() || value.requiresConfirmation && !current()) { void answerChangeRequest({ action: 'discard', token: value.token }).catch(() => {}); notice('The answer or its sources changed. Save again to review the current edit.'); return null; }
   if (!value.requiresConfirmation) return value;
@@ -453,6 +460,82 @@ async function reviewAnswerChange(input, generation) {
     $('answer-change-dialog').showModal(); $('answer-change-cancel').focus();
   });
 }
+let reviewPanel = null;
+const reviewPanelCurrent = () => reviewPanel && !closed && !suspended && reviewPanel.page === pageEpoch && reviewPanel.journey === referenceJourney() && reviewPanel.base === JSON.stringify(state.document);
+const queueCauses = node => [...(node?.reviewCauses?.changes ?? []), ...(node && (!node.reviewCauses || node.reviewCauses.earlier) ? ['earlier'] : [])];
+function closeReviewQueue(force = false) {
+  if (reviewPanel?.committing && force !== true) return;
+  const focus = reviewPanel?.focus; reviewPanel = null; if ($('review-queue-dialog').open) $('review-queue-dialog').close();
+  if (focus?.isConnected) focus.focus({ preventScroll: true });
+}
+function refreshReviewQueue(nodeId = reviewPanel?.nodes[reviewPanel.index]?.id) {
+  if (!state.document) return closeReviewQueue();
+  const nodes = reviewQueue(state.document), previous = reviewPanel;
+  reviewPanel = { doc: state.document, base: JSON.stringify(state.document), nodes, index: Math.max(0, nodes.some(n => n.id === nodeId) ? nodes.findIndex(n => n.id === nodeId) : Math.min(previous?.index ?? 0, nodes.length - 1)), cause: 0, journey: referenceJourney(), page: pageEpoch, focus: previous?.focus ?? document.activeElement, busy: false };
+  renderReviewQueue();
+}
+function openReviewQueue(nodeId) {
+  refreshReviewQueue(nodeId); if (!reviewPanel) return;
+  if (!$('review-queue-dialog').open) $('review-queue-dialog').showModal(); $('review-queue-close').focus();
+}
+function syncReviewQueue() {
+  if (!reviewPanel) return;
+  const fresh = reviewPanelCurrent(), node = reviewPanel.nodes[reviewPanel.index], blocked = !fresh || reviewPanel.busy || !!state.pending;
+  for (const name of ['reaffirm', 'clear', 'revise', 'cause']) $(`review-queue-${name}`).disabled = blocked || !node;
+  $('review-queue-prev').disabled = blocked || reviewPanel.index === 0; $('review-queue-next').disabled = blocked || reviewPanel.index + 1 >= reviewPanel.nodes.length;
+  $('review-queue-refresh').disabled = reviewPanel.busy;
+  $('review-queue-close').disabled = !!reviewPanel.committing;
+  $('review-queue-status').textContent = reviewPanel.committing ? 'Saving the reviewed answer. Keep this dialog open until the response is applied; your private draft is preserved.' : !fresh ? 'Saved sources changed. Refresh the review queue before acting. Your editor draft is retained.' : state.pending ? 'Wait for or cancel the current request before changing a reviewed answer.' : node ? `Question ${reviewPanel.index + 1} of ${reviewPanel.nodes.length}. Tree order; each affected answer appears once. Explicit dependencies may cross this order.` : 'No answers currently need review. Structural directions have separate review controls.';
+}
+function renderReviewQueue() {
+  const p = reviewPanel, node = p.nodes[p.index], causes = queueCauses(node), cause = causes[p.cause];
+  $('review-queue-content').hidden = !node;
+  if (node) {
+    $('review-queue-question').textContent = node.question;
+    $('review-queue-answer-label').textContent = `Saved answer (${ANSWER_STATES[effectiveAnswerState(node)]})`;
+    $('review-queue-answer').textContent = node.answer || '(No saved answer text)';
+    $('review-queue-cause').replaceChildren(...causes.map((c, i) => el('option', { value: i }, c === 'earlier' ? 'Earlier / legacy causes without retained details' : `${i + 1}. ${c.kind === 'dependency-added' ? 'Dependency added' : c.kind === 'dependency-removed' ? 'Dependency removed' : 'Upstream answer or branch changed'} — before revision ${c.revision}`)));
+    $('review-queue-cause').value = String(p.cause);
+    const context = reviewContext(p.doc, node.id, cause);
+    $('review-queue-provenance').textContent = context.legacy ? 'Historical details are unavailable for these legacy or earlier causes. Acknowledging this remainder does not acknowledge separately retained causes.' : `Saved base before this change: revision ${cause.revision}, fingerprint ${cause.baseDigest}. This identifies the recorded pre-change map; previous answer text is not retained here. Local History may contain that version; revision numbers alone do not prove a match across collaborators.`;
+    $('review-queue-source').textContent = context.source ? `Current upstream question: ${context.source.question}\nCurrent saved answer (${ANSWER_STATES[effectiveAnswerState(context.source)]}): ${context.source.answer || '(No answer text)'}${context.source.review ? '\nThis upstream answer also still needs review.' : ''}` : context.legacy ? 'No specific upstream source can be reconstructed.' : `Upstream source ${cause.sourceId} is no longer in this map. Its current answer cannot be reviewed here.`;
+    $('review-queue-path').textContent = context.legacy ? 'No relationship history has been invented.' : `${context.structural ? 'Current tree path: possible exposure. ' : ''}${context.confirmed ? 'Current explicit dependency path. ' : ''}${context.mixed ? 'Current mixed tree/dependency path: possible exposure. ' : ''}${!context.structural && !context.confirmed && !context.mixed ? 'No current path; the historical cause remains until acknowledged. ' : ''}${cause.dependentId ? `Recorded dependency: ${context.dependent?.question ?? cause.dependentId} depends on ${context.source?.question ?? cause.sourceId}. This direct link is ${context.linkPresent ? 'present' : 'absent'} in the current map.` : ''}`;
+    $('review-queue-research').textContent = node.research ? `${node.researchStale ? 'Saved research is marked stale.' : 'Saved research may not cover the changed premise.'} Reaffirming does not refresh or verify it. Use the question’s Research tab for an explicit new request.` : 'No research is saved for this answer. Review does not start research automatically.';
+  }
+  syncReviewQueue();
+}
+async function applyQueueReview(operation) {
+  const p = reviewPanel, node = p?.nodes[p.index], cause = node && queueCauses(node)[p.cause];
+  if (!node || !reviewPanelCurrent() || p.busy || state.pending) return;
+  p.busy = true; syncReviewQueue();
+  const clearing = operation === 'clear-review-answer', generation = draftClient.entries.get(node.id)?.edits;
+  const current = () => reviewPanel === p && reviewPanelCurrent() && (!clearing || draftClient.entries.get(node.id)?.edits === generation);
+  try {
+    if (clearing) {
+      await draftClient.flush(false, node.id);
+      if (!current()) return notice('The draft or saved sources changed while preserving the draft. Review Clear again; your editor text is retained.');
+    }
+    const input = { nodeId: node.id, operation, answer: operation === 'reaffirm-review' ? node.answer : '', answerState: operation === 'reaffirm-review' ? effectiveAnswerState(node) : 'unanswered', ...(operation === 'reaffirm-review' ? { reviewCause: cause } : {}) };
+    const proof = await reviewAnswerChange(input, null, current); if (!proof || !current()) return;
+    p.committing = true; syncReviewQueue();
+    const result = await api(operation, { ...input, answerPreview: proof.token, confirmConsequences: true });
+    if (result && reviewPanel === p && p.journey === referenceJourney() && p.page === pageEpoch) refreshReviewQueue(node.id);
+  } catch (error) { notice(error.message); }
+  finally { if (reviewPanel === p) { p.busy = false; p.committing = false; syncReviewQueue(); } }
+}
+$('review-affected').addEventListener('click', () => openReviewQueue(selected));
+$('review-queue-close').addEventListener('click', () => closeReviewQueue());
+$('review-queue-dialog').addEventListener('cancel', event => { event.preventDefault(); closeReviewQueue(); });
+$('review-queue-refresh').addEventListener('click', () => refreshReviewQueue());
+for (const [id, direction] of [['prev', -1], ['next', 1]]) $(`review-queue-${id}`).addEventListener('click', () => { if (reviewPanelCurrent() && !reviewPanel.busy) { reviewPanel.index += direction; reviewPanel.cause = 0; renderReviewQueue(); } });
+$('review-queue-cause').addEventListener('change', () => { if (reviewPanelCurrent() && !reviewPanel.busy) { reviewPanel.cause = Number($('review-queue-cause').value); renderReviewQueue(); } });
+$('review-queue-reaffirm').addEventListener('click', () => void applyQueueReview('reaffirm-review'));
+$('review-queue-clear').addEventListener('click', () => void applyQueueReview('clear-review-answer'));
+$('review-queue-revise').addEventListener('click', () => {
+  if (!reviewPanelCurrent() || reviewPanel.busy) return;
+  const id = reviewPanel.nodes[reviewPanel.index]?.id; if (!id) return;
+  closeReviewQueue(); select(id); $('answer')?.focus({ preventScroll: true }); notice('Edit your retained draft. Saving explicitly confirms all current review causes; cancel keeps the draft.');
+});
 $('answer-change-cancel').addEventListener('click', () => closeAnswerChange());
 $('answer-change-dialog').addEventListener('cancel', event => { event.preventDefault(); closeAnswerChange(); });
 $('answer-change-confirm').addEventListener('click', () => { if (!answerChange?.current()) closeAnswerChange(false, 'The answer or its sources changed. Review again; your draft is retained.'); else closeAnswerChange(true); });
@@ -543,6 +626,7 @@ function apply(next, reset = false) {
     acceptedIds.clear(); acceptedParentId = null;
   }
   signature = stamp; state = next;
+  syncReviewQueue();
   if (answerChange && !answerChange.current()) closeAnswerChange(false, 'Saved sources changed. Review the answer change again; your draft is retained.');
   if (paletteOpen() && (changedDocument || !state.document?.nodes.some(n => n.id === selected))) { closePalette(false); $('palette-open').focus({ preventScroll: true }); }
   for (const [id, ui] of nodeUi) {
@@ -571,6 +655,7 @@ function apply(next, reset = false) {
   updateCriticalStatus();
   showView();
   $('decision-brief').hidden = !doc;
+  $('review-affected').hidden = !doc;
   $('implementation-handoff').hidden = !doc;
   $('check-answers').hidden = !doc; $('challenge-decisions').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
@@ -1880,7 +1965,8 @@ function renderWorkspace() {
       }
     });
     update('review', [node.review, isQuestion(node), pending], () => node.review ? el('div', { class: 'note' },
-      el('p', {}, isQuestion(node) ? 'An earlier answer changed. Review this question and save your answer again when it still fits.' : 'An earlier answer changed. Review this direction and generate fresh questions when needed.'),
+      el('p', {}, isQuestion(node) ? 'Saved reasoning changed or this answer has an earlier review flag. Inspect each cause before reaffirming or revising.' : 'Earlier reasoning changed. Review this direction and generate fresh questions when needed.'),
+      isQuestion(node) ? button('Review affected answers', () => openReviewQueue(node.id), { id: 'review-this-answer' }) : null,
       node.kind === 'direction' ? button('Mark direction reviewed', () => { if (current()) void api('acknowledge-direction', { nodeId: node.id }); }, { id: 'acknowledge-direction', disabled: pending }) : null) : null);
     if ($('revisit-date')) {
       const draft = ui.revisitDraft, conflict = draft && draft.base !== JSON.stringify(node.revisit ?? null);
@@ -3199,6 +3285,7 @@ const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
   closeAnswerChange();
+  closeReviewQueue(true);
   if ($('project-merge-dialog').open) closeProjectMerge();
   if ($('project-reconcile-dialog').open) closeProjectReconciliation();
   if ($('project-copy-dialog').open) closeProjectCopy();

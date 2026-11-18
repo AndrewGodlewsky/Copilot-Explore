@@ -19,7 +19,8 @@ import { parseHandoff } from '../com.github.copilot/extensions/explorer/implemen
 import { parseAnswerCheck } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { Library } from '../com.github.copilot/extensions/explorer/library.mjs';
-import { createDocument, contextFor } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
+import { createDocument, contextFor, addDependency, answerNode } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { GeometryCache, viewportBounds, intersects, layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
@@ -324,6 +325,7 @@ test('Save & continue without guidance prioritizes review then wraps past resolv
   f.open(last.id); f.type('answer', 'Last answer'); $('save-answer').click();
   await until(() => $('node-workspace').dataset.nodeId === review.id, 'opened question needing review');
   chooseState(f, 'decided'); f.type('answer', 'Reviewed answer'); $('save-answer').click();
+  await until(() => $('answer-change-dialog').open, 'confirm all review causes'); $('answer-change-confirm').click();
   await until(() => $('node-workspace').dataset.nodeId === last.id, 'continued after acknowledged review');
   chooseState(f, 'decided'); $('save-answer').click();
   await until(() => $('node-workspace').dataset.nodeId === first.id, 'wrapped to first unresolved question');
@@ -1329,7 +1331,7 @@ test('next question refresh drops stale sources, preserves orphan drafts and ren
   await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: target.id, answer: 'Changed source', answerState: 'tentative' }); await f.poll(); assert.ok($('open-next-question'));
   const reviewed = structuredClone(f.explorer.doc); reviewed.nodes[1].review = true; await f.explorer.command('import', { revision: f.explorer.doc.revision, document: reviewed }); await f.poll();
   assert.ok($('open-next-question')); assert.match($('next-question').textContent, /1 need source review/);
-  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: target.id, answer: 'Changed source', answerState: 'tentative' }); await f.poll();
+  await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: target.id, answer: 'Changed source', answerState: 'tentative' }); await f.poll();
   $('open-next-question').click(); f.type('answer', 'Keep removed answer'); f.type('revisit-condition', 'Keep removed reminder');
   await until(() => $('answer-status').textContent === 'Draft saved locally', 'answer draft saved before removal');
   const removed = structuredClone(f.explorer.doc); removed.nodes = removed.nodes.filter(n => n.id !== target.id);
@@ -1697,6 +1699,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   dashboardDialog.close = () => { dashboardDialog.open = false; };
   const scriptErrors = []; window.addEventListener('error', event => scriptErrors.push(event.error));
   const answerChangeDialog = document.getElementById('answer-change-dialog');
+  const reviewQueueDialog = document.getElementById('review-queue-dialog');
+  reviewQueueDialog.showModal = () => { reviewQueueDialog.open = true; };
+  reviewQueueDialog.close = () => { reviewQueueDialog.open = false; };
   answerChangeDialog.showModal = () => { answerChangeDialog.open = true; };
   answerChangeDialog.close = () => { answerChangeDialog.open = false; };
   const briefDialog = document.getElementById('brief-dialog');
@@ -1787,12 +1792,12 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   mini.setPointerCapture = id => captured.add(id); mini.hasPointerCapture = id => captured.has(id); mini.releasePointerCapture = id => captured.delete(id);
   Object.assign(window, { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   Object.assign(window, { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches });
-  window.NextQuestion = NextQuestion;
+  window.NextQuestion = NextQuestion; window.reviewQueue = reviewQueue; window.reviewContext = reviewContext;
   window.DecisionImpact = DecisionImpact; window.impactPath = impactPath; window.decisionImpactKey = decisionImpactKey; window.criticalPaths = criticalPaths;
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -1805,6 +1810,95 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     resize: (w, h = height) => { width = w; height = h; observers.get('map')(); }, pauseState: fn => { holdState = fn; }, pauseAdd: fn => { holdAdd = fn; },
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
+
+async function reviewFixture(t) {
+  return fixture(t, 360, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc), [a, b] = doc.nodes.slice(1);
+    b.answer = '  Saved downstream\n'; b.answerState = 'assumption';
+    addDependency(doc, b.id, a.id); answerNode(doc, a.id, 'First upstream', 'decided'); answerNode(doc, a.id, 'Second upstream', 'decided');
+    await e.command('import', { revision: e.doc.revision, document: doc });
+  } });
+}
+
+test('guided review queue reaffirms one cause at a time and preserves connected draft and caret', async t => {
+  const f = await reviewFixture(t), $ = id => f.document.getElementById(id), [a, b] = f.explorer.doc.nodes.slice(1);
+  f.open(b.id); f.type('answer', '  Private edit\n'); const editor = $('answer'); editor.setSelectionRange(2, 6);
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'private review draft');
+  $('review-affected').click(); assert.equal($('review-queue-dialog').open, true);
+  assert.equal($('review-queue-answer').textContent, b.answer); assert.match($('review-queue-source').textContent, /Second upstream/); assert.match($('review-queue-provenance').textContent, /saved base/i);
+  assert.equal($('review-queue-cause').options.length, 2); $('review-queue-reaffirm').click();
+  await until(() => $('answer-change-dialog').open, 'reaffirm proof'); assert.match($('answer-change-summary').textContent, /1.*remain/);
+  $('answer-change-confirm').click(); await until(() => $('review-queue-cause').options.length === 1 && !$('review-queue-reaffirm').disabled, 'one cause remains');
+  assert.equal(f.explorer.doc.nodes.find(n => n.id === b.id).review, true); assert.equal($('answer'), editor); assert.equal(editor.value, '  Private edit\n'); assert.equal(editor.selectionStart, 2);
+  $('review-queue-reaffirm').click(); await until(() => $('answer-change-dialog').open, 'last cause'); $('answer-change-confirm').click();
+  await until(() => $('review-queue-status').textContent.includes('No answers'), 'queue finished');
+  assert.equal(f.explorer.doc.nodes.find(n => n.id === b.id).review, false); assert.equal(f.explorer.doc.nodes.find(n => n.id === b.id).answer, b.answer); assert.equal(f.explorer.doc.nodes.find(n => n.id === a.id).answer, 'Second upstream');
+  $('review-queue-close').click(); assert.equal(editor.value, '  Private edit\n');
+});
+
+test('guided review invalidates on source changes, refreshes explicitly and revises in the retained editor', async t => {
+  const f = await reviewFixture(t), $ = id => f.document.getElementById(id), [a, b] = f.explorer.doc.nodes.slice(1);
+  f.open(b.id); f.type('answer', 'Draft survives stale queue'); const editor = $('answer'); $('review-affected').click();
+  await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: a.id, answer: 'Latest premise', answerState: 'decided' }); await f.poll();
+  assert.match($('review-queue-status').textContent, /changed.*Refresh/); assert.equal($('review-queue-reaffirm').disabled, true); assert.equal($('review-queue-clear').disabled, true);
+  $('review-queue-refresh').click(); assert.match($('review-queue-source').textContent, /Latest premise/); assert.equal($('review-queue-cause').options.length, 3);
+  $('review-queue-revise').click(); assert.equal($('review-queue-dialog').open, false); assert.equal($('answer'), editor); assert.equal(editor.value, 'Draft survives stale queue'); assert.equal(f.document.activeElement, editor);
+  $('save-answer').click(); await until(() => $('answer-change-dialog').open, 'revise acknowledgment'); assert.match($('answer-change-summary').textContent, /all 3/); $('answer-change-cancel').click(); assert.equal(editor.value, 'Draft survives stale queue');
+});
+
+test('guided clear previews exact saved answer, cancels safely and leaves a differing private draft recoverable', async t => {
+  const f = await reviewFixture(t), $ = id => f.document.getElementById(id), [, b] = f.explorer.doc.nodes.slice(1);
+  f.open(b.id); f.type('answer', 'Separate private reasoning'); await until(() => $('answer-status').textContent === 'Draft saved locally', 'draft before clear');
+  $('review-affected').click(); $('review-queue-clear').click(); await until(() => $('answer-change-dialog').open, 'clear preview');
+  assert.equal($('answer-change-old').textContent, b.answer); assert.match($('answer-change-new-label').textContent, /Unanswered/); $('answer-change-cancel').click();
+  await until(() => !$('review-queue-clear').disabled, 'cancel released'); assert.equal(f.explorer.doc.nodes.find(n => n.id === b.id).answer, b.answer);
+  $('review-queue-clear').click(); await until(() => $('answer-change-dialog').open, 'clear again'); $('answer-change-confirm').click();
+  await until(() => $('review-queue-status').textContent.includes('No answers'), 'clear complete'); $('review-queue-close').click();
+  const node = f.explorer.doc.nodes.find(n => n.id === b.id); assert.equal(node.answer, ''); assert.equal(node.answerState, 'unanswered'); assert.equal(node.review, false);
+  assert.equal($('answer').value, 'Separate private reasoning'); assert.match($('draft-recovery').textContent, /changed|saved/i);
+});
+
+test('guided clear persists an immediately typed private draft before its saved base changes', async t => {
+  const f = await reviewFixture(t), $ = id => f.document.getElementById(id), [, b] = f.explorer.doc.nodes.slice(1);
+  f.open(b.id); f.type('answer', 'Newest unflushed private text'); $('review-affected').click(); $('review-queue-clear').click();
+  await until(() => $('answer-change-dialog').open, 'immediate clear preview'); $('answer-change-confirm').click();
+  await until(() => $('review-queue-status').textContent.includes('No answers'), 'immediate clear saved');
+  await delay(650);
+  const records = await f.explorer.readDrafts(f.explorer.doc.id);
+  assert.equal(records.entries.find(n => n.nodeId === b.id)?.text, 'Newest unflushed private text');
+  const reopened = await fixture(t, 360, undefined, true, { explorer: f.explorer }); reopened.open(b.id);
+  await until(() => reopened.document.querySelector('#draft-recovery textarea')?.value === 'Newest unflushed private text', 'durable draft recovered on fresh page');
+});
+
+test('guided clear rejects failed draft persistence and late editor changes without clearing the saved answer', async t => {
+  const f = await reviewFixture(t), $ = id => f.document.getElementById(id), [, b] = f.explorer.doc.nodes.slice(1), before = JSON.stringify(f.explorer.doc);
+  const original = f.explorer.writeDraft.bind(f.explorer); f.explorer.writeDraft = async () => { throw Error('Injected private draft failure'); };
+  f.open(b.id); f.type('answer', 'Keep despite failed persistence'); $('review-affected').click(); $('review-queue-clear').click();
+  await until(() => $('notice').textContent.includes('Injected private draft failure'), 'clear blocked by failed draft flush');
+  assert.equal($('answer-change-dialog').open, false); assert.equal(JSON.stringify(f.explorer.doc), before); assert.equal($('answer').value, 'Keep despite failed persistence');
+  f.explorer.writeDraft = original; $('review-queue-clear').click(); await until(() => $('answer-change-dialog').open, 'retry clear');
+  f.type('answer', 'Newer edit during confirmation'); $('answer-change-confirm').click();
+  await until(() => !$('answer-change-dialog').open && !$('review-queue-clear').disabled, 'late edit rejected');
+  assert.equal(JSON.stringify(f.explorer.doc), before); assert.equal($('answer').value, 'Newer edit during confirmation');
+});
+
+test('guided clear keeps the editor behind its dialog until the committed response is applied', async t => {
+  const f = await reviewFixture(t), $ = id => f.document.getElementById(id), [, b] = f.explorer.doc.nodes.slice(1), fetch = f.window.fetch;
+  let release;
+  f.window.fetch = async (path, options) => {
+    const response = await fetch(path, options);
+    if (path === 'api/action' && JSON.parse(options.body).action === 'clear-review-answer') await new Promise(resolve => { release = resolve; });
+    return response;
+  };
+  t.after(() => release?.());
+  f.open(b.id); f.type('answer', 'Keep this private text'); $('review-affected').click(); $('review-queue-clear').click();
+  await until(() => $('answer-change-dialog').open, 'clear proof before held response'); $('answer-change-confirm').click();
+  await until(() => release, 'clear committed but response held');
+  $('review-queue-close').click(); $('review-queue-dialog').dispatchEvent(new f.window.Event('cancel', { cancelable: true }));
+  assert.equal($('review-queue-dialog').open, true); assert.equal($('review-queue-close').disabled, true);
+  release(); await until(() => !$('review-queue-close').disabled && $('review-queue-status').textContent.includes('No answers'), 'response applied');
+  $('review-queue-close').click(); assert.equal($('review-queue-dialog').open, false); assert.equal($('answer').value, 'Keep this private text');
+});
 
 test('branch restart previews exact removal and links, cancels safely, then retains removed-node drafts and active source', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {
@@ -2172,7 +2266,7 @@ test('historical question rationale is disclosed near expanded question without 
   $('question-rationale').open = true;
   const changed = structuredClone(f.explorer.doc); changed.objective = 'Changed goal'; changed.nodes[1].review = true;
   await f.explorer.save(changed, 'Guidance changed');
-  await until(() => $('question-rationale')?.open && /An earlier answer changed/.test(f.document.querySelector('.note')?.textContent ?? ''), 'historical rationale rerender');
+  await until(() => $('question-rationale')?.open && /Saved reasoning changed/.test(f.document.querySelector('.note')?.textContent ?? ''), 'historical rationale rerender');
   assert.match($('question-rationale').textContent, /original suggested wording and context/i);
   assert.equal($('answer').value, 'Local draft'); assert.equal($('answer').selectionStart, 5);
   assert.equal($('answer').selectionEnd, 5); assert.equal($('answer-state').value, 'assumption');
@@ -2343,7 +2437,7 @@ test('Clean My Answer reviews safely in a narrow pane, preserves state/polling, 
   assert.equal($('answer').disabled, false); assert.equal(runs[0].text, original);
   $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
   const changed = structuredClone(f.explorer.doc); changed.nodes[1].review = true; await f.explorer.save(changed, 'Review');
-  await until(() => /An earlier answer changed/.test(f.document.querySelector('.note')?.textContent ?? ''), 'same node polling');
+  await until(() => /Saved reasoning changed/.test(f.document.querySelector('.note')?.textContent ?? ''), 'same node polling');
   assert.ok($('cancel-cleanup')); assert.equal(runs[0].signal.aborted, false);
   runs[0].resolve('Maybe Élodie needs 42 <unsafe>.');
   await until(() => $('apply-cleanup'), 'proposal arrives');
@@ -4998,7 +5092,7 @@ test('direction review action shares the Map and Outline editor and preserves de
   assert.equal(f.explorer.doc.nodes.find(n => n.id === childId).review, true);
   $('outline-toggle').click(); assert.equal($('node-workspace'), panel); assert.equal($('acknowledge-direction'), null);
   f.window.__updates.select(childId); assert.equal($('answer').value, 'Unsaved exact child 🌱'); assert.equal($('revisit-condition').value, 'Keep reminder');
-  assert.match($('node-workspace').textContent, /An earlier answer changed/);
+  assert.match($('node-workspace').textContent, /Saved reasoning changed/);
 });
 
 test('conditional polling bounds timeouts and retry delays without replaying failed actions', async t => {

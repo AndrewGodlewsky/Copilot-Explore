@@ -1,6 +1,6 @@
 # Shared documents and private working data
 
-The #54 persistence foundation separates an authoritative project document from private working data. `ProjectJourney` is an internal adapter for #55's controller and project-storage UI; the desktop app still uses the existing personal Library until that integration lands. No existing personal file or draft is moved automatically.
+The #54 persistence foundation separates an authoritative project document from private working data. #55 connects `ProjectJourney` to the controller and [project-storage UI](project-saving.md). Personal Library remains the default. No existing personal file or draft is moved automatically.
 
 ## Data inventory
 

@@ -1,5 +1,7 @@
 # Explorer library storage
 
+Personal library behavior is described below. See [project saving](project-saving.md) for shared repository files, explicit reopening, and the private auxiliary-data boundary.
+
 `library.mjs` owns discovery, safe entry resolution, duplicate imports, and library metadata. `controller.mjs` still owns document revisions and the per-document exclusive writer lock. `Explorer({ file, ... })` remains available for tests and preview; production uses `Explorer({ library, binding, ... })`.
 
 The Explorer data root contains the original version-1 `.explore.json` documents. New files use `journey-<sha256(document.id)>.explore.json`; existing root files are discovered and never renamed or removed. Document IDs identify journeys independently of host sessions/canvases. An entry key is SHA-256 of its filename, a NUL separator, and its document ID. The UI receives keys and summaries, never file paths. Different legacy files with the same logical ID remain separate entries; divergent contents are visibly marked as ambiguous.

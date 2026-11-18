@@ -315,7 +315,7 @@ async function api(action, input = {}) {
     const result = await response.json();
     if (closed || suspended || page !== pageEpoch || epoch !== actionEpoch) return null;
     if (!response.ok) throw new Error(result.error);
-    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'import'].includes(action)); return result;
+    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'open-project', 'import'].includes(action)); return result;
   } catch (error) {
     if (!closed && !suspended && page === pageEpoch && epoch === actionEpoch) notice(abort.signal.aborted ? 'The action response timed out. Refresh the saved map before retrying; it may have been saved. Your draft is still here.' : error.message);
     return null;
@@ -415,6 +415,7 @@ function apply(next, reset = false) {
   if (!doc) return;
   if (firstQuestions && selected === doc.rootId) expanded = false;
   $('map-title').textContent = doc.topic;
+  $('journey-storage').textContent = state.storage?.scope === 'project' ? `Project: ${state.storage.path}. Saved locally; commit and share through Git for teammates to receive changes. Drafts, history and usage stay private.` : 'Personal library: Saved on this computer.';
   $('current-mode').textContent = `Mode: ${MODES[effectiveMode(doc)].label}`;
   const { answered, resolved, deferred, unresolved } = questionCounts(doc);
   $('progress').textContent = `${answered} answered · ${resolved} resolved · ${deferred} deferred · ${unresolved} unresolved · Saved locally`;
@@ -569,6 +570,7 @@ function showView() {
   $('welcome').hidden = !home; $('workspace').hidden = home;
   $('library-toggle').hidden = !state.library;
   $('library-home').hidden = !state.library;
+  for (const id of ['start-storage-fields', 'project-open', 'project-open-form']) $(id).hidden = !state.library;
   $('library-return').hidden = !state.document;
   document.body.classList.toggle('has-library', !!state.library);
 }
@@ -2068,7 +2070,10 @@ $('history-restore').addEventListener('click', async () => {
 });
 
 function dirtyNodes() { return state.document?.nodes.filter(n => drafts.has(n.id) || draftClient.entries.get(n.id)?.conflict) ?? []; }
-$('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value, objective: $('start-objective').value, successCriteria: $('start-criteria').value, mode: $('start-mode').value }); });
+$('start-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('start', { topic: $('topic').value, objective: $('start-objective').value, successCriteria: $('start-criteria').value, mode: $('start-mode').value, storageScope: $('start-storage').value, projectFolder: $('project-folder').value }); });
+$('start-storage').addEventListener('change', () => { $('project-folder-fields').hidden = $('start-storage').value !== 'project'; });
+$('project-open').addEventListener('click', () => { voice.cancel(); libraryView = true; showView(); $('project-open-path').focus(); });
+$('project-open-form').addEventListener('submit', async event => { event.preventDefault(); await switchJourney('open-project', { path: $('project-open-path').value }); });
 $('start-mode').addEventListener('change', () => showModeDescription('start-mode'));
 $('edit-mode').addEventListener('change', () => showModeDescription('edit-mode'));
 let lastCoverage = '';

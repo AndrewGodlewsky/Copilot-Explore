@@ -55,7 +55,7 @@ async function fixture(t, options = {}) {
       } };
     }
   } } });
-  const cleaner = createCleaner(parent, { runtime, usageDirectory: join(dir, 'usage'), ...(options.usageRecorder ? { usageRecorder: options.usageRecorder } : {}), ...(options.stopTimeoutMs ? { stopTimeoutMs: options.stopTimeoutMs } : {}) });
+  const cleaner = createCleaner(parent, { runtime, usageDirectory: options.usageDirectory ?? join(dir, 'usage'), ...(options.usageRecorder ? { usageRecorder: options.usageRecorder } : {}), ...(options.stopTimeoutMs ? { stopTimeoutMs: options.stopTimeoutMs } : {}) });
   t.after(async () => { await cleaner.close(); if (calls.client) { const owned = dirname(calls.client.workingDirectory); assert.equal(dirname(resolve(owned)), resolve(tmpdir())); await rm(owned, { recursive: true, force: true }); } await rm(dir, { recursive: true, force: true }); });
   return { cleaner, calls, dir };
 }
@@ -117,4 +117,13 @@ test('cleanup fails closed before inference for tools/accounts and preserves inp
   const accounting = await fixture(t, { usageRecorder: async () => ({ record() {}, flush: async () => { throw Error('private'); } }) });
   await assert.rejects(accounting.cleaner.run('private'), /accounting failed/); assert.equal(accounting.calls.sends, 1);
   assert.ok((await readdir(join(accounting.dir, 'usage'))).some(name => name.startsWith('recovery-')));
+});
+
+
+test('owned helper captures its private receipt destination at invocation, before asynchronous setup or scope changes', async t => {
+  let selected = 'personal-receipts'; const captured = [];
+  const f = await fixture(t, { usageDirectory: () => selected, start: () => { selected = 'project-receipts'; },
+    usageRecorder: async (id, directory) => { captured.push(directory); return { record() {}, flush: async () => {} }; } });
+  await f.cleaner.run('First draft'); await f.cleaner.run('Second draft');
+  assert.deepEqual(captured, ['personal-receipts', 'project-receipts']);
 });

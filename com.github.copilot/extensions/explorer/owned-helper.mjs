@@ -40,11 +40,12 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
     const abort = () => controller.abort();
     if (signal?.aborted) controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
-    const task = execute(context, controller, onProgress).finally(() => { signal?.removeEventListener('abort', abort); active.delete(controller); });
+    const receiptDirectory = typeof usageDirectory === 'function' ? usageDirectory() : usageDirectory;
+    const task = execute(context, controller, onProgress, receiptDirectory).finally(() => { signal?.removeEventListener('abort', abort); active.delete(controller); });
     active.set(controller, task);
     return task;
   }
-  async function execute(context, controller, progress) {
+  async function execute(context, controller, progress, usageDirectory) {
     const timeLimitMs = webResearch ? context.limits.timeLimitMs : 180000;
     const started = clock.now();
     const remaining = () => Math.max(0, timeLimitMs - (clock.now() - started));

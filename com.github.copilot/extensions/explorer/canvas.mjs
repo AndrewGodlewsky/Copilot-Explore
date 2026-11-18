@@ -74,7 +74,9 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
       if (!instances.has(ctx.instanceId) && !starting.has(ctx.instanceId)) {
         starting.set(ctx.instanceId, (async () => {
           const key = createHash('sha256').update(`${ctx.sessionId}\0${ctx.instanceId}`).digest('hex').slice(0, 32);
-          const explorer = await new Explorer({ library, binding: key,
+          let explorer;
+          const usageDirectory = () => join(explorer?.auxiliaryDirectory() ?? directory, 'usage');
+          explorer = await new Explorer({ library, binding: key,
             projectRoot: async () => {
               const session = getSession();
               if (session.sessionId !== ctx.sessionId) throw new Error('Project session changed.');
@@ -82,11 +84,11 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
               if (getSession().sessionId !== ctx.sessionId || metadata.sessionId !== ctx.sessionId || metadata.isRemote !== false) throw new Error('Local project metadata unavailable.');
               return metadata.workingDirectory;
             },
-            researcher: createResearcher(getSession(), { usageDirectory: join(directory, 'usage') }),
-            cleaner: createCleaner(getSession(), { usageDirectory: join(directory, 'usage') }),
-            briefHelper: createBriefHelper(getSession(), { usageDirectory: join(directory, 'usage') }),
-            checkHelper: createAnswerCheckHelper(getSession(), { usageDirectory: join(directory, 'usage') }),
-            questionHelper: createQuestionHelper(getSession(), { usageDirectory: join(directory, 'usage') }),
+            researcher: createResearcher(getSession(), { usageDirectory }),
+            cleaner: createCleaner(getSession(), { usageDirectory }),
+            briefHelper: createBriefHelper(getSession(), { usageDirectory }),
+            checkHelper: createAnswerCheckHelper(getSession(), { usageDirectory }),
+            questionHelper: createQuestionHelper(getSession(), { usageDirectory }),
             target: { extensionId: ctx.extensionId, canvasId: 'explorer', instanceId: ctx.instanceId },
             send: async options => {
               try { return await getSession().send(options); }

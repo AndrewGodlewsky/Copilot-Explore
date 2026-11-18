@@ -14,7 +14,8 @@ const absolute = path => {
   if (typeof path !== 'string' || !isAbsolute(path) || path.startsWith('\\\\') || path.includes('\0')) throw Error('Storage needs an absolute local path.');
   return resolve(path);
 };
-async function directoryState(directory, create = false) {
+export async function directoryState(directory, create = false) {
+  directory = absolute(directory);
   let path = parse(directory).root; const ancestors = [];
   for (const part of ['', ...relative(path, directory).split(sep).filter(Boolean)]) {
     path = join(path, part);
@@ -34,22 +35,14 @@ async function directoryState(directory, create = false) {
 }
 
 /** This context never discovers a project or moves a personal journey/draft. */
-export async function projectStorageContext({ checkoutDirectory, file, localDirectory, journeyId }) {
-  if (typeof journeyId !== 'string' || !journeyId.trim() || journeyId.trim() !== journeyId || journeyId.length > 100) throw Error('Invalid journey identity.');
-  const checkout = await directoryState(absolute(checkoutDirectory)), requestedFile = absolute(file), localPath = absolute(localDirectory);
+export async function projectDocumentAccess({ checkoutDirectory, file, revalidate = async () => {} }) {
+  const checkout = await directoryState(absolute(checkoutDirectory)), requestedFile = absolute(file);
   if (!inside(checkout.path, requestedFile) || requestedFile === checkout.path) throw Error('The document must be inside its checkout.');
-  if (inside(checkout.path, localPath)) throw Error('Private storage must be outside the checkout.');
   const parent = await directoryState(dirname(requestedFile));
   file = join(parent.path, basename(requestedFile));
-  const local = await directoryState(localPath, true);
-  const checkoutKey = hash(JSON.stringify([comparable(checkout.path), checkout.identity]));
-  const key = hash(JSON.stringify([checkoutKey, journeyId]));
-  const directory = join(local.path, 'projects', checkoutKey, hash(journeyId));
-  if (inside(checkout.path, directory)) throw Error('Private storage must be outside the checkout.');
-  const auxiliary = await directoryState(directory, true), lockFile = join(auxiliary.path, 'document.lock');
-  const creationLockFile = join(local.path, 'projects', checkoutKey, 'create.lock');
   const assertCurrent = async () => {
-    for (const captured of [checkout, parent, local, auxiliary]) {
+    await revalidate();
+    for (const captured of [checkout, parent]) {
       const current = await directoryState(captured.path);
       if (current.identity !== captured.identity || comparable(current.path) !== comparable(captured.path)) throw Error('Storage root identity changed. Reopen the current checkout; private data was not moved.');
     }
@@ -71,11 +64,31 @@ export async function projectStorageContext({ checkoutDirectory, file, localDire
       return { bytes: bytes.subarray(0, count), stamp: before.stamp };
     } finally { await handle.close(); }
   };
+  return { file, checkout, assertCurrent, read };
+}
+
+export async function projectStorageContext({ checkoutDirectory, file, localDirectory, journeyId, revalidate }) {
+  if (typeof journeyId !== 'string' || !journeyId.trim() || journeyId.trim() !== journeyId || journeyId.length > 100) throw Error('Invalid journey identity.');
+  const document = await projectDocumentAccess({ checkoutDirectory, file, revalidate }), { checkout } = document;
+  const localPath = absolute(localDirectory);
+  if (inside(checkout.path, localPath)) throw Error('Private storage must be outside the checkout.');
+  const local = await directoryState(localPath, true);
+  const checkoutKey = hash(JSON.stringify([comparable(checkout.path), checkout.identity]));
+  const key = hash(JSON.stringify([checkoutKey, journeyId]));
+  const directory = join(local.path, 'projects', checkoutKey, hash(journeyId));
+  if (inside(checkout.path, directory)) throw Error('Private storage must be outside the checkout.');
+  const auxiliary = await directoryState(directory, true), lockFile = join(auxiliary.path, 'document.lock');
+  const creationLockFile = join(local.path, 'projects', checkoutKey, 'create.lock');
+  const assertCurrent = async () => {
+    await document.assertCurrent();
+    for (const captured of [local, auxiliary]) if ((await directoryState(captured.path)).identity !== captured.identity) throw Error('Private storage identity changed. Reopen the journey.');
+  };
+  const read = async () => { await assertCurrent(); return document.read(); };
   const locked = async (path, work) => {
     await assertCurrent(); const lock = await acquireLock(path, { attempts: 50 });
     try { await assertCurrent(); return await work(); } finally { await lock.release(); }
   };
-  return Object.freeze({ scope: 'project', file, checkoutDirectory: checkout.path, journeyId, key,
+  return Object.freeze({ scope: 'project', file: document.file, checkoutDirectory: checkout.path, journeyId, key,
     directory: auxiliary.path, usageDirectory: join(auxiliary.path, 'usage'), lockFile, creationLockFile, assertCurrent, read,
     withLock: work => locked(lockFile, work), withCreationLock: work => locked(creationLockFile, work) });
 }

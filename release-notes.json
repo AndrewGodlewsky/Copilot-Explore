@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.70",
+    "summary": "Create explorations in your project repository or personal library. Reopen shared files by relative path, with private drafts, history and AI usage kept separate. Project saves verify the active checkout; Journey details shows where the file lives and how to share it through Git."
+  },
+  {
     "version": "0.1.69",
     "summary": "Added project-storage foundations that keep shared journeys separate from private drafts, helper records, locks and recovery history. Includes clone isolation, interrupted-save recovery and safe local-history cleanup. Project storage controls will follow separately."
   },

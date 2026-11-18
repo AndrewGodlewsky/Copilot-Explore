@@ -2,6 +2,8 @@ import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/d
 import { attachMinimap, projectOverview, overviewPaths } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import test from 'node:test';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
 import { NextQuestion } from '../com.github.copilot/extensions/explorer/web/next-question.mjs';
 import assert from 'node:assert/strict';
@@ -908,6 +910,30 @@ async function until(read, label) {
   for (let i = 0; i < 250; i++) { const result = read(); if (result) return result; await delay(10); }
   assert.fail('Timed out: ' + label);
 }
+
+test('project storage controls create and explicitly reopen a repository journey with a relative location', async t => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-project-controls-')); t.after(() => rm(project, { recursive: true, force: true }));
+  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project }), $ = id => f.document.getElementById(id);
+  const personalKey = f.explorer.activeKey;
+  $('library-toggle').click();
+  assert.equal($('start-storage').value, 'personal');
+  $('start-storage').value = 'project'; $('start-storage').dispatchEvent(new f.window.Event('change'));
+  assert.equal($('project-folder-fields').hidden, false);
+  f.type('topic', 'Project journey'); f.type('project-folder', 'decisions/maps');
+  $('start-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => f.explorer.snapshot().storage.scope === 'project', 'project creation'); await f.poll();
+  const path = f.explorer.snapshot().storage.path;
+  assert.match($('journey-storage').textContent, /Project.*decisions\/maps/);
+  assert.ok(!$('journey-storage').textContent.includes(project)); assert.match($('journey-storage').textContent, /Git/);
+  await f.explorer.command('cancel');
+  await f.explorer.command('open', { revision: f.explorer.doc.revision, key: personalKey }); await f.poll();
+  $('project-open').click(); assert.equal(f.document.activeElement, $('project-open-path'));
+  f.type('project-open-path', path); $('project-open-form').dispatchEvent(new f.window.Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => f.explorer.snapshot().storage.scope === 'project', 'project reopening'); await f.poll();
+  assert.equal(f.explorer.doc.topic, 'Project journey');
+  assert.equal($('workspace').hidden, false); assert.match($('journey-storage').textContent, /Project/);
+});
 
 async function startReviewedResearch(f) {
   await until(() => !f.document.getElementById('research-review-start').disabled, 'review ready');

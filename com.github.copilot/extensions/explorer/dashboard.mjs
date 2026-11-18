@@ -32,11 +32,16 @@ export function projectMap(doc) {
 }
 const distribution = (values, bounds) => bounds.map(([label, min, max]) => ({ label, value: values.filter(n => n >= min && n <= max).length }));
 export class Dashboard {
-  constructor(directory) { this.directory = directory; this.storage = new StorageManagement(directory); this.scan = null; this.helpers = null; this.stale = false; }
+  constructor(directory, { readDocument } = {}) { this.directory = directory; this.readDocument = readDocument; this.storage = new StorageManagement(directory); this.scan = null; this.helpers = null; this.stale = false; }
   invalidate() { this.stale = true; }
   async start() {
     const scan = { names: [], rows: [], examined: 0, unavailable: 0, truncated: false, metadataUnavailable: false, startedAt: new Date().toISOString(), metadata: null };
     this.scan = scan; this.stale = false;
+    if (this.readDocument) {
+      scan.names = ['current-project-journey']; scan.examined = 1; scan.metadata = {};
+      try { scan.rows.push({ ...projectMap(await this.readDocument()), archived: false }); } catch { scan.unavailable = 1; }
+      this.helpers = await readHelpers(this.directory); return;
+    }
     try {
       await this.storage.root(); let discovered = 0;
       for await (const entry of await opendir(this.directory)) { if (++discovered > DASHBOARD_LIMITS.entries) { scan.truncated = true; break; } if (entry.name.endsWith('.explore.json')) scan.names.push(entry.name); }
@@ -78,7 +83,7 @@ export class Dashboard {
       rows.push(group[0]);
     }
     const sizes = rows.map(row => row.questions).sort((a, b) => a - b), sum = field => rows.reduce((total, row) => total + row[field], 0), n = rows.length;
-    return { journeys: n, duplicates, ambiguous, excluded, unavailable: scan.unavailable, metadataUnavailable: scan.metadataUnavailable, truncated: scan.truncated, examined: scan.examined, discovered: scan.names.length, next: scan.examined < scan.names.length,
+    return { coverage: this.readDocument ? 'current-project-journey' : 'personal-library', journeys: n, duplicates, ambiguous, excluded, unavailable: scan.unavailable, metadataUnavailable: scan.metadataUnavailable, truncated: scan.truncated, examined: scan.examined, discovered: scan.names.length, next: scan.examined < scan.names.length,
       startedAt: scan.startedAt, aggregatedAt: scan.aggregatedAt, questions: sum('questions'), allNodes: sum('allNodes'), answered: sum('answered'), resolved: sum('resolved'),
       mean: n ? sum('questions') / n : null, median: n ? (sizes[Math.floor((n - 1) / 2)] + sizes[Math.floor(n / 2)]) / 2 : null,
       branching: sum('parents') ? sum('edges') / sum('parents') : null, branchingParents: sum('parents'),

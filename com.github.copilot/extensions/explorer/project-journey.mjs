@@ -65,34 +65,36 @@ export class ProjectJourney {
       this.accept(readSharedDocument(prepared.content), 0); return this.document;
     }));
   }
-  async save(candidate, { baseDigest, label = 'Map updated' } = {}) {
+  async save(candidate, options) {
+    validateProjectWorkingDocument(candidate); candidate = structuredClone(candidate); options = { ...options };
+    return this.transact(() => this.saveLocked(candidate, options));
+  }
+  async saveLocked(candidate, { baseDigest, label = 'Map updated', beforeWrite = () => {} } = {}) {
     validateProjectWorkingDocument(candidate);
     candidate = structuredClone(candidate);
-    return this.transact(async () => {
-      const current = await this.current();
-      if (candidate.revision !== current.working.revision) throw Error('Local working revision changed. Reopen before saving.');
-      for (const key of ['id', 'rootId', 'createdAt']) if (candidate[key] !== current.working[key]) throw Error('Journey identity cannot be changed by saving.');
-      let next = envelope(candidate);
-      // Preserve optional envelope presence; never insert extensions on an unchanged save.
-      if (!Object.hasOwn(current.document, 'extensions')) delete next.extensions;
-      let prepared = prepareSharedWrite(current.content, next, baseDigest);
-      if (!prepared.changed) {
-        await this.history.reconcile(current.working); this.accept(current, current.working.revision); return false;
-      }
-      const revision = current.working.revision + 1;
-      if (!Number.isSafeInteger(revision)) throw Error('Local revision limit reached.');
-      next = structuredClone(next);
-      next.journey.updatedAt = new Date(Math.max(Date.now(), Date.parse(current.working.updatedAt) + 1)).toISOString();
-      prepared = prepareSharedWrite(current.content, next, baseDigest);
-      const read = readSharedDocument(prepared.content), after = working(read.document, revision);
-      await this.history.commit(current.working, after, label, async () => {
-        const fresh = await this.context.read();
-        if (readSharedDocument(fresh.bytes).baseDigest !== current.baseDigest) throw Error('Project document changed before save. Existing content and local recovery are preserved.');
-        await this.context.assertCurrent(); await this.write(this.context.file, prepared.content);
-        this.accept(read, revision);
-      });
-      return true;
+    const current = await this.current();
+    if (candidate.revision !== current.working.revision) throw Error('Local working revision changed. Reopen before saving.');
+    for (const key of ['id', 'rootId', 'createdAt']) if (candidate[key] !== current.working[key]) throw Error('Journey identity cannot be changed by saving.');
+    let next = envelope(candidate);
+    // Preserve optional envelope presence; never insert extensions on an unchanged save.
+    if (!Object.hasOwn(current.document, 'extensions')) delete next.extensions;
+    let prepared = prepareSharedWrite(current.content, next, baseDigest);
+    if (!prepared.changed) {
+      await this.history.reconcile(current.working); beforeWrite(); this.accept(current, current.working.revision); return false;
+    }
+    const revision = current.working.revision + 1;
+    if (!Number.isSafeInteger(revision)) throw Error('Local revision limit reached.');
+    next = structuredClone(next);
+    next.journey.updatedAt = new Date(Math.max(Date.now(), Date.parse(current.working.updatedAt) + 1)).toISOString();
+    prepared = prepareSharedWrite(current.content, next, baseDigest);
+    const read = readSharedDocument(prepared.content), after = working(read.document, revision);
+    await this.history.commit(current.working, after, label, async () => {
+      const fresh = await this.context.read();
+      if (readSharedDocument(fresh.bytes).baseDigest !== current.baseDigest) throw Error('Project document changed before save. Existing content and local recovery are preserved.');
+      await this.context.assertCurrent(); beforeWrite(); await this.write(this.context.file, prepared.content);
+      this.accept(read, revision);
     });
+    return true;
   }
   versions(selected) {
     return this.transact(() => discoverVersions(this.context.directory, this.context.key, id => id === this.context.journeyId, selected, { validate: validateProjectWorkingDocument }));

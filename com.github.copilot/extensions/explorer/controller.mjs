@@ -1,6 +1,7 @@
 import { captureHandoff, handoffFreshness, acceptHandoff, validateHandoff } from './implementation-handoff.mjs';
 import { followupResult, retainExchanges, sameFollowup } from './research-followup.mjs';
 import { ProjectContext } from './project-context.mjs';
+import { ProjectRepository } from './project-repository.mjs';
 import { acquireLock } from './owned-lock.mjs';
 import { discoverVersions, boundedNames, recoveryHash, validRecoveryKey } from './recovery.mjs';
 import { Library } from './library.mjs';
@@ -38,6 +39,7 @@ export class Explorer {
     this.preview = null; this.questionSource = null;
     this.researchReview = new ResearchReview();
     this.projectContext = new ProjectContext(projectRoot);
+    this.projectRepository = library ? new ProjectRepository({ readRoot: projectRoot, localDirectory: library.directory }) : null;
     this.researcher = researcher; this.researchTasks = new Set(); this.researchTask = Promise.resolve(); this.unconfirmedResearchRelease = null; this.researchWork = null;
     this.briefHelper = briefHelper; this.briefWork = null; this.checkHelper = checkHelper; this.checkWork = null; this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
     this.library = library; this.binding = binding; this.activeKey = null;
@@ -52,7 +54,22 @@ export class Explorer {
     catch (error) { if (error.code !== 'ENOENT') this.error = 'Could not load the saved map. The file is preserved. Open Recovery to retry reading.'; }
     return this;
   }
-  snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
+  snapshot() { return structuredClone({ document: this.doc, pending: this.pending, error: this.error, storage: this.projectStore ? { scope: 'project', path: this.projectStore.context.relativePath } : { scope: 'personal' }, ...(this.library ? { library: true, activeKey: this.activeKey } : {}) }); }
+  auxiliaryDirectory() { return this.projectStore?.context.directory ?? this.library?.directory ?? dirname(this.file); }
+  async changeStorage(store) {
+    if (this.projectStore === store) return;
+    await this.analytics?.flush();
+    this.projectStore = store;
+    this.draftStore = this.referenceStore = this.historyStore = this.storageManager = this.dashboard = null;
+    this.dashboardHelperStatus = undefined;
+    if (this.analytics) { this.analytics = null; this.startObservation(); }
+  }
+  async attachProject(store) {
+    await this.changeStorage(store);
+    this.file = store.context.file; this.doc = store.document; this.activeKey = store.context.key;
+    this.researchReview.clear(); this.followup = null; this.recoveryNotice = null; this.exportObservation = null;
+    this.reconcileCleanup();
+  }
   reconcileCleanup() {
     if (this.researchReview.selection && this.researchReview.selection.journey !== (this.activeKey ?? this.doc?.id)) this.researchReview.clear();
     const brief = this.briefWork;
@@ -360,6 +377,7 @@ export class Explorer {
   }
   async attach(key, expected) {
     const record = await this.library.opened(key, this.binding, expected);
+    await this.changeStorage(null);
     this.researchReview.clear(); this.followup = null;
     this.file = record.file; this.doc = record.document; this.activeKey = key;
     this.recoveryNotice = null; this.exportObservation = null;
@@ -367,13 +385,13 @@ export class Explorer {
   }
   async draftIdentity(journey) {
     if (!this.doc || journey !== (this.activeKey ?? this.doc.id)) throw new Error('The active journey changed. This draft request was rejected.');
-    this.draftStore ??= new Drafts(this.library?.directory ?? dirname(this.file));
+    this.draftStore ??= new Drafts(this.auxiliaryDirectory());
     return this.activeKey ?? draftHash(`${await realpath(this.file)}\0${this.doc.id}`);
   }
   readReferences(journey) {
     return this.transact(async () => {
       const key = await this.draftIdentity(journey);
-      this.referenceStore ??= new References(this.library?.directory ?? dirname(this.file));
+      this.referenceStore ??= new References(this.auxiliaryDirectory());
       try { return { journey, ...(await this.referenceStore.read(key)) }; }
       catch (error) { return { journey, ...emptyReferences(), error: error.message }; }
     });
@@ -383,7 +401,7 @@ export class Explorer {
       if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).sort().join(',') !== 'journey,nodeIds,revision') throw new Error('Invalid reference request.');
       const key = await this.draftIdentity(input.journey);
       validateReferenceIds(input.nodeIds);
-      this.referenceStore ??= new References(this.library?.directory ?? dirname(this.file));
+      this.referenceStore ??= new References(this.auxiliaryDirectory());
       const old = await this.referenceStore.read(key);
       for (const id of input.nodeIds) {
         if (old.nodeIds.includes(id)) continue;
@@ -419,6 +437,11 @@ export class Explorer {
     return work;
   }
   async readCurrent() {
+    if (this.projectStore) {
+      const current = await this.projectStore.current();
+      if (current.baseDigest !== this.projectStore.baseDigest) throw Error('The project document changed on disk. Reopen it before continuing; drafts are preserved.');
+      return current.working;
+    }
     let saved;
     try { saved = this.library ? await this.library.resolve(this.activeKey) :
       { file: this.file, document: validateDocument(JSON.parse(await readFile(this.file, 'utf8'))) }; }
@@ -459,6 +482,7 @@ export class Explorer {
     });
   }
   async withDocumentLock(work) {
+    if (this.projectStore) return this.projectStore.context.withLock(work);
     try { await mkdir(dirname(this.file), { recursive: true }); }
     catch { throw new Error('Journey storage is unavailable. Check local storage access and retry; files are preserved.'); }
     const lock = await acquireLock(`${this.file}.lock`);
@@ -479,7 +503,7 @@ export class Explorer {
     if (!input || Object.keys(input).some(k => !['action', 'journey', 'revision', 'candidate', 'operation'].includes(k)) || !['list', 'inspect', 'dismiss'].includes(input.action)) throw new Error('Invalid recovery request.');
     if (input.action === 'inspect' && !validRecoveryKey(input.candidate)) throw new Error('Invalid recovery selection.');
     let operations = [], operationsUnavailable = false;
-    try { operations = await operationEvidence(this.library?.directory ?? dirname(this.file)); }
+    try { operations = await operationEvidence(this.auxiliaryDirectory()); }
     catch { operationsUnavailable = true; }
     if (input.action === 'dismiss') {
       if (!operations.some(row => row.id === input.operation && ['interrupted', 'failed'].includes(row.status))) throw new Error('Active or unknown operations cannot be dismissed as interrupted.');
@@ -489,7 +513,7 @@ export class Explorer {
     const context = await this.recoveryContext();
     if (input.action !== 'list' && (input.journey !== context.journey || input.revision !== context.revision)) throw new Error('The recovery journey changed. Refresh recovery.');
     let versions = { entries: [], unavailable: 0 };
-    try { if (context.key) versions = await discoverVersions(this.library?.directory ?? dirname(this.file), context.key, context.acceptsId, input.action === 'inspect' ? input.candidate : undefined); }
+    try { if (context.key) versions = this.projectStore ? await this.projectStore.versions(input.action === 'inspect' ? input.candidate : undefined) : await discoverVersions(this.auxiliaryDirectory(), context.key, context.acceptsId, input.action === 'inspect' ? input.candidate : undefined); }
     catch (error) { if (input.action === 'inspect') throw error; versions.unavailable = 1; }
     return { journey: context.journey, revision: context.revision, ...versions, operationsUnavailable, operations: operations.filter(row => !this.dismissedRecovery?.has(row.id)), export: this.exportObservation ?? null, notice: this.recoveryNotice ?? null, operation: this.pending ? { kind: this.pending.kind, status: 'active' } : { status: 'unknown' } };
   }
@@ -523,14 +547,15 @@ export class Explorer {
   }
   async history(journey) {
     const key = await this.draftIdentity(journey);
-    if (this.historyStore?.key !== key) this.historyStore = new History(this.library?.directory ?? dirname(this.file), key, this.doc.id);
+    if (this.projectStore) return this.projectStore.history;
+    if (this.historyStore?.key !== key) this.historyStore = new History(this.auxiliaryDirectory(), key, this.doc.id);
     return this.historyStore;
   }
   storageRequest(input) {
     return this.transact(async () => {
       if (this.closed || !input || typeof input !== 'object' || Array.isArray(input) || !['inspect', 'settings', 'preview', 'clean'].includes(input.action) ||
         Object.keys(input).sort().join(',') !== ({ inspect: 'action', settings: 'action,keepHistory,revision', preview: 'action,keepHistory', clean: 'action,id' })[input.action]) throw new Error('Invalid storage request.');
-      this.storageManager ??= new StorageManagement(this.library?.directory ?? dirname(this.file));
+      this.storageManager ??= this.projectStore?.retention() ?? new StorageManagement(this.auxiliaryDirectory());
       const storage = this.storageManager;
       if (input.action === 'settings') return storage.saveSettings(input.keepHistory, input.revision);
       if (input.action === 'clean') return storage.clean(input.id);
@@ -539,8 +564,8 @@ export class Explorer {
         const { journeyNames, ...summary } = inventory;
         return { inventory: summary, ...await storage.settings() };
       }
-      const direct = !this.library && this.doc ? { key: await this.draftIdentity(this.doc.id), file: this.file, id: this.doc.id, topic: this.doc.topic.slice(0, 160) } : null;
-      const found = await storage.records(this.library ? inventory.journeyNames : [], direct);
+      const direct = this.projectStore?.record() ?? (!this.library && this.doc ? { key: await this.draftIdentity(this.doc.id), file: this.file, id: this.doc.id, topic: this.doc.topic.slice(0, 160) } : null);
+      const found = await storage.records(this.library && !this.projectStore ? inventory.journeyNames : [], direct);
       const preview = await storage.preview(found.records, input.keepHistory);
       return { ...preview, issues: [...(inventory.partial ? ['Inventory is partial; unscanned and unknown data remain protected.'] : []), ...found.issues, ...preview.issues].slice(0, 100) };
     });
@@ -548,17 +573,17 @@ export class Explorer {
   dashboardRequest(input) {
     return this.transact(async () => {
       if (this.closed) throw new Error('Dashboard is closed.');
-      this.dashboard ??= new Dashboard(this.library?.directory ?? dirname(this.file));
+      this.dashboard ??= new Dashboard(this.auxiliaryDirectory(), this.projectStore ? { readDocument: () => this.readCurrent() } : {});
       const helperStatus = JSON.stringify([this.cleanup?.status, this.help?.status, this.briefWork?.status, this.checkWork?.status, this.pending?.kind]);
       if (this.dashboardHelperStatus !== undefined && this.dashboardHelperStatus !== helperStatus) this.dashboard.invalidate();
-      const result = await this.dashboard.request(input, this.analytics ?? new Analytics(this.library?.directory ?? dirname(this.file)));
+      const result = await this.dashboard.request(input, this.analytics ?? new Analytics(this.auxiliaryDirectory()));
       if (input.action === 'refresh' || this.dashboardHelperStatus === undefined) this.dashboardHelperStatus = helperStatus;
       return result;
     });
   }
   startObservation() {
     if (this.analytics || this.closed) return;
-    this.analytics = new Analytics(this.library?.directory ?? dirname(this.file));
+    this.analytics = new Analytics(this.auxiliaryDirectory());
     this.analytics.visit();
   }
   async fresh() {
@@ -595,6 +620,22 @@ export class Explorer {
     return this.commitCurrentLocked(saved, next, label);
   }
   async commitCurrentLocked(saved, next, label, accept = () => {}) {
+    if (this.projectStore) {
+      try {
+        const changed = await this.projectStore.saveLocked(next, { baseDigest: this.projectStore.baseDigest, label, beforeWrite: accept });
+        this.recoveryNotice = null; return changed;
+      } catch (error) {
+        const committed = this.projectStore.document !== this.doc;
+        this.recoveryNotice = { kind: 'save', status: committed ? 'committed' : 'failed', message: committed ? 'Map saved. History finalization needs a retry; newer saved content is retained.' : 'Save did not commit. Previous saved content and drafts are retained. Retry reading before saving again.' };
+        throw error;
+      } finally {
+        if (this.doc !== this.projectStore.document) {
+          this.doc = this.projectStore.document; this.dashboard?.invalidate();
+          try { if (saved?.id === this.doc.id) this.analytics?.commit(saved, this.doc); } catch { /* A receipt cannot fail a saved answer. */ }
+          this.reconcileCleanup(); this.reconcileResearch();
+        }
+      }
+    }
     next = validateDocument(next);
     if (saved && JSON.stringify(saved) === JSON.stringify(next)) {
       await (await this.history(this.activeKey ?? this.doc.id)).reconcile(saved);
@@ -752,7 +793,7 @@ export class Explorer {
         await this.library.update(input.key, input.patch, input.metadataRevision); this.dashboard?.invalidate(); return this.uiSnapshot();
       }
       if (this.pending && !(['research', 'research-follow-up'].includes(this.pending.kind) && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
-      if (this.preview && (['start', 'open', 'import', 'restore', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
+      if (this.preview && (['start', 'open', 'open-project', 'import', 'restore', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
       if (this.doc && input.revision !== this.doc.revision) throw new Error('The map changed. Refresh and try again; your draft is still here.');
       const next = structuredClone(this.doc);
       this.error = '';
@@ -790,6 +831,12 @@ export class Explorer {
           return { ...this.uiSnapshot(), acceptedIds, acceptedParentId: batch.nodeId };
         }
         case 'start':
+          if (input.storageScope !== undefined && !['personal', 'project'].includes(input.storageScope)) throw Error('Choose Personal or Project storage.');
+          if (input.storageScope === 'project') {
+            if (!this.projectRepository) throw Error('Project storage requires the installed Explorer library.');
+            await this.attachProject(await this.projectRepository.create(createDocument(input.topic, input), input.projectFolder));
+            this.request('questions', this.doc.rootId, input.scope); break;
+          }
           if (this.library) {
             const doc = createDocument(input.topic, input); doc.revision = 1;
             const record = await this.library.import(doc); this.dashboard?.invalidate(); await this.attach(record.key);
@@ -806,6 +853,10 @@ export class Explorer {
             await this.attach(record.key); break;
           }
           await this.save(importedDocument(input.document), 'Imported saved map');
+          break;
+        case 'open-project':
+          if (!this.projectRepository) throw Error('Project storage requires the installed Explorer library.');
+          await this.attachProject(await this.projectRepository.open(input.path));
           break;
         case 'open':
           if (!this.library) throw new Error('The library is unavailable in this preview.');
@@ -887,7 +938,7 @@ export class Explorer {
           if (!next) throw new Error('Start an exploration first.');
           next.finishedAt = new Date().toISOString();
           await this.save(next, 'Exploration finished');
-          await atomicWrite(this.file.replace(/\.explore\.json$/, '.md'), toMarkdown(this.doc));
+          if (!this.projectStore) await atomicWrite(this.file.replace(/\.explore\.json$/, '.md'), toMarkdown(this.doc));
           break;
         default: throw new Error('Unknown Explorer action.');
       }

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.94",
+    "summary": "Generate a proposed ADR from reviewed saved scope, template layout and optional recorded evidence. Edit its title and statements, then explicitly save the wording in the exploration. Source changes block stale acceptance while manual edits stay available. Accepting wording does not approve the decision or write a project file."
+  },
+  {
     "version": "0.1.93",
     "summary": "Review saved ADR context and format, then ask up to three optional questions about missing reasoning. Preview and edit candidates before adding them beneath the focal decision. Empty results are advice, not approval. Changed inputs and cancelled requests reject stale candidates; private answer drafts stay intact."
   },

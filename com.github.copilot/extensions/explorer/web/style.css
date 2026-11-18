@@ -160,7 +160,7 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #viewer-selection input[type=checkbox] { width: auto; flex: none; }
 #viewer-preview-content { max-height: 24rem; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .handoff-sources label { display: flex; gap: .5rem; align-items: baseline; margin-block: .5rem; overflow-wrap: anywhere; }
-#handoff-preview-text, #adr-scope-preview-text, .handoff-appendix { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; }
+#handoff-preview-text, #adr-scope-preview-text, #adr-draft-input, .handoff-appendix { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; }
 #adr-scope-dialog { overflow-wrap: anywhere; }
 #adr-scope-dialog select { width: 100%; max-width: 100%; min-width: 0; }
 #adr-scope-dialog fieldset { min-width: 0; }

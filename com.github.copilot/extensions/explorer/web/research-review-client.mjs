@@ -5,7 +5,7 @@ export class ResearchReviewClient {
     this.context = null; this.value = null; this.loading = false; this.error = ''; this.abort = null;
     this.projectDraft = ''; this.projectDirty = false;
   }
-  open(context) { this.close(); this.context = context.purpose === 'question-regeneration' ? { ...context, excluded: [], retained: [] } : ['implementation-handoff', 'adr-scope', 'adr-questions'].includes(context.purpose) ? { ...context } : { ...context, settings: researchSettings(), excluded: [] }; void this.prepare(); }
+  open(context) { this.close(); this.context = context.purpose === 'question-regeneration' ? { ...context, excluded: [], retained: [] } : ['implementation-handoff', 'adr-scope', 'adr-questions', 'adr-draft'].includes(context.purpose) ? { ...context } : { ...context, settings: researchSettings(), excluded: [] }; void this.prepare(); }
   retain(ids) { if (this.context?.purpose === 'question-regeneration') { this.context = { ...this.context, retained: [...ids] }; void this.prepare(); } }
   settings(value) {
     if (!this.context) return;
@@ -42,6 +42,6 @@ export class ResearchReviewClient {
     const context = this.context; this.sequence++; this.abort?.abort(); this.abort = null; this.context = null; this.value = null; this.loading = false;
     this.projectDraft = ''; this.projectDirty = false;
     if (context) void this.fetch('api/research-review', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
-      body: JSON.stringify({ action: 'cancel', ...context, ...(['implementation-handoff', 'adr-scope', 'adr-questions'].includes(context.purpose) ? {} : { excluded: [] }), clientId: this.clientId, sequence: this.sequence }) }).catch(() => {});
+      body: JSON.stringify({ action: 'cancel', ...context, ...(['implementation-handoff', 'adr-scope', 'adr-questions', 'adr-draft'].includes(context.purpose) ? {} : { excluded: [] }), clientId: this.clientId, sequence: this.sequence }) }).catch(() => {});
   }
 }

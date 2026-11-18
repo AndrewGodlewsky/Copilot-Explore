@@ -263,6 +263,7 @@ const paletteCommands = [
   ['visual-export-open', 'Export maps'], ['decision-brief', 'Decision brief'], ['implementation-handoff', 'Implementation handoff'],
   ['adr-scope-open', 'ADR scope'],
   ['adr-questions-open', 'ADR questions'],
+  ['adr-draft-open', 'ADR draft'],
   ['adr-format-open', 'ADR format'],
   ['check-answers', 'Check answers'], ['challenge-decisions', 'Challenge decisions'], ['research-request', 'Research options'],
   ['revisit-answer', 'Revisit this answer'], ['scenario-preference-open', 'Scenario preference'],
@@ -431,7 +432,7 @@ function renderAnswerChange() {
   $('answer-change-old-label').textContent = `Saved answer (${ANSWER_STATES[p.current.state]})`; $('answer-change-old').textContent = p.current.answer || '(No answer text)';
   $('answer-change-new-label').textContent = `Proposed answer (${ANSWER_STATES[p.proposed.state]})`; $('answer-change-new').textContent = p.proposed.answer || '(No answer text)';
   $('answer-change-artifacts').textContent = `${p.research} retained research results need reconsideration; ${p.generated} accepted generated questions need review. Saved research does not retain complete context dependencies, so all retained results are conservatively flagged, even without a recorded path. ${p.staged ? 'The unsaved question proposal becomes stale. ' : ''}${p.running ? 'Active research will be discarded and only its owned helper stopped. ' : ''}${p.followup ? 'The research conversation becomes historical. ' : ''}Answers and research are preserved; research is not automatically refreshed.`;
-  const artifactNames = { brief: 'decision brief', handoff: 'implementation handoff', 'answer-check': 'answer check', 'challenge-review': 'challenge review' };
+  const artifactNames = { brief: 'decision brief', handoff: 'implementation handoff', adrDraft: 'proposed ADR draft', 'answer-check': 'answer check', 'challenge-review': 'challenge review' };
   if (restart) $('answer-change-artifacts').textContent = `${p.research} surviving research results need reconsideration; ${p.generated} surviving generated questions need review. Removed content is recoverable from History. Private drafts remain recoverable; selected local references to removed questions remain unavailable. ${p.followup ? 'The research conversation becomes historical. ' : ''}Research is not automatically refreshed.`;
   for (const artifact of p.artifacts) $('answer-change-artifacts').append(` The ${artifact.state === 'saved' ? 'saved' : artifact.state === 'pending' ? 'running' : 'unsaved'} ${artifactNames[artifact.kind]} becomes stale${artifact.state === 'pending' ? ' and its owned helper stops' : ''}.`);
   $('answer-change-adr').textContent = p.adr;
@@ -602,6 +603,7 @@ function apply(next, reset = false) {
   const compactFocused = $('nodes').contains(document.activeElement);
   const previousSelection = selected;
   const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
+  if (briefOperation === 'adrDraft' && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) { adrDraftReview.close(); adrDraftReview.error = 'Saved inputs or scenario changed. Review current ADR input before generating.'; renderAdrDraftReview(); }
   if ($('adr-questions-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) invalidateAdrQuestions('Saved inputs or scenario changed. Refresh and review again.');
   if (adrFormat && (adrFormat.value || adrFormat.action === 'prepare') && !changedDocument && JSON.stringify(state.document) !== JSON.stringify(next.document)) invalidateAdrFormat('Saved journey changed. Review the format again before saving.');
   if ($('adr-scope-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) {
@@ -685,6 +687,7 @@ function apply(next, reset = false) {
   $('implementation-handoff').hidden = !doc;
   $('adr-scope-open').hidden = !doc;
   $('adr-questions-open').hidden = !doc;
+  $('adr-draft-open').hidden = !doc;
   $('adr-format-open').hidden = !doc;
   $('check-answers').hidden = !doc; $('challenge-decisions').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
@@ -3539,16 +3542,23 @@ $('adr-scope-dialog').addEventListener('close', () => { if (adrJourney) closeAdr
 
 let briefOperation = 'brief';
 const handoffReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: renderHandoffPreview });
+const adrDraftReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: renderAdrDraftReview });
+const briefRoute = () => briefOperation === 'adrDraft' ? 'adr-draft' : briefOperation;
+const briefReview = () => briefOperation === 'adrDraft' ? adrDraftReview : handoffReview;
+const briefReviewReady = () => briefOperation === 'brief' || !!briefReview().value && !briefReview().loading && Date.now() < briefReview().value.expiresAt;
+let adrDraftProposal = null, adrDraftTitleEdit = null, adrDraftSavePending = false;
 let briefView = null, briefId = null, briefJourney = null, briefEpoch = 0, briefBusy = false, briefAbort = null, briefStamp = '', briefEdits = new Map();
 function closeBrief() {
-  briefEpoch++; briefAbort?.abort(); briefAbort = null; handoffReview.close();
-  if (briefId && briefJourney) void fetch(`api/${briefOperation}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'discard', id: briefId, journey: briefJourney }) }).catch(() => {});
+  briefEpoch++; briefAbort?.abort(); briefAbort = null; handoffReview.close(); adrDraftReview.close();
+  if (briefId && briefJourney) void fetch(`api/${briefRoute()}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'discard', id: briefId, journey: briefJourney }) }).catch(() => {});
   briefId = null; briefJourney = null; briefView = null; briefStamp = ''; briefEdits.clear(); briefBusy = false;
+  adrDraftProposal = null; adrDraftTitleEdit = null; adrDraftSavePending = false;
   if ($('brief-dialog').open) $('brief-dialog').close();
   briefOperation = 'brief';
 }
 async function requestBrief(action) {
-  if (briefOperation === 'handoff' && action === 'start' && (!handoffReview.value || Date.now() >= handoffReview.value.expiresAt)) { $('handoff-preview-status').textContent = 'Preview the current selection again before starting.'; return; }
+  if (briefOperation === 'adrDraft' && adrDraftSavePending && ['start', 'accept'].includes(action)) return;
+  if (action === 'start' && !briefReviewReady()) { $(briefOperation === 'adrDraft' ? 'adr-draft-review-status' : 'handoff-preview-status').textContent = 'Review current saved input again before starting.'; return; }
   if (!briefId || briefBusy || closed || suspended || action === 'accept' && busy) return;
   const writesMap = action === 'accept';
   if (writesMap) { busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); }
@@ -3556,43 +3566,65 @@ async function requestBrief(action) {
   const epoch = briefEpoch, id = briefId, journey = briefJourney, abort = new AbortController(); briefAbort = abort;
   const timer = setTimeout(() => abort.abort(), 5000);
   briefBusy = true;
+  if (briefOperation === 'adrDraft' && writesMap) {
+    adrDraftSavePending = true;
+    $('brief-status').textContent = 'Saving ADR wording. The wording is read-only until the save outcome is checked; it can still be selected and copied.';
+  }
+  renderAdrDraftReview();
   for (const name of ['generate-brief', 'accept-brief', 'discard-brief']) $(name).disabled = true;
   try {
-    const response = await fetch(`api/${briefOperation}`, { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
-      body: JSON.stringify({ action, id, journey, ...(briefOperation === 'handoff' && action === 'start' ? { token: handoffReview.value.token } : {}), ...(action === 'accept' ? { revision: state.document.revision, edits: [...briefEdits].map(([id, text]) => ({ id, text })) } : {}) }) });
+    const response = await fetch(`api/${briefRoute()}`, { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
+      body: JSON.stringify({ action, id, journey, ...(briefOperation !== 'brief' && action === 'start' ? { token: briefReview().value.token } : {}), ...(action === 'accept' ? { revision: state.document.revision, edits: briefOperation === 'adrDraft' ? { title: adrDraftTitleEdit ?? adrDraftProposal.title, statements: [...briefEdits].map(([id, text]) => ({ id, text })) } : [...briefEdits].map(([id, text]) => ({ id, text })) } : {}) }) });
     const result = await response.json();
     if (epoch !== briefEpoch || id !== briefId || closed || writesMap && mapEpoch !== actionEpoch) return;
     if (!response.ok) throw new Error(result.error);
     if (result.id !== id) throw new Error('Decision brief response did not match this request.');
     if (result.snapshot) apply(result.snapshot);
+    if (briefOperation === 'adrDraft') {
+      adrDraftSavePending = false;
+      if (result.status === 'proposal') { if (briefView?.status !== 'proposal') briefStamp = ''; adrDraftProposal = result.proposal; }
+      if (action === 'accept' || action === 'discard') { adrDraftProposal = null; adrDraftTitleEdit = null; }
+      if (action === 'accept') { result.accepted = state.document.adrDraft; result.freshness = 'current'; }
+    }
     briefView = result;
     if (briefOperation === 'handoff' && action === 'start') { handoffReview.close(); renderHandoffPreview(); }
+    if (briefOperation === 'adrDraft' && action === 'start') { adrDraftReview.close(); renderAdrDraftReview(); }
     if (action === 'discard') { briefStamp = ''; briefEdits.clear(); }
     renderBrief();
   } catch (error) {
-    if (epoch === briefEpoch && !closed) { $('brief-status').textContent = `${error.message} Brief freshness is unknown until the saved journey can be checked.`; $('accept-brief').hidden = true; }
-  } finally { clearTimeout(timer); if (writesMap && mapEpoch === actionEpoch) busy = false; if (epoch === briefEpoch) { briefBusy = false; $('generate-brief').disabled = briefView?.status === 'pending' || briefOperation === 'handoff' && !handoffReview.value; $('accept-brief').disabled = false; $('discard-brief').disabled = false; } }
+    if (epoch === briefEpoch && !closed) { $('brief-status').textContent = `${error.message} Brief freshness is unknown until the saved journey can be checked.${adrDraftSavePending ? ' ADR wording remains read-only and copyable until its save outcome is checked; use Refresh to check again.' : ''}`; $('accept-brief').hidden = true; }
+  } finally { clearTimeout(timer); if (writesMap && mapEpoch === actionEpoch) busy = false; if (epoch === briefEpoch) { briefBusy = false; $('generate-brief').disabled = briefView?.status === 'pending' || !briefReviewReady(); $('accept-brief').disabled = briefOperation === 'adrDraft' && (adrDraftSavePending || briefView?.status !== 'proposal'); $('discard-brief').disabled = false; renderAdrDraftReview(); } }
 }
 function renderBrief() {
-  const value = briefView, proposal = value?.status === 'proposal' ? value.proposal : null, brief = proposal ?? value?.accepted;
+  const value = briefView, adr = briefOperation === 'adrDraft', liveProposal = value?.status === 'proposal' ? value.proposal : null;
+  const proposal = liveProposal ?? (adr && ['pending', 'stale', 'error'].includes(value?.status) ? adrDraftProposal : null), brief = proposal ?? value?.accepted;
   $('discard-brief').hidden = !['pending', 'proposal', 'stale', 'error'].includes(value?.status);
-  $('accept-brief').hidden = !proposal;
-  $('generate-brief').disabled = value?.status === 'pending' || briefOperation === 'handoff' && !handoffReview.value;
-  $('export-brief').hidden = !value?.accepted;
+  $('accept-brief').hidden = !liveProposal;
+  $('generate-brief').disabled = value?.status === 'pending' || !briefReviewReady();
+  $('export-brief').hidden = adr || !value?.accepted;
   $('copy-handoff').hidden = briefOperation !== 'handoff' || !value?.accepted;
   const coverage = brief?.coverage ?? value?.coverage;
   $('brief-status').textContent = [value?.error, value?.status === 'pending' ? `${value.progress}… Cancel this before using cleanup or question help.` : proposal ? 'Proposal only — review and edit, then explicitly accept.' : value?.accepted ? `Accepted brief — ${value.freshness}.` : 'No accepted brief yet.',
     coverage ? `${briefOperation === 'handoff' ? 'Selected handoff scope' : 'Journey summary'}: ${coverage.included} records included${coverage.omitted !== undefined ? `; ${coverage.omitted} omitted (not examined); ${coverage.bytes}/${coverage.limit} UTF-8 bytes` : ''}.` : '',
     'User constraints are statements, not verified facts. User edits keep original source links; edited wording is not automatically reverified.'].filter(Boolean).join(' ');
+  if (adr) $('brief-status').textContent = [value?.error, 'ADR status: proposed. Accepting wording does not approve the decision or write a project file.', value?.status === 'pending' ? `${value.progress}… Cancel to stop this owned helper.` : liveProposal ? 'Review and edit this optional draft.' : proposal ? 'Edited wording is retained for copying; review current input and regenerate before acceptance.' : value?.accepted ? `Saved draft wording is ${value.freshness} at this check.` : 'No saved ADR draft yet.', coverage ? `${coverage.included} selected records; ${coverage.omitted} omitted. ${coverage.bytes}/${coverage.limit} UTF-8 input bytes.` : '', 'Source states describe user intent, not verified facts. Edits retain original references without automatic verification.'].filter(Boolean).join(' ');
   const unavailable = proposal ? [] : value?.unavailableSources ?? [];
-  const stamp = JSON.stringify([proposal ? briefId : 'accepted', brief, unavailable, brief?.dependencies.records.filter(source => !state.document.nodes.some(node => node.id === source.id)).map(source => source.id)]);
+  const stamp = JSON.stringify([proposal ? briefId : 'accepted', brief, adr ? [] : unavailable, adr ? [] : brief?.dependencies.records.filter(source => !state.document.nodes.some(node => node.id === source.id)).map(source => source.id)]);
   if (stamp === briefStamp) return;
-  briefStamp = stamp; briefEdits.clear(); $('brief-content').replaceChildren();
+  briefStamp = stamp; briefEdits.clear(); adrDraftTitleEdit = null; $('brief-content').replaceChildren();
   if (!brief) return;
   const titles = { goal: brief.format === 'prompt' ? 'Instructions to the implementer' : 'Goal', decisions: brief.format === 'specification' ? 'Selected requirements' : 'Decisions and rationale', constraints: 'Constraints', assumptions: 'Assumptions', unresolved: 'Unresolved questions and conflicts', nextSteps: brief.format === 'tasks' ? 'Proposed tasks (in order)' : brief.format === 'plan' ? 'Proposed sequence' : brief.format === 'specification' ? 'Suggested validation' : 'Next steps' };
+  if (adr) {
+    Object.assign(titles, { context: 'Context', drivers: 'Decision drivers', alternatives: 'Considered options', outcome: 'Decision and rationale', consequences: 'Consequences', confirmation: 'Confirmation', optionDetails: 'Pros and cons of options' }, Object.fromEntries(brief.format.layout.sections.map(section => [section.key, section.label])));
+    if (proposal) {
+      const input = el('input', { id: 'adr-draft-title', type: 'text', maxlength: '200' }); input.value = brief.title;
+      input.addEventListener('input', () => { adrDraftTitleEdit = input.value; });
+      $('brief-content').append(el('label', { for: 'adr-draft-title' }, 'Draft title'), input);
+    } else $('brief-content').append(el('h3', {}, brief.title), el('p', { class: 'quiet' }, brief.titleEdited ? 'Title edited by the user.' : 'Title is AI synthesis reviewed by the user.'));
+  }
   for (const [key, statements] of Object.entries(brief.sections)) {
     const area = el('section', {}, el('h3', {}, titles[key]));
-    if (!statements.length) area.append(el('p', { class: 'quiet' }, 'Unspecified in this brief.'));
+    if (!statements.length) area.append(el('p', { class: 'quiet' }, adr ? brief.format.layout.sections.some(section => section.key === key) ? 'Unspecified in this draft.' : 'Not in the selected template; remains unspecified.' : 'Unspecified in this brief.'));
     for (const statement of statements) {
       const label = el('p', { class: 'quiet' }, `${statement.certainty} · ${statement.edited ? 'User edited' : 'AI synthesis'}`);
       if (proposal) {
@@ -3607,13 +3639,13 @@ function renderBrief() {
           area.append(el('p', { class: 'quiet' }, `Recorded research: ${ref.nodeId} / ${ref.sourceId}: ${source?.title}. ${source?.provenance}; retrieved ${source?.retrievedAt ?? 'unknown'}. Consultation alone does not establish support.`));
         } else {
           const source = brief.dependencies.records.find(source => source.id === ref.id), available = !unavailable.includes(ref.id) && state.document.nodes.some(node => node.id === ref.id);
-          area.append(el('p', { class: 'quiet' }, `Source state: ${source.state}${source.review ? '; needs review' : ''}`), available ? button(`Reveal: ${source.question}`, () => { $('brief-dialog').close(); select(ref.id); }, { class: 'brief-source' }) : el('p', { class: 'quiet' }, `Historical source unavailable: ${source.question} (${ref.id})`));
+          area.append(el('p', { class: 'quiet' }, `Source state: ${source.state}${source.review ? '; needs review' : ''}`), adr ? el('p', { class: 'quiet' }, `Source at capture: ${source.question} (${ref.id}).`) : available ? button(`Reveal: ${source.question}`, () => { $('brief-dialog').close(); select(ref.id); }, { class: 'brief-source' }) : el('p', { class: 'quiet' }, `Historical source unavailable: ${source.question} (${ref.id})`));
         }
       }
     }
     $('brief-content').append(area);
   }
-  if (briefOperation === 'handoff') {
+  if (briefOperation === 'handoff' || adr) {
     const appendix = el('details', {}, el('summary', {}, 'Captured guidance, constraints and recorded research'));
     appendix.append(el('pre', { class: 'handoff-appendix' }, JSON.stringify({ guidance: brief.guidance, includeEvidence: brief.includeEvidence, evidence: brief.evidence }, null, 2))); $('brief-content').append(appendix);
   }
@@ -3629,7 +3661,10 @@ $('generate-brief').addEventListener('click', () => { voice.cancel(); void reque
 $('discard-brief').addEventListener('click', () => void requestBrief('discard'));
 $('accept-brief').addEventListener('click', () => void requestBrief('accept'));
 $('refresh-brief').addEventListener('click', async () => { if (await api('refresh-answer')) await requestBrief('poll'); });
-$('close-brief').addEventListener('click', () => { $('brief-dialog').close(); $(briefOperation === 'handoff' ? 'implementation-handoff' : 'decision-brief').focus(); });
+function hideBrief() { if (briefOperation === 'adrDraft') adrDraftReview.close(); $('brief-dialog').close(); $(briefOperation === 'adrDraft' ? 'adr-draft-open' : briefOperation === 'handoff' ? 'implementation-handoff' : 'decision-brief').focus(); }
+$('close-brief').addEventListener('click', hideBrief);
+$('brief-dialog').addEventListener('cancel', event => { if (briefOperation === 'adrDraft') { event.preventDefault(); hideBrief(); } });
+$('brief-dialog').addEventListener('close', () => { if (briefOperation === 'adrDraft') adrDraftReview.close(); });
 function configureBriefDialog() {
   const handoff = briefOperation === 'handoff';
   $('brief-title').textContent = handoff ? 'Reviewed implementation handoff' : 'Reviewed decision brief';
@@ -3640,7 +3675,35 @@ function configureBriefDialog() {
   $('export-brief').textContent = handoff ? 'Export accepted handoff' : 'Export reviewed brief';
   $('export-brief').href = handoff ? 'handoff.md' : 'brief.md';
   $('copy-handoff').hidden = true;
+  $('adr-draft-review').hidden = briefOperation !== 'adrDraft';
+  if (briefOperation === 'adrDraft') {
+    $('brief-title').textContent = 'Proposed ADR draft';
+    $('brief-description').textContent = 'Review the current saved ADR scope and template layout, then generate an optional draft with an isolated helper that has no tools. Missing reasons and alternatives remain unspecified. Edit the wording and explicitly accept it into this exploration. The decision stays proposed; this does not approve it or write a project file. Close hides the draft; Discard proposal / cancel stops it. Native SDK journals may retain inputs and output.';
+    $('generate-brief').textContent = 'Generate reviewed ADR draft'; $('accept-brief').textContent = 'Accept draft wording'; $('export-brief').hidden = true;
+  }
 }
+function renderAdrDraftReview() {
+  const value = adrDraftReview.value;
+  $('adr-draft-preview').hidden = !value;
+  const text = value ? `${value.prepared.instructions}\n\n${value.prepared.prompt}` : '';
+  if ($('adr-draft-input').textContent !== text) $('adr-draft-input').textContent = text;
+  $('adr-draft-review-status').textContent = adrDraftReview.error || (adrDraftReview.loading ? 'Preparing exact saved ADR input…' : value ? `${value.prepared.coverage.included} selected records; ${value.prepared.bytes}/${value.prepared.limit} UTF-8 bytes. Review before generating.` : 'Review current saved scope and template input before generating.');
+  $('review-adr-draft').disabled = briefBusy || adrDraftSavePending || briefView?.status === 'pending' || adrDraftReview.loading;
+  if (briefOperation === 'adrDraft') {
+    $('generate-brief').disabled = briefBusy || adrDraftSavePending || briefView?.status === 'pending' || !briefReviewReady();
+    for (const input of $('brief-content').querySelectorAll('#adr-draft-title, [data-brief-statement]')) input.readOnly = adrDraftSavePending;
+  }
+}
+$('adr-draft-open').addEventListener('click', () => {
+  if (!state.document || closed || suspended || !switchAllowed('drafting an ADR')) return;
+  voice.cancel(); if (briefOperation !== 'adrDraft') closeBrief(); briefOperation = 'adrDraft'; configureBriefDialog();
+  if (!briefId) { briefId = crypto.randomUUID(); briefJourney = state.activeKey ?? state.document.id; briefEpoch++; }
+  $('brief-dialog').showModal(); renderAdrDraftReview(); void requestBrief('view');
+});
+$('review-adr-draft').addEventListener('click', () => {
+  if (briefOperation !== 'adrDraft' || !briefId || briefBusy || adrDraftSavePending || briefView?.status === 'pending' || closed || suspended || !$('brief-dialog').open) return;
+  adrDraftReview.open({ purpose: 'adr-draft', journey: briefJourney, nodeId: state.document.rootId });
+});
 function renderHandoffPreview() {
   const value = handoffReview.value;
   $('handoff-preview').hidden = !value;

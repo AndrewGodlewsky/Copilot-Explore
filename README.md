@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.93.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.94.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 
 **Usage dashboard** compares current maps, saved answer states and structure, newly observed canvas visits/committed question growth, and retained owned-helper outcomes and usage. UTC date filters apply to observations and receipts, not current stock. Scans are bounded and explicitly refreshed; missing usage and incomplete coverage stay visible. It preserves your editor and drafts. See [metric definitions, inventory, privacy and retention](docs/usage-dashboard.md).
 
@@ -22,6 +22,8 @@ Save a local-calendar **review date** and/or **manual revisit condition** on a q
 **Tools → ADR format** selects an ADR directory, numbered or title-only filenames, and a bundled MADR-based or explicit repository Markdown template. Review the recognized structure and sample, then save preferences. Template examples and instructions are discarded; no decision is generated, file written or number reserved. See [supported templates, path limits and naming](docs/adr-format.md).
 
 **Tools → ADR questions** reviews the saved ADR scope and format, then queues up to three optional questions about missing reasons, options, consequences or revisit conditions. Review and accept only the questions you want. An empty result is advice, not approval or proof of readiness. Draft answers stay private, and changed inputs require a fresh review. See [ADR questions and source boundaries](docs/adr-questions.md).
+
+**Tools → ADR draft** reviews saved scope and template input, then generates a proposed ADR with an isolated helper that has no tools. Edit the title and statements and explicitly accept the wording into the exploration. The decision stays proposed; no project file is written. Stale inputs block acceptance while manual edits remain available. See [ADR drafts, provenance and limits](docs/adr-drafts.md).
 
 Choose **Implementation handoff**, explicitly select saved decisions or open questions, and choose **Brief**, **Specification**, **Plan**, **Prompt** or **Tasks**. Optionally include recorded research sources and structured claims; these remain unverified AI interpretation with their original provenance and limitations. Preview the exact input before generating, then edit and explicitly accept the proposal before copying or exporting its Markdown. Your map and answer drafts stay intact.
 
@@ -315,7 +317,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.93, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.93**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.94, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.94**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Settings > Map and motion** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

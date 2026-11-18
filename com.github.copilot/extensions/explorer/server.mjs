@@ -135,9 +135,9 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.helpRequest(await body(req, 2048)));
       }
-      if (req.method === 'POST' && ['api/brief', 'api/handoff'].includes(route)) {
+      if (req.method === 'POST' && ['api/brief', 'api/handoff', 'api/adr-draft'].includes(route)) {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
-        return json(200, await explorer.briefRequest(await body(req, 256 * 1024), route === 'api/handoff' ? 'handoff' : 'brief'));
+        return json(200, await explorer.briefRequest(await body(req, 256 * 1024), route === 'api/adr-draft' ? 'adrDraft' : route === 'api/handoff' ? 'handoff' : 'brief'));
       }
       if (req.method === 'POST' && route === 'api/check-answers') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });

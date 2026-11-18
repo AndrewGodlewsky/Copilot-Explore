@@ -1,6 +1,6 @@
 {
   "name": "copilot-explorer",
-  "version": "0.1.93",
+  "version": "0.1.94",
   "private": true,
   "type": "module",
   "description": "An exploration map canvas for the GitHub Copilot desktop app.",
@@ -24,6 +24,7 @@
     "e2e:question-help": "node scripts/e2e-question-help.mjs",
     "e2e:handoff": "node scripts/e2e-decision-brief.mjs --handoff",
     "e2e:brief": "node scripts/e2e-decision-brief.mjs",
+    "e2e:adr": "node scripts/e2e-decision-brief.mjs --adr",
     "e2e:check": "node scripts/e2e-answer-check.mjs",
     "benchmark:impact": "node scripts/perf-impact.mjs"
   },

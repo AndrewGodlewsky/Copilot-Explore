@@ -1,4 +1,5 @@
 import { validateHandoff, handoffMarkdown } from './implementation-handoff.mjs';
+import { validateAdrDraft } from './adr-draft.mjs';
 import { validateAdrScope, adrScopeMarkdown } from './adr-scope.mjs';
 import { validateAdrFormat } from './adr-format.mjs';
 import { scenarioOrigin } from './scenario-origin.mjs';
@@ -211,6 +212,7 @@ export function importedDocument(value) {
   const doc = validateDocument(value);
   for (const node of doc.nodes) for (const source of node.research?.claims ? node.research.sources : []) source.provenance = 'imported';
   for (const item of doc.handoff?.evidence ?? []) for (const source of item.claims ? item.sources : []) source.provenance = 'imported';
+  for (const item of doc.adrDraft?.evidence ?? []) for (const source of item.claims ? item.sources : []) source.provenance = 'imported';
   return doc;
 }
 export function createDocument(topic, { objective = '', successCriteria = '', mode = 'understand' } = {}) {
@@ -288,6 +290,7 @@ export function validateDocument(value) {
     ...(Object.hasOwn(value, 'handoff') ? { handoff: validateHandoff(value.handoff) } : {}),
     ...(Object.hasOwn(value, 'adrScope') ? { adrScope: validateAdrScope(value.adrScope) } : {}),
     ...(Object.hasOwn(value, 'adrFormat') ? { adrFormat: validateAdrFormat(value.adrFormat) } : {}),
+    ...(Object.hasOwn(value, 'adrDraft') ? { adrDraft: validateAdrDraft(value.adrDraft) } : {}),
     finishedAt: value.finishedAt === null ? null : date(value.finishedAt, 'finish date'), nodes };
   if (Buffer.byteLength(JSON.stringify(document, null, 2)) > MAX_DOCUMENT_BYTES) throw new Error('This map has reached the 9 MiB saved-data limit. Export it and continue in a new exploration.');
   return document;

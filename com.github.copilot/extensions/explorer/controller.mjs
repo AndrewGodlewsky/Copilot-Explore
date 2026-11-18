@@ -12,6 +12,7 @@ import { BranchRestoration } from './branch-restoration.mjs';
 import { savedDigest } from './review-causes.mjs';
 import { captureAdrScope, adrScopeFreshness } from './adr-scope.mjs';
 import { prepareAdrQuestions, validateAdrQuestions } from './adr-questions.mjs';
+import { captureAdrDraft, validateAdrDraft, acceptAdrDraft, adrDraftFreshness } from './adr-draft.mjs';
 import { AdrFormatReview } from './adr-format-review.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
@@ -101,7 +102,7 @@ export class Explorer {
   reconcileCleanup() {
     if (this.researchReview.selection && this.researchReview.selection.journey !== (this.activeKey ?? this.doc?.id)) this.researchReview.clear();
     const brief = this.briefWork;
-    if (brief && (brief.journey !== (this.activeKey ?? this.doc?.id) || (brief.operation === 'handoff' ? handoffFreshness : briefFreshness)(brief.proposal ?? brief, this.doc) !== 'current')) { brief.abort.abort(); brief.status = 'stale'; brief.error = 'Saved brief inputs changed. Refresh the journey and regenerate.'; }
+    if (brief && (brief.journey !== (this.activeKey ?? this.doc?.id) || (brief.operation === 'adrDraft' ? adrDraftFreshness : brief.operation === 'handoff' ? handoffFreshness : briefFreshness)(brief.proposal ?? brief, this.doc) !== 'current')) { brief.abort.abort(); brief.status = 'stale'; brief.error = 'Saved artifact inputs changed. Refresh the journey and regenerate.'; }
     const check = this.checkWork;
     if (check && check.journey !== (this.activeKey ?? this.doc?.id)) { check.abort.abort(); this.checkWork = null; }
     else if (check && !checkFreshness(check.dependencies, this.doc)) { check.abort.abort(); check.status = 'stale'; check.error = 'Saved check inputs changed. Refresh the journey and run the check again.'; }
@@ -255,47 +256,53 @@ export class Explorer {
     });
   }
   briefRequest(input, operation = 'brief') {
-    const handoff = operation === 'handoff', freshness = handoff ? handoffFreshness : briefFreshness, validate = handoff ? validateHandoff : validateBrief, accept = handoff ? acceptHandoff : acceptBrief;
+    const adr = operation === 'adrDraft', handoff = operation === 'handoff', reviewed = adr || handoff;
+    const freshness = adr ? adrDraftFreshness : handoff ? handoffFreshness : briefFreshness, validate = adr ? validateAdrDraft : handoff ? validateHandoff : validateBrief, accept = adr ? acceptAdrDraft : handoff ? acceptHandoff : acceptBrief;
     return this.transact(async () => {
       const action = input?.action;
       if (this.closed || !input || !['view', 'start', 'poll', 'discard', 'accept'].includes(action) ||
-        Object.keys(input).sort().join(',') !== (action === 'accept' ? 'action,edits,id,journey,revision' : handoff && action === 'start' ? 'action,id,journey,token' : 'action,id,journey') ||
+        !['brief', 'handoff', 'adrDraft'].includes(operation) || Object.keys(input).sort().join(',') !== (action === 'accept' ? 'action,edits,id,journey,revision' : reviewed && action === 'start' ? 'action,id,journey,token' : 'action,id,journey') ||
         typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.id) || !this.doc || input.journey !== (this.activeKey ?? this.doc.id)) throw new Error('Invalid decision brief request.');
       const matches = () => this.briefWork?.id === input.id && this.briefWork.journey === input.journey && this.briefWork.operation === operation;
       if (action === 'discard') {
         if (matches()) { this.briefWork.abort.abort(); this.briefWork = null; }
         return { id: input.id, status: 'discarded' };
       }
-      const current = await this.readCurrent();
-      const check = (work, disk = current) => work.journey === (this.activeKey ?? this.doc.id) && freshness(work, disk) === 'current' && freshness(work, this.doc) === 'current';
+      let current = await this.readCurrent();
+      const scenario = adr ? (await this.scenarioPolicy()).label : undefined;
+      const check = (work, disk = current) => work.journey === (this.activeKey ?? this.doc.id) && freshness(work, disk, scenario) === 'current' && freshness(work, this.doc, scenario) === 'current';
       if (action === 'start') {
         this.requireToolFreeRelease();
         if (!this.briefHelper) throw new Error('Decision briefs require the installed Copilot desktop SDK.');
         if (this.cleanup?.status === 'pending' || this.help?.status === 'pending') throw new Error('Cancel answer cleanup or question help before generating a decision brief.');
         if (this.checkWork?.status === 'pending') throw new Error('Cancel the answer check or challenge review before generating a decision brief.');
         const policy = await this.scenarioPolicy();
-        const prepared = handoff ? await this.researchReview.consume(this, { token: input.token, journey: input.journey, nodeId: this.doc.rootId, purpose: 'implementation-handoff' }) : prepareBrief(this.doc, { scenario: policy.label }), dependencies = (handoff ? captureHandoff : captureBrief)(prepared);
+        const prepared = reviewed ? await this.researchReview.consume(this, { token: input.token, journey: input.journey, nodeId: this.doc.rootId, purpose: adr ? 'adr-draft' : 'implementation-handoff' }) : prepareBrief(this.doc, { scenario: policy.label });
+        const adrCapture = adr ? captureAdrDraft(prepared) : null, dependencies = adr ? adrCapture.dependencies : (handoff ? captureHandoff : captureBrief)(prepared);
         const scenarioPolicy = prepared.scenarioPolicy ?? policy;
-        const artifact = handoff ? { format: prepared.format, formatFingerprint: prepared.formatFingerprint, guidance: prepared.context.guidance, includeEvidence: prepared.context.includeEvidence, evidence: prepared.context.evidence } : {};
-        const work = { id: input.id, journey: input.journey, operation, scenarioPolicy, ...artifact, dependencies, coverage: handoff ? prepared.coverage : { scope: 'journey-summary', bytes: prepared.bytes, limit: prepared.limit, included: dependencies.records.length, omitted: Object.values(prepared.context.omitted).reduce((a, b) => a + b, 0) }, status: 'pending', progress: 'Preparing decision brief', abort: new AbortController() };
+        const artifact = adr ? adrCapture : handoff ? { format: prepared.format, formatFingerprint: prepared.formatFingerprint, guidance: prepared.context.guidance, includeEvidence: prepared.context.includeEvidence, evidence: prepared.context.evidence } : {};
+        const work = { id: input.id, journey: input.journey, operation, scenarioPolicy, ...artifact, dependencies, coverage: reviewed ? prepared.coverage : { scope: 'journey-summary', bytes: prepared.bytes, limit: prepared.limit, included: dependencies.records.length, omitted: Object.values(prepared.context.omitted).reduce((a, b) => a + b, 0) }, status: 'pending', progress: adr ? 'Preparing proposed ADR draft' : 'Preparing decision brief', abort: new AbortController() };
         if (!check(work)) throw new Error('Saved brief inputs changed. Refresh the journey before generating.');
         this.briefWork?.abort.abort(); this.briefWork = work;
         this.toolFreeTask = this.toolFreeTask.then(async () => {
           if (this.briefWork !== work || work.abort.signal.aborted) return;
           try {
             this.requireToolFreeRelease();
-            const dispatch = handoff ? await this.readCurrent() : current;
+            let dispatch = reviewed ? await this.readCurrent() : current;
             await this.assertScenarioPolicy(work.scenarioPolicy);
+            if (adr) dispatch = await this.readCurrent();
             if (this.briefWork !== work || work.abort.signal.aborted) return;
             if (!check(work, dispatch)) { work.status = 'stale'; work.error = 'Saved artifact inputs changed while queued. Refresh and review again.'; return; }
             const proposal = await this.briefHelper.run(prepared, { signal: work.abort.signal, onProgress: progress => { if (this.briefWork === work) work.progress = progress; } });
             // Revalidate even injected helper results and retain only server-owned provenance.
             const trusted = validate({ ...proposal, ...artifact, dependencies, coverage: work.coverage, version: 1, acceptedAt: new Date().toISOString() });
+            if (adr) { trusted.titleEdited = false; for (const statement of Object.values(trusted.sections).flat()) statement.edited = false; }
             delete trusted.version; delete trusted.acceptedAt;
             await this.transact(async () => {
               if (this.briefWork !== work || work.abort.signal.aborted) return;
-              const disk = await this.readCurrent();
+              let disk = await this.readCurrent();
               await this.assertScenarioPolicy(work.scenarioPolicy);
+              if (adr) disk = await this.readCurrent();
               if (this.briefWork !== work || work.abort.signal.aborted || this.closed) return;
               if (!check(work, disk)) { work.status = 'stale'; work.error = 'Saved brief inputs changed. Refresh and regenerate.'; return; }
               work.proposal = trusted; work.status = 'proposal';
@@ -315,7 +322,13 @@ export class Explorer {
           if (!check(work, disk)) throw new Error('This brief is stale. Refresh and regenerate.');
           await this.assertScenarioPolicy(work.scenarioPolicy);
           const next = structuredClone(disk); next[operation] = accept(work.proposal, input.edits);
-          await this.commitCurrentLocked(disk, next, handoff ? 'Accepted reviewed implementation handoff' : 'Accepted reviewed decision brief', () => this.assertScenarioPolicy(work.scenarioPolicy));
+          await this.commitCurrentLocked(disk, next, adr ? 'Accepted proposed ADR wording' : handoff ? 'Accepted reviewed implementation handoff' : 'Accepted reviewed decision brief', async () => {
+            await this.assertScenarioPolicy(work.scenarioPolicy);
+            if (adr) {
+              const latest = await this.readCurrent();
+              if (this.closed || this.briefWork !== work || work.abort.signal.aborted || savedDigest(latest) !== savedDigest(disk) || !check(work, latest)) throw Error('Saved ADR draft inputs or destination changed before acceptance. Refresh and review again.');
+            }
+          });
           this.briefWork = null;
         });
         return { id: input.id, status: 'accepted', snapshot: this.uiSnapshot() };
@@ -325,10 +338,11 @@ export class Explorer {
         try { await this.assertScenarioPolicy(work.scenarioPolicy); }
         catch (error) { work.abort.abort(); work.status = 'stale'; work.error = error.message; }
       }
+      if (adr) current = await this.readCurrent();
       if (work && !check(work)) { work.abort.abort(); work.status = 'stale'; work.error = 'Saved brief inputs changed. Refresh the journey and regenerate.'; }
       return structuredClone({ id: input.id, status: work?.status ?? 'idle', progress: work?.progress, error: work?.error,
         ...(work?.status === 'proposal' ? { proposal: work.proposal } : {}),
-        ...(current[operation] ? { accepted: current[operation], freshness: freshness(current[operation], current), unavailableSources: current[operation].dependencies.records.filter(source => !current.nodes.some(node => node.id === source.id)).map(source => source.id) } : {}),
+        ...(current[operation] ? { accepted: current[operation], freshness: freshness(current[operation], current, scenario), unavailableSources: current[operation].dependencies.records.filter(source => !current.nodes.some(node => node.id === source.id)).map(source => source.id) } : {}),
         ...(work ? { coverage: work.coverage } : {}) });
     });
   }

@@ -4,6 +4,7 @@ import { createOwnedHelper } from './owned-helper.mjs';
 import { toolFreeConfig, validateNoTools } from './tool-free.mjs';
 import { ANSWER_STATES } from './web/answer-state.mjs';
 import { parseHandoff } from './implementation-handoff.mjs';
+import { parseAdrDraft } from './adr-draft.mjs';
 
 export const BRIEF_SECTIONS = ['goal', 'decisions', 'constraints', 'assumptions', 'unresolved', 'nextSteps'];
 export const BRIEF_OUTPUT_LIMIT = 256 * 1024;
@@ -90,11 +91,12 @@ export function acceptBrief(proposal, edits) {
   return validateBrief({ ...result, version: 1, acceptedAt: new Date().toISOString() });
 }
 export function createBriefHelper(parent, options) {
-  const helpers = Object.fromEntries(['decision-brief', 'implementation-handoff'].map(operation => [operation, createOwnedHelper(parent, operation, (prepared, { fail }) => ({ instructions: prepared.instructions, prompt: prepared.prompt,
-    config: toolFreeConfig, validateTools: value => validateNoTools(value, fail), stage: operation === 'implementation-handoff' ? 'Drafting implementation handoff' : 'Drafting decision brief',
-    parse: content => { try { return operation === 'implementation-handoff' ? parseHandoff(content, prepared) : parseBrief(content, prepared); } catch (error) { throw fail(error.message); } },
+  const contracts = { 'decision-brief': { parse: parseBrief, stage: 'Drafting decision brief' }, 'implementation-handoff': { parse: parseHandoff, stage: 'Drafting implementation handoff' }, 'adr-draft': { parse: parseAdrDraft, stage: 'Drafting proposed ADR' } };
+  const helpers = Object.fromEntries(Object.entries(contracts).map(([operation, contract]) => [operation, createOwnedHelper(parent, operation, (prepared, { fail }) => ({ instructions: prepared.instructions, prompt: prepared.prompt,
+    config: toolFreeConfig, validateTools: value => validateNoTools(value, fail), stage: contract.stage,
+    parse: content => { try { return contract.parse(content, prepared); } catch (error) { throw fail(error.message); } },
   }), options)]));
-  return { run: (prepared, options) => helpers[prepared.operation === 'implementation-handoff' ? 'implementation-handoff' : 'decision-brief'].run(prepared, options), close: () => Promise.all(Object.values(helpers).map(helper => helper.close())) };
+  return { run: (prepared, options) => helpers[prepared.operation === 'adr-draft' ? 'adr-draft' : prepared.operation === 'implementation-handoff' ? 'implementation-handoff' : 'decision-brief'].run(prepared, options), close: () => Promise.all(Object.values(helpers).map(helper => helper.close())) };
 }
 // Escape Markdown control characters, including punctuation used by autolinks and HTML entities.
 const md = value => String(value).replace(/[\\`*_{}[\]<>#+!|()&.:=~-]/g, '\\$&');

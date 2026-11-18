@@ -9,7 +9,7 @@ const fail = message => new Error(`Cannot edit this shared exploration: ${messag
 function canonical(value) {
   // Legacy accepted artifacts hash these subtrees with order-sensitive JSON.
   // Keep those hash inputs intact, including stale historical guidance/evidence.
-  const retained = new Set([value.journey?.pins, value.journey?.handoff?.guidance, value.journey?.handoff?.evidence]);
+  const retained = new Set([value.journey?.pins, value.journey?.handoff?.guidance, value.journey?.handoff?.evidence, value.journey?.adrDraft?.guidance, value.journey?.adrDraft?.evidence]);
   const order = (item, preserve = false) => {
     if (!item || typeof item !== 'object') return item;
     preserve ||= retained.has(item);

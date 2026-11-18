@@ -7,6 +7,7 @@ import { sameFollowup } from './research-followup.mjs';
 import { savedDigest } from './review-causes.mjs';
 import { briefFreshness } from './decision-brief.mjs';
 import { handoffFreshness } from './implementation-handoff.mjs';
+import { adrDraftFreshness } from './adr-draft.mjs';
 import { checkFreshness } from './answer-check.mjs';
 import { References } from './references.mjs';
 
@@ -17,12 +18,12 @@ const artifactKey = work => work && [work.id, work.journey, work.operation, work
 const workKey = e => savedDigest([e.pending && [e.pending.id, e.pending.kind, e.pending.nodeId], e.preview, e.questionSource, e.followup, artifactKey(e.briefWork), artifactKey(e.checkWork)]);
 export function affectedArtifacts(e, doc, next) {
   const artifacts = [];
-  for (const [kind, fresh] of [['brief', briefFreshness], ['handoff', handoffFreshness]]) {
+  for (const [kind, fresh] of [['brief', briefFreshness], ['handoff', handoffFreshness], ['adrDraft', adrDraftFreshness]]) {
     if (doc[kind] && fresh(doc[kind], doc) === 'current' && fresh(doc[kind], next) !== 'current') artifacts.push({ kind, state: 'saved' });
   }
   const brief = e.briefWork, check = e.checkWork;
   if (brief && ['pending', 'proposal'].includes(brief.status)) {
-    const fresh = brief.operation === 'handoff' ? handoffFreshness : briefFreshness, value = brief.proposal ?? brief;
+    const fresh = brief.operation === 'adrDraft' ? adrDraftFreshness : brief.operation === 'handoff' ? handoffFreshness : briefFreshness, value = brief.proposal ?? brief;
     if (fresh(value, doc) === 'current' && fresh(value, next) !== 'current') artifacts.push({ kind: brief.operation, state: brief.status });
   }
   if (check && ['pending', 'result'].includes(check.status) && checkFreshness(check.dependencies, doc) && !checkFreshness(check.dependencies, next)) artifacts.push({ kind: check.operation, state: check.status });

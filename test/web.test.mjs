@@ -16,6 +16,7 @@ import { JSDOM } from 'jsdom';
 import { fixtureSpecs, makeFixture } from '../scripts/perf-fixtures.mjs';
 import { parseBrief } from '../com.github.copilot/extensions/explorer/decision-brief.mjs';
 import { parseHandoff } from '../com.github.copilot/extensions/explorer/implementation-handoff.mjs';
+import { parseAdrDraft } from '../com.github.copilot/extensions/explorer/adr-draft.mjs';
 import { prepareAdrScope, captureAdrScope } from '../com.github.copilot/extensions/explorer/adr-scope.mjs';
 import { defaultAdrFormat } from '../com.github.copilot/extensions/explorer/adr-format.mjs';
 import { parseAnswerCheck } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
@@ -5883,6 +5884,106 @@ test('ADR scope UI rejects oversized exact input without disabling source correc
   await until(() => /128 KiB/.test($('adr-scope-preview-status').textContent), 'scope budget error'); assert.equal($('adr-scope-save').disabled, true);
   $('adr-scope-sources').querySelector(`[data-adr-node="${doc.nodes[1].id}"]`).click(); await f.previewScope();
   assert.equal(f.scopeCalls(), 0); assert.equal($('answer').value, 'PRIVATE ADR DRAFT λ'); $('adr-scope-close').click();
+});
+
+async function adrDraftFixture(t, scoped = true) {
+  const f = await adrQuestionsFixture(t, scoped), $ = f.$, calls = [];
+  f.explorer.briefHelper = { async run(p) { calls.push(p); return parseAdrDraft(JSON.stringify({ title: 'Proposed choice λ', status: 'proposed', sections: { context: [], drivers: [], alternatives: [], outcome: [{ id: 'choice', text: 'Maybe a local team; reason remains unknown.', certainty: 'uncertain', sources: [{ kind: 'node', id: p.context.focalId }] }], consequences: [], confirmation: [], optionDetails: [] } }), p); }, close() {} };
+  const open = async () => { $('adr-draft-open').click(); await until(() => $('brief-dialog').open && !$('review-adr-draft').disabled, 'ADR draft dialog'); };
+  const review = async () => { $('review-adr-draft').click(); await until(() => !$('generate-brief').disabled || /Save a current reviewed ADR scope/i.test($('adr-draft-review-status').textContent), 'ADR input reviewed'); };
+  const generate = async () => { await open(); await review(); $('generate-brief').click(); await until(() => !$('accept-brief').hidden && !$('accept-brief').disabled, 'ADR draft proposal'); };
+  return { ...f, calls, openDraft: open, reviewDraft: review, generateDraft: generate };
+}
+
+test('ADR draft UI reviews exact saved input, edits literal wording and accepts a proposed artifact while preserving answer drafts', async t => {
+  const f = await adrDraftFixture(t), $ = f.$, before = structuredClone(f.explorer.doc.nodes); await f.openDraft();
+  assert.equal($('generate-brief').disabled, true); assert.equal(f.calls.length, 0); await f.reviewDraft();
+  const input = $('adr-draft-input').textContent; assert.doesNotMatch(input, /PRIVATE ADR QUESTION DRAFT/); assert.match(input, /Maybe a local team/);
+  $('generate-brief').click(); await until(() => !$('accept-brief').hidden && !$('accept-brief').disabled, 'ADR proposal ready');
+  assert.ok(input.includes(f.calls[0].prompt)); assert.equal(f.explorer.doc.adrDraft, undefined); assert.match($('brief-status').textContent, /proposed/i);
+  const title = $('adr-draft-title'), editor = $('brief-content').querySelector('[data-brief-statement="choice"]');
+  f.type('adr-draft-title', 'Edited title λ'); editor.value = 'Exact λ <script>\nStill provisional'; editor.dispatchEvent(new f.window.Event('input', { bubbles: true })); editor.focus(); editor.setSelectionRange(2, 6);
+  await f.poll(); assert.equal($('adr-draft-title'), title); assert.equal($('brief-content').querySelector('[data-brief-statement="choice"]'), editor); assert.equal(editor.selectionStart, 2);
+  $('accept-brief').click(); await until(() => f.explorer.doc.adrDraft && $('accept-brief').hidden, 'ADR wording accepted and response applied');
+  assert.equal(f.explorer.doc.adrDraft.status, 'proposed'); assert.equal(f.explorer.doc.adrDraft.title, 'Edited title λ'); assert.equal(f.explorer.doc.adrDraft.sections.outcome[0].text, editor.value);
+  assert.deepEqual(f.explorer.doc.nodes, before); assert.equal($('answer'), f.editor); assert.match(f.editor.value, /PRIVATE ADR QUESTION DRAFT/);
+  assert.equal($('export-brief').hidden, true); assert.equal($('copy-handoff').hidden, true); assert.equal(f.sent.length, 0); assert.equal($('brief-content').querySelector('script'), null);
+});
+
+for (const outcome of ['success', 'lost response', 'rejected']) test(`ADR draft UI locks wording until acceptance outcome is checked: ${outcome}`, async t => {
+  const f = await adrDraftFixture(t), $ = f.$; await f.generateDraft();
+  const title = $('adr-draft-title'), editor = $('brief-content').querySelector('[data-brief-statement="choice"]');
+  f.type('adr-draft-title', 'Click-time title λ'); editor.value = 'Click-time rationale λ'; editor.dispatchEvent(new f.window.Event('input', { bubbles: true }));
+  const fetch = f.window.fetch; let releaseAccept, releasePoll;
+  f.window.fetch = async (path, options) => {
+    const action = path === 'api/adr-draft' ? JSON.parse(options.body).action : null;
+    if (action === 'accept') {
+      const response = outcome === 'rejected' ? null : await fetch(path, options);
+      await new Promise(resolve => { releaseAccept = resolve; });
+      if (outcome !== 'success') throw Error('Acceptance response unavailable');
+      return response;
+    }
+    if (action === 'poll') await new Promise(resolve => { releasePoll = resolve; });
+    return fetch(path, options);
+  };
+  try {
+    $('accept-brief').click();
+    assert.equal(title.readOnly, true); assert.equal(editor.readOnly, true);
+    assert.equal(title.disabled, false, 'wording remains selectable for copying'); assert.equal(editor.disabled, false);
+    assert.equal($('answer').readOnly, false); f.type('answer', 'Independent private answer λ');
+    await until(() => releaseAccept, 'acceptance response held');
+    releaseAccept();
+    if (outcome !== 'success') {
+      await until(() => /Acceptance response unavailable/.test($('brief-status').textContent), 'uncertain save reported');
+      assert.equal(title.readOnly, true); assert.equal(editor.readOnly, true);
+      assert.equal($('review-adr-draft').disabled, true); assert.equal($('generate-brief').disabled, true);
+      await until(() => releasePoll, 'save outcome check held');
+      assert.equal(editor.readOnly, true); releasePoll();
+    }
+    if (outcome === 'rejected') {
+      await until(() => !editor.readOnly, 'unsaved proposal editable after checking');
+      assert.equal($('adr-draft-title'), title); assert.equal(editor.value, 'Click-time rationale λ'); assert.equal(f.explorer.doc.adrDraft, undefined);
+    } else {
+      await until(() => !$('adr-draft-title') && $('brief-content').textContent.includes('Click-time title λ'), 'saved wording displayed');
+      assert.equal(f.explorer.doc.adrDraft.title, 'Click-time title λ'); assert.equal(f.explorer.doc.adrDraft.sections.outcome[0].text, 'Click-time rationale λ');
+    }
+    assert.equal($('answer').value, 'Independent private answer λ');
+  } finally { f.window.fetch = fetch; releaseAccept?.(); releasePoll?.(); }
+});
+
+test('ADR draft UI retains connected title and statement edits when saved sources make the proposal stale', async t => {
+  const f = await adrDraftFixture(t), $ = f.$; await f.generateDraft();
+  const title = $('adr-draft-title'), editor = $('brief-content').querySelector('[data-brief-statement="choice"]'); f.type('adr-draft-title', 'Retain this title'); editor.value = 'Retain manual rationale'; editor.dispatchEvent(new f.window.Event('input', { bubbles: true })); editor.focus(); editor.setSelectionRange(1, 8);
+  const changed = structuredClone(f.explorer.doc); changed.adrFormat.digits = 6; await f.explorer.save(changed); await f.poll();
+  await until(() => /changed|stale/i.test($('brief-status').textContent), 'stale ADR shown');
+  assert.equal($('adr-draft-title'), title); assert.equal(title.value, 'Retain this title'); assert.equal($('brief-content').querySelector('[data-brief-statement="choice"]'), editor); assert.equal(editor.value, 'Retain manual rationale'); assert.equal(editor.selectionStart, 1);
+  assert.equal($('accept-brief').hidden || $('accept-brief').disabled, true); assert.equal($('generate-brief').disabled, true); assert.equal(f.explorer.doc.adrDraft, undefined);
+  await f.reviewDraft(); assert.equal(f.calls.length, 1); assert.equal($('adr-draft-title'), title);
+});
+
+test('ADR draft UI handles missing saved scope locally without helper calls or answer edits', async t => {
+  const f = await adrDraftFixture(t, false), $ = f.$; await f.openDraft(); await f.reviewDraft();
+  assert.match($('adr-draft-review-status').textContent, /save.*scope/i); assert.equal($('generate-brief').disabled, true); assert.equal(f.calls.length, 0);
+  $('close-brief').click(); assert.equal(f.document.activeElement, $('adr-draft-open')); assert.equal($('answer'), f.editor);
+});
+
+for (const leave of ['hide', 'switch', 'suspend']) test(`ADR draft UI ignores a late exact-review response after ${leave}`, async t => {
+  const f = await adrDraftFixture(t), $ = f.$; await f.openDraft(); const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/research-review' && JSON.parse(options.body).purpose === 'adr-draft' && JSON.parse(options.body).action === 'prepare') await new Promise(resolve => { release = resolve; }); return response; };
+  $('review-adr-draft').click(); await until(() => release, 'ADR review response held');
+  if (leave === 'hide') $('close-brief').click(); else if (leave === 'switch') $('decision-brief').click(); else f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  release(); f.window.fetch = fetch; await delay(25);
+  if (leave === 'suspend') { f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await f.poll(); }
+  if (leave === 'switch') assert.match($('brief-title').textContent, /decision brief/i);
+  await f.openDraft(); assert.equal($('generate-brief').disabled, true); assert.equal(f.calls.length, 0); assert.match(f.editor.value, /PRIVATE ADR QUESTION DRAFT/);
+});
+
+test('ADR draft UI cancellation rejects late helper output and retains saved answers and private editor text', async t => {
+  const f = await adrDraftFixture(t), $ = f.$, original = f.explorer.briefHelper.run, before = structuredClone(f.explorer.doc); let release, signal;
+  f.explorer.briefHelper.run = (p, options) => { signal = options.signal; return new Promise(resolve => { release = async () => resolve(await original(p)); signal.addEventListener('abort', release, { once: true }); }); };
+  await f.openDraft(); await f.reviewDraft(); $('generate-brief').click(); await until(() => release && !$('discard-brief').hidden, 'ADR helper running');
+  $('discard-brief').click(); await until(() => signal.aborted && !f.explorer.briefWork, 'ADR helper cancelled'); release(); await f.explorer.toolFreeTask; await f.poll();
+  assert.deepEqual(f.explorer.doc, before); assert.equal($('answer'), f.editor); assert.match(f.editor.value, /PRIVATE ADR QUESTION DRAFT/); assert.equal($('accept-brief').hidden, true);
 });
 
 test('implementation handoff HTTP UI requires exact selection review, preserves drafts and edits, and copies accepted portable text', async t => {

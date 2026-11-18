@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { confirmAnswer } from './helpers/answer-change.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -91,7 +92,7 @@ test('late cancelled work cannot enter a replacement, relevant changes mark exis
   f.runs[0].resolve(result); await new Promise(setImmediate); await new Promise(setImmediate);
   assert.equal(f.runs.length, 2); f.runs[1].resolve(result); await f.settle();
   assert.equal(f.e.uiSnapshot().followup.exchanges[0].question, 'Why now?');
-  await f.e.command('answer', { nodeId: f.doc.nodes[1].id, answer: 'Changed committed answer', revision: f.e.doc.revision });
+  await confirmAnswer(f.e, { nodeId: f.doc.nodes[1].id, answer: 'Changed committed answer', revision: f.e.doc.revision });
   assert.equal(f.e.uiSnapshot().followup.historical, true);
 });
 test('shared actual-release queue gates follow-up and research in both directions, including unconfirmed shutdown', async t => {

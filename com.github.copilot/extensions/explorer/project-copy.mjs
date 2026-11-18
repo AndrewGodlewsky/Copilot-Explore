@@ -18,7 +18,7 @@ export class ProjectCopy {
     const id = newCopy ? randomUUID() : `copy-${hash(JSON.stringify([source.contentDigest, includeResearch, destination])).slice(0, 40)}`;
     document.journey.id = id;
     document.journey.copyOrigin = { kind: 'personal-copy', sourceId: source.document.journey.id, sourceDigest: source.contentDigest };
-    if (!includeResearch) for (const node of document.journey.nodes) node.research = null;
+    if (!includeResearch) for (const node of document.journey.nodes) { node.research = null; delete node.researchStale; }
     const prepared = prepareSharedMigration(JSON.stringify({ format: FORMAT, version: 1, revision: 0, ...document.journey }));
     const selected = await this.repository.selection(`${folder}/${id}.explore.json`, false);
     // Remember all existing ancestors without creating folders during review.

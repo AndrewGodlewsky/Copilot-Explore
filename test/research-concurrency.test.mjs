@@ -1,4 +1,5 @@
 import { startResearch } from './helpers/research-review.mjs';
+import { confirmAnswer } from './helpers/answer-change.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
@@ -46,10 +47,10 @@ test('external pin edits discard research, while absent and empty pin defaults a
 
 test('research source save keeps new user text and discards stale output only after commit', async t => {
   const f = await fixture(t); await f.begin();
-  const save = f.e.save; f.e.save = async () => { throw Error('Injected precommit failure'); };
-  await assert.rejects(f.command('answer', { nodeId: f.doc.nodes[1].id, answer: 'New target' }), /Injected/);
-  assert.ok(f.e.pending); assert.equal(f.runs[0].signal.aborted, false); f.e.save = save;
-  await f.command('answer', { nodeId: f.doc.nodes[1].id, answer: 'New target' });
+  const save = f.e.commitCurrentLocked; f.e.commitCurrentLocked = async () => { throw Error('Injected precommit failure'); };
+  await assert.rejects(confirmAnswer(f.e, { revision: f.e.doc.revision, nodeId: f.doc.nodes[1].id, answer: 'New target' }), /Injected/);
+  assert.ok(f.e.pending); assert.equal(f.runs[0].signal.aborted, false); f.e.commitCurrentLocked = save;
+  await confirmAnswer(f.e, { revision: f.e.doc.revision, nodeId: f.doc.nodes[1].id, answer: 'New target' });
   assert.equal(f.e.pending, null); assert.match(f.e.error, /saved.*context changed/i); assert.equal(f.runs[0].signal.aborted, true);
   await f.finish(); assert.equal(f.e.doc.nodes[1].answer, 'New target'); assert.equal(f.e.doc.nodes[1].research, null);
 });
@@ -93,7 +94,7 @@ test('captured sources reject target, ancestry, state, guidance, effective mode 
 
 test('research completion then source save preserves completed history and new answer', async t => {
   const f = await fixture(t); await f.begin(); await f.finish();
-  await f.command('answer', { nodeId: f.doc.nodes[1].id, answer: 'Later decision' });
+  await confirmAnswer(f.e, { revision: f.e.doc.revision, nodeId: f.doc.nodes[1].id, answer: 'Later decision' });
   assert.equal(f.e.doc.nodes[1].answer, 'Later decision'); assert.deepEqual(f.e.doc.nodes[1].research, { ...result, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });
   assert.equal((await f.e.readHistory(f.e.doc.id, 1)).document.nodes[1].answer, '');
 });
@@ -102,7 +103,7 @@ test('already sent external decisions invalidate by ID while a newly answered br
   const f = await fixture(t);
   await f.command('answer', { nodeId: f.doc.nodes[2].id, answer: 'Included at start' }); await f.begin();
   assert.equal(f.runs[0].context.decisionsElsewhere[0].id, f.doc.nodes[2].id);
-  await f.command('answer', { nodeId: f.doc.nodes[2].id, answer: 'New included decision' });
+  await confirmAnswer(f.e, { revision: f.e.doc.revision, nodeId: f.doc.nodes[2].id, answer: 'New included decision' });
   assert.equal(f.e.pending, null); await f.finish(); assert.equal(f.e.doc.nodes[1].research, null);
 });
 
@@ -163,11 +164,12 @@ test('research retains question generation, history and journey guards; cancelle
   const reopened = await new Explorer({ file: f.file }).load(); assert.equal(reopened.pending, null); assert.equal(reopened.doc.id, replacement.id);
 });
 
-test('identical research reconciles the latest disk snapshot without inventing a revision', async t => {
+test('identical research reconciles the latest disk snapshot and records clearing a stale marker', async t => {
   const f = await fixture(t); await f.begin(); await f.finish(); await f.begin();
   const other = await new Explorer({ file: f.file }).load();
-  await other.command('answer', { revision: other.doc.revision, nodeId: f.doc.nodes[2].id, answer: 'Newest independent answer' });
-  await f.finish(); assert.equal(f.e.doc.revision, 2); assert.equal(f.e.doc.nodes[2].answer, 'Newest independent answer');
+  await confirmAnswer(other, { revision: other.doc.revision, nodeId: f.doc.nodes[2].id, answer: 'Newest independent answer' });
+  assert.equal(other.doc.nodes[1].researchStale, true);
+  await f.finish(); assert.equal(f.e.doc.revision, 3); assert.equal(f.e.doc.nodes[2].answer, 'Newest independent answer'); assert.equal(f.e.doc.nodes[1].researchStale, undefined);
   assert.equal(f.e.error, ''); assert.equal(f.e.pending, null);
 });
 

@@ -192,6 +192,6 @@ export class DraftClient {
       entry.status = entry.conflict ? 'Review recovered draft' : entry.dirty ? 'Saving draft…' : '';
       this.changed(); return result;
     } catch (error) { entry.status = 'Draft could not be saved'; entry.error = error.message; this.changed(); throw error; }
-    finally { this.savingAnswer = false; entry.paused = false; if (result && entry.dirty && !entry.conflict) void this.flush(false, id).catch(() => {}); }
+    finally { this.savingAnswer = false; entry.paused = false; if (entry.dirty && !entry.conflict) void this.flush(false, id).catch(() => {}); }
   }
 }

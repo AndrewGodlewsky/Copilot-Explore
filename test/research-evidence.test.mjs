@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { confirmAnswer } from './helpers/answer-change.mjs';
 import assert from 'node:assert/strict';
 import { research, createDocument, addQuestions, importedDocument, validateDocument, toMarkdown } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
@@ -68,7 +69,7 @@ test('external import marks historical metadata while native reopen and history 
   const e = await new Explorer({ file: record.file }).load(); t.after(() => e.close());
   const expected = structuredClone(evidence); expected.sources[0].provenance = 'imported';
   assert.deepEqual(e.doc.nodes[1].research, expected);
-  await e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, answer: 'My answer' });
+  await confirmAnswer(e, { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, answer: 'My answer' });
   const previous = await e.readHistory(e.doc.id, 0); assert.deepEqual(previous.document.nodes[1].research, expected);
   await e.command('restore', { revision: e.doc.revision, journey: e.doc.id, snapshotRevision: 0 });
   assert.deepEqual(e.doc.nodes[1].research, expected); assert.equal(e.doc.nodes[1].answer, '');
@@ -116,7 +117,7 @@ test('invalid evidence, overflow, cancellation and current-disk changes preserve
   const node = addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Scope' }])[0]; node.research = evidence; node.answer = 'My unchanged answer';
   await writeFile(file, JSON.stringify(doc));
   let finish;
-  const e = await new Explorer({ file, researcher: { run: () => new Promise(resolve => { finish = resolve; }) } }).load(); t.after(() => e.close());
+  const e = await new Explorer({ file, researcher: { run: () => new Promise(resolve => { finish = resolve; }) } }).load(); t.after(async () => { finish?.(evidence); await e.close(); });
   for (const mode of ['unknown-ref', 'oversized', 'cancelled', 'disk-source', 'disk-destination']) {
     await startResearch(e, { revision: e.doc.revision, nodeId: node.id });
     // Starting the owned task is scheduled after the command releases its writer lock.
@@ -127,7 +128,7 @@ test('invalid evidence, overflow, cancellation and current-disk changes preserve
     if (mode === 'cancelled') await e.command('cancel');
     if (mode.startsWith('disk-')) {
       const other = await new Explorer({ file }).load();
-      if (mode === 'disk-source') await other.command('answer', { revision: other.doc.revision, nodeId: node.id, answer: 'Current disk answer' });
+      if (mode === 'disk-source') await confirmAnswer(other, { revision: other.doc.revision, nodeId: node.id, answer: 'Current disk answer' });
       else { const next = structuredClone(other.doc); next.nodes[1].research.summary = 'Current disk research'; await other.save(next); }
       await other.close();
     }

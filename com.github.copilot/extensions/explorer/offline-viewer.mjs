@@ -49,7 +49,8 @@ export function viewerSnapshot(doc, selection) {
     const result = { id: ids.get(n.id), parentId: ids.get(n.parentId) ?? null, role, question: text(n.question, 4000), category: text(n.category, 60), status: nodeStatus(n), review: n.review === true,
       ...(role === 'question' && n.importance ? { importance: n.importance, importanceReason: text(n.importanceReason, 600), originalQuestion: text(n.generation.originalQuestion, 600) } : {}),
       answer: choice.answer && role === 'question' ? text(n.answer) : null,
-      research: choice.research && n.research ? researchProjection(n.research) : null };
+      research: choice.research && n.research ? researchProjection(n.research) : null,
+      ...(choice.research && n.researchStale ? { researchStale: true } : {}) };
     bytes += Buffer.byteLength(JSON.stringify(result)); if (bytes > VIEWER_LIMITS.inputBytes) throw Error(limitMessage);
     return result;
   });

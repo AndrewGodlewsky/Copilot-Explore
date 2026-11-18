@@ -170,6 +170,13 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (!explorer.library) throw new Error('Library search is unavailable.');
         return json(200, await explorer.library.search(await body(req, 24 * 1024)));
       }
+      if (req.method === 'POST' && route === 'api/answer-change') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        const result = await explorer.answerChangeRequest(await body(req, 128 * 1024));
+        // Exact answers, 50 question labels and 30 path steps can exceed 512 KiB after JSON escaping.
+        if (Buffer.byteLength(JSON.stringify(result)) > 1024 * 1024) throw Error('Answer preview response limit reached.');
+        return json(200, result);
+      }
       if (req.method === 'POST' && route === 'api/project-library') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.projectLibraryRequest(await body(req, 4096)));
@@ -197,7 +204,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/action') {
         if (req.headers['x-explorer-client'] !== '1' || (req.headers.origin && req.headers.origin !== origin)) return json(403, { error: 'Invalid request origin.' });
         const input = await body(req);
-        if (['research', 'research-follow-up', 'restore', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry', 'project-merge-accept', 'add-dependency', 'remove-dependency'].includes(input.action) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        if ((input.answerPreview || ['research', 'research-follow-up', 'restore', 'checkpoint', 'remove-checkpoint', 'recover-copy', 'recovery-retry', 'project-merge-accept', 'add-dependency', 'remove-dependency'].includes(input.action)) && req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.command(input.action, input));
       }
       if (req.method === 'POST' && route === 'api/viewer-export') {

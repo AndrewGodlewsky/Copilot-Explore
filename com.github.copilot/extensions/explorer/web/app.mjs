@@ -382,6 +382,73 @@ document.addEventListener('keydown', event => {
 });
 window.addEventListener('pagehide', () => { if ($('palette-dialog').open) closePalette(false); });
 
+let answerChange = null;
+const answerChangeWork = () => JSON.stringify([state.pending && [state.pending.id, state.pending.kind, state.pending.nodeId], state.preview, state.followup]);
+async function answerChangeRequest(input) {
+  const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 10000);
+  try {
+    const response = await fetch('api/answer-change', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+    const value = await response.json(); if (!response.ok) throw Error(value.error); return value;
+  } finally { clearTimeout(timer); }
+}
+function closeAnswerChange(accept = false, message = '') {
+  const review = answerChange; if (!review) return;
+  answerChange = null; if ($('answer-change-dialog').open) $('answer-change-dialog').close();
+  if (!accept) void answerChangeRequest({ action: 'discard', token: review.value.token }).catch(() => {});
+  review.resolve(accept ? review.value : null);
+  if (review.focus?.isConnected) review.focus.focus({ preventScroll: true });
+  if (message) notice(message);
+}
+function renderAnswerChange() {
+  const p = answerChange?.value; if (!p) return;
+  $('answer-change-summary').textContent = `${p.acknowledgment ? 'This acknowledges current review causes without changing answer text or state. Captured work still needs reconsideration. ' : ''}${p.counts.total} affected questions: ${p.counts.structural} reachable through the tree, ${p.counts.confirmed} through explicit dependencies, ${p.counts.mixedOnly} through mixed paths only. Tree and dependency counts may overlap. ${p.directions} structural directions also need review.`;
+  $('answer-change-confirm').textContent = p.acknowledgment ? 'Acknowledge review and update captured work' : 'Save and mark affected items for review';
+  $('answer-change-old-label').textContent = `Saved answer (${ANSWER_STATES[p.current.state]})`; $('answer-change-old').textContent = p.current.answer || '(No answer text)';
+  $('answer-change-new-label').textContent = `Proposed answer (${ANSWER_STATES[p.proposed.state]})`; $('answer-change-new').textContent = p.proposed.answer || '(No answer text)';
+  $('answer-change-artifacts').textContent = `${p.research} retained research results need reconsideration; ${p.generated} accepted generated questions need review. Saved research does not retain complete context dependencies, so all retained results are conservatively flagged, even without a recorded path. ${p.staged ? 'The unsaved question proposal becomes stale. ' : ''}${p.running ? 'Active research will be discarded and only its owned helper stopped. ' : ''}${p.followup ? 'The research conversation becomes historical. ' : ''}Answers and research are preserved; research is not automatically refreshed.`;
+  const artifactNames = { brief: 'decision brief', handoff: 'implementation handoff', 'answer-check': 'answer check', 'challenge-review': 'challenge review' };
+  for (const artifact of p.artifacts) $('answer-change-artifacts').append(` The ${artifact.state === 'saved' ? 'saved' : artifact.state === 'pending' ? 'running' : 'unsaved'} ${artifactNames[artifact.kind]} becomes stale${artifact.state === 'pending' ? ' and its owned helper stops' : ''}.`);
+  $('answer-change-adr').textContent = p.adr;
+  $('answer-change-items').replaceChildren(...p.items.map(n => el('option', { value: n.id }, `${n.question} (${n.direction ? 'direction' : ANSWER_STATES[n.state]}${n.structural ? '; tree exposure' : ''}${n.confirmed ? '; explicit dependency' : ''}${n.review && !n.structural && !n.confirmed ? '; mixed exposure' : ''}${!n.review && n.research ? '; research reconsideration only' : ''}${n.research ? '; retained research' : ''}${n.generated ? '; generated question' : ''})`)));
+  $('answer-change-items').value = p.targetId ?? ''; $('answer-change-items').disabled = !p.items.length;
+  $('answer-change-page').textContent = p.total ? `Items ${p.page * 50 + 1}-${Math.min((p.page + 1) * 50, p.total)} of ${p.total}` : 'No downstream items. Context-bound work listed above may still become stale.';
+  $('answer-change-prev').disabled = p.page === 0; $('answer-change-next').disabled = (p.page + 1) * 50 >= p.total;
+  $('answer-change-path').replaceChildren(...p.path.map(step => el('li', {}, `${step.via === null ? 'Starting question' : step.via === 'tree' ? 'Possible tree exposure' : 'Recorded dependency'}: ${step.question}`)));
+  $('answer-change-path').start = p.pathPage * 30 + 1;
+  $('answer-change-path-page').textContent = p.pathTotal ? `Path steps ${p.pathPage * 30 + 1}-${Math.min((p.pathPage + 1) * 30, p.pathTotal)} of ${p.pathTotal}. A path with a tree step is possible exposure.` : 'No recorded path. Research context dependencies are unknown; no decision relationship has been inferred.';
+  $('answer-change-path-prev').disabled = p.pathPage === 0; $('answer-change-path-next').disabled = (p.pathPage + 1) * 30 >= p.pathTotal;
+  $('answer-change-confirm').disabled = false; $('answer-change-error').textContent = '';
+}
+async function pageAnswerChange(page, targetId = null, pathPage = 0) {
+  const review = answerChange; if (!review) return;
+  const sequence = ++review.sequence; $('answer-change-confirm').disabled = true;
+  try {
+    const value = await answerChangeRequest({ action: 'page', token: review.value.token, page, targetId, pathPage });
+    if (answerChange !== review || sequence !== review.sequence) return;
+    if (!review.current()) return closeAnswerChange(false, 'The answer or its sources changed. Review again; your draft is retained.');
+    review.value = value; renderAnswerChange();
+  } catch (error) { if (answerChange === review && sequence === review.sequence) { $('answer-change-error').textContent = error.message; $('answer-change-confirm').disabled = true; } }
+}
+async function reviewAnswerChange(input, generation) {
+  const journey = referenceJourney(), page = pageEpoch, base = JSON.stringify(state.document), work = answerChangeWork(), focus = document.activeElement;
+  const savedCurrent = () => !closed && !suspended && page === pageEpoch && journey === referenceJourney() && selected === input.nodeId && JSON.stringify(state.document) === base && answerChangeWork() === work;
+  const current = () => savedCurrent() && draftClient.entries.get(input.nodeId)?.edits === generation;
+  const value = await answerChangeRequest({ action: 'prepare', journey, revision: state.document.revision, ...input });
+  if (!savedCurrent() || value.requiresConfirmation && !current()) { void answerChangeRequest({ action: 'discard', token: value.token }).catch(() => {}); notice('The answer or its sources changed. Save again to review the current edit.'); return null; }
+  if (!value.requiresConfirmation) return value;
+  return new Promise(resolve => {
+    answerChange = { value, current, resolve, focus, sequence: 0 }; renderAnswerChange();
+    $('answer-change-dialog').showModal(); $('answer-change-cancel').focus();
+  });
+}
+$('answer-change-cancel').addEventListener('click', () => closeAnswerChange());
+$('answer-change-dialog').addEventListener('cancel', event => { event.preventDefault(); closeAnswerChange(); });
+$('answer-change-confirm').addEventListener('click', () => { if (!answerChange?.current()) closeAnswerChange(false, 'The answer or its sources changed. Review again; your draft is retained.'); else closeAnswerChange(true); });
+$('answer-change-prev').addEventListener('click', () => void pageAnswerChange(answerChange.value.page - 1));
+$('answer-change-next').addEventListener('click', () => void pageAnswerChange(answerChange.value.page + 1));
+$('answer-change-items').addEventListener('change', () => void pageAnswerChange(answerChange.value.page, $('answer-change-items').value));
+$('answer-change-path-prev').addEventListener('click', () => void pageAnswerChange(answerChange.value.page, answerChange.value.targetId, answerChange.value.pathPage - 1));
+$('answer-change-path-next').addEventListener('click', () => void pageAnswerChange(answerChange.value.page, answerChange.value.targetId, answerChange.value.pathPage + 1));
 async function api(action, input = {}) {
   if (busy || closed || suspended) return null;
   busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort();
@@ -462,6 +529,7 @@ function apply(next, reset = false) {
     acceptedIds.clear(); acceptedParentId = null;
   }
   signature = stamp; state = next;
+  if (answerChange && !answerChange.current()) closeAnswerChange(false, 'Saved sources changed. Review the answer change again; your draft is retained.');
   if (paletteOpen() && (changedDocument || !state.document?.nodes.some(n => n.id === selected))) { closePalette(false); $('palette-open').focus({ preventScroll: true }); }
   for (const [id, ui] of nodeUi) {
     if (ui.comparison && ui.researchKey !== JSON.stringify(state.document?.nodes.find(node => node.id === id)?.research)) {
@@ -1530,7 +1598,12 @@ function renderWorkspace() {
         if (!drafts.has(node.id)) draftClient.edit(node.id, answer.value);
         const generation = draftClient.entries.get(node.id).edits;
         if (await draftClient.save(node.id, async (value, draftRevision, draftJourney, answerState) => {
-          const result = await api('answer', { nodeId: node.id, answer: value, answerState, expand: deepen, draftRevision, draftJourney });
+          const input = { nodeId: node.id, answer: value, answerState, expand: deepen, draftRevision, draftJourney };
+          let proof;
+          try { proof = await reviewAnswerChange(input, generation); }
+          catch (error) { if (/Another canvas|map changed|journey changed on disk/i.test(error.message)) { ui.refreshAnswer = true; if (current()) renderDraftRecovery(node); } throw error; }
+          if (!proof) return null;
+          const result = await api('answer', { ...input, answerPreview: proof.token, confirmConsequences: proof.requiresConfirmation });
           if (!result && /Another canvas|map changed/.test($('notice').textContent)) { ui.refreshAnswer = true; if (current()) renderDraftRecovery(node); }
           return result;
         }, () => state.document.nodes.find(n => n.id === node.id))) {
@@ -1818,9 +1891,11 @@ function renderWorkspace() {
       const research = el('details', { class: 'research-disclosure' }, el('summary', { id: 'research-summary' }, 'Research options')); research.open = ui.researchOpen;
       research.addEventListener('toggle', () => { if (research.isConnected) { ui.researchOpen = research.open; scheduleLayout(); } });
       research.append(el('p', { class: 'quiet' }, 'A separate researcher compares possibilities using your saved answers and states. Review its context before starting. Suggestions stay separate from your answer; normal Copilot usage applies.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; openResearchReview(node.id); }, { id: 'research-request', disabled: pending }));
+      research.append(el('p', { id: 'research-stale-warning', class: 'review-warning', hidden: !node.researchStale }, 'Retained research needs reconsideration after saved reasoning changed. It has not been refreshed.'));
       if (node.research) research.append(renderResearch(node));
       return research;
     });
+    if ($('research-stale-warning')) $('research-stale-warning').hidden = !node.researchStale;
     update('children', doc.nodes.filter(n => n.parentId === node.id).map(n => [n.id, n.question]), () => {
       const children = doc.nodes.filter(n => n.parentId === node.id);
       if (children.length) return el('div', { class: 'followups' }, el('h3', {}, root ? 'Explore a direction' : 'Explore this branch'), el('p', { class: 'quiet' }, 'Connected below this node.'), children.map(child => button(child.question, () => select(child.id), { id: `followup-${child.id}`, class: 'followup' })));
@@ -3097,6 +3172,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  closeAnswerChange();
   if ($('project-merge-dialog').open) closeProjectMerge();
   if ($('project-reconcile-dialog').open) closeProjectReconciliation();
   if ($('project-copy-dialog').open) closeProjectCopy();

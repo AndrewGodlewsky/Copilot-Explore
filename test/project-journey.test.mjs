@@ -11,6 +11,20 @@ import { atomicWrite } from '../com.github.copilot/extensions/explorer/storage.m
 import { readSharedDocument } from '../com.github.copilot/extensions/explorer/shared-document.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 
+test('project consequence confirmation persists review causes and rejects a replaced shared base', async t => {
+  const f = await fixture(t), e = new Explorer({ file: f.file }); await e.attachProject(f.journey); t.after(() => e.close());
+  const next = structuredClone(e.doc), parent = next.nodes[1]; addQuestions(next, parent.id, [{ question: 'Downstream?', category: 'Scope' }]); await e.save(next);
+  const input = { revision: e.doc.revision, nodeId: parent.id, answer: 'New shared choice', answerState: 'decided' };
+  const prepare = () => e.answerChangeRequest({ action: 'prepare', journey: e.activeKey, ...input });
+  const p = await prepare(); await e.command('answer', { ...input, answerPreview: p.token, confirmConsequences: true });
+  const shared = readSharedDocument(await readFile(f.file)).document;
+  assert.equal(shared.journey.nodes[2].reviewCauses.changes[0].sourceId, parent.id);
+  input.revision = e.doc.revision; input.answer = 'Another shared choice'; const stale = await prepare();
+  const other = await new ProjectJourney(f.context).load(); await answer(other, 'Newer writer');
+  const winning = await readFile(f.file); await assert.rejects(e.command('answer', { ...input, answerPreview: stale.token, confirmConsequences: true }), /changed/);
+  assert.deepEqual(await readFile(f.file), winning);
+});
+
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'explorer-project-storage-'));
   t.after(() => rm(root, { recursive: true, force: true }));

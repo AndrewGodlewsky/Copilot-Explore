@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { confirmAnswer } from './helpers/answer-change.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -74,7 +75,7 @@ test('direction review acknowledgment commits only its flag with revision, histo
   await command('add', { nodeId, question: 'Safe enough?', category: 'Safety' });
   const childId = e.doc.nodes.at(-1).id;
   await command('answer', { nodeId: childId, answer: 'Maybe', answerState: 'tentative' });
-  await command('answer', { nodeId: parentId, answer: 'Everyone' });
+  await confirmAnswer(e, { revision: e.doc.revision, nodeId: parentId, answer: 'Everyone' });
   const before = structuredClone(e.doc), revision = before.revision;
   assert.equal(model.findNode(before, nodeId).review, true); assert.equal(model.findNode(before, childId).review, true);
   const historyStore = await e.history(e.doc.id), writeHistory = historyStore.write;
@@ -83,7 +84,7 @@ test('direction review acknowledgment commits only its flag with revision, histo
   assert.deepEqual(e.doc, before); assert.deepEqual(JSON.parse(await readFile(e.file, 'utf8')), before);
   historyStore.write = writeHistory;
   await command('acknowledge-direction', { nodeId });
-  const expected = structuredClone(before.nodes); expected.find(n => n.id === nodeId).review = false;
+  const expected = structuredClone(before.nodes); expected.find(n => n.id === nodeId).review = false; delete expected.find(n => n.id === nodeId).reviewCauses;
   assert.deepEqual(e.doc.nodes, expected); assert.equal(e.doc.revision, revision + 1);
   assert.deepEqual(JSON.parse(await readFile(e.file, 'utf8')), e.doc);
   assert.equal((await e.readHistory(e.doc.id)).current.label, 'Direction review acknowledged');

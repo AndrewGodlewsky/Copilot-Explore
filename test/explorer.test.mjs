@@ -1,4 +1,5 @@
 import { startResearch } from './helpers/research-review.mjs';
+import { confirmAnswer } from './helpers/answer-change.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
@@ -63,7 +64,7 @@ test('answer counts exclude root and distinguish resolved, answered, deferred an
 test('state-only answer saves mark descendants, no-ops preserve finish and check disk freshness', async t => {
   const { explorer: e, messages } = await started(t), id = e.doc.nodes[1].id;
   await e.command('add', { revision: e.doc.revision, nodeId: id, question: 'Next?', category: 'Scope' });
-  await e.command('answer', { revision: e.doc.revision, nodeId: id, answer: '', answerState: 'needs-evidence', expand: true });
+  await confirmAnswer(e, { revision: e.doc.revision, nodeId: id, answer: '', answerState: 'needs-evidence', expand: true });
   assert.equal(e.doc.nodes[1].answerState, 'needs-evidence'); assert.equal(e.doc.nodes[2].review, true);
   assert.equal(messages.at(-1).mode, 'enqueue'); assert.match(messages.at(-1).prompt, /needs-evidence/);
   await e.command('cancel'); await e.command('finish', { revision: e.doc.revision });
@@ -71,7 +72,7 @@ test('state-only answer saves mark descendants, no-ops preserve finish and check
   await e.command('answer', { revision: e.doc.revision, nodeId: id, answer: '', answerState: 'needs-evidence' });
   assert.deepEqual(e.doc, before);
   const other = await new Explorer({ file: e.file }).load();
-  await other.command('answer', { revision: other.doc.revision, nodeId: id, answer: '', answerState: 'not-relevant' });
+  await confirmAnswer(other, { revision: other.doc.revision, nodeId: id, answer: '', answerState: 'not-relevant' });
   await assert.rejects(e.command('answer', { revision: e.doc.revision, nodeId: id, answer: '', answerState: 'needs-evidence' }), /updated|changed/);
   await e.command('refresh-answer', { revision: e.doc.revision }); assert.equal(e.doc.nodes[1].answerState, 'not-relevant');
 });

@@ -7,6 +7,7 @@ import { ProjectCopy } from './project-copy.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
 import { ProjectMerge } from './project-merge.mjs';
+import { AnswerChanges } from './answer-changes.mjs';
 import { addDependency, removeDependency } from './model.mjs';
 import { projectDocumentAccess } from './storage-context.mjs';
 import { acquireLock } from './owned-lock.mjs';
@@ -583,6 +584,7 @@ export class Explorer {
       return { ...preview, issues: [...(inventory.partial ? ['Inventory is partial; unscanned and unknown data remain protected.'] : []), ...found.issues, ...preview.issues].slice(0, 100) };
     });
   }
+  answerChangeRequest(input) { return this.transact(() => (this.answerChanges ??= new AnswerChanges()).request(this, input)); }
   markProjectChanged() {
     if (this.projectChange || !this.projectStore) return;
     this.projectChange = { path: this.projectStore.context.relativePath, message: 'The project file or Git checkout changed or became unavailable. Review project changes before editing. The displayed map and private drafts are preserved.' };
@@ -738,14 +740,14 @@ export class Explorer {
     next = validateDocument(next);
     if (saved && JSON.stringify(saved) === JSON.stringify(next)) {
       await (await this.history(this.activeKey ?? this.doc.id)).reconcile(saved);
-      accept(); this.doc = saved; this.reconcileCleanup(); this.reconcileResearch(); return false;
+      await accept(); this.doc = saved; this.reconcileCleanup(); this.reconcileResearch(); return false;
     }
     next.revision = (saved?.revision ?? 0) + 1;
     if (!Number.isSafeInteger(next.revision)) throw new Error('Map revision limit reached.');
     next.updatedAt = new Date(Math.max(Date.now(), Date.parse(saved?.updatedAt ?? 0) + 1)).toISOString();
     validateDocument(next);
     const replace = async () => {
-      accept(); await atomicWrite(this.file, JSON.stringify(next, null, 2)); this.doc = next;
+      await accept(); await atomicWrite(this.file, JSON.stringify(next, null, 2)); this.doc = next;
       this.dashboard?.invalidate();
       try { if (saved?.id === next.id && label !== 'Imported saved map') this.analytics?.commit(saved, next); } catch { /* Observations cannot fail a committed answer. */ }
       this.reconcileCleanup(); this.reconcileResearch();
@@ -838,7 +840,7 @@ export class Explorer {
           this.followup = { id: randomUUID(), journey: this.activeKey ?? current.id, nodeId, dependencies, exchanges, dropped: (previous?.dropped ?? 0) + all.length - exchanges.length, historical: false };
           this.clearPending(); this.error = ''; return;
         }
-        const next = structuredClone(current); findNode(next, nodeId).research = research({ ...result, settings: prepared.settings });
+        const next = structuredClone(current); findNode(next, nodeId).research = research({ ...result, settings: prepared.settings }); delete findNode(next, nodeId).researchStale;
         await this.commitCurrentLocked(current, next, 'Research replaced', () => {
           if (!active()) throw new Error('Research was cancelled before saving.');
         });
@@ -1006,8 +1008,15 @@ export class Explorer {
           }
           const changedAnswer = answerNode(next, input.nodeId, input.answer, input.answerState);
           if (input.expand === true && effectiveAnswerState(findNode(next, input.nodeId)) === 'unanswered') throw new Error('Choose a state or write an answer before exploring deeper.');
-          if (changedAnswer) { next.finishedAt = null; await this.save(next, 'Answer or state changed'); }
-          else if ((await this.readCurrent()).revision !== next.revision) throw new Error('Another canvas updated this file. Refresh the saved journey before retrying.');
+          await this.withDocumentLock(async () => {
+            const saved = await this.fresh(), review = this.answerChanges ??= new AnswerChanges();
+            await review.guard(this, saved, input, next);
+            if (changedAnswer) {
+              next.finishedAt = null;
+              await this.commitCurrentLocked(saved, next, 'Answer or state changed', () => review.guard(this, saved, input, next));
+            }
+            if (input.answerPreview && review.entry?.token === input.answerPreview) review.entry = null;
+          });
           if (input.draftRevision !== undefined) {
             try {
               await this.draftStore.update({ key: await this.draftIdentity(input.draftJourney), nodeId: input.nodeId, base: draftBase(findNode(next, input.nodeId)), text: null, revision: input.draftRevision }, { matchingText: input.answer, matchingState: effectiveAnswerState(findNode(next, input.nodeId)) });

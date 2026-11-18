@@ -54,6 +54,7 @@ export function renderOfflineViewer(snapshot) {
     if (n.parentId) jump(detail, n.parentId, `Parent: ${byId.get(n.parentId).question}`);
     else detail.append(el('p', 'Root of this exported selection.'));
     paragraph(detail, 'Saved user answer', n.answer === null ? 'Not included in this export.' : n.answer || '(No answer text)');
+    if (n.researchStale) detail.append(el('p', 'Retained research needs reconsideration after saved reasoning changed. It has not been refreshed.'));
     if (n.research) research(detail, n.research); else detail.append(el('p', 'Research not included.'));
     const children = nodes.filter(child => child.parentId === n.id);
     if (children.length) { detail.append(el('h3', 'Selected children')); for (const child of children) jump(detail, child.id, child.question); }

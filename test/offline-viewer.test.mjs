@@ -25,6 +25,14 @@ function fixture() {
 }
 const hash = text => createHash('sha256').update(text).digest('base64');
 
+test('offline selected research keeps its reconsideration warning without exposing review source identities', () => {
+  const { doc, a } = fixture(); a.researchStale = true; a.reviewCauses = { changes: [{ sourceId: 'PRIVATE_CAUSE', baseDigest: 'a'.repeat(64), revision: 1 }], earlier: false };
+  const snapshot = viewer.viewerSnapshot(doc, [{ nodeId: a.id, answer: false, research: true }]);
+  const artifact = viewer.viewerArtifact(snapshot); assert.doesNotMatch(artifact.content, /PRIVATE_CAUSE/);
+  const dom = new JSDOM(artifact.content, { runScripts: 'dangerously' });
+  assert.match(dom.window.document.getElementById('detail').textContent, /Retained research needs reconsideration/); dom.window.close();
+});
+
 test('viewer projection exports exact selections with generated forest IDs and no excluded data anywhere in artifact', () => {
   assert.equal(typeof viewer.viewerSnapshot, 'function', 'dedicated viewer projection exists');
   const { doc, a, c, selection } = fixture();

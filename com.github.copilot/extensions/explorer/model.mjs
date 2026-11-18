@@ -1,6 +1,8 @@
 import { validateHandoff, handoffMarkdown } from './implementation-handoff.mjs';
 import { validateBrief, briefMarkdown } from './decision-brief.mjs';
 import { randomUUID } from 'node:crypto';
+import { DecisionImpact } from './web/decision-impact.mjs';
+import { savedDigest, reviewCauses, addReviewCause } from './review-causes.mjs';
 import { researchSettings, researchSettingsText } from './web/research-policy.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './web/answer-state.mjs';
 import { effectiveMode, validMode, MODES } from './web/modes.mjs';
@@ -223,11 +225,15 @@ export function validateDocument(value) {
     ...questionImportance(n),
     ...(Object.hasOwn(n, 'answerState') ? { answerState: n.answerState } : {}),
     research: n.research === null ? null : research(n.research), review: n.review === true,
+    ...(Object.hasOwn(n, 'reviewCauses') ? { reviewCauses: reviewCauses(n.reviewCauses) } : {}),
+    ...(Object.hasOwn(n, 'researchStale') ? { researchStale: n.researchStale } : {}),
     ...(Object.hasOwn(n, 'revisit') ? { revisit: validateRevisit(n.revisit) } : {}),
     ...(Object.hasOwn(n, 'generation') ? { generation: generation(n.generation, text(n.question, 'Question', 600), text(n.category, 'Category', 60)) } : {}),
   }));
   const byId = new Map(nodes.map(n => [n.id, n]));
   for (const node of nodes) {
+    if (node.reviewCauses && !node.review) throw Error('Review causes require a review flag.');
+    if (Object.hasOwn(node, 'researchStale') && (node.researchStale !== true || !node.research)) throw Error('Research stale markers require retained research.');
     if (Object.hasOwn(node, 'importance') && (node.id === value.rootId || !isQuestion(node) || !node.generation)) throw new Error('Only generated ordinary questions can have importance.');
     if (Object.hasOwn(node, 'revisit') && !isQuestion(node)) throw new Error('Only ordinary questions can have revisit reminders.');
     if (Object.hasOwn(node, 'kind') && (node.kind !== 'direction' || node.id === value.rootId)) throw new Error('Invalid node kind.');
@@ -305,6 +311,7 @@ export function acknowledgeDirection(doc, id) {
   const node = findNode(doc, id);
   if (node.kind !== 'direction') throw new Error('Only structural directions can acknowledge direction review.');
   node.review = false;
+  delete node.reviewCauses;
 }
 export function answerNode(doc, id, answer, answerState) {
   const node = findNode(doc, id);
@@ -316,16 +323,15 @@ export function answerNode(doc, id, answer, answerState) {
   const changed = node.answer !== next || previousState !== state;
   if (!changed && !node.review) return false;
   if (changed) {
-    const children = new Map(doc.nodes.map(n => [n.id, []]));
-    for (const n of doc.nodes) if (n.parentId) children.get(n.parentId).push(n);
-    const queue = [id];
-    for (let i = 0; i < queue.length; i++) for (const child of children.get(queue[i])) {
-      child.review = true; queue.push(child.id);
-    }
+    const result = new DecisionImpact(doc).analyze(id), cause = { sourceId: id, baseDigest: savedDigest(doc), revision: doc.revision };
+    for (const child of doc.nodes) if (child.id !== id && result.predecessors.combined.has(child.id)) addReviewCause(child, cause);
+    // Saved results do not retain their complete context dependency set. Be explicit about uncertainty.
+    for (const saved of doc.nodes) if (saved.research) saved.researchStale = true;
   }
   node.answer = next;
   node.answerState = state;
   node.review = false;
+  delete node.reviewCauses;
   return true;
 }
 export function contextFor(doc, nodeId) {
@@ -366,7 +372,9 @@ export function toMarkdown(doc) {
   for (const n of doc.nodes) {
     if (n.id === doc.rootId) continue;
     lines.push('', `## ${ids.get(n.id)}: ${md(n.question)}`, '', `Category: ${md(n.category)}. Parent: ${ids.get(n.parentId)}.`, '');
-    if (n.review) lines.push('**Needs review:** an ancestor answer changed after this branch was created.', '');
+    if (n.review) lines.push('**Needs review:** recorded upstream reasoning changed, or a legacy review remains unresolved.', '');
+    if (n.reviewCauses) { for (const cause of n.reviewCauses.changes) lines.push(`- Review cause: source ${md(cause.sourceId)}, saved base ${cause.baseDigest}, revision ${cause.revision}.`); if (n.reviewCauses.earlier) lines.push('- Additional earlier or legacy review causes are not individually retained.'); lines.push(''); }
+    if (n.researchStale) lines.push('**Retained research needs reconsideration after saved reasoning changed.** It has not been refreshed.', '');
     if (!isQuestion(n)) { lines.push('Direction (user supplied). Original direction text; not an answer or decision.', ''); continue; }
     lines.push('### User answer', '', `State: ${ANSWER_STATES[effectiveAnswerState(n)]}.`, '', n.answer ? md(n.answer) : '_No answer text._', '');
     if (n.revisit) lines.push('### User revisit reminder', '', `Review date (local calendar): ${n.revisit.date ?? 'Not set'}.`, '', 'Manual condition (evaluated by you; not monitored):', '', n.revisit.condition ? md(n.revisit.condition) : '_Not set._', '', `Acknowledged: ${n.revisit.acknowledgedAt ?? 'Not yet'}. Acknowledgment records a review, not a changed answer or resolved decision.`, '');

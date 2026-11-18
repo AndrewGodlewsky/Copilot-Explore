@@ -417,4 +417,7 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .node[data-critical="highlight"] { border-top: 3px solid currentColor; }
 .node[data-critical="context"] { border-top: 1px dashed var(--muted); }
 .critical-reason { font-weight: 600; }
+#answer-change-dialog { max-width: min(680px, calc(100vw - 24px)); }
+#answer-change-dialog select { max-width: 100%; min-width: 0; }
+#answer-change-dialog pre, #answer-change-path { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media(forced-colors:active) { .node[data-critical="context"] { border-top-color: CanvasText; } }

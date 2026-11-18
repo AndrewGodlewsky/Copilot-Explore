@@ -174,5 +174,17 @@
     <p class="quiet">Off by default. Works outside text fields only when the configured voice shortcut is known and different. Copilot or the OS may reserve it; use Commands if it conflicts.</p>
     <button id="palette-close">Close</button>
   </dialog>
+  <dialog id="answer-change-dialog" aria-labelledby="answer-change-title">
+    <h2 id="answer-change-title">Review this answer change</h2>
+    <p>These are recorded reasoning relationships, not a prediction of real-world damage. Affected answers are retained and marked for review.</p>
+    <p id="answer-change-summary" role="status"></p>
+    <details><summary>Exact saved and proposed answer</summary><h3 id="answer-change-old-label"></h3><pre id="answer-change-old"></pre><h3 id="answer-change-new-label"></h3><pre id="answer-change-new"></pre></details>
+    <p id="answer-change-artifacts"></p><p id="answer-change-adr" class="quiet"></p>
+    <label for="answer-change-items">Affected questions, directions and retained research</label><select id="answer-change-items"></select>
+    <p id="answer-change-page"></p><div class="actions"><button id="answer-change-prev">Previous items</button><button id="answer-change-next">Next items</button></div>
+    <ol id="answer-change-path"></ol><p id="answer-change-path-page"></p><div class="actions"><button id="answer-change-path-prev">Previous steps</button><button id="answer-change-path-next">Next steps</button></div>
+    <p id="answer-change-error" role="alert"></p>
+    <div class="actions"><button id="answer-change-cancel">Keep editing</button><button id="answer-change-confirm" class="primary">Save and mark affected items for review</button></div>
+  </dialog>
   <script type="module" src="app.mjs"></script>
 </body></html>

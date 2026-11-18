@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.81",
+    "summary": "Review downstream consequences before saving an influential answer. Paged paths explain affected questions, directions and research; cancel keeps exact drafts. Fresh confirmations protect against changed sources. Cross-branch review causes are retained, and saved research is clearly flagged for reconsideration."
+  },
+  {
     "version": "0.1.80",
     "summary": "Find influential decisions and unresolved recorded dependencies with Critical paths. Equal-impact decisions, connected dependency chains and ancestor context stay visible. Return restores prior folds, focus, filters and navigation; drafts and saved answers remain intact. Outline provides text reasons and paged access."
   },

@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { confirmAnswer } from './helpers/answer-change.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -107,7 +108,7 @@ test('controller rejects stale previews and switched sources while preserving pe
   await e.command('open', { key: personal.key });
   const request = input => e.projectCopyRequest({ journey: e.activeKey, revision: e.doc.revision, ...input });
   const preview = await request({ action: 'preview', folder: 'maps', includeResearch: true, newCopy: false });
-  await e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, answer: 'New committed answer' });
+  await confirmAnswer(e, { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, answer: 'New committed answer' });
   const original = await readFile(e.file);
   await assert.rejects(request({ action: 'confirm', id: preview.id }), /source changed/i); assert.deepEqual(await readFile(e.file), original);
   const other = await library.import(createDocument('Another journey'));

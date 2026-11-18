@@ -2,6 +2,7 @@ import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/d
 import { attachMinimap, projectOverview, overviewPaths } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import test from 'node:test';
+import { confirmAnswer } from './helpers/answer-change.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
@@ -591,6 +592,7 @@ test('full Outline keeps research and private cleanup previews on their captured
   f.resolveResearch(findings); await until(() => f.explorer.doc.nodes[1].research, 'research completed'); await f.poll();
   assert.equal($('answer'), answer); assert.equal(answer.value, 'OUTLINE_PRIVATE'); assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.match($('outline-list').textContent, /Research available/);
   chooseState(f, 'tentative'); const count = f.actions.filter(a => a.action === 'answer').length; f.click('Save & continue');
+  await until(() => $('answer-change-dialog').open, 'review retained research'); $('answer-change-confirm').click();
   await until(() => f.explorer.doc.nodes[1].answer === 'OUTLINE_PRIVATE', 'same save action'); assert.equal(f.explorer.doc.nodes[1].answerState, 'tentative'); assert.equal(f.actions.filter(a => a.action === 'answer').length, count + 1);
   assert.equal(f.actions.filter(a => a.action === 'research').length, 1);
 });
@@ -1456,7 +1458,7 @@ test('visual export UI explicitly captures full or selected scope despite foldin
   assert.ok(!$('export-dialog').textContent.includes('download saved'));
   $('close-export').click(); assert.equal($('answer').value, 'VISUAL_DRAFT_CANARY');
   $('visual-export-open').click();
-  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Changed saved revision' });
+  await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Changed saved revision' });
   downloaded = null; $('visual-export-download').click();
   await until(() => /changed|Reopen/.test($('visual-export-status').textContent), 'stale captured revision'); assert.equal(downloaded, null);
   assert.deepEqual(f.actions.filter(a => a.action === 'finish'), []);
@@ -1489,12 +1491,12 @@ test('offline viewer UI requires a fresh exact preview, defaults private fields 
   f.window.fetch = original; $('visual-export-open').click();
   const node = $('viewer-selection').querySelectorAll('[data-field="node"]')[1]; node.checked = true; node.dispatchEvent(new f.window.Event('change', { bubbles: true }));
   $('viewer-preview').click(); await until(() => !$('viewer-download').disabled, 'second fresh preview');
-  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[1].id, answer: 'Changed saved answer' });
+  await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[1].id, answer: 'Changed saved answer' });
   $('viewer-download').click(); await until(() => /changed|Reopen/.test($('viewer-status').textContent), 'stale saved version'); assert.equal(downloaded, null); assert.equal($('viewer-download').disabled, true);
   await f.poll(); $('close-export').click(); $('visual-export-open').click();
   const freshNode = $('viewer-selection').querySelectorAll('[data-field="node"]')[1]; freshNode.checked = true; freshNode.dispatchEvent(new f.window.Event('change', { bubbles: true }));
   $('viewer-preview').click(); await until(() => !$('viewer-download').disabled, 'preview before poll update');
-  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[1].id, answer: 'Another saved version' });
+  await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[1].id, answer: 'Another saved version' });
   await f.poll(); assert.equal($('viewer-download').disabled, true, 'a published state update invalidates the preview immediately'); assert.equal($('viewer-preview-content').textContent, '');
   $('close-export').click(); $('visual-export-open').click();
   const restoredNode = $('viewer-selection').querySelectorAll('[data-field="node"]')[1]; restoredNode.checked = true; restoredNode.dispatchEvent(new f.window.Event('change', { bubbles: true }));
@@ -1533,7 +1535,7 @@ test('option comparison preserves exact duplicate values, unknowns, subjective p
   $('undo-addition').click(); assert.equal(answer.value, 'My words');
   $('detail-0-1').click(); assert.equal($('comparison-detail-0-1').checked, true);
   $('comparison-criterion-4').click(); assert.equal(table.querySelectorAll('tbody th').length, 5);
-  priority.focus(); await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Unrelated' }); await f.poll();
+  priority.focus(); await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Unrelated' }); await f.poll();
   assert.equal($('comparison-priority-4'), priority); assert.equal(f.document.activeElement, priority); assert.equal(priority.value, 'high');
   assert.equal($('comparison-criterion-4').checked, false); assert.equal($('detail-0-1').checked, true);
   f.open(f.explorer.doc.nodes[2].id); f.open(node.id); assert.equal($('comparison-priority-4').value, 'high'); assert.equal($('option-comparison').open, true);
@@ -1676,6 +1678,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   dashboardDialog.showModal = () => { dashboardDialog.open = true; };
   dashboardDialog.close = () => { dashboardDialog.open = false; };
   const scriptErrors = []; window.addEventListener('error', event => scriptErrors.push(event.error));
+  const answerChangeDialog = document.getElementById('answer-change-dialog');
+  answerChangeDialog.showModal = () => { answerChangeDialog.open = true; };
+  answerChangeDialog.close = () => { answerChangeDialog.open = false; };
   const briefDialog = document.getElementById('brief-dialog');
   briefDialog.showModal = () => { briefDialog.open = true; };
   briefDialog.close = () => { briefDialog.open = false; };
@@ -1783,6 +1788,36 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
     pauseHistory: fn => { holdHistory = fn; }, pauseDraftRead: fn => { holdDraftRead = fn; }, pauseDraftWrite: fn => { holdDraftWrite = fn; }, pauseVoicePoll: fn => { holdVoicePoll = fn; }, pauseNavigationRead: fn => { holdNavigationRead = fn; }, pauseReferencesRead: fn => { holdReferencesRead = fn; } };
 }
 
+test('answer consequence HTTP dialog pages paths, cancels exact drafts, then confirms the displayed affected set', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); let parent = doc.nodes[1].id;
+    for (let i = 0; i < 55; i++) { const id = `consequence-${i}`; doc.nodes.push({ id, parentId: parent, question: `Follow-up ${i}?`, category: 'Scope', answer: '', research: null, review: false }); parent = id; }
+    doc.dependencies = [{ prerequisiteId: doc.nodes[1].id, dependentId: doc.nodes[2].id }]; await e.save(doc);
+  } });
+  const $ = id => f.document.getElementById(id), source = f.explorer.doc.nodes[1], revision = f.explorer.doc.revision;
+  f.open(source.id); f.type('answer', '  Exact proposed answer 🌿\n'); chooseState(f, 'assumption'); const editor = $('answer'); editor.focus(); editor.setSelectionRange(3, 8);
+  $('save-answer').click(); await until(() => $('answer-change-dialog').open, 'consequence preview');
+  assert.equal(f.document.activeElement, $('answer-change-cancel')); assert.equal(f.explorer.doc.revision, revision); assert.equal($('answer-change-items').options.length, 50);
+  assert.equal($('answer-change-new').textContent, editor.value); assert.match($('answer-change-summary').textContent, /56 affected questions/);
+  $('answer-change-next').click(); await until(() => $('answer-change-page').textContent.includes('51-56'), 'second consequence page');
+  const target = [...$('answer-change-items').options].find(o => o.textContent.includes('Follow-up 54?')); assert.ok(target);
+  $('answer-change-items').value = target.value; $('answer-change-items').dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  await until(() => $('answer-change-path-page').textContent.includes('of 56'), 'long path'); assert.equal($('answer-change-path').children.length, 30);
+  $('answer-change-path-next').click(); await until(() => $('answer-change-path-page').textContent.includes('31-56'), 'remaining path');
+  $('answer-change-cancel').click(); await delay(30); assert.equal($('answer'), editor); assert.equal(editor.value, '  Exact proposed answer 🌿\n'); assert.equal(editor.selectionStart, 3); assert.equal($('answer-state').value, 'assumption'); assert.equal(f.explorer.doc.revision, revision);
+  $('save-answer').click(); await until(() => $('answer-change-dialog').open, 'fresh preview'); $('answer-change-confirm').click();
+  await until(() => f.explorer.doc.revision > revision, 'confirmed answer'); assert.equal(f.explorer.doc.nodes.filter(n => n.review).length, 56); assert.equal(f.explorer.doc.nodes[1].answer, '  Exact proposed answer 🌿\n');
+});
+test('answer consequence confirmation rejects changed draft and late saved sources without losing edits', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, question: 'Child?', category: 'Scope' }); } });
+  const $ = id => f.document.getElementById(id), source = f.explorer.doc.nodes[1], revision = f.explorer.doc.revision;
+  f.open(source.id); f.type('answer', 'Proposal'); $('save-answer').click(); await until(() => $('answer-change-dialog').open, 'preview');
+  f.type('answer', 'Newer draft'); $('answer-change-confirm').click(); await until(() => !$('answer-change-dialog').open, 'changed draft rejected'); await delay(30);
+  assert.equal(f.explorer.doc.revision, revision); assert.equal($('answer').value, 'Newer draft'); assert.match($('notice').textContent, /changed/);
+  $('save-answer').click(); await until(() => $('answer-change-dialog').open, 'next preview');
+  await f.explorer.command('guidance', { revision, objective: 'Changed context', successCriteria: '' }); await f.poll();
+  await until(() => !$('answer-change-dialog').open, 'saved context invalidates modal'); assert.equal($('answer').value, 'Newer draft'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
 test('storage preview-confirm uses real HTTP, keeps draft editors and returns keyboard focus', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {
     for (let i = 0; i < 8; i++) await e.command('guidance', { revision: e.doc.revision, objective: `Version ${i}`, successCriteria: '' });
@@ -2525,12 +2560,12 @@ test('failed state draft or answer writes retain both fields for retry', async t
   assert.equal(f.document.getElementById('answer-state').value, 'revisit-later'); assert.equal(f.explorer.doc.nodes[1].answerState, undefined);
   f.explorer.draftStore.write = write; f.document.getElementById('retry-draft').click();
   await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'draft retry');
-  const save = f.explorer.save; f.explorer.save = async () => { throw new Error('Map disk full'); };
+  const save = f.explorer.commitCurrentLocked; f.explorer.commitCurrentLocked = async () => { throw new Error('Map disk full'); };
   f.type('answer', 'Optional note'); f.document.getElementById('save-answer').click();
   await until(() => /Map disk full/.test(f.document.getElementById('notice').textContent), 'answer failure');
   assert.equal(f.document.getElementById('answer').value, 'Optional note'); assert.equal(f.document.getElementById('answer-state').value, 'revisit-later');
   assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].answerState, 'revisit-later');
-  f.explorer.save = save; f.document.getElementById('save-answer').click();
+  f.explorer.commitCurrentLocked = save; f.document.getElementById('save-answer').click();
   await until(() => f.explorer.doc.nodes[1].answerState === 'revisit-later', 'answer retry');
 });
 
@@ -2996,7 +3031,7 @@ test('research callbacks and follow-ups work inside a narrow expanded node witho
   f.click('Use this option');
   assert.match(f.document.getElementById('answer').value, /^My own thought, still editing\n\nOne block/);
   assert.equal(f.explorer.doc.nodes[1].answer, '');
-  f.click('Save answer and explore deeper'); await until(() => f.explorer.pending?.kind === 'questions', 'follow-ups requested');
+  f.click('Save answer and explore deeper'); await until(() => f.document.getElementById('answer-change-dialog').open, 'review research consequences'); f.document.getElementById('answer-change-confirm').click(); await until(() => f.explorer.pending?.kind === 'questions', 'follow-ups requested');
   await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [{ category: 'People', question: 'How will you invite them?' }] });
   await until(() => f.document.getElementById('accept-questions'), 'review follow-ups'); f.document.getElementById('accept-questions').click();
   await until(() => [...f.document.querySelectorAll('#question-drawer .followup')].length, 'follow-up link');
@@ -3036,7 +3071,7 @@ test('recommendations and selected details append to editable drafts with safe u
   f.click('Undo addition'); assert.equal(f.document.getElementById('answer').value, 'My own words');
   const check = f.document.getElementById('detail-0-0'); check.click(); check.focus();
   // A map refresh retains both the checkbox selection and its focus.
-  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Shared fund' });
+  await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Shared fund' });
   await until(() => f.document.getElementById('progress').textContent.startsWith('1 answered'), 'background refresh');
   assert.equal(f.document.getElementById('detail-0-0').checked, true); assert.equal(f.document.activeElement.id, 'detail-0-0');
   f.click('Add selected details');
@@ -4294,7 +4329,7 @@ test('question preview acceptance reveals focused folded children and keeps edit
   await until(() => d.querySelector(`[data-branch-id="${other.id}"]`), 'branches');
   d.querySelector(`[data-branch-id="${other.id}"]`).click(); f.open(parent.id);
   d.getElementById('focus-branch').click(); d.getElementById('branch-workspace').click();
-  f.type('answer', 'Saved answer'); d.getElementById('save-deeper').click(); await until(() => e.pending, 'deepen');
+  f.type('answer', 'Saved answer'); d.getElementById('save-deeper').click(); await until(() => d.getElementById('answer-change-dialog').open, 'review deeper consequences'); d.getElementById('answer-change-confirm').click(); await until(() => e.pending, 'deepen');
   await until(() => d.getElementById('save-deeper').disabled, 'pending UI');
   f.type('answer', 'New unsaved answer'); d.getElementById('answer-state').value = 'assumption'; d.getElementById('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
   const answer = d.getElementById('answer'); answer.focus(); answer.setSelectionRange(2, 8, 'backward');
@@ -4904,7 +4939,7 @@ test('direction review action shares the Map and Outline editor and preserves de
     await command('add-direction', { nodeId: parentId, direction: 'Safety' }); await command('cancel');
     directionId = e.doc.nodes.at(-1).id;
     await command('add', { nodeId: directionId, question: 'Safe enough?', category: 'Safety' }); childId = e.doc.nodes.at(-1).id;
-    await command('answer', { nodeId: parentId, answer: 'Everyone' });
+    await confirmAnswer(e, { revision: e.doc.revision, nodeId: parentId, answer: 'Everyone' });
   } }), $ = id => f.document.getElementById(id);
   f.window.__updates.select(childId); f.type('answer', 'Unsaved exact child 🌱'); f.type('revisit-condition', 'Keep reminder');
   f.window.__updates.select(directionId); f.type('manual-question', 'Keep direction draft');

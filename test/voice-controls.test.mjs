@@ -8,6 +8,8 @@ import { VoiceService } from '../com.github.copilot/extensions/explorer/voice.mj
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { VoicePreferences } from '../com.github.copilot/extensions/explorer/voice-preferences.mjs';
 import { microphoneIndex, audioLevel } from '../com.github.copilot/extensions/explorer/voice-audio.mjs';
+import { JSDOM } from 'jsdom';
+import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 
 async function temporary(t) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-voice-controls-'));
@@ -95,4 +97,109 @@ test('voice settings HTTP blocks other origins, injected fields and invalid revi
   assert.equal((await send({ ...valid, revision: -1 })).status, 400);
   assert.equal((await send({ ...valid, microphone: 'x'.repeat(5000) })).status, 400); assert.equal(calls, 0);
   assert.equal((await send(valid)).status, 200); assert.equal(calls, 1);
+});
+
+function voicePanel(t, respond) {
+  const dom = new JSDOM('<div id="settings-host"></div><div id="editor"></div>', { url: 'http://localhost/' });
+  t.after(() => dom.window.close());
+  const { window } = dom, { document } = window, requests = [];
+  const options = { ready: true, mode: 'push_to_talk', label: 'Ctrl + Space', shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false },
+    preferences: { revision: 0, microphone: '', model: 'copilot' }, copilotModel: 'English',
+    microphones: [{ name: 'USB', supported: true }], models: [{ id: 'english', label: 'English', supported: true }] };
+  let context = 'first', recordingId;
+  const voice = attachVoice({ document, window, context: () => context, changed() {}, insert() { assert.fail('settings must not insert an answer'); },
+    fetch: async (url, init = {}) => {
+      const request = { url, method: init.method || 'GET', input: init.body ? JSON.parse(init.body) : undefined }; requests.push(request);
+      const custom = await respond?.(request, options);
+      if (custom) return { ok: custom.ok !== false, json: async () => structuredClone(custom.body) };
+      let result = options;
+      if (url === 'api/voice/settings' && request.method === 'POST') options.preferences = { ...request.input, revision: request.input.revision + 1 };
+      if (url === 'api/voice' && request.method === 'POST') {
+        recordingId = request.input.id;
+        result = { id: recordingId, phase: request.input.action === 'cancel' ? 'cancelled' : 'listening' };
+      }
+      return { ok: true, json: async () => structuredClone(result) };
+    } });
+  voice.mountSettings(document.getElementById('settings-host'));
+  const get = id => document.getElementById(id);
+  return { voice, window, document, get, options, requests,
+    bind(id) {
+      context = id;
+      const answer = document.createElement('textarea'), root = document.createElement('div');
+      document.getElementById('editor').replaceChildren(answer, root); voice.bind(answer, root);
+      return { answer, root };
+    },
+    choose(id, value) { const select = get(id); select.value = value; select.dispatchEvent(new window.Event('change')); },
+    save() { document.querySelector('.voice-settings-actions button').click(); },
+  };
+}
+async function waitFor(check) {
+  for (let i = 0; i < 100; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
+  assert.fail('Voice controls did not settle');
+}
+
+test('global voice settings load on explicit opening and save before any answer is bound', async t => {
+  let release;
+  const f = voicePanel(t, request => request.url === 'api/voice/settings' && request.method === 'GET' ? new Promise(resolve => { release = resolve; }) : undefined);
+  assert.equal(f.requests.length, 0, 'mounting settings does not inspect devices or start recording');
+  assert.equal(f.get('voice-microphone').disabled, true); assert.equal(f.get('voice-refresh').disabled, false);
+  f.voice.openSettings();
+  assert.equal(f.get('voice-settings').open, true); assert.equal(f.document.activeElement.tagName, 'SUMMARY');
+  assert.equal(f.document.activeElement.textContent, 'Voice'); assert.equal(f.get('voice-refresh').disabled, true);
+  release(); await waitFor(() => !f.get('voice-microphone').disabled);
+  f.choose('voice-microphone', 'USB'); f.choose('voice-model', 'english'); f.save();
+  await waitFor(() => !f.get('voice-refresh').disabled);
+  assert.deepEqual(f.requests.at(-1).input, { microphone: 'USB', model: 'english', revision: 0 });
+  assert.equal(f.options.preferences.revision, 1);
+  assert.match(f.document.querySelector('.voice-fields [role="status"]').textContent, /Saved for Explorer/);
+  assert.ok(f.requests.every(request => request.url === 'api/voice/settings'), 'no recording or answer operation is needed');
+});
+
+test('global voice choices and disclosure survive answer rebinding and closing settings', async t => {
+  const f = voicePanel(t); f.voice.openSettings(); await waitFor(() => !f.get('voice-model').disabled);
+  const settings = f.get('voice-settings'), mic = f.get('voice-microphone');
+  f.choose('voice-microphone', 'USB'); f.choose('voice-model', 'english');
+  const first = f.bind('first');
+  assert.equal(first.root.querySelector('details'), null); assert.equal(first.root.querySelector('#voice-record').textContent, 'Record');
+  assert.equal(first.root.dataset.phase, 'idle'); assert.equal(first.root.dataset.ready, 'true'); assert.equal(first.root.dataset.readyHint, 'true');
+  settings.open = false; f.bind('second'); f.voice.openSettings();
+  assert.equal(f.get('voice-settings'), settings); assert.equal(f.get('voice-microphone'), mic);
+  assert.equal(f.document.querySelectorAll('#voice-settings').length, 1);
+  assert.equal(mic.value, 'USB'); assert.equal(f.get('voice-model').value, 'english');
+  assert.equal(f.requests.filter(request => request.url === 'api/voice/settings').length, 1);
+  f.save(); await waitFor(() => !f.get('voice-refresh').disabled);
+  assert.deepEqual(f.options.preferences, { microphone: 'USB', model: 'english', revision: 1 });
+});
+
+test('global voice settings keep edits through failed refresh and revision conflicts', async t => {
+  let failRead = false, conflict = true;
+  const f = voicePanel(t, request => {
+    if (request.url !== 'api/voice/settings') return;
+    if (request.method === 'GET' && failRead) return { ok: false, body: { error: 'Devices unavailable.' } };
+    if (request.method === 'POST' && conflict) return { ok: false, body: { error: 'Voice preferences changed elsewhere.' } };
+  });
+  f.voice.openSettings(); await waitFor(() => !f.get('voice-model').disabled);
+  f.choose('voice-microphone', 'USB'); f.choose('voice-model', 'english'); f.save();
+  await waitFor(() => !f.get('voice-refresh').disabled);
+  assert.match(f.document.querySelector('.voice-fields [role="status"]').textContent, /changed elsewhere.*Refresh/);
+  failRead = true; f.get('voice-refresh').click(); await waitFor(() => !f.get('voice-refresh').disabled);
+  assert.match(f.document.querySelector('.voice-fields [role="status"]').textContent, /Devices unavailable/);
+  assert.equal(f.get('voice-microphone').value, 'USB'); assert.equal(f.get('voice-model').value, 'english');
+  failRead = false; conflict = false; f.options.preferences.revision = 4;
+  f.get('voice-refresh').click(); await waitFor(() => !f.get('voice-refresh').disabled); f.save();
+  await waitFor(() => !f.get('voice-refresh').disabled);
+  assert.deepEqual(f.requests.at(-1).input, { microphone: 'USB', model: 'english', revision: 4 });
+});
+
+test('recording owns answer feedback and locks the separate global voice settings', async t => {
+  const f = voicePanel(t); f.voice.openSettings(); await waitFor(() => !f.get('voice-model').disabled);
+  const { answer, root } = f.bind('first');
+  f.get('voice-record').focus(); f.get('voice-record').click();
+  await waitFor(() => root.dataset.phase === 'listening');
+  assert.equal(root.dataset.readyHint, 'false'); assert.equal(f.document.activeElement, f.get('voice-stop'));
+  assert.equal(f.get('voice-microphone').disabled, true); assert.equal(f.get('voice-model').disabled, true); assert.equal(f.get('voice-refresh').disabled, true);
+  f.get('voice-cancel').click();
+  assert.equal(f.document.activeElement, answer); assert.match(root.querySelector('[role="status"]').textContent, /Dictation cancelled/);
+  assert.equal(root.dataset.readyHint, 'false', 'cancellation feedback stays visible');
+  assert.equal(f.get('voice-microphone').disabled, false); assert.equal(f.get('voice-refresh').disabled, false);
 });

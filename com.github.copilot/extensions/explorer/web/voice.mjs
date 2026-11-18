@@ -4,7 +4,7 @@ export function matchesShortcut(event, shortcut) {
 
 export function attachVoice({ document, window, fetch, context, insert, changed }) {
   let settings, binding, recording, message = 'Checking local dictation…', checking = false, pendingRelease = Promise.resolve();
-  let options, choices, settingsOpen = false, optionsBusy = false, optionsMessage = '', feedback = { phase: 'idle' };
+  let options, choices, settingsBinding, optionsBusy = false, optionsMessage = '', feedback = { phase: 'idle' };
   let timer = null, suspended = false, disposed = false;
   const hint = () => settings?.ready ? `${settings.mode === 'toggle' ? 'Press' : 'Hold'} ${settings.label} to dictate · local model` : settings?.error || 'Checking local dictation…';
   const show = (text, result = { phase: 'idle' }) => {
@@ -16,7 +16,9 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
   }
   function paintFeedback() {
     if (!binding) return;
-    const { status, bar, bars, elapsed, activity } = binding;
+    const { root, status, bar, bars, elapsed, activity } = binding;
+    root.dataset.phase = feedback.phase; root.dataset.ready = String(!!settings?.ready);
+    root.dataset.readyHint = String(!!settings?.ready && feedback.phase === 'idle' && message === hint());
     if (status.textContent !== message) status.textContent = message;
     bar.dataset.phase = feedback.phase; bar.hidden = !['loading', 'listening', 'transcribing'].includes(feedback.phase);
     activity.textContent = feedback.phase === 'listening' ? 'Listening' : feedback.phase === 'transcribing' ? 'Transcribing' : 'Loading model';
@@ -26,10 +28,12 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     elapsed.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   }
   function lockControls() {
+    if (settingsBinding) {
+      settingsBinding.mic.disabled = settingsBinding.model.disabled = settingsBinding.save.disabled = optionsBusy || !!recording || !options;
+      settingsBinding.refresh.disabled = optionsBusy || !!recording;
+    }
     if (!binding) return;
     const focused = document.activeElement;
-    binding.mic.disabled = binding.model.disabled = binding.save.disabled = optionsBusy || !!recording || !options;
-    binding.refresh.disabled = optionsBusy || !!recording;
     binding.record.disabled = suspended || disposed || !settings?.ready || optionsBusy || !!recording;
     binding.stop.disabled = !recording || recording.phase !== 'listening' || !!recording.finishing;
     binding.cancel.disabled = !recording;
@@ -44,8 +48,8 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     } else if (focused === binding.cancel && binding.cancel.disabled) binding.answer.focus({ preventScroll: true });
   }
   function paintChoices() {
-    if (!binding) return;
-    const { mic, model, note } = binding;
+    if (!settingsBinding) return;
+    const { mic, model, note } = settingsBinding;
     note.textContent = optionsMessage;
     const populate = (select, items, value) => {
       select.replaceChildren();
@@ -58,7 +62,7 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     lockControls(); changed();
   }
   async function loadOptions(save = false) {
-    if (optionsBusy || recording) return;
+    if (optionsBusy || recording || (save && !options)) return;
     optionsBusy = true; optionsMessage = save ? 'Saving voice settings…' : 'Checking microphones and downloaded models…'; paintChoices();
     try {
       const response = await fetch('api/voice/settings', save ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ ...choices, revision: options.preferences.revision }) } : undefined);
@@ -85,22 +89,28 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
     const bar = element('div', 'voice-feedback'); bar.id = 'voice-feedback'; bar.setAttribute('aria-hidden', 'true');
     const activity = element('span', 'voice-activity'), spinner = element('span', 'voice-spinner'), meter = element('span', 'voice-meter'), elapsed = element('span', 'voice-elapsed');
     const bars = Array.from({ length: 24 }, () => element('i', 'voice-level')); meter.append(...bars); bar.append(spinner, activity, meter, elapsed);
-    const details = element('details', 'voice-settings'); details.id = 'voice-settings'; details.open = settingsOpen;
-    const summary = element('summary', '', 'Voice settings'), fields = element('div', 'voice-fields');
+    root.replaceChildren(voiceActions, bar, status);
+    binding = { answer, root, record, stop, cancel: discard, status, bar, bars, elapsed, activity };
+    paintFeedback(); lockControls(); changed();
+  }
+  function mountSettings(root) {
+    if (settingsBinding?.root === root) return;
+    const details = element('details', 'voice-settings'); details.id = 'voice-settings';
+    const summary = element('summary', '', 'Voice'), fields = element('div', 'voice-fields');
     const mic = element('select'), model = element('select'); mic.id = 'voice-microphone'; model.id = 'voice-model';
     for (const [select, name] of [[mic, 'Microphone'], [model, 'Downloaded voice model']]) {
       const label = element('label', '', name); label.htmlFor = select.id; fields.append(label, select);
-      select.addEventListener('change', () => { choices = { microphone: mic.value, model: model.value }; optionsMessage = 'Unsaved voice settings. Save to use these choices.'; binding.note.textContent = optionsMessage; changed(); });
+      select.addEventListener('change', () => { choices = { microphone: mic.value, model: model.value }; optionsMessage = 'Unsaved voice settings. Save to use these choices.'; note.textContent = optionsMessage; changed(); });
     }
     const save = element('button', '', 'Save voice settings'), refresh = element('button', '', 'Refresh devices and models'), actions = element('div', 'voice-settings-actions');
     save.type = refresh.type = 'button'; refresh.id = 'voice-refresh'; actions.append(save, refresh);
     save.addEventListener('click', () => { void loadOptions(true); }); refresh.addEventListener('click', () => { void loadOptions(); });
     const note = element('p', 'quiet'); note.setAttribute('role', 'status');
     fields.append(actions, note, element('p', 'quiet', 'Your shortcut and recording mode follow Copilot. Model downloads are managed in Copilot.'));
-    details.append(summary, fields); root.replaceChildren(voiceActions, bar, status, details);
-    binding = { answer, root, record, stop, cancel: discard, status, bar, bars, elapsed, activity, mic, model, save, refresh, note };
-    details.addEventListener('toggle', () => { if (!details.isConnected) return; settingsOpen = details.open; if (settingsOpen && !options) void loadOptions(); changed(); });
-    paintFeedback(); paintChoices();
+    details.append(summary, fields); root.replaceChildren(details);
+    settingsBinding = { root, details, summary, mic, model, save, refresh, note };
+    details.addEventListener('toggle', () => { if (!details.isConnected) return; if (details.open && !options) void loadOptions(); changed(); });
+    paintChoices();
   }
   const request = async (action, id, keepalive = false, sequence) => {
     const response = await fetch('api/voice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, id, ...(sequence === undefined ? {} : { sequence }) }), keepalive });
@@ -220,6 +230,13 @@ export function attachVoice({ document, window, fetch, context, insert, changed 
   startPolling();
   return {
     cancel,
+    mountSettings,
+    openSettings() {
+      if (!settingsBinding) return;
+      settingsBinding.details.open = true;
+      if (!options) void loadOptions();
+      settingsBinding.summary.focus({ preventScroll: true });
+    },
     allowsShortcut(event) {
       const current = recording?.settings || settings;
       return !!current?.shortcut && !checking && !optionsBusy && !matchesShortcut(event, current.shortcut);

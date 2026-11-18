@@ -50,7 +50,7 @@ export function attachNavigation({ document, window, fetch, zoom, pan }) {
     $('navigation-open').focus({ preventScroll: true });
   }
   $('navigation-open').addEventListener('click', async () => {
-    fields(settings); error(''); $('navigation-dialog').showModal(); $('navigation-wheel').focus();
+    fields(settings); error(''); $('navigation-dialog').showModal(); $('navigation-cancel').focus();
     await refresh();
   });
   $('navigation-cancel').addEventListener('click', close);

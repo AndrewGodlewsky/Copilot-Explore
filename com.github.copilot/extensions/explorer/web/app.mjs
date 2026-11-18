@@ -83,6 +83,8 @@ const voice = attachVoice({ document, window, fetch: (...args) => fetch(...args)
     answerStatus(state.document.nodes.find(n => n.id === selected));
     return draftClient.flush(false, selected);
   }, changed: () => scheduleLayout() });
+voice.mountSettings($('voice-settings-host'));
+$('navigation-open').addEventListener('click', () => voice.cancel());
 const navigation = attachNavigation({ document, window, fetch: (...args) => fetch(...args),
   zoom: (factor, point) => zoom(factor, point),
   pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); } });
@@ -172,7 +174,7 @@ async function refreshLibrarySearch(cursor = null) {
 // The palette routes through mounted controls: it never owns a mutation handler.
 const paletteCommands = [
   ['library-toggle', 'Library'], ['outline-toggle', 'Outline'], ['fit', 'Fit visible map'],
-  ['center-question', 'Center question'], ['minimap-toggle', 'Show minimap'], ['navigation-open', 'Map settings'],
+  ['center-question', 'Center question'], ['minimap-toggle', 'Show minimap'], ['navigation-open', 'Settings'],
   ['edit-guidance', 'Edit guidance'], ['history-open', 'History'], ['recovery-open', 'Recovery'],
   ['visual-export-open', 'Export maps'], ['decision-brief', 'Decision brief'], ['implementation-handoff', 'Implementation handoff'],
   ['check-answers', 'Check answers'], ['challenge-decisions', 'Challenge decisions'], ['research-request', 'Research options'],
@@ -183,7 +185,7 @@ const paletteIdentity = () => JSON.stringify([state.activeKey ?? state.document?
 const paletteOpen = () => $('palette-dialog').open && !closed && !suspended;
 function paletteReason(id) {
   const target = $(id);
-  if (!target || target.closest('[hidden]')) return 'Unavailable in this view. Open the relevant journey or question.';
+  if (!target || target.closest('[hidden]:not(#question-tools-body)')) return 'Unavailable in this view. Open the relevant journey or question.';
   if (busy || draftClient.savingAnswer) return 'Wait for the current save or action to finish.';
   if (target.disabled) return state.pending ? 'Wait for or cancel the current request.' : state.preview ? 'Review or dismiss the unsaved questions first.' : 'Unavailable for the current selection.';
   return '';
@@ -208,7 +210,7 @@ function paletteCommandRows() {
       const currentReason = paletteReason(id);
       if (currentReason) { $('palette-status').textContent = currentReason; paletteCommandRows(); return; }
       paletteActing = true; const target = $(id);
-      closePalette(false); target.focus({ preventScroll: true }); target.click();
+      closePalette(false); revealQuestionTool(target); target.focus({ preventScroll: true }); target.click();
     }, { 'data-command': id, 'aria-disabled': String(!!reason) });
   }));
   if (focused) [...$('palette-commands').children].find(row => row.dataset.command === focused)?.focus({ preventScroll: true });
@@ -335,6 +337,8 @@ function captureWorkspace() {
     ui.manualOpen = panel.querySelector('.manual')?.open ?? false;
     ui.contextOpen = panel.querySelector('#question-context')?.open ?? false;
     ui.revisitOpen = panel.querySelector('#revisit-editor')?.open ?? false;
+    ui.toolsOpen = panel.querySelector('#question-tools-toggle')?.getAttribute('aria-expanded') === 'true';
+    ui.toolsScroll = panel.querySelector('#question-tools-body')?.scrollTop ?? 0;
     if (!references.error) references.open = panel.querySelector('#references')?.open ?? references.open;
   }
 }
@@ -562,7 +566,6 @@ function showView() {
   questionHelp.sync();
   const home = !state.document || libraryView;
   $('storage-home').hidden = !home;
-  $('navigation-open').hidden = home || outlineMode;
   $('welcome').hidden = !home; $('workspace').hidden = home;
   $('library-toggle').hidden = !state.library;
   $('library-home').hidden = !state.library;
@@ -748,7 +751,7 @@ function showWholeMap() {
   updateFocusStatus();
   refreshScene(null);
   revealNode(selected);
-  const focusTarget = expanded ? ($('question-context').open ? $('focus-branch') : $('question-context').querySelector('summary')) : $('map');
+  const focusTarget = expanded ? ($('question-tools-body').hidden ? $('question-tools-toggle') : $('question-context').open ? $('focus-branch') : $('question-context').querySelector('summary')) : $('map');
   focusTarget.focus({ preventScroll: true });
 }
 function focusBranch(id) {
@@ -948,6 +951,7 @@ function renderDraftRecovery(node) {
   const stamp = JSON.stringify([node.answer, node.answerState, conflict, entry?.dirty, entry?.error, draftClient.loadError, drafts.has(node.id), uiFor(node.id).refreshAnswer]);
   if (area.renderStamp === stamp) return;
   area.renderStamp = stamp; area.replaceChildren();
+  $('draft-actions')?.replaceChildren();
   if (uiFor(node.id).refreshAnswer) area.append(button('Refresh saved journey', async () => {
     voice.cancel();
     if (await api('refresh-answer')) { uiFor(node.id).refreshAnswer = false; renderDraftRecovery(state.document.nodes.find(n => n.id === node.id)); }
@@ -966,7 +970,7 @@ function renderDraftRecovery(node) {
   if (entry?.dirty && (entry.error || draftClient.loadError)) area.append(button('Discard unsaved editor text', () => {
     voice.cancel(); void draftClient.discardUnsaved(node.id, node).catch(error => notice(error.message));
   }, { id: 'discard-unsaved-draft' }));
-  if (drafts.has(node.id) || conflict) area.append(button('Discard draft', () => choose('discard'), { id: 'discard-draft' }));
+  if (drafts.has(node.id) || conflict) ($('draft-actions') ?? area).append(button('Discard draft', () => choose('discard'), { id: 'discard-draft' }));
 }
 function orphanReminderDrafts() {
   const questions = new Set(state.document?.nodes.filter(isQuestion).map(node => node.id));
@@ -1002,6 +1006,24 @@ function renderDraftSummary() {
       button('Discard removed-question reminder', () => { delete ui.revisitDraft; renderDraftSummary(); notice('Removed-question reminder draft discarded.'); $('map').focus({ preventScroll: true }); })));
   }
 }
+function setQuestionTools(open) {
+  const shelf = $('question-shelf'), body = $('question-tools-body'), toggle = $('question-tools-toggle');
+  if (!shelf || !body || !toggle) return;
+  if (!open && body.contains(document.activeElement)) toggle.focus({ preventScroll: true });
+  body.hidden = !open; shelf.dataset.open = String(open); toggle.setAttribute('aria-expanded', String(open));
+  uiFor(selected).toolsOpen = open;
+  scheduleLayout();
+}
+function revealQuestionTool(target) {
+  if (!target || !$('question-tools-body')?.contains(target)) return;
+  setQuestionTools(true);
+  for (let parent = target.parentElement; parent && parent !== $('question-tools-body'); parent = parent.parentElement) if (parent.tagName === 'DETAILS') parent.open = true;
+}
+function revealQuestionWork() {
+  setQuestionTools(true);
+  if ($('question-tools-body')) $('question-tools-body').scrollTop = 0;
+  uiFor(selected).toolsScroll = 0;
+}
 function renderWorkspace() {
   cleanup.sync();
   questionHelp.sync();
@@ -1020,9 +1042,14 @@ function renderWorkspace() {
   panel.dataset.nodeId = node.id; panel.replaceChildren();
   const headingArea = el('div', { class: 'workspace-region' }), content = el('div', { class: 'node-content' });
   panel.append(headingArea, content);
+  const toolsBody = el('div', { id: 'question-tools-body', class: 'question-tools-body' });
+  toolsBody.hidden = !ui.toolsOpen;
+  const toolsToggle = button('Question tools', () => setQuestionTools(toolsBody.hidden), { id: 'question-tools-toggle', 'aria-expanded': String(!!ui.toolsOpen), 'aria-controls': 'question-tools-body' });
+  toolsToggle.addEventListener('pointerdown', event => { if (event.button === 0 && content.contains(document.activeElement)) event.preventDefault(); });
+  const shelf = el('section', { id: 'question-shelf', class: 'question-shelf', 'data-open': String(!!ui.toolsOpen) }, toolsToggle, toolsBody);
   const regions = new Map();
   // Named regions own their children; the answer form is never moved during an update.
-  const region = (name, parent = content) => { const area = el('div', { class: 'workspace-region' }); parent.append(area); regions.set(name, { area, stamp: null }); };
+  const region = (name, parent = toolsBody) => { const area = el('div', { class: 'workspace-region' }); parent.append(area); regions.set(name, { area, stamp: null }); };
   regions.set('heading', { area: headingArea, stamp: null });
   const update = (name, value, build) => {
     const part = regions.get(name), stamp = JSON.stringify(value);
@@ -1032,7 +1059,7 @@ function renderWorkspace() {
     if (focused) ($(focused) ?? $('expanded-title'))?.focus({ preventScroll: true });
   };
   workspace = owner;
-  const context = el('details', { id: 'question-context', class: 'question-context' }, el('summary', {}, 'Question context & tools'));
+  const context = el('details', { id: 'question-context', class: 'question-context' }, el('summary', {}, 'Context & navigation'));
   context.open = ui.contextOpen ?? false;
   context.addEventListener('toggle', () => { if (context.isConnected) ui.contextOpen = context.open; });
   region('navigation', context);
@@ -1051,7 +1078,8 @@ function renderWorkspace() {
     context.append(help);
   }
   region('references', context);
-  for (const name of ['pending', 'review', 'preview', 'retry']) region(name);
+  for (const name of ['pending', 'preview', 'retry']) region(name);
+  region('review', content);
   if (root) {
     content.append(el('p', { class: 'quiet' }, 'Pick a connected question to explore it. Each question opens into its own workspace on the map.'), button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
   } else if (!isQuestion(node)) {
@@ -1075,6 +1103,7 @@ function renderWorkspace() {
       if (error) return notice(error);
       if (deepen && draftClient.state(node.id) === 'unanswered') return notice('Choose a state or write an answer before exploring deeper.');
       if (ui.refreshAnswer) return notice('Refresh the saved journey before retrying.');
+      if (deepen) revealQuestionWork();
       try {
         if (!drafts.has(node.id)) draftClient.edit(node.id, answer.value);
         if (await draftClient.save(node.id, async (value, draftRevision, draftJourney, answerState) => {
@@ -1093,26 +1122,27 @@ function renderWorkspace() {
     const voiceStatus = el('div', { class: 'voice-controls' });
     answer.setAttribute('aria-describedby', 'voice-status');
     voice.bind(answer, voiceStatus);
-    form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), el('span', { id: 'answer-status', class: 'quiet' })), answer, voiceStatus,
+    form.append(el('div', { class: 'answer-label' }, el('label', { for: 'answer' }, 'Your answer'), voiceStatus), answer, el('span', { id: 'answer-status', class: 'quiet answer-status' }));
+    toolsBody.append(el('div', { class: 'answer-state-field' }, el('label', { for: 'answer-state' }, 'Answer state'), answerState),
+      el('p', { id: 'answer-state-help', class: 'quiet' }, 'Text and state stay a draft until you save. Decided, Tentative and Assumption need text; other states can have no note.'),
       button('Clean My Answer', () => { voice.cancel(); void cleanup.start(); }, { id: 'clean-answer', disabled: !answer.value.trim() }),
       el('div', { id: 'cleanup-review', 'aria-live': 'polite' }));
     const savebar = el('div', { class: 'workspace-savebar' },
-      el('div', { class: 'answer-state-field' }, el('label', { for: 'answer-state' }, 'Answer state'), answerState),
       el('div', { class: 'actions' },
         button('Save', () => { voice.cancel(); void save(false); }, { id: 'save-answer', class: 'primary', 'aria-label': 'Save answer', title: 'Save answer · Ctrl/Command + Enter', disabled: pending && !['research', 'research-follow-up'].includes(state.pending.kind) }),
         button('Explore deeper', () => { voice.cancel(); void save(true); }, { id: 'save-deeper', title: 'Save this answer and ask Copilot for follow-up questions', 'aria-label': 'Save answer and explore deeper', disabled: pending })));
     panel.append(savebar);
-    savebar.addEventListener('keydown', saveKey);
-    context.append(el('p', { id: 'answer-state-help', class: 'quiet' }, 'Text and state stay a draft until you save. Decided, Tentative and Assumption need text; other states can have no note. Ctrl/Command + Enter saves without generating questions.'));
-    const researchNote = el('p', { id: 'research-save-note', class: 'quiet' }, 'Save is available during research. Saving its source context discards that research. Wait or cancel research before Explore deeper.'); form.append(researchNote);
-    form.append(button('Undo addition', () => {
+    savebar.addEventListener('keydown', saveKey); toolsBody.addEventListener('keydown', saveKey);
+    const researchNote = el('p', { id: 'research-save-note', class: 'quiet' }, 'Save is available during research. Saving its source context discards that research. Wait or cancel research before Explore deeper.'); toolsBody.append(researchNote);
+    toolsBody.append(button('Undo addition', () => {
       const addition = ui.addition;
       if (!addition || (drafts.get(node.id) ?? node.answer) !== addition.after) return;
       voice.cancel(); draftClient.edit(node.id, addition.before); answer.value = addition.before; ui.addition = null;
       answerStatus(node); answer.focus({ preventScroll: true }); notice('Addition undone. Your earlier draft is restored.');
     }, { id: 'undo-addition', class: 'undo-addition' }));
+    toolsBody.append(el('div', { id: 'draft-actions' }));
     form.append(el('div', { id: 'draft-recovery', 'aria-live': 'polite' }));
-    content.append(form); answerStatus(node); renderDraftRecovery(node); renderCleanup(); renderQuestionHelp();
+    content.append(form);
     const revisit = el('details', { id: 'revisit-editor', class: 'revisit-editor' }, el('summary', { id: 'revisit-title' }, 'Revisit this question'),
       el('p', { id: 'revisit-status', role: 'status' }), el('p', { class: 'quiet' }, 'Optional local-calendar date or condition you evaluate yourself. No monitoring or notifications. Acknowledging records a review; it does not change your answer, certainty or ancestor review flag.'));
     revisit.open = ui.revisitOpen ?? !!(node.revisit || ui.revisitDraft);
@@ -1137,9 +1167,9 @@ function renderWorkspace() {
         button('Clear reminder', () => void saveReminder('clear-revisit'), { id: 'clear-revisit' }),
         button('Use saved reminder', () => { delete ui.revisitDraft; workspace.update(); date.focus(); }, { id: 'reset-revisit' }),
         button('Keep my reminder edits', () => { if (ui.revisitDraft) { ui.revisitDraft.base = JSON.stringify(node.revisit ?? null); workspace.update(); } }, { id: 'keep-revisit' })));
-    content.append(revisit);
+    toolsBody.append(revisit);
   }
-  content.append(context);
+  toolsBody.append(context);
   region('research');
   region('followup');
   region('children');
@@ -1162,7 +1192,8 @@ function renderWorkspace() {
       notice('Direction saved. Copilot will propose questions beneath it for your review.');
     }
   });
-  details.append(manual); content.append(details);
+  details.append(manual); toolsBody.append(details);
+  panel.append(shelf);
   workspace.update = () => {
     const focused = panel.contains(document.activeElement) ? document.activeElement : null;
     refresh();
@@ -1215,7 +1246,11 @@ function renderWorkspace() {
       node.kind === 'direction' ? button('Mark direction reviewed', () => { if (current()) void api('acknowledge-direction', { nodeId: node.id }); }, { id: 'acknowledge-direction', disabled: pending }) : null) : null);
     if ($('revisit-date')) {
       const draft = ui.revisitDraft, conflict = draft && draft.base !== JSON.stringify(node.revisit ?? null);
-      if (conflict) $('revisit-editor').open = true;
+      if (conflict) {
+        $('revisit-editor').open = true;
+        const version = JSON.stringify(node.revisit ?? null);
+        if (ui.revisitConflict !== version) { ui.revisitConflict = version; setQuestionTools(true); }
+      } else ui.revisitConflict = null;
       if (!draft) { $('revisit-date').value = node.revisit?.date ?? ''; $('revisit-condition').value = node.revisit?.condition ?? ''; }
       else { if ($('revisit-date').value !== draft.date) $('revisit-date').value = draft.date; if ($('revisit-condition').value !== draft.condition) $('revisit-condition').value = draft.condition; }
       $('revisit-status').textContent = node.revisit ? `${revisitLabel(node)}${node.revisit.date ? ` · ${node.revisit.date}` : ''}${node.revisit.acknowledgedAt ? ` · Reviewed ${new Date(node.revisit.acknowledgedAt).toLocaleString()}` : ''}` : 'No reminder saved.';
@@ -1228,6 +1263,8 @@ function renderWorkspace() {
       $('acknowledge-revisit').hidden = !node.revisit; $('clear-revisit').hidden = !node.revisit;
     }
     const preview = state.preview && (state.preview.nodeId === node.id || root && !byId.has(state.preview.nodeId)) ? state.preview : null;
+    toolsToggle.textContent = preview ? 'Question tools · Review questions' : state.pending?.nodeId === node.id ? 'Question tools · Working' : 'Question tools';
+    if (preview && ui.toolsPreview !== preview.id) { ui.toolsPreview = preview.id; revealQuestionWork(); }
     update('preview', preview?.id ?? null, () => preview ? renderQuestionPreview() : null);
     if (preview) {
       $('preview-stale').hidden = !preview.stale;
@@ -1260,10 +1297,11 @@ function renderWorkspace() {
     const answer = $('answer'), value = drafts.get(node.id) ?? node.answer;
     if (answer && answer !== composing && answer.value !== value) answer.value = value;
     if (answer) { answerStatus(node); renderDraftRecovery(node); renderCleanup(); renderQuestionHelp(); }
-    if (focused?.isConnected && focused.disabled) ($('cancel-request') ?? $('expanded-title')).focus({ preventScroll: true });
+    if (focused?.isConnected && focused.disabled) { const target = $('cancel-request') ?? $('expanded-title'); revealQuestionTool(target); target.focus({ preventScroll: true }); }
   };
   workspace.update();
   content.scrollTop = ui.scroll;
+  toolsBody.scrollTop = ui.toolsScroll ?? 0;
 }
 function renderCleanup() {
   const area = $('cleanup-review'), start = $('clean-answer'); if (!area || !start) return;
@@ -1606,7 +1644,6 @@ function setOutlineMode(value) {
   const active = document.activeElement, editorFocus = $('node-workspace').contains(active);
   endDrag(); suppressClick = false; cancelAnimationFrame(layoutFrame); if (value) outlineNavigated = false; outlineMode = value;
   $('working-view').classList.toggle('outline-mode', value);
-  $('navigation-open').hidden = value || libraryView || !state.document;
   $('outline').hidden = !value;
   $('outline-toggle').setAttribute('aria-expanded', String(value));
   $('outline-toggle').textContent = value ? 'Map view' : 'Outline view';
@@ -1732,9 +1769,9 @@ $('diagnostics-dialog').addEventListener('cancel', event => { event.preventDefau
 $('diagnostics-retry').addEventListener('click', () => void loadDiagnostics('retry'));
 $('diagnostics-export').addEventListener('click', () => void loadDiagnostics('export'));
 $('diagnostics-voice').addEventListener('click', () => {
-  const settings = $('voice-settings');
-  if (!settings) { $('diagnostics-status').textContent = 'Expand a question, then open Voice settings beside its answer editor.'; return; }
-  closeDiagnostics(); $('navigation-dialog').close(); settings.open = true; settings.querySelector('summary').focus();
+  closeDiagnostics();
+  if (!$('navigation-dialog').open) $('navigation-open').click();
+  voice.openSettings();
 });
 $('diagnostics-recovery').addEventListener('click', () => { closeDiagnostics(); $('navigation-dialog').close(); $('recovery-open').click(); });
 
@@ -2400,6 +2437,7 @@ $('request-status').addEventListener('click', () => {
   if (state.pending || state.preview) {
     const id = (state.pending ?? state.preview).nodeId;
     select(state.document.nodes.some(n => n.id === id) ? id : state.document.rootId);
+    revealQuestionWork();
   }
 });
 for (const menu of document.querySelectorAll('.app-menu')) {
@@ -2418,6 +2456,10 @@ for (const menu of document.querySelectorAll('.app-menu')) {
 }
 document.addEventListener('click', event => {
   for (const menu of document.querySelectorAll('.app-menu[open]')) if (!menu.contains(event.target)) menu.open = false;
+});
+$('node-workspace').addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || event.isComposing || $('question-tools-body')?.hidden !== false) return;
+  event.preventDefault(); event.stopPropagation(); setQuestionTools(false); $('question-tools-toggle').focus({ preventScroll: true });
 });
 $('fit').addEventListener('click', () => { collapseNode(false); fit(); }); $('center-question').addEventListener('click', centerSelected);
 $('show-whole-map').addEventListener('click', showWholeMap);

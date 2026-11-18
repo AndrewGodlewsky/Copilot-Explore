@@ -31,6 +31,66 @@ import { draftHash } from '../com.github.copilot/extensions/explorer/drafts.mjs'
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 
+test('question shelf keeps secondary tools out of answering and preserves mounted drafts when toggled', async t => {
+  const f = await fixture(t, 360), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id);
+  const answer = $('answer'), parent = answer.parentElement, body = $('question-tools-body');
+  assert.ok(body); assert.equal(body.hidden, true);
+  for (const id of ['answer-state', 'clean-answer', 'revisit-editor', 'question-context', 'research-summary', 'manual-question']) assert.ok(body.contains($(id)), id);
+  assert.equal($('node-workspace').contains($('voice-settings')), false);
+  f.type('answer', 'Keep my answer and caret'); answer.focus(); answer.setSelectionRange(3, 8);
+  $('question-tools-toggle').click(); assert.equal(body.hidden, false);
+  f.type('revisit-condition', 'Next month'); $('question-tools-toggle').click();
+  assert.equal(body.hidden, true); assert.equal($('answer'), answer); assert.equal(answer.parentElement, parent);
+  assert.equal(answer.value, 'Keep my answer and caret'); assert.equal(answer.selectionStart, 3); assert.equal(answer.selectionEnd, 8);
+  $('question-tools-toggle').click(); $('revisit-condition').focus();
+  $('revisit-condition').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal(body.hidden, true); assert.equal(f.document.activeElement, $('question-tools-toggle')); assert.equal($('node-workspace').hidden, false);
+  $('outline-toggle').click(); await f.poll(); $('outline-toggle').click();
+  assert.equal($('answer'), answer); assert.equal(body.hidden, true); assert.equal($('revisit-condition').value, 'Next month');
+});
+
+test('global settings gear remains available without a card and in Outline', async t => {
+  const f = await fixture(t, 360), $ = id => f.document.getElementById(id);
+  assert.equal($('navigation-open').getAttribute('aria-label'), 'Settings');
+  assert.equal($('navigation-open').closest('.app-menu'), null); assert.equal($('navigation-open').hidden, false);
+  $('navigation-open').click(); assert.equal($('navigation-dialog').open, true);
+  assert.ok($('navigation-dialog').contains($('voice-settings'))); assert.ok($('navigation-dialog').contains($('palette-shortcut')));
+  $('navigation-cancel').click(); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Settings must keep this');
+  const answer = $('answer'); $('outline-toggle').click(); assert.equal($('navigation-open').hidden, false);
+  $('navigation-open').click(); $('navigation-cancel').click();
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'Settings must keep this'); assert.equal(f.document.activeElement, $('navigation-open'));
+});
+
+test('Commands reveals a closed question shelf before opening a tool review', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); assert.equal($('question-tools-body').hidden, true);
+  const answer = $('answer'); f.type('answer', 'Keep my private text');
+  $('palette-open').click();
+  const command = $('palette-commands').querySelector('[data-command="research-request"]');
+  assert.equal(command.getAttribute('aria-disabled'), 'false'); command.click();
+  await until(() => $('research-review-dialog').open, 'review opened');
+  assert.equal($('question-tools-body').hidden, false); assert.equal($('research-summary').parentElement.open, true);
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep my private text'); assert.equal(f.explorer.pending, null);
+});
+
+test('request navigation and new previews reveal the top of a scrolled question shelf', async t => {
+  const f = await fixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Start with nearby neighbors');
+  $('question-tools-toggle').click(); $('question-tools-body').scrollTop = 800;
+  $('question-tools-toggle').click(); $('question-tools-toggle').click();
+  assert.equal($('question-tools-body').scrollTop, 800, 'ordinary toggling keeps the reader’s place');
+  $('save-deeper').click(); await until(() => $('cancel-request'), 'pending controls');
+  assert.equal($('question-tools-body').scrollTop, 0, 'Explore deeper reveals its request');
+  $('question-tools-body').scrollTop = 800; $('question-tools-toggle').click(); $('request-status').click();
+  assert.equal($('question-tools-body').hidden, false); assert.equal($('question-tools-body').scrollTop, 0);
+  $('question-tools-body').scrollTop = 800; $('question-tools-toggle').click();
+  await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [{ category: 'Next', question: 'What can we try first?' }] }); await f.poll();
+  assert.equal($('question-tools-body').hidden, false); assert.equal($('question-tools-body').scrollTop, 0, 'a new preview is visible');
+  $('question-tools-body').scrollTop = 200; $('question-tools-toggle').click(); await f.poll();
+  assert.equal($('question-tools-body').hidden, true, 'the same preview does not force the shelf open again');
+});
+
 test('card workspace prioritizes the answer and keeps save controls outside the scrolling content', async t => {
   const f = await fixture(t, 460), $ = id => f.document.getElementById(id);
   f.open(f.explorer.doc.nodes[1].id);
@@ -38,7 +98,7 @@ test('card workspace prioritizes the answer and keeps save controls outside the 
   assert.equal([...content.children].find(child => child.textContent.trim()).className, 'answer-form');
   assert.equal(content.contains($('save-answer')), false);
   assert.equal($('save-answer').closest('.workspace-savebar').parentElement, $('node-workspace'));
-  assert.equal($('answer-state').closest('.workspace-savebar').parentElement, $('node-workspace'));
+  assert.equal($('answer-state').closest('.question-tools-body').id, 'question-tools-body');
   assert.equal($('question-context').open, false);
   assert.equal($('revisit-editor').open, false);
   const answer = $('answer'), form = answer.closest('form');
@@ -82,6 +142,7 @@ test('application menus dismiss before an action and Escape returns focus withou
 test('leaving branch focus returns to visible context controls when the disclosure is closed', async t => {
   const f = await fixture(t), $ = id => f.document.getElementById(id);
   f.open(f.explorer.doc.nodes[1].id);
+  $('question-tools-toggle').click();
   $('question-context').open = true; $('focus-branch').click();
   $('question-context').open = false; $('show-whole-map').focus(); $('show-whole-map').click();
   assert.equal($('focus-access').hidden, true);
@@ -3304,19 +3365,20 @@ test('voice settings list local choices, save independently and retain unsaved c
   voice.options = async () => { reads++; return options; };
   voice.configure = async input => { saved = input; options.preferences = { ...input, revision: input.revision + 1 }; return options; };
   const f = await fixture(t, 340, voice), [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
+  f.document.getElementById('navigation-open').click();
   const disclosure = f.document.getElementById('voice-settings'); assert.ok(disclosure);
   disclosure.open = true;
   await until(() => f.document.querySelector('#voice-microphone option[value="USB microphone"]'), 'device choices');
   assert.match(f.document.querySelector('#voice-microphone option:checked').textContent, /Unavailable/);
   assert.equal(f.document.querySelector('#voice-model option[value="whisper"]').disabled, true);
   const mic = f.document.getElementById('voice-microphone'); mic.value = 'USB microphone'; mic.dispatchEvent(new f.window.Event('change'));
-  f.open(b.id);
+  f.document.getElementById('navigation-cancel').click(); f.open(b.id); f.document.getElementById('navigation-open').click();
   assert.equal(f.document.getElementById('voice-settings').open, true);
   assert.equal(f.document.getElementById('voice-microphone').value, 'USB microphone');
-  f.click('Save voice settings'); await until(() => saved, 'saved settings');
+  f.document.querySelector('#voice-settings .voice-settings-actions button').click(); await until(() => saved, 'saved settings');
   assert.deepEqual(saved, { microphone: 'USB microphone', model: 'copilot', revision: 0 });
   await until(() => !f.document.getElementById('voice-refresh').disabled, 'save finishes');
-  f.click('Refresh devices and models'); await until(() => reads === 2, 'refresh');
+  f.document.getElementById('voice-refresh').click(); await until(() => reads === 2, 'refresh');
   assert.equal(f.explorer.doc.nodes.every(n => !n.answer), true, 'settings do not submit an answer');
 });
 

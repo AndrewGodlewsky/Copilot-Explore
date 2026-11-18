@@ -16,6 +16,8 @@ import { JSDOM } from 'jsdom';
 import { fixtureSpecs, makeFixture } from '../scripts/perf-fixtures.mjs';
 import { parseBrief } from '../com.github.copilot/extensions/explorer/decision-brief.mjs';
 import { parseHandoff } from '../com.github.copilot/extensions/explorer/implementation-handoff.mjs';
+import { prepareAdrScope, captureAdrScope } from '../com.github.copilot/extensions/explorer/adr-scope.mjs';
+import { defaultAdrFormat } from '../com.github.copilot/extensions/explorer/adr-format.mjs';
 import { parseAnswerCheck } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { buildScenario } from '../com.github.copilot/extensions/explorer/scenario-fork.mjs';
@@ -1995,6 +1997,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   if (adrScopeDialog) { adrScopeDialog.showModal = () => { adrScopeDialog.open = true; }; adrScopeDialog.close = () => { adrScopeDialog.open = false; }; }
   const adrFormatDialog = document.getElementById('adr-format-dialog');
   if (adrFormatDialog) { adrFormatDialog.showModal = () => { adrFormatDialog.open = true; }; adrFormatDialog.close = () => { adrFormatDialog.open = false; }; }
+  const adrQuestionsDialog = document.getElementById('adr-questions-dialog');
+  if (adrQuestionsDialog) { adrQuestionsDialog.showModal = () => { adrQuestionsDialog.open = true; }; adrQuestionsDialog.close = () => { adrQuestionsDialog.open = false; }; }
   briefDialog.showModal = () => { briefDialog.open = true; };
   briefDialog.close = () => { briefDialog.open = false; };
   const checkDialog = document.getElementById('check-dialog');
@@ -5655,6 +5659,86 @@ test('cold damaged binding reaches recovery controls with no active map and open
   assert.equal(await readFile(originalFile, 'utf8'), '{truncated private'); assert.notEqual(f.explorer.file, originalFile);
 });
 
+
+async function adrQuestionsFixture(t, scoped = true) {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].answer = 'Maybe a local team'; doc.nodes[1].answerState = 'tentative'; doc.adrFormat = defaultAdrFormat();
+    if (scoped) doc.adrScope = captureAdrScope(prepareAdrScope(doc, { focalId: doc.nodes[1].id, nodeIds: [doc.nodes[1].id], includeEvidence: false }, { scenario: (await e.scenarioPolicy()).label }));
+    await e.save(doc);
+  } }), $ = id => f.document.getElementById(id), sent = [];
+  f.explorer.send = async value => sent.push(value); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'PRIVATE ADR QUESTION DRAFT λ');
+  const editor = $('answer'); editor.focus(); editor.setSelectionRange(2, 7);
+  const open = async () => { $('adr-questions-open').click(); await until(() => !$('adr-questions-start').disabled || /scope|error/i.test($('adr-questions-status').textContent) && !/preparing/i.test($('adr-questions-status').textContent), 'ADR question review ready'); };
+  return { ...f, $, sent, editor, openAdrQuestions: open };
+}
+
+test('ADR questions UI reviews exact input then queues optional candidates while preserving the answer draft and caret', async t => {
+  const f = await adrQuestionsFixture(t), $ = f.$; await f.openAdrQuestions();
+  assert.equal(f.sent.length, 0); assert.match($('adr-questions-input').textContent, /Maybe a local team/); assert.doesNotMatch($('adr-questions-input').textContent, /PRIVATE ADR QUESTION DRAFT/);
+  const exact = $('adr-questions-input').textContent; $('adr-questions-start').click(); await until(() => f.sent.length === 1 && !$('adr-questions-dialog').open, 'ADR queued');
+  assert.ok(exact.includes(f.sent[0].prompt)); assert.equal(f.sent[0].mode, 'enqueue'); assert.equal($('answer'), f.editor); assert.equal(f.editor.selectionStart, 2); assert.equal(f.editor.selectionEnd, 7);
+  const requestId = f.explorer.pending.id, focal = f.explorer.doc.nodes[1].id;
+  await f.explorer.receive('questions', { requestId, questions: [{ question: 'What operating cost is acceptable?', category: 'Consequences', rationale: 'Cost is unspecified in the tentative choice.' }] }); await f.poll();
+  await until(() => $('preview-title')?.textContent.includes('ADR'), 'ADR candidate shown'); assert.equal(f.explorer.doc.nodes.length, 3);
+  $('accept-questions').click(); await until(() => f.explorer.doc.nodes.length === 4 && !$('question-preview'), 'explicit ADR question accepted and response applied');
+  assert.equal(f.explorer.doc.nodes.at(-1).parentId, focal); assert.equal($('answer'), f.editor); assert.equal(f.editor.value, 'PRIVATE ADR QUESTION DRAFT λ');
+});
+
+test('ADR questions UI shows an empty result as dismissible advice with no acceptance or readiness claim', async t => {
+  const f = await adrQuestionsFixture(t), $ = f.$; await f.openAdrQuestions(); $('adr-questions-start').click(); await until(() => f.sent.length === 1 && !$('adr-questions-dialog').open, 'ADR queued');
+  await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [] }); await f.poll();
+  await until(() => $('question-preview'), 'empty ADR result'); assert.match($('question-preview').textContent, /no material gaps/i); assert.match($('question-preview').textContent, /not.*approval|not.*readiness/i);
+  assert.equal($('accept-questions').disabled, true); assert.equal(f.explorer.doc.nodes.length, 3); $('dismiss-questions').click(); await until(() => !f.explorer.preview, 'dismissed without save');
+});
+
+test('ADR questions UI invalidates changed formats and routes stale candidate retry back to ADR review', async t => {
+  const f = await adrQuestionsFixture(t), $ = f.$; await f.openAdrQuestions();
+  const changed = structuredClone(f.explorer.doc); changed.adrFormat.digits = 5; await f.explorer.save(changed); await f.poll();
+  await until(() => $('adr-questions-start').disabled, 'review invalidated'); assert.match($('adr-questions-status').textContent, /changed|refresh/i);
+  $('adr-questions-refresh').click(); await until(() => !$('adr-questions-start').disabled, 'fresh ADR review'); $('adr-questions-start').click(); await until(() => f.sent.length === 1 && !$('adr-questions-dialog').open, 'ADR queued');
+  await f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [{ question: 'What rejected alternative?', category: 'Options' }] }); await f.poll();
+  const newer = structuredClone(f.explorer.doc); newer.adrFormat.digits = 6; await f.explorer.save(newer); await f.poll();
+  await until(() => $('preview-retry') && !$('preview-retry').hidden, 'stale candidate'); $('preview-retry').click();
+  await until(() => $('adr-questions-dialog').open && !$('adr-questions-start').disabled, 'retry reviews ADR context'); assert.equal(f.sent.length, 1); assert.equal(f.actions.some(action => action.action === 'questions'), false);
+});
+
+for (const stage of ['dispatch', 'callback']) test(`ADR questions UI retries failed ${stage} source checks through a fresh ADR review`, async t => {
+  const f = await adrQuestionsFixture(t), $ = f.$; await f.openAdrQuestions();
+  const changeFormat = async () => { const changed = structuredClone(f.explorer.doc); changed.adrFormat.digits = 6; changed.revision++; await writeFile(f.explorer.file, JSON.stringify(changed)); };
+  if (stage === 'dispatch') {
+    const original = f.explorer.assertScenarioPolicy.bind(f.explorer); let checks = 0;
+    f.explorer.assertScenarioPolicy = async policy => { await original(policy); if (++checks === 3) await changeFormat(); };
+  }
+  $('adr-questions-start').click();
+  await until(() => !$('adr-questions-dialog').open && (stage === 'dispatch' ? !f.explorer.pending && f.explorer.error : f.sent.length === 1), 'ADR request finished dispatch');
+  if (stage === 'callback') {
+    await changeFormat();
+    await assert.rejects(f.explorer.receive('questions', { requestId: f.explorer.pending.id, questions: [] }), /saved question context changed/i);
+  }
+  await f.poll(); await until(() => $('refresh-question-context'), 'failed request recovery shown');
+  const sent = f.sent.length; $('refresh-question-context').click();
+  await until(() => $('adr-questions-dialog').open && !$('adr-questions-start').disabled, 'fresh ADR review required before retry');
+  assert.equal(f.sent.length, sent); assert.equal(f.actions.some(action => action.action === 'questions'), false);
+  assert.equal($('answer'), f.editor); assert.match(f.editor.value, /PRIVATE ADR QUESTION DRAFT/);
+});
+
+test('ADR questions UI reports missing saved scope without dispatch and leaves editor text available', async t => {
+  const f = await adrQuestionsFixture(t, false), $ = f.$; await f.openAdrQuestions();
+  assert.match($('adr-questions-status').textContent, /save.*scope/i); assert.equal($('adr-questions-start').disabled, true); assert.equal(f.sent.length, 0);
+  $('adr-questions-close').click(); assert.equal($('answer'), f.editor); assert.equal(f.editor.value, 'PRIVATE ADR QUESTION DRAFT λ');
+});
+
+test('ADR questions UI ignores closed or suspended review responses and requires fresh explicit review', async t => {
+  for (const suspend of [false, true]) {
+    const f = await adrQuestionsFixture(t), $ = f.$, fetch = f.window.fetch; let release;
+    f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/research-review' && JSON.parse(options.body).purpose === 'adr-questions' && JSON.parse(options.body).action === 'prepare') await new Promise(resolve => { release = resolve; }); return response; };
+    $('adr-questions-open').click(); await until(() => release, 'ADR review reply held');
+    if (suspend) f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true })); else $('adr-questions-close').click();
+    release(); f.window.fetch = fetch; await delay(30);
+    if (suspend) { f.window.dispatchEvent(new f.window.PageTransitionEvent('pageshow', { persisted: true })); await f.poll(); }
+    assert.equal($('adr-questions-dialog').open, false); assert.equal(f.sent.length, 0); await f.openAdrQuestions(); assert.equal($('adr-questions-start').disabled, false); assert.equal(f.editor.value, 'PRIVATE ADR QUESTION DRAFT λ');
+  }
+});
 
 async function adrFormatFixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'explorer-format-ui-')); t.after(() => rm(root, { recursive: true, force: true })); let reads = 0;

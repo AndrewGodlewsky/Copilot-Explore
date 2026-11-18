@@ -97,6 +97,7 @@ export function prepareResearch(doc, nodeId, options) {
     records: [...prepared.context.path, ...prepared.context.decisionsElsewhere], generationRecords: prepared.context.generationContext ?? [], destination: target.research }) });
 }
 export function sameResearchSources(dependencies, doc) {
+  if (dependencies?.adrQuestionsDigest) return !!doc && dependencies.adrQuestionsDigest === savedDigest(doc);
   if (dependencies?.regenerationDigest) return !!doc && dependencies.regenerationDigest === savedDigest(doc);
   if (!dependencies || !doc || !equal(dependencies.identity, identity(doc)) || !equal(dependencies.framing, framing(doc))) return false;
   const nodes = new Map(doc.nodes.map(node => [node.id, node]));

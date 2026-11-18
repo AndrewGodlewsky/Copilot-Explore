@@ -46,7 +46,7 @@ const object = (properties, required = Object.keys(properties)) => ({ type: 'obj
 const requestId = string(100);
 export const actionSchemas = {
   get_exploration: object({}),
-  submit_questions: object({ requestId, questions: { ...array({ ...object({ question: string(600), category: string(60), rationale: string(1000), importance: { type: 'string', enum: ['low', 'medium', 'high'] }, importanceReason: string(600) }, ['question', 'category']), dependentRequired: { importance: ['importanceReason'], importanceReason: ['importance'] } }, 6), minItems: 1 } }),
+  submit_questions: object({ requestId, questions: { ...array({ ...object({ question: string(600), category: string(60), rationale: string(1000), importance: { type: 'string', enum: ['low', 'medium', 'high'] }, importanceReason: string(600) }, ['question', 'category']), dependentRequired: { importance: ['importanceReason'], importanceReason: ['importance'] } }, 6), minItems: 0 } }),
   fail_request: object({ requestId, message: string(2000) }),
 };
 
@@ -66,7 +66,7 @@ export function explorerCanvas({ createCanvas, getSession, directory }) {
     inputSchema: { type: 'object', properties: { topic: string(4000) }, additionalProperties: false },
     actions: [
       { name: 'get_exploration', description: 'Read the current map and pending request with its scenario classification. Retained alternatives require explicit hypothetical use.', inputSchema: actionSchemas.get_exploration, handler: ctx => get(ctx).explorer.nativeSnapshot() },
-      { name: 'submit_questions', description: 'Stage specific questions for a pending request in an unsaved preview. Only the user can accept questions in the canvas; this callback never saves nodes.', inputSchema: actionSchemas.submit_questions, handler: ctx => get(ctx).explorer.receive('questions', ctx.input) },
+      { name: 'submit_questions', description: 'Stage specific questions for a pending request in an unsaved preview. Only the user can accept questions in the canvas; this callback never saves nodes. An empty array is allowed only for an ADR questions request with no material gaps.', inputSchema: actionSchemas.submit_questions, handler: ctx => get(ctx).explorer.receive('questions', ctx.input) },
       { name: 'fail_request', description: 'Explain why a pending request cannot be completed.', inputSchema: actionSchemas.fail_request, handler: ctx => get(ctx).explorer.receive('fail', ctx.input) },
     ],
     async open(ctx) {

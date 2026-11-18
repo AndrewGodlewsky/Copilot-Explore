@@ -11,6 +11,7 @@ import { ScenarioPreferences } from './scenario-preference-workflow.mjs';
 import { BranchRestoration } from './branch-restoration.mjs';
 import { savedDigest } from './review-causes.mjs';
 import { captureAdrScope, adrScopeFreshness } from './adr-scope.mjs';
+import { prepareAdrQuestions, validateAdrQuestions } from './adr-questions.mjs';
 import { AdrFormatReview } from './adr-format-review.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
@@ -416,7 +417,9 @@ export class Explorer {
       catch { stale = true; } // Another canvas can remove the parent before an explicit refresh.
     }
     const preview = this.preview ? { ...this.preview, stale } : null;
-    return { ...this.snapshot(), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), preview: structuredClone(preview), recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
+    const source = this.questionSource;
+    const questionRetry = !preview && !this.pending && /saved question context changed/.test(this.error) && source?.journey === (this.activeKey ?? this.doc?.id) ? { purpose: source.purpose ?? 'questions', nodeId: source.nodeId } : null;
+    return { ...this.snapshot(), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
   }
   async checkQuestionSource(nodeId) {
     const source = this.questionSource;
@@ -971,7 +974,7 @@ export class Explorer {
       if (this.pending?.id === id) { this.clearPending(); this.error = 'Copilot has not returned a result yet. Check the chat, then try again. Your answers are saved.'; }
     }), this.timeoutMs);
     this.timer?.unref?.();
-    if (kind === 'questions') this.questionSource = { journey: this.activeKey ?? this.doc.id, dependencies: prepared.dependencies, scenarioPolicy, ...(prepared.operation === 'question-regeneration' ? { purpose: prepared.operation } : {}) };
+    if (kind === 'questions') this.questionSource = { journey: this.activeKey ?? this.doc.id, nodeId, dependencies: prepared.dependencies, scenarioPolicy, ...(['question-regeneration', 'adr-questions'].includes(prepared.operation) ? { purpose: prepared.operation } : {}) };
     if (webResearch) {
       const controller = new AbortController(); this.researchAbort = controller;
       const work = { ...prepared, scenarioPolicy, file: this.file, key: this.activeKey, abort: controller }; this.researchWork = work;
@@ -1026,12 +1029,16 @@ export class Explorer {
     Promise.resolve().then(async () => {
       await this.assertScenarioPolicy(scenarioPolicy);
       if (this.closed || this.pending?.id !== id) return;
-      if (prepared.operation === 'question-regeneration') await this.checkQuestionSource(nodeId);
+      if (['question-regeneration', 'adr-questions'].includes(prepared.operation)) await this.checkQuestionSource(nodeId);
       if (this.closed || this.pending?.id !== id) return;
       return this.send({ prompt, mode: 'enqueue' });
     }).catch(error => this.transact(() => {
       if (this.pending?.id === id) { this.clearPending(); this.error = `Could not confirm Copilot received the request: ${error.message}. Check the chat before retrying.`; }
     }));
+  }
+  prepareAdrQuestionRequest(document, requestId, scenario) {
+    const prefix = `Explorer ADR question request. Use invoke_canvas_action targeting ${JSON.stringify(this.target)}. requestId: ${requestId}. Return the result through submit_questions, not only in chat. If unable, call fail_request with {requestId,message}.\n`;
+    return prepareAdrQuestions(document, { prefix, requestId, scenario });
   }
   prepareRequest(kind, nodeId, id = '00000000-0000-0000-0000-000000000000', scope, scenario, regeneration) {
     if (kind === 'research') return prepareResearch(this.doc, nodeId, { ...researchFraming(this.doc), scope, scenario });
@@ -1100,12 +1107,12 @@ export class Explorer {
         return { ...this.uiSnapshot(), contextCoverage: { scenario: policy.label, kind: input.kind, nodeId: input.nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage } };
       }
       if (action === 'cancel') { this.researchReview.clear(); this.clearPending(); this.error = ''; return this.uiSnapshot(); }
-      if (action === 'regenerate-questions') {
+      if (action === 'regenerate-questions' || action === 'adr-questions') {
         if (this.pending || this.preview) throw Error('Finish or dismiss the current question request or preview before regenerating.');
         if (Object.keys(input).some(key => !['action', 'scope', 'revision', 'journey', 'nodeId', 'token'].includes(key)) || input.revision !== this.doc?.revision) throw Error('Invalid or changed regeneration selection. Review the saved context again.');
         await this.withDocumentLock(async () => {
-          const prepared = await this.researchReview.consume(this, { ...input, purpose: 'question-regeneration' });
-          await this.request('questions', input.nodeId, undefined, prepared);
+          const prepared = await this.researchReview.consume(this, { ...input, purpose: action === 'adr-questions' ? 'adr-questions' : 'question-regeneration' });
+          await this.request('questions', prepared.targetId ?? input.nodeId, undefined, prepared);
         });
         return this.uiSnapshot();
       }
@@ -1167,6 +1174,7 @@ export class Explorer {
             await this.checkQuestionSource(batch.nodeId);
             if (batch.stale) throw new Error('This preview is stale. Dismiss it and generate again.');
             const accepted = acceptQuestions(this.doc, batch.nodeId, batch, input.selected);
+            if (batch.purpose === 'adr-questions') validateAdrQuestions(this.doc, batch.nodeId, accepted.ids.map(id => findNode(accepted.document, id)));
             await this.commitCurrentLocked(await this.fresh(), accepted.document, 'Questions accepted', () => this.checkQuestionSource(batch.nodeId)); acceptedIds = accepted.ids;
           });
           this.preview = null; this.questionSource = null;
@@ -1330,7 +1338,7 @@ export class Explorer {
       if (pending.kind !== kind) throw new Error('The response type does not match this request.');
       try { await this.checkQuestionSource(pending.nodeId); }
       catch (error) { this.clearPending(); this.error = error.message; throw error; }
-      const questions = candidateQuestions(this.doc, pending.nodeId, input.questions);
+      const questions = (this.questionSource?.purpose === 'adr-questions' ? validateAdrQuestions : candidateQuestions)(this.doc, pending.nodeId, input.questions);
       this.preview = { id: pending.id, journey: this.activeKey ?? this.doc.id, nodeId: pending.nodeId, questions, stale: false, ...(this.questionSource?.purpose ? { purpose: this.questionSource.purpose } : {}) };
       this.clearPending(); this.error = '';
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };

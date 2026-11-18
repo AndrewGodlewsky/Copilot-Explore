@@ -100,6 +100,8 @@ try {
   assert.ok(JSON.stringify(requests).includes('Synthetic garden fixture'));
   assert.ok(JSON.stringify(requests).includes('submit_questions'));
   let snapshot = await state();
+  const emptyOrdinary = await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_questions', input: { requestId: snapshot.pending.id, questions: [] } }).catch(error => ({ error: error.message }));
+  assert.match(JSON.stringify(emptyOrdinary), /at least one|error/i); assert.equal((await state()).pending.id, snapshot.pending.id);
   const rationale = 'Unclear ownership could delay the synthetic garden pilot.';
   const importanceReason = 'Limited volunteer time makes ownership critical to a viable garden pilot.';
   assert.ok(JSON.stringify(requests).includes('importanceReason'));
@@ -188,6 +190,34 @@ try {
   assert.ok(!JSON.stringify(await session.rpc.canvas.action.invoke({ instanceId, actionName: 'get_exploration', input: {} })).includes(templateCanary));
   assert.ok(!(await (await fetch(opened.url + 'export.json')).text()).includes(templateCanary)); assert.ok(!JSON.stringify(requests).includes(templateCanary));
   console.log('Installed metadata cwd explicitly read ADR template structure; changed cwd rejected saving and raw template text stayed out of native context and exports.');
+  const adrPost = async (route, input) => {
+    const response = await fetch(opened.url + route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify(input) });
+    assert.equal(response.status, 200, await response.clone().text()); return response.json();
+  };
+  snapshot = await state();
+  const adrScope = await adrPost('api/research-review', { action: 'prepare', purpose: 'adr-scope', clientId: 'fixture-adr-scope-00000001', sequence: 1, journey: snapshot.activeKey, nodeId: snapshot.document.rootId, selection: { focalId: nodeId, nodeIds: [nodeId], includeEvidence: false } });
+  await adrPost('api/adr-scope', { action: 'save', journey: snapshot.activeKey, revision: snapshot.document.revision, token: adrScope.token });
+  secondSession = await client.createSession(sessionOptions);
+  await until(() => secondSession.rpc.canvas.list(), value => value.canvases?.some(c => c.canvasId === 'explorer'), 'second-session canvas registration');
+  for (const sequence of [1, 2]) {
+    snapshot = await state();
+    const reviewedAdr = await adrPost('api/research-review', { action: 'prepare', purpose: 'adr-questions', clientId: 'fixture-adr-questions-0001', sequence, journey: snapshot.activeKey, nodeId: snapshot.document.rootId });
+    assert.deepEqual(reviewedAdr.prepared.context.format.sections.map(section => section.label), ['Context', 'Decision']);
+    assert.ok(!reviewedAdr.prepared.prompt.includes(templateCanary)); assert.ok(!reviewedAdr.prepared.prompt.includes(projectCanary));
+    snapshot = await action('adr-questions', { journey: snapshot.activeKey, nodeId: snapshot.document.rootId, token: reviewedAdr.token });
+    const adrId = snapshot.pending.id, beforeAdr = snapshot.document.nodes.length;
+    assert.equal(snapshot.pending.nodeId, nodeId);
+    await until(async () => requests, values => JSON.stringify(values).includes(adrId), 'reviewed ADR questions queued');
+    const wrongSession = await secondSession.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_questions', input: { requestId: adrId, questions: [] } }).catch(error => ({ error: error.message }));
+    assert.match(JSON.stringify(wrongSession), /error|not found|open|session/i); assert.equal((await state()).pending.id, adrId);
+    const adrCandidates = sequence === 1 ? [] : [{ question: 'What maintenance cost would change this choice?', category: 'Consequences', rationale: 'The saved choice does not record a maintenance limit.' }];
+    await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_questions', input: { requestId: adrId, questions: adrCandidates } });
+    snapshot = await state(); assert.equal(snapshot.preview.purpose, 'adr-questions'); assert.equal(snapshot.document.nodes.length, beforeAdr); assert.equal(snapshot.preview.questions.length, adrCandidates.length);
+    assert.ok(!JSON.stringify(await session.rpc.canvas.action.invoke({ instanceId, actionName: 'get_exploration', input: {} })).includes('What maintenance cost'));
+    if (!adrCandidates.length) await action('dismiss-questions', { batchId: adrId });
+    else { snapshot = await action('accept-questions', { batchId: adrId, selected: [{ index: 0, question: adrCandidates[0].question }] }); assert.equal(snapshot.document.nodes.length, beforeAdr + 1); assert.equal(snapshot.document.nodes.at(-1).parentId, nodeId); }
+  }
+  console.log('Installed canvas accepted empty ADR results and explicit reviewed ADR candidates; ordinary empty results and cross-session callbacks rejected.');
   const reviewed = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin },
     body: JSON.stringify({ action: 'prepare', clientId: 'fixture-review-000000000001', sequence: 1, journey: snapshot.activeKey ?? snapshot.document.id, nodeId, scope: 'decisions', excluded: [] }) });
   assert.equal(reviewed.status, 200); const review = await reviewed.json(); assert.ok(review.prepared.prompt.includes('Neighbors'));
@@ -219,15 +249,18 @@ try {
   assert.equal(result.status, 200); assert.equal((await result.json()).document.nodes[1].answer, 'Neighbors');
   const library = await (await fetch(imported.url + 'api/library')).json();
   assert.equal(library.entries.length, 1, 'identical import reopens without another stored document');
-  secondSession = await client.createSession(sessionOptions);
-  await until(() => secondSession.rpc.canvas.list(), value => value.canvases?.some(c => c.canvasId === 'explorer'), 'second-session canvas registration');
   const across = await secondSession.rpc.canvas.open({ canvasId: 'explorer', instanceId: 'library-other-session', input: {} });
   assert.equal((await (await fetch(across.url + 'api/state')).json()).document, null);
-  const acrossPost = async input => fetch(across.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+  const acrossHeaders = { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(across.url).origin };
+  const acrossPost = async input => fetch(across.url + 'api/action', { method: 'POST', headers: acrossHeaders, body: JSON.stringify(input) });
   const crossOpen = await acrossPost({ action: 'open', key: library.entries[0].key });
   assert.equal(crossOpen.status, 200); assert.deepEqual((await crossOpen.json()).document, exported);
-  const crossAnswer = await acrossPost({ action: 'answer', revision: exported.revision, nodeId, answer: 'Another session, same journey', expand: false });
-  assert.equal(crossAnswer.status, 200);
+  const answerInput = { revision: exported.revision, nodeId, answer: 'Another session, same journey', expand: false };
+  const consequenceResponse = await fetch(across.url + 'api/answer-change', { method: 'POST', headers: acrossHeaders, body: JSON.stringify({ action: 'prepare', journey: library.entries[0].key, ...answerInput }) });
+  assert.equal(consequenceResponse.status, 200, await consequenceResponse.clone().text());
+  const consequence = await consequenceResponse.json();
+  const crossAnswer = await acrossPost({ action: 'answer', ...answerInput, answerPreview: consequence.token, confirmConsequences: true });
+  assert.equal(crossAnswer.status, 200, await crossAnswer.clone().text());
   const crossState = await crossAnswer.json();
   const staleSave = await fetch(imported.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'answer', revision: exported.revision, nodeId, answer: 'Stale writer', expand: false }) });
   assert.equal(staleSave.status, 400); assert.match((await staleSave.json()).error, /Another canvas/);
@@ -235,16 +268,16 @@ try {
   const crossPending = await followup.json(); assert.ok(crossPending.pending);
   await until(async () => requests, values => JSON.stringify(values).includes('library-other-session'), 'currently attached session question delivery');
   await secondSession.rpc.canvas.action.invoke({ instanceId: 'library-other-session', actionName: 'submit_questions', input: { requestId: crossPending.pending.id, questions: [{ question: 'How will the new group coordinate?', category: 'People' }] } });
-  const staged = await (await fetch(across.url + 'api/state')).json(); assert.equal(staged.document.nodes.length, 2);
+  const staged = await (await fetch(across.url + 'api/state')).json(); assert.equal(staged.document.nodes.length, exported.nodes.length);
   const accepted = await acrossPost({ action: 'accept-questions', revision: staged.document.revision, batchId: staged.preview.id, selected: [{ index: 0, question: staged.preview.questions[0].question }] });
-  assert.equal(accepted.status, 200); assert.equal((await accepted.json()).document.nodes.length, 3);
+  assert.equal(accepted.status, 200); assert.equal((await accepted.json()).document.nodes.length, exported.nodes.length + 1);
   const unsaved = await acrossPost({ action: 'questions', revision: staged.document.revision + 1, nodeId });
   const unsavedRequest = await unsaved.json();
   await secondSession.rpc.canvas.action.invoke({ instanceId: 'library-other-session', actionName: 'submit_questions', input: { requestId: unsavedRequest.pending.id, questions: [{ question: 'Unsaved proposal?', category: 'People' }] } });
   await secondSession.rpc.canvas.close({ instanceId: 'library-other-session' });
   const previewReopen = await secondSession.rpc.canvas.open({ canvasId: 'explorer', instanceId: 'library-other-session', input: {} });
   const previewRestored = await (await fetch(previewReopen.url + 'api/state')).json();
-  assert.equal(previewRestored.preview, null); assert.equal(previewRestored.document.nodes.length, 3);
+  assert.equal(previewRestored.preview, null); assert.equal(previewRestored.document.nodes.length, exported.nodes.length + 1);
   const seedResponse = await fetch(previewReopen.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'add-direction', revision: previewRestored.document.revision, nodeId, direction: '  Safety seed  ' }) });
   assert.equal(seedResponse.status, 200); const seeded = await seedResponse.json();
   const seed = seeded.document.nodes.find(n => n.id === seeded.directionId);
@@ -252,7 +285,7 @@ try {
   await until(async () => requests, values => JSON.stringify(values).includes('user-supplied direction'), 'no-answer seed generation');
   await secondSession.rpc.canvas.action.invoke({ instanceId: 'library-other-session', actionName: 'submit_questions', input: { requestId: seeded.pending.id, questions: [{ question: 'Which safety concern first?', category: 'Safety' }] } });
   const seedPreview = await (await fetch(previewReopen.url + 'api/state')).json();
-  assert.equal(seedPreview.document.nodes.length, 4); assert.equal(seedPreview.preview.nodeId, seed.id);
+  assert.equal(seedPreview.document.nodes.length, exported.nodes.length + 2); assert.equal(seedPreview.preview.nodeId, seed.id);
   const seedAccept = await fetch(previewReopen.url + 'api/action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'accept-questions', revision: seedPreview.document.revision, batchId: seedPreview.preview.id, selected: [{ index: 0, question: 'Which safety concern first?' }] }) });
   assert.equal(seedAccept.status, 200); const developed = await seedAccept.json();
   assert.equal(developed.document.nodes.at(-1).parentId, seed.id); assert.equal(developed.document.nodes.at(-1).generation.adjusted, false);

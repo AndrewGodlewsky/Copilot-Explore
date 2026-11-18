@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.93",
+    "summary": "Review saved ADR context and format, then ask up to three optional questions about missing reasoning. Preview and edit candidates before adding them beneath the focal decision. Empty results are advice, not approval. Changed inputs and cancelled requests reject stale candidates; private answer drafts stay intact."
+  },
+  {
     "version": "0.1.92",
     "summary": "Choose an ADR directory, filename convention and bundled or selected repository template. Preview supported structure and sample Markdown, then save portable preferences. Template examples and instructions are discarded; changed files and stale reviews reject saves. Drafts stay intact. No ADR is generated or written, and no filename is reserved."
   },

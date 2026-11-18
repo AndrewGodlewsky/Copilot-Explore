@@ -262,6 +262,7 @@ const paletteCommands = [
   ['edit-guidance', 'Edit guidance'], ['history-open', 'History'], ['recovery-open', 'Recovery'],
   ['visual-export-open', 'Export maps'], ['decision-brief', 'Decision brief'], ['implementation-handoff', 'Implementation handoff'],
   ['adr-scope-open', 'ADR scope'],
+  ['adr-questions-open', 'ADR questions'],
   ['adr-format-open', 'ADR format'],
   ['check-answers', 'Check answers'], ['challenge-decisions', 'Challenge decisions'], ['research-request', 'Research options'],
   ['revisit-answer', 'Revisit this answer'], ['scenario-preference-open', 'Scenario preference'],
@@ -601,6 +602,7 @@ function apply(next, reset = false) {
   const compactFocused = $('nodes').contains(document.activeElement);
   const previousSelection = selected;
   const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
+  if ($('adr-questions-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) invalidateAdrQuestions('Saved inputs or scenario changed. Refresh and review again.');
   if (adrFormat && (adrFormat.value || adrFormat.action === 'prepare') && !changedDocument && JSON.stringify(state.document) !== JSON.stringify(next.document)) invalidateAdrFormat('Saved journey changed. Review the format again before saving.');
   if ($('adr-scope-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) {
     invalidateAdrPreview('Saved inputs or scenario changed. Review the current selection again.');
@@ -629,6 +631,7 @@ function apply(next, reset = false) {
     closeBrief();
     closeAdrScope();
     closeAdrFormat();
+    closeAdrQuestions();
     closeCheck();
     lastCoverage = ''; $('context-coverage').textContent = 'Check the selected node or start a request to see coverage.';
     cleanup.cancel();
@@ -645,6 +648,7 @@ function apply(next, reset = false) {
     acceptedIds.clear(); acceptedParentId = null;
   }
   signature = stamp; state = next;
+  if ($('adr-questions-dialog').open) renderAdrQuestions();
   syncReviewQueue();
   syncComparison();
   syncBranchRestore();
@@ -680,6 +684,7 @@ function apply(next, reset = false) {
   $('review-affected').hidden = !doc;
   $('implementation-handoff').hidden = !doc;
   $('adr-scope-open').hidden = !doc;
+  $('adr-questions-open').hidden = !doc;
   $('adr-format-open').hidden = !doc;
   $('check-answers').hidden = !doc; $('challenge-decisions').hidden = !doc;
   $('save-file').hidden = !doc; $('finish').hidden = !doc; $('finish').disabled = !!state.pending;
@@ -2332,8 +2337,11 @@ function renderWorkspace() {
       $('accept-questions').disabled = preview.stale || !previewEdits.questions.some(q => q.selected);
       if (preview.stale) $('preview-retry').hidden = false;
     }
-    update('retry', [!!state.preview, pending, state.error], () => !state.preview && !pending && /saved question context changed/.test(state.error) ? button('Refresh saved journey & generate again', async () => {
-      if (await api('refresh-answer') && current()) await api('questions', { nodeId: node.id });
+    update('retry', [!!state.preview, pending, state.error, state.questionRetry], () => !state.preview && !pending && /saved question context changed/.test(state.error) ? button('Refresh saved journey & generate again', async () => {
+      const retry = state.questionRetry;
+      if (!await api('refresh-answer') || !current()) return;
+      if (retry?.purpose === 'adr-questions') openAdrQuestions();
+      else await api('questions', { nodeId: retry?.nodeId ?? node.id });
     }, { id: 'refresh-question-context' }) : null);
     update('research', node.research ?? null, () => {
       if (root || !isQuestion(node)) return;
@@ -2419,7 +2427,7 @@ function renderQuestionFeedback() {
 function renderQuestionPreview() {
   const batch = state.preview, edits = previewEdits.questions;
   const section = el('section', { id: 'question-preview', class: 'question-preview', 'aria-labelledby': 'preview-title' },
-    el('h3', { id: 'preview-title' }, batch.purpose === 'question-regeneration' ? 'Review new follow-up questions' : 'Review suggested questions'),
+    el('h3', { id: 'preview-title' }, batch.purpose === 'adr-questions' ? 'Review ADR questions' : batch.purpose === 'question-regeneration' ? 'Review new follow-up questions' : 'Review suggested questions'),
     el('p', { class: 'quiet' }, 'Not saved. Select questions and optionally adjust their wording. Closing or restarting this canvas discards this preview.'));
   const stale = el('p', { id: 'preview-stale', class: 'notice' }, 'Saved context changed. Dismiss and generate again.'); stale.hidden = !batch.stale; section.append(stale);
   edits.forEach((edit, index) => {
@@ -2454,13 +2462,18 @@ function renderQuestionPreview() {
   const retry = button('Dismiss, refresh & generate again', async () => {
     if (!await api('dismiss-questions', { batchId: batch.id })) return;
     if (await api('refresh-answer')) {
-      if (batch.purpose === 'question-regeneration') {
+      if (batch.purpose === 'adr-questions') openAdrQuestions();
+      else if (batch.purpose === 'question-regeneration') {
         if (state.document.nodes.some(n => n.id === batch.nodeId)) openResearchReview(batch.nodeId, undefined, batch.purpose);
         else notice('The corrected question is no longer saved. Select another question to review.');
       } else await api('questions', { nodeId: state.document.nodes.some(n => n.id === batch.nodeId) ? batch.nodeId : state.document.rootId });
     }
   }, { id: 'preview-retry' }); retry.hidden = !batch.stale; section.append(retry);
   if (batch.purpose === 'question-regeneration') { retry.textContent = 'Dismiss, refresh & review context'; section.prepend(el('p', { class: 'quiet' }, 'These are new candidates. Existing questions remain saved; accepting adds selected candidates without replacing old branches.')); }
+  if (batch.purpose === 'adr-questions') {
+    retry.textContent = 'Dismiss, refresh & review ADR context';
+    section.prepend(el('p', { class: 'quiet' }, batch.questions.length ? 'Optional questions about missing ADR reasoning. Accepting adds questions below the saved focal decision; your answers and decision rationale remain yours.' : 'The AI found no material gaps in the supplied context. This is not a readiness judgment or approval of an ADR. No questions were added.'));
+  }
   return section;
 }
 function openResearchReview(nodeId, followup, purpose) {
@@ -3294,6 +3307,58 @@ $('file').addEventListener('change', async () => {
   try { const document = JSON.parse(await file.text()); await switchJourney('import', { document }); }
   catch (error) { notice(`Could not open that file: ${error.message}`); }
 });
+let adrQuestionsEpoch = 0, adrQuestionsStarting = false;
+const adrQuestionReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: renderAdrQuestions });
+function renderAdrQuestions() {
+  const value = adrQuestionReview.value, context = value?.prepared.context;
+  $('adr-questions-start').disabled = adrQuestionsStarting || busy || !!state.pending || !!state.preview || adrQuestionReview.loading || !value || Date.now() >= value.expiresAt;
+  $('adr-questions-refresh').disabled = adrQuestionsStarting || adrQuestionReview.loading || !!state.pending || !!state.preview;
+  $('adr-questions-preview').hidden = !value;
+  const texts = {
+    'adr-questions-status': adrQuestionsStarting ? 'Processing request…' : adrQuestionReview.error || (adrQuestionReview.loading ? 'Preparing exact saved ADR input…' : value ? `${value.prepared.coverage.included} selected records; ${value.prepared.coverage.omitted} omitted. ${value.prepared.bytes}/${value.prepared.limit} UTF-8 bytes. Review before generating optional questions.` : 'Refresh saved context to prepare a new review.'),
+    'adr-questions-summary': context ? `Focal question: ${context.records.find(node => node.id === context.focalId)?.question}. Template sections: ${context.format.sections.map(section => section.label).join(', ')}. The AI will check drivers, options, rejection reasons, outcome reasons, consequences and revisit conditions.` : '',
+    'adr-questions-input': value ? `${value.prepared.instructions}\n\n${value.prepared.prompt}` : '',
+  };
+  for (const [id, value] of Object.entries(texts)) if ($(id).textContent !== value) $(id).textContent = value;
+}
+function invalidateAdrQuestions(message) { adrQuestionReview.close(); adrQuestionReview.error = message; renderAdrQuestions(); }
+function closeAdrQuestions(focus = false) {
+  adrQuestionsEpoch++; adrQuestionsStarting = false; adrQuestionReview.close();
+  if ($('adr-questions-dialog').open) $('adr-questions-dialog').close();
+  if (focus) $('adr-questions-open').focus();
+}
+function prepareAdrQuestionsReview() {
+  adrQuestionReview.open({ purpose: 'adr-questions', journey: state.activeKey ?? state.document.id, nodeId: state.document.rootId });
+}
+function openAdrQuestions() {
+  if (!state.document || suspended || !switchAllowed('reviewing ADR questions')) return;
+  voice.cancel(); closeAdrQuestions(); $('adr-questions-dialog').showModal(); prepareAdrQuestionsReview(); $('adr-questions-close').focus();
+}
+$('adr-questions-open').addEventListener('click', openAdrQuestions);
+$('adr-questions-close').addEventListener('click', () => closeAdrQuestions(true));
+$('adr-questions-dialog').addEventListener('cancel', event => { event.preventDefault(); closeAdrQuestions(true); });
+$('adr-questions-dialog').addEventListener('close', () => { if (adrQuestionReview.context) closeAdrQuestions(); });
+$('adr-questions-refresh').addEventListener('click', async () => {
+  if (adrQuestionsStarting || adrQuestionReview.loading || !$('adr-questions-dialog').open) return;
+  const epoch = adrQuestionsEpoch; adrQuestionsStarting = true; renderAdrQuestions();
+  const result = await api('refresh-answer');
+  if (epoch !== adrQuestionsEpoch) return;
+  adrQuestionsStarting = false;
+  if (result) prepareAdrQuestionsReview(); else invalidateAdrQuestions($('notice').textContent || 'Refresh saved context before reviewing again.');
+});
+$('adr-questions-start').addEventListener('click', async () => {
+  const value = adrQuestionReview.value, epoch = adrQuestionsEpoch, sequence = adrQuestionReview.sequence;
+  if (!value || adrQuestionsStarting || adrQuestionReview.loading || busy || closed || suspended || state.pending || state.preview || !$('adr-questions-dialog').open) return;
+  if (Date.now() >= value.expiresAt) return invalidateAdrQuestions('This review expired. Refresh and review before generating.');
+  adrQuestionsStarting = true; renderAdrQuestions();
+  const result = await api('adr-questions', { journey: value.journey, nodeId: value.nodeId, token: value.token });
+  if (epoch !== adrQuestionsEpoch) return;
+  adrQuestionsStarting = false;
+  if (sequence !== adrQuestionReview.sequence) return renderAdrQuestions();
+  if (result) { closeAdrQuestions(); $('cancel-request')?.focus({ preventScroll: true }); }
+  else invalidateAdrQuestions($('notice').textContent || 'Refresh and review before generating again.');
+});
+
 let adrFormat = null;
 const adrFormatCurrent = f => !!f && adrFormat === f && !closed && !suspended && f.page === pageEpoch && f.journey === (state.activeKey ?? state.document?.id) && $('adr-format-dialog').open;
 function adrFormatControls() {
@@ -3935,6 +4000,7 @@ window.addEventListener('pagehide', event => {
   closeCheck();
   closeAdrScope();
   closeAdrFormat();
+  closeAdrQuestions();
   questionHelp.dispose();
   void draftClient.flush(true).catch(() => {});
   if (event.persisted) return;

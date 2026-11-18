@@ -1,5 +1,7 @@
 # Generated-question review
 
+The explicit [ADR questions](adr-questions.md) operation uses this same flow with zero to three candidates anchored at its saved focal question. An empty ADR result is dismissible advice, never approval or a map change. Ordinary generation still requires one to six candidates. ADR source checks additionally fingerprint the entire saved map, including scope and format preferences.
+
 Question callbacks stage a temporary proposal. The user accepts selected questions, optionally changing their wording, or dismisses the batch at its parent node. A legacy `{requestId, questions:[{question,category}]}` callback has exactly the same staging behavior. There is no callback that commits proposed nodes.
 
 ## Ownership and lifetime

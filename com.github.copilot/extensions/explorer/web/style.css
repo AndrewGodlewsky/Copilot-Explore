@@ -165,6 +165,8 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #adr-scope-dialog select { width: 100%; max-width: 100%; min-width: 0; }
 #adr-scope-dialog fieldset { min-width: 0; }
 #adr-format-dialog { overflow-wrap: anywhere; }
+#adr-questions-dialog { overflow-wrap: anywhere; }
+#adr-questions-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; }
 #adr-format-dialog input, #adr-format-dialog select { width: 100%; max-width: 100%; min-width: 0; }
 #adr-format-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; }
 

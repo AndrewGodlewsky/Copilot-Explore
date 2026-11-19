@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.104.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.105.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 
 **Usage dashboard** compares current maps, saved answer states and structure, newly observed canvas visits/committed question growth, and retained owned-helper outcomes and usage. UTC date filters apply to observations and receipts, not current stock. Scans are bounded and explicitly refreshed; missing usage and incomplete coverage stay visible. It preserves your editor and drafts. See [metric definitions, inventory, privacy and retention](docs/usage-dashboard.md).
 
@@ -124,6 +124,8 @@ Local marketplace installs can show a generic native tab icon due to a host issu
 While creating a journey, open **Add exploration guidance** to choose a mode or enter an objective and success criteria. **Understand** maps concepts and unknowns; **Decide** compares choices and tradeoffs; **Design** explores outcomes and feasibility; **Diagnose** investigates symptoms and causes; **Challenge** tests assumptions and failure conditions. Understand is the default. Open **Journey details** above an existing map and use **Edit guidance** to change these settings. Mode guides future questions and isolated research; earlier answers, research and explanations stay intact. Objective and success criteria remain separate inputs. Cancel pending Copilot work before editing guidance, and dismiss an old question preview before accepting new suggestions.
 
 **File** holds Library, import, recovery, exports and Finish. **Tools** holds decision helpers and the Usage dashboard. The **Settings** gear opens Voice, Map and motion, Keyboard, and Local data and diagnostics from any view. **Journey details** holds guidance, mode, progress and AI context controls. Within a question, the answer, compact Record control, **Save & continue** and **More options** stay up front. More options opens a full-width drawer below the map with **Explore**, **Research**, **Answer details** and **Context** tabs. Expand the drawer for more room. It remembers drafts and your place; Escape closes it without closing the question. See the [card workspace design and experience checks](docs/card-workspace.md).
+
+The proposed Research redesign has an [offline interactive prototype](docs/prototypes/research-workspace.html) and [interaction specification](docs/research-workspace-design.md) for owner review. It covers concise alternatives, context review, comparison, follow-ups and answer drafting. The production redesign and internet-access policy remain pending their separate reviews.
 
 1. Use `/explore` to open your library, or `/explore <idea>` to start a journey. Search saved topics, pin favorites, or show archived journeys. **Open** continues a journey in the current chat; **New exploration** starts another without replacing the saved map. Copilot creates questions in several directions around a new idea.
 2. Select a question in the map or searchable **Outline**. The node expands in its branch for writing; research and follow-up controls are in its screen-level drawer.
@@ -335,7 +337,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.104, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.104**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.105, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.105**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Settings > Map and motion** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

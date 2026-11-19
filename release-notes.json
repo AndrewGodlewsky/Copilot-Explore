@@ -1,5 +1,9 @@
 [
   {
+      "version":  "0.1.105",
+      "summary":  "Add an offline Research workspace prototype and interaction specification covering context review, concise answer options, comparisons, follow-ups and explicit draft actions. The design is ready for owner feedback; native usability and the separate internet-access policy remain pending review."
+  },
+  {
       "version":  "0.1.104",
       "summary":  "Create editable Markdown summaries from two retained saved versions or a chosen local Git revision and the current saved exploration. Review questions, decisions, uncertainty, dependencies, scenario lineage and linked ADR changes. Copy or download after source checks; private drafts and project excerpts stay excluded."
   },

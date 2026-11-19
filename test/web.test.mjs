@@ -2271,6 +2271,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   if (adrScopeDialog) { adrScopeDialog.showModal = () => { adrScopeDialog.open = true; }; adrScopeDialog.close = () => { adrScopeDialog.open = false; }; }
   const adrFormatDialog = document.getElementById('adr-format-dialog');
   const adrFileDialog = document.getElementById('adr-file-dialog');
+  const adrLifecycleDialog = document.getElementById('adr-lifecycle-dialog');
+  if (adrLifecycleDialog) { adrLifecycleDialog.showModal = () => { adrLifecycleDialog.open = true; }; adrLifecycleDialog.close = () => { adrLifecycleDialog.open = false; }; }
   if (adrFileDialog) { adrFileDialog.showModal = () => { adrFileDialog.open = true; }; adrFileDialog.close = () => { adrFileDialog.open = false; }; }
   if (adrFormatDialog) { adrFormatDialog.showModal = () => { adrFormatDialog.open = true; }; adrFormatDialog.close = () => { adrFormatDialog.open = false; }; }
   const adrQuestionsDialog = document.getElementById('adr-questions-dialog');
@@ -6149,6 +6151,70 @@ test('ADR file UI rediscovers a completed save after its response is lost and th
   f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-file' && JSON.parse(options.body).action === 'save') await new Promise(resolve => { release = resolve; }); return response; };
   $('adr-file-save').click(); await until(() => release, 'saved response held'); $('adr-file-close').click(); release(); f.window.fetch = fetch; await delay(30); await f.poll(); await f.openFile();
   assert.match($('adr-file-status').textContent, /file and exploration association are saved/); assert.equal(f.explorer.doc.adrFiles.length, 1); assert.equal($('adr-file-save').disabled, true);
+});
+
+async function adrLifecycleFixture(t) {
+  const f = await adrFileFixture(t), e = f.explorer, journey = e.activeKey ?? e.doc.id;
+  const p = await e.adrFileRequest({ action: 'prepare', journey, clientId: randomUUID(), sequence: 1, selection: { kind: 'new', number: 1 } });
+  assert.equal((await e.adrFileRequest({ action: 'save', journey, token: p.token, revision: e.doc.revision })).recovery.phase, 'complete'); await f.poll();
+  const openLifecycle = async () => { assert.ok(f.$('adr-lifecycle-open')); await uiResponse(f, 'api/adr-lifecycle', 'status', () => f.$('adr-lifecycle-open').click()); await until(() => !f.$('adr-lifecycle-refresh').disabled, 'lifecycle loaded'); };
+  const reviewLifecycle = async kind => { f.$('adr-lifecycle-kind').value = kind; f.$('adr-lifecycle-kind').dispatchEvent(new f.window.Event('change')); f.$('adr-lifecycle-review').click(); await until(() => !f.$('adr-lifecycle-save').disabled, 'lifecycle reviewed'); };
+  const saveLifecycle = async () => { f.$('adr-lifecycle-save').click(); await until(() => /history are saved/.test(f.$('adr-lifecycle-status').textContent) && !f.$('adr-lifecycle-refresh').disabled, 'lifecycle saved'); };
+  return { ...f, openLifecycle, reviewLifecycle, saveLifecycle };
+}
+
+test('ADR lifecycle UI explicitly accepts and deprecates without a draft, preserving literal reasoning and private editor state', async t => {
+  const f = await adrLifecycleFixture(t), $ = f.$, original = structuredClone(f.explorer.doc.adrFiles[0]); assert.equal(original.status, 'proposed');
+  const doc = structuredClone(f.explorer.doc); delete doc.adrDraft; await f.explorer.save(doc); await f.poll(); await f.openLifecycle();
+  assert.match($('adr-lifecycle-selection').selectedOptions[0].textContent, /proposed/); assert.equal($('adr-lifecycle-kind').querySelector('[value="successor"]').disabled, true);
+  await f.reviewLifecycle('accept'); assert.match($('adr-lifecycle-preview').textContent, /proposed.*accepted/); assert.equal($('adr-lifecycle-preview').querySelector('pre').textContent, await readFile(join(f.root, original.path), 'utf8')); assert.equal($('adr-lifecycle-preview').querySelector('script'), null);
+  assert.equal($('adr-lifecycle-preview').querySelectorAll('pre').length, 2); assert.equal(f.explorer.doc.adrFiles[0].status, 'proposed'); await f.saveLifecycle();
+  assert.equal(f.explorer.doc.adrFiles[0].status, 'accepted'); assert.match($('adr-lifecycle-history').textContent, /accepted/); assert.equal($('adr-lifecycle-kind').querySelector('[value="accept"]').disabled, true);
+  await f.reviewLifecycle('deprecate'); await f.saveLifecycle(); assert.equal(f.explorer.doc.adrFiles[0].status, 'deprecated');
+  $('adr-lifecycle-close').click(); assert.equal($('answer'), f.editor); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ'); assert.equal(f.editor.selectionStart, 2); assert.equal(f.editor.selectionEnd, 7);
+  await f.openFile(); $('adr-file-selection').value = original.id; $('adr-file-selection').dispatchEvent(new f.window.Event('change'));
+  assert.match($('adr-file-selection').selectedOptions[0].textContent, /deprecated/); assert.equal($('adr-file-review').disabled, true); assert.equal($('adr-file-sources').disabled, false);
+});
+
+test('ADR lifecycle UI previews both successor files and requires separate acceptance to supersede', async t => {
+  const f = await adrLifecycleFixture(t), $ = f.$; await f.openLifecycle(); await f.reviewLifecycle('accept'); await f.saveLifecycle();
+  f.type('adr-lifecycle-number', '2'); await f.reviewLifecycle('successor'); assert.equal($('adr-lifecycle-preview').querySelectorAll('[data-lifecycle-file]').length, 2);
+  assert.match($('adr-lifecycle-preview').textContent, /proposed/); assert.match($('adr-lifecycle-preview').textContent, /accepted.*accepted/); await f.saveLifecycle();
+  assert.deepEqual(f.explorer.doc.adrFiles.map(record => record.status), ['accepted', 'proposed']); const child = f.explorer.doc.adrFiles[1];
+  $('adr-lifecycle-selection').value = child.id; $('adr-lifecycle-selection').dispatchEvent(new f.window.Event('change')); await f.reviewLifecycle('accept');
+  assert.match($('adr-lifecycle-preview').textContent, /accepted.*superseded/); await f.saveLifecycle(); assert.deepEqual(f.explorer.doc.adrFiles.map(record => record.status), ['superseded', 'accepted']);
+  $('adr-lifecycle-selection').value = f.explorer.doc.adrFiles[0].id; $('adr-lifecycle-selection').dispatchEvent(new f.window.Event('change'));
+  assert.equal($('adr-lifecycle-review').disabled, true); assert.match($('adr-lifecycle-history').textContent, /superseded/);
+});
+
+test('ADR lifecycle UI rediscovers partial publication and explicitly reconciles each saved file after reopen', async t => {
+  const f = await adrLifecycleFixture(t), $ = f.$; await f.openLifecycle(); await f.reviewLifecycle('accept'); await f.saveLifecycle(); f.type('adr-lifecycle-number', '2'); await f.reviewLifecycle('successor');
+  const store = await f.explorer.adrLifecycle.storage(f.explorer); store.fault = async (phase, _, index) => { if (phase === 'after-file' && index === 0) throw Error('Paused after successor'); };
+  $('adr-lifecycle-save').click(); await until(() => !$('adr-lifecycle-retry').hidden && !$('adr-lifecycle-retry').disabled, 'lifecycle partial recovery');
+  assert.match($('adr-lifecycle-recovery').textContent, /0002.*saved/); assert.match($('adr-lifecycle-recovery').textContent, /0001.*not saved/); assert.match($('adr-lifecycle-status').textContent, /association: not saved/i); assert.equal($('adr-lifecycle-discard').hidden, true);
+  $('adr-lifecycle-close').click(); await f.openLifecycle(); assert.equal($('adr-lifecycle-retry').hidden, false); store.fault = async () => {};
+  $('adr-lifecycle-retry').click(); await until(() => /history are saved/.test($('adr-lifecycle-status').textContent), 'lifecycle recovery done');
+  assert.equal(f.explorer.doc.adrFiles.length, 2); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ');
+});
+
+for (const action of ['prepare', 'status']) for (const leave of ['hide', 'source', 'switch', 'suspend']) test(`ADR lifecycle UI ignores late ${action} after ${leave}`, async t => {
+  const f = await adrLifecycleFixture(t), $ = f.$; await f.openLifecycle(); const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-lifecycle' && JSON.parse(options.body).action === action) await new Promise(resolve => { release = resolve; }); return response; };
+  $(action === 'prepare' ? 'adr-lifecycle-review' : 'adr-lifecycle-refresh').click(); await until(() => release, 'lifecycle reply held');
+  if (leave === 'hide') $('adr-lifecycle-close').click();
+  else if (leave === 'switch') { const next = structuredClone(f.explorer.snapshot()); next.document = createDocument('Another map'); f.window.__updates.apply(next); }
+  else if (leave === 'suspend') f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  else { const doc = structuredClone(f.explorer.doc); doc.nodes[1].answer += ' correction'; await f.explorer.save(doc); f.window.__updates.apply(f.explorer.snapshot()); }
+  release(); f.window.fetch = fetch; await delay(30); assert.equal($('adr-lifecycle-save').disabled, true); assert.equal($('adr-lifecycle-preview').hidden, true); assert.equal(f.explorer.doc.adrFiles[0].status, 'proposed');
+});
+
+test('ADR lifecycle UI invalidates changed selections and rediscovers a saved operation after a lost response', async t => {
+  const f = await adrLifecycleFixture(t), $ = f.$; await f.openLifecycle(); await f.reviewLifecycle('accept');
+  $('adr-lifecycle-kind').value = 'deprecate'; $('adr-lifecycle-kind').dispatchEvent(new f.window.Event('change')); assert.equal($('adr-lifecycle-save').disabled, true); assert.equal($('adr-lifecycle-preview').hidden, true);
+  await f.reviewLifecycle('accept'); const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-lifecycle' && JSON.parse(options.body).action === 'save') await new Promise(resolve => { release = resolve; }); return response; };
+  $('adr-lifecycle-save').click(); await until(() => release, 'lifecycle saved reply held'); $('adr-lifecycle-close').click(); release(); f.window.fetch = fetch; await delay(30); await f.poll(); await f.openLifecycle();
+  assert.match($('adr-lifecycle-status').textContent, /history are saved/); assert.equal(f.explorer.doc.adrFiles[0].status, 'accepted'); assert.equal($('adr-lifecycle-save').disabled, true);
 });
 
 async function adrFormatFixture(t) {

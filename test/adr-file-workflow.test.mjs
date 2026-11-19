@@ -177,7 +177,7 @@ test('ADR reconciliation rejects conflicting association changes without replaci
 test('ADR association history-finalization failure reports the durable record and retry creates no duplicate', async t => {
   const f = await fixture(t), p = await f.prepare(), history = await f.e.history(f.journey); let manifests = 0;
   history.write = async (path, bytes) => { if (path.endsWith('manifest.json') && ++manifests === 2) throw Error('Injected final history failure'); await atomicWrite(path, bytes); };
-  const result = await f.save(p); assert.equal(result.recovery.phase, 'complete'); assert.match(result.error, /history|final/i); assert.equal(f.e.doc.adrFiles.length, 1);
+  const result = await f.save(p); assert.equal(result.recovery.phase, 'completion-pending'); assert.equal(result.recovery.canReconcile, true); assert.match(result.error, /history|final/i); assert.equal(f.e.doc.adrFiles.length, 1);
   const revision = f.e.doc.revision; history.write = atomicWrite;
   const retry = await f.request({ action: 'reconcile', operationId: result.recovery.id, revision }); assert.equal(retry.recovery.phase, 'complete'); assert.equal(f.e.doc.revision, revision); assert.equal(f.e.doc.adrFiles.length, 1);
 });

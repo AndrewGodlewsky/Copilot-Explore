@@ -8,7 +8,7 @@ Captures describe historical inputs, not verified truth or decision approval. Re
 
 ## Inspecting current sources
 
-Open **Tools > Save ADR file**, select a recorded proposed ADR, then **Inspect captured sources**. The view separates the captured text from current source status. Choose a captured question to read its original answer/state and recorded research. Expand guidance, capture identity/location, or statement mappings as needed.
+Open **Tools > Save ADR file**, select a recorded ADR of any status, then **Inspect captured sources**. The view separates the captured text from current source status. Choose a captured question to read its original answer/state and recorded research. Expand guidance, capture identity/location, or statement mappings as needed.
 
 ADR file requests allow up to 60 seconds for bounded local Git and filesystem checks. Closing the dialog still invalidates an unconfirmed preview. If a confirmed save times out, refresh its recovery status before retrying; a timeout does not prove that nothing saved.
 

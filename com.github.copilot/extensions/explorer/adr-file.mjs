@@ -5,10 +5,11 @@ import { renderAdr } from './adr-format.mjs';
 import { validateProjectPaths } from './project-context.mjs';
 import { scenarioMarkdown } from './scenario-export.mjs';
 import { validateAdrSources, adrSourcesMarkdown } from './adr-sources.mjs';
+import { validateAdrLifecycle, validateAdrRelationships } from './adr-lifecycle.mjs';
 
 export const ADR_FILE_LIMIT = 65536;
 const keys = (v, names) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join(',') === names.split(',').sort().join(',');
-const invalid = () => { throw Error('Invalid ADR file reference. Check its proposed status, relative Markdown path and bounded metadata.'); };
+const invalid = () => { throw Error('Invalid ADR file reference. Check its decision status, relative Markdown path and bounded metadata.'); };
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const id = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
@@ -33,27 +34,34 @@ export function adrFileMarkdown(value, managedId, scenario = null, sources = nul
   return output;
 }
 export function validateAdrFile(value) {
-  if (!keys(value, 'version,id,path,title,status,sha256,artifactDigest,readinessDigest,writtenAt' + (Object.hasOwn(value ?? {}, 'sources') ? ',sources' : '')) || value.version !== 1 || !id(value.id) || value.status !== 'proposed' ||
+  if (!keys(value, 'version,id,path,title,status,sha256,artifactDigest,readinessDigest,writtenAt' + (Object.hasOwn(value ?? {}, 'sources') ? ',sources' : '') + (Object.hasOwn(value ?? {}, 'lifecycle') ? ',lifecycle' : '')) || value.version !== 1 || !id(value.id) || !['proposed', 'accepted', 'deprecated', 'superseded'].includes(value.status) || value.status !== 'proposed' && !Object.hasOwn(value, 'lifecycle') ||
       typeof value.title !== 'string' || !value.title.trim() || value.title.length > 200 || !value.title.isWellFormed() || /[\x00-\x1f\x7f]/.test(value.title) ||
       !digest(value.sha256) || !digest(value.artifactDigest) || !digest(value.readinessDigest) || typeof value.writtenAt !== 'string' || value.writtenAt.length > 40 || !Number.isFinite(Date.parse(value.writtenAt))) invalid();
-  return { version: 1, id: value.id, path: adrFilePath(value.path), title: value.title, status: 'proposed', sha256: value.sha256, artifactDigest: value.artifactDigest, readinessDigest: value.readinessDigest, writtenAt: value.writtenAt, ...(Object.hasOwn(value, 'sources') ? { sources: validateAdrSources(value.sources) } : {}) };
+  return { version: 1, id: value.id, path: adrFilePath(value.path), title: value.title, status: value.status, sha256: value.sha256, artifactDigest: value.artifactDigest, readinessDigest: value.readinessDigest, writtenAt: value.writtenAt, ...(Object.hasOwn(value, 'sources') ? { sources: validateAdrSources(value.sources) } : {}), ...(Object.hasOwn(value, 'lifecycle') ? { lifecycle: validateAdrLifecycle(value.lifecycle, value.status) } : {}) };
 }
 export function validateAdrFiles(value) {
   if (!Array.isArray(value) || value.length > 50) invalid();
   const records = value.map(validateAdrFile);
   if (new Set(records.map(record => record.id)).size !== records.length || new Set(records.map(record => record.path.toLowerCase())).size !== records.length) invalid();
-  return records;
+  return validateAdrRelationships(records);
 }
 export function associateAdrFile(existing, value, expected = null) {
-  const records = validateAdrFiles(existing ?? []), record = validateAdrFile(value), base = expected === null ? null : validateAdrFile(expected);
+  return associateAdrBatch(existing, [{ record: value, base: expected }]);
+}
+export function associateAdrBatch(existing, pairs) {
+  if (!Array.isArray(pairs) || !pairs.length || pairs.length > 2 || pairs.some(pair => !keys(pair, 'record,base'))) invalid();
+  const records = validateAdrFiles(existing ?? []), seen = new Set();
   const conflict = () => { throw Error('ADR association changed or conflicts with another path. Refresh and review; existing references are preserved.'); };
-  if (base && (base.id !== record.id || base.path !== record.path)) conflict();
-  const index = records.findIndex(item => item.id === record.id);
-  if (index >= 0) {
-    if (equal(records[index], record)) return records;
-    if (!base || !equal(records[index], base)) conflict();
-    records[index] = record;
-  } else { if (base) conflict(); records.push(record); }
+  for (const pair of pairs) {
+    const record = validateAdrFile(pair.record), base = pair.base === null ? null : validateAdrFile(pair.base);
+    if (seen.has(record.id) || base && (base.id !== record.id || base.path !== record.path)) conflict(); seen.add(record.id);
+    const index = records.findIndex(item => item.id === record.id);
+    if (index >= 0) {
+      if (equal(records[index], record)) continue;
+      if (!base || !equal(records[index], base)) conflict();
+      records[index] = record;
+    } else { if (base) conflict(); records.push(record); }
+  }
   if (new Set(records.map(item => item.path.toLowerCase())).size !== records.length) conflict();
   return validateAdrFiles(records);
 }

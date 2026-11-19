@@ -1,6 +1,6 @@
 import { open, lstat, realpath, mkdir, link, rename, unlink } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { join, dirname, resolve, relative, sep, isAbsolute } from 'node:path';
+import { constants, lstatSync, realpathSync } from 'node:fs';
+import { join, dirname, resolve, relative, sep, isAbsolute, parse } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ProjectContext } from './project-context.mjs';
 import { directoryState, projectDocumentAccess } from './storage-context.mjs';
@@ -28,16 +28,17 @@ function targetValue(value) {
   return structuredClone(value);
 }
 function validateIntent(value) {
-  if (!keys(value, 'version,id,target,content,record,base,sourceDigest,journeyId,createdAt,stage,abandoned') || value.version !== 1 || typeof value.abandoned !== 'boolean') invalid();
+  if (!keys(value, 'version,id,target,content,record,base,sourceDigest,journeyId,createdAt,stage,abandoned' + (Object.hasOwn(value ?? {}, 'completed') ? ',completed' : '') + (Object.hasOwn(value ?? {}, 'completionRequired') ? ',completionRequired' : '')) || value.version !== 1 || typeof value.abandoned !== 'boolean' || Object.hasOwn(value, 'completed') && (value.completed !== true || value.abandoned || value.stage === null) || Object.hasOwn(value, 'completionRequired') && value.completionRequired !== true) invalid();
   adrFileMarker(value.id); const target = targetValue(value.target), record = validateAdrFile(value.record), base = value.base === null ? null : validateAdrFile(value.base);
   if (typeof value.content !== 'string' || !value.content.isWellFormed() || Buffer.byteLength(value.content) > ADR_FILE_LIMIT || !value.content.endsWith(adrFileMarker(record.id) + '\n') || adrBytesDigest(value.content) !== record.sha256 || record.path !== target.path || !digest(value.sourceDigest) ||
       typeof value.journeyId !== 'string' || !value.journeyId.trim() || value.journeyId.length > 100 || typeof value.createdAt !== 'string' || value.createdAt.length > 40 || !Number.isFinite(Date.parse(value.createdAt))) invalid();
   if (base ? !target.base || base.id !== record.id || base.path !== record.path || base.sha256 !== target.base.sha256 || base.id !== target.base.id : target.base !== null) invalid();
   if (value.stage !== null && (!keys(value.stage, 'name,identity') || typeof value.stage.name !== 'string' || !/^\.explorer-adr-[a-f0-9-]{36}\.tmp$/.test(value.stage.name) || !identity(value.stage.identity))) invalid();
-  const result = { version: 1, id: value.id, target, content: value.content, record, base, sourceDigest: value.sourceDigest, journeyId: value.journeyId, createdAt: value.createdAt, stage: structuredClone(value.stage), abandoned: value.abandoned };
+  const result = { version: 1, id: value.id, target, content: value.content, record, base, sourceDigest: value.sourceDigest, journeyId: value.journeyId, createdAt: value.createdAt, stage: structuredClone(value.stage), abandoned: value.abandoned, ...(value.completed ? { completed: true } : {}), ...(value.completionRequired ? { completionRequired: true } : {}) };
   if (Buffer.byteLength(JSON.stringify(result)) > JOURNAL_LIMIT) throw Error('ADR write journal exceeds its 256 KiB limit.');
   return result;
 }
+export { validateIntent as validateAdrWriteIntent };
 
 /** Caller owns the exploration lock. This service never commits an association or infers project authority from a journal path. */
 export class AdrFileStorage {
@@ -120,13 +121,37 @@ export class AdrFileStorage {
   }
   async begin(value, previousId = null) {
     if (!keys(value, 'target,content,record,base,sourceDigest,journeyId')) invalid();
-    return this.writeIntent({ ...value, version: 1, id: randomUUID(), createdAt: new Date().toISOString(), stage: null, abandoned: false }, previousId);
+    return this.writeIntent({ ...value, version: 1, id: randomUUID(), createdAt: new Date().toISOString(), stage: null, abandoned: false, completionRequired: true }, previousId);
   }
   stagePath(intent) { return join(dirname(join(intent.target.root.path, intent.target.path)), intent.stage.name); }
   async stageData(intent, links = 1) {
     const data = await this.fileData(intent.target, this.stagePath(intent), links);
     if (data.identity !== intent.stage.identity || data.sha256 !== intent.record.sha256) changed();
     return data;
+  }
+  publicationSnapshot(intent, staged) {
+    // No awaits after the final source guard: catch edits made during it without
+    // reopening the inverse late-source gap. The OS rename still is not a CAS.
+    const target = intent.target, directoryIdentity = directory => {
+      let path = parse(directory).root; const ancestors = [];
+      for (const part of ['', ...relative(path, directory).split(sep).filter(Boolean)]) {
+        path = join(path, part); const entry = lstatSync(path, { bigint: true });
+        if (!entry.isDirectory() || entry.isSymbolicLink() || entry.ino <= 0n || entry.dev < 0n) changed();
+        ancestors.push(physical(entry));
+      }
+      if (comparable(realpathSync(directory)) !== comparable(directory)) changed();
+      return ancestors.join('/');
+    };
+    if (directoryIdentity(target.root.path) !== target.root.ancestors) changed();
+    let parent = target.root.path;
+    for (const [index, part] of target.path.split('/').slice(0, -1).entries()) {
+      parent = join(parent, part); if (directoryIdentity(parent) !== target.parents[index]) changed();
+    }
+    const stage = lstatSync(this.stagePath(intent), { bigint: true });
+    if (!stage.isFile() || stage.isSymbolicLink() || stamp(stage) !== staged.stamp) changed();
+    let destination;
+    try { destination = lstatSync(join(target.root.path, target.path), { bigint: true }); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (target.base ? !destination || !destination.isFile() || destination.isSymbolicLink() || stamp(destination) !== target.base.stamp : !!destination) changed();
   }
   async inspectIntent(intent) {
     const target = intent.target; await this.assertTarget(target); const file = join(target.root.path, target.path);
@@ -170,26 +195,43 @@ export class AdrFileStorage {
   }
   async abandon(id) {
     let intent = await this.readIntent(); if (!intent || intent.id !== id) throw Error('ADR operation is unavailable. Refresh recovery.');
+    if (intent.completed) throw Error('This completed ADR operation is historical and cannot be abandoned.');
     return this.withTargetLock(intent, async () => {
       intent = await this.readIntent(); if (!intent || intent.id !== id) throw Error('ADR operation changed. Refresh recovery.');
+      if (intent.completed) throw Error('This completed ADR operation is historical and cannot be abandoned.');
       if ((await this.inspectIntent(intent)).publication !== 'unpublished') throw Error('The ADR file is already published. Reconcile its association; it cannot be abandoned or deleted here.');
       await this.cleanupStage(intent); return this.writeIntent({ ...intent, abandoned: true, stage: null }, id);
     });
   }
+  async complete(id, guard) {
+    if (typeof guard !== 'function') invalid();
+    let intent = await this.readIntent(); if (!intent || intent.id !== id) throw Error('ADR operation is unavailable. Refresh recovery.');
+    if (intent.completed) return intent;
+    return this.withTargetLock(intent, async () => {
+      intent = await this.readIntent(); if (!intent || intent.id !== id) throw Error('ADR operation changed. Refresh recovery.');
+      if (intent.completed) return intent;
+      const status = await this.inspectIntent(intent);
+      if (intent.abandoned || status.publication !== 'published' || status.cleanupRequired) throw Error('Complete ADR publication and cleanup before recording its completion.');
+      await guard(intent);
+      return this.writeIntent({ ...intent, completed: true }, id);
+    });
+  }
   async publish(id, guard = async () => {}) {
     let intent = await this.readIntent(); if (!intent || intent.id !== id) throw Error('ADR write operation is unavailable. Refresh its recovery status.');
+    if (intent.completed) throw Error('This completed ADR operation is historical and cannot be published again.');
     return this.withTargetLock(intent, async () => {
       const current = await this.readIntent(); if (!current || current.id !== id) throw Error('ADR write operation changed. Refresh recovery.'); intent = current;
-      if (intent.abandoned) throw Error('This ADR operation was abandoned. Review a new write.');
+      if (intent.abandoned || intent.completed) throw Error('This ADR operation was abandoned or completed. Review a new write.');
       let status = await this.inspectIntent(intent);
       if (status.publication !== 'published') {
         await this.assertTarget(intent.target);
         const parents = await this.parents(intent.target.root, intent.target.path, true); await this.assertTarget(intent.target);
         intent = await this.writeIntent({ ...intent, target: { ...intent.target, parents } }, id);
         intent = await this.stage(intent); await this.fault('before-publish', intent); await guard(intent);
-        status = await this.inspectIntent(intent); await this.stageData(intent);
+        status = await this.inspectIntent(intent); const staged = await this.stageData(intent);
         if (status.publication !== 'published') {
           await guard(intent);
+          this.publicationSnapshot(intent, staged);
           const destination = join(intent.target.root.path, intent.target.path);
           if (intent.target.base) await rename(this.stagePath(intent), destination); else await link(this.stagePath(intent), destination);
           await this.fault('after-publish', intent);

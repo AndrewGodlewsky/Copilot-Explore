@@ -88,3 +88,20 @@ test('captured ADR history remains inspectable when the attached checkout is no 
   const result = await f.e.adrFileRequest({ action: 'sources', journey: f.e.activeKey, revision: f.e.doc.revision, id: record.id });
   assert.equal(result.sourceStatus.status, 'unavailable'); assert.deepEqual(result.capture, record.sources); assert.ok(!JSON.stringify(result).includes(f.checkout));
 });
+
+test('ADR lifecycle changes preserve nested portable identity and source history in a fresh Git clone', async t => {
+  const f = await fixture(t); await f.commit(); await f.save(await f.prepare());
+  const original = structuredClone(f.e.doc.adrFiles[0]), clientId = randomUUID();
+  const accepted = await f.e.adrLifecycleRequest({ action: 'prepare', journey: f.e.activeKey, clientId, sequence: 1, selection: { kind: 'accept', id: original.id } });
+  assert.equal((await f.e.adrLifecycleRequest({ action: 'save', journey: f.e.activeKey, token: accepted.token, revision: f.e.doc.revision })).recovery.phase, 'complete');
+  await f.commit(); const clone = join(f.root, 'lifecycle-clone'); await git(f.root, '-c', 'core.autocrlf=false', 'clone', '--quiet', '--local', '--no-hardlinks', f.checkout, clone);
+  let cwd = join(clone, 'nested'); const other = await new Explorer({ library: new Library(join(f.root, 'clone-private')), binding: 'CLONE', projectRoot: async () => cwd }).load(); f.extras.push(other);
+  await other.attachProject(await other.projectRepository.open(original.sources.journey.path)); const index = await readFile(join(clone, '.git/index'));
+  const prepare = sequence => other.adrLifecycleRequest({ action: 'prepare', journey: other.activeKey, clientId, sequence, selection: { kind: 'deprecate', id: original.id } });
+  const wrong = join(clone, original.path); await mkdir(dirname(wrong), { recursive: true }); await copyFile(join(cwd, original.path), wrong); const wrongBytes = await readFile(wrong);
+  cwd = clone; await assert.rejects(prepare(2), /location|folder|changed/i); assert.deepEqual(await readFile(wrong), wrongBytes);
+  cwd = join(clone, 'nested'); const preview = await prepare(3);
+  assert.equal((await other.adrLifecycleRequest({ action: 'save', journey: other.activeKey, revision: other.doc.revision, token: preview.token })).recovery.phase, 'complete');
+  assert.equal(other.doc.adrFiles[0].status, 'deprecated'); assert.deepEqual(other.doc.adrFiles[0].sources, original.sources); assert.deepEqual(await readFile(join(clone, '.git/index')), index);
+  assert.equal(await readFile(join(cwd, original.path), 'utf8'), preview.files[0].content); assert.ok(!JSON.stringify(preview).includes(clone));
+});

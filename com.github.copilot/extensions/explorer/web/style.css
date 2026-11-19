@@ -176,6 +176,9 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #adr-format-dialog input, #adr-format-dialog select { width: 100%; max-width: 100%; min-width: 0; }
 #adr-format-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; }
 #adr-file-dialog { overflow-wrap: anywhere; }
+#adr-lifecycle-dialog { overflow-wrap: anywhere; }
+#adr-lifecycle-dialog input, #adr-lifecycle-dialog select { width: 100%; max-width: 100%; min-width: 0; }
+#adr-lifecycle-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; }
 #adr-file-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow-y: auto; }
 
 .node .category{display:flex;align-items:center;gap:5px;flex:none}.category-text{overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}.importance{font-size:10px;font-weight:600;white-space:nowrap;border-left:3px solid currentColor;padding-left:4px;color:#52636e}.node .importance{flex:none}.importance-high{color:#97501c}.importance-medium{color:#326b86}.importance-low{color:#536d45}@media(prefers-color-scheme:dark){.importance{color:#b2c7d2}.importance-high{color:#efbb83}.importance-medium{color:#a3d4ed}.importance-low{color:#bad7a9}}

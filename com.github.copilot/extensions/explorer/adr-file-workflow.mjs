@@ -7,6 +7,7 @@ import { adrReadiness } from './adr-readiness.mjs';
 import { savedDigest } from './review-causes.mjs';
 import { captureAdrSources, adrSourcesStatus } from './adr-sources.mjs';
 import { captureAdrSourceLocation } from './adr-source-location.mjs';
+import { appendAdrLifecycle } from './adr-lifecycle.mjs';
 
 const TTL = 10 * 60 * 1000;
 const keys = (v, names) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join(',') === names.split(',').sort().join(',');
@@ -14,7 +15,7 @@ const identity = e => [e.file, e.activeKey, e.doc?.id, e.doc?.rootId, e.doc?.cre
 const invalid = () => { throw Error('Invalid ADR file request.'); };
 const obsolete = () => { throw Error('This ADR preview is obsolete. Review the current wording and destination again.'); };
 const message = error => error.code ? `ADR file or recovery storage is unavailable (${error.code}). Existing files are preserved.` : error.message;
-const finished = recovery => !recovery || ['complete', 'abandoned', 'recorded-file-changed'].includes(recovery.phase);
+const finished = recovery => !recovery || ['complete', 'abandoned', 'recorded-file-changed', 'completed-history'].includes(recovery.phase);
 
 export class AdrFileWorkflow {
   constructor(readRoot) { this.readRoot = readRoot; this.generation = 0; this.order = null; this.current = null; this.timer = null; this.owner = null; this.store = null; this.fault = async () => {}; }
@@ -44,13 +45,14 @@ export class AdrFileWorkflow {
     const doc = await e.readCurrent(); if (intent.journeyId !== doc.id) throw Error('ADR recovery belongs to a different exploration. Preserve the journal for storage review.');
     const associationSaved = equal(doc.adrFiles?.find(record => record.id === intent.record.id), intent.record);
     const base = { id: intent.id, path: intent.target.path, content: intent.content, associationSaved, canReconcile: false, canDiscard: false };
+    if (intent.completed && !associationSaved) return { ...base, phase: 'completed-history', fileSaved: null, cleanupRequired: null, message: 'This write completed previously. Its association has since changed; the historical receipt does not verify current file bytes.' };
     let state;
     try { state = await store.inspect(); }
-    catch (error) { return { ...base, phase: associationSaved ? 'recorded-file-changed' : 'unavailable', fileSaved: null, cleanupRequired: null, message: message(error) }; }
+    catch (error) { return { ...base, phase: associationSaved && (!intent.completionRequired || intent.completed) ? 'recorded-file-changed' : 'unavailable', fileSaved: null, cleanupRequired: null, message: message(error) }; }
     if (!state.intent || state.intent.id !== intent.id) throw Error('ADR recovery operation changed. Refresh its status.');
-    const fileSaved = state.publication === 'published', phase = intent.abandoned ? 'abandoned' : fileSaved && associationSaved && !state.cleanupRequired ? 'complete' : fileSaved ? 'published' : 'unpublished';
+    const fileSaved = state.publication === 'published', phase = intent.abandoned ? 'abandoned' : fileSaved && associationSaved && !state.cleanupRequired ? intent.completionRequired && !intent.completed ? 'completion-pending' : 'complete' : fileSaved ? 'published' : 'unpublished';
     return { ...base, phase, fileSaved, cleanupRequired: state.cleanupRequired, canReconcile: !intent.abandoned && phase !== 'complete', canDiscard: !intent.abandoned && !fileSaved,
-      message: phase === 'complete' ? 'ADR file and exploration association are saved.' : phase === 'abandoned' ? 'Unpublished operation discarded. No ADR file was deleted.' : fileSaved ? 'ADR file is saved. Finish recovery to verify cleanup and save its exploration association.' : 'ADR file has not been published. Retry the confirmed write or explicitly discard this unpublished operation.' };
+      message: phase === 'complete' ? 'ADR file and exploration association are saved.' : phase === 'completion-pending' ? 'ADR file and association are saved; completion still needs explicit reconciliation before another operation.' : phase === 'abandoned' ? 'Unpublished operation discarded. No ADR file was deleted.' : fileSaved ? 'ADR file is saved. Finish recovery to verify cleanup and save its exploration association.' : 'ADR file has not been published. Retry the confirmed write or explicitly discard this unpublished operation.' };
   }
   async result(e, store, error) {
     let recovery;
@@ -71,8 +73,22 @@ export class AdrFileWorkflow {
     await this.fault('after-association', intent);
   }
   async finish(e, store, intent, owner) {
+    if (intent.completed) return;
     await store.publish(intent.id, current => this.checkSource(e, current, owner));
     await this.associate(e, store, intent, owner);
+    await store.complete(intent.id, current => this.checkAssociation(e, current, owner));
+  }
+  async checkAssociation(e, intent, owner) {
+    const doc = await e.readCurrent();
+    if (e.closed || !equal(owner, identity(e)) || doc.id !== intent.journeyId || !equal(doc.adrFiles?.find(record => record.id === intent.record.id), intent.record)) throw Error('ADR association changed before completion could be recorded. Reconcile the saved operation.');
+  }
+  async hasPending(e) { return !finished(await this.recovery(e, await this.storage(e))); }
+  async ensureCompleteReceipt(e) {
+    const store = await this.storage(e), intent = await store.readIntent();
+    if (!intent || intent.abandoned || intent.completed) return;
+    const recovery = await this.recovery(e, store);
+    if (recovery.phase === 'complete') await store.complete(intent.id, current => this.checkAssociation(e, current, identity(e)));
+    else if (recovery.phase !== 'recorded-file-changed') throw Error('An unfinished ADR write needs recovery before changing its lifecycle.');
   }
   async request(e, input) {
     const fields = { status: 'action,journey', sources: 'action,journey,id,revision', prepare: 'action,journey,clientId,sequence,selection', cancel: 'action,journey,clientId,sequence', save: 'action,journey,token,revision', reconcile: 'action,journey,operationId,revision', 'discard-operation': 'action,journey,operationId,revision' };
@@ -89,6 +105,7 @@ export class AdrFileWorkflow {
     }
     const store = await this.storage(e);
     if (input.action === 'status') return this.result(e, store);
+    if (input.action !== 'cancel' && await e.adrLifecycle.hasPending(e)) throw Error('An unfinished ADR lifecycle operation needs reconciliation before another ADR write.');
     if (['save', 'reconcile', 'discard-operation'].includes(input.action)) {
       if (!Number.isSafeInteger(input.revision) || input.revision !== e.doc.revision) throw Error('Exploration revision changed. Refresh before saving or reconciling an ADR.');
       await e.fresh(); const owner = identity(e);
@@ -120,13 +137,15 @@ export class AdrFileWorkflow {
     const recovery = await this.recovery(e, store); if (!finished(recovery)) throw Error('An unfinished ADR write needs recovery before another preview. Inspect its saved parts or discard it only if unpublished.');
     const source = await this.source(e), format = source.doc.adrDraft.format;
     const base = selection.kind === 'update' ? source.doc.adrFiles?.find(record => record.id === selection.id) : null;
-    if (selection.kind === 'update' && !base) throw Error('Select a recorded managed proposed ADR to update.');
+    if (selection.kind === 'update' && (!base || base.status !== 'proposed')) throw Error('Only proposed ADR wording can be updated. Create a successor proposal to revise an accepted decision.');
     if (selection.kind === 'new' && (format.naming === 'slug' ? selection.number !== null : !Number.isSafeInteger(selection.number))) invalid();
     const path = base?.path ?? adrFilename(format, source.doc.adrDraft.title, selection.number), id = base?.id ?? randomUUID();
     const preview = await store.capture(path, base ?? null), located = await captureAdrSourceLocation(e, preview.target);
     if (base?.sources?.adrPath && located.location.adrPath !== base.sources.adrPath) throw Error('The ADR destination location changed with the working directory. Reopen the original folder before updating this recorded file.');
     const sources = captureAdrSources(source.doc, located.location);
-    const content = adrFileMarkdown(source.doc.adrDraft, id, source.policy.label, sources), record = { version: 1, id, path, title: source.doc.adrDraft.title, status: 'proposed', sha256: adrBytesDigest(content), artifactDigest: source.artifactDigest, readinessDigest: source.readiness.digest, writtenAt: new Date().toISOString(), sources };
+    let content = adrFileMarkdown(source.doc.adrDraft, id, source.policy.label, sources);
+    const record = { version: 1, id, path, title: source.doc.adrDraft.title, status: 'proposed', sha256: adrBytesDigest(content), artifactDigest: source.artifactDigest, readinessDigest: source.readiness.digest, writtenAt: new Date().toISOString(), sources, ...(base?.lifecycle ? { lifecycle: structuredClone(base.lifecycle) } : {}) };
+    if (record.lifecycle) { content = appendAdrLifecycle(content, record); record.sha256 = adrBytesDigest(content); }
     associateAdrFile(source.doc.adrFiles, record, base ?? null);
     await located.assertCurrent(); const latest = await this.source(e);
     if (!this.valid(e, review) || source.digest !== latest.digest || source.readiness.digest !== latest.readiness.digest) obsolete();

@@ -21,6 +21,7 @@ import { captureAdrDraft, validateAdrDraft, acceptAdrDraft, adrDraftFreshness } 
 import { adrReadiness, captureAdrReadiness } from './adr-readiness.mjs';
 import { AdrFormatReview } from './adr-format-review.mjs';
 import { AdrFileWorkflow } from './adr-file-workflow.mjs';
+import { AdrLifecycleWorkflow } from './adr-lifecycle-workflow.mjs';
 import { ProjectReconciliation } from './project-reconciliation.mjs';
 import { ProjectGitStatus } from './project-git-status.mjs';
 import { ProjectMerge } from './project-merge.mjs';
@@ -69,6 +70,7 @@ export class Explorer {
     this.projectContext = new ProjectContext(projectRoot);
     this.adrFormats = new AdrFormatReview(projectRoot);
     this.adrWriter = new AdrFileWorkflow(projectRoot);
+    this.adrLifecycle = new AdrLifecycleWorkflow(projectRoot);
     this.projectRepository = library ? new ProjectRepository({ readRoot: projectRoot, localDirectory: library.directory }) : null;
     this.researcher = researcher; this.researchTasks = new Set(); this.researchTask = Promise.resolve(); this.unconfirmedResearchRelease = null; this.researchWork = null;
     this.briefHelper = briefHelper; this.briefWork = null; this.checkHelper = checkHelper; this.checkWork = null; this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
@@ -115,6 +117,7 @@ export class Explorer {
   replaceStorage(store) {
     this.adrFormats.clear();
     this.adrWriter.clear();
+    this.adrLifecycle.clear();
     this.branchRestoration.clear();
     this.projectCopy = null;
     this.scenarioComparison?.clear();
@@ -1006,6 +1009,7 @@ export class Explorer {
   reviewResearch(input) { return this.transact(() => this.researchReview.prepare(this, input)); }
   adrFormatRequest(input) { return this.transact(() => this.adrFormats.request(this, input)); }
   adrFileRequest(input) { return this.transact(() => input?.action === 'sources' ? this.adrWriter.request(this, input) : this.withDocumentLock(() => this.adrWriter.request(this, input))); }
+  adrLifecycleRequest(input) { return this.transact(() => this.withDocumentLock(() => this.adrLifecycle.request(this, input))); }
   adrScopeRequest(input) {
     return this.transact(async () => {
       if (!input || typeof input !== 'object' || Array.isArray(input) || !['status', 'save'].includes(input.action) ||
@@ -1479,5 +1483,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
+  async close() { this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

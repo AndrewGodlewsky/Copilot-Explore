@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.102",
+    "summary": "Track explicit ADR acceptance, deprecation and supersession with dated history and optional contributor names. Create proposed successors without rewriting older reasoning, then separately review acceptance. Preview every changed file, retain source uncertainty and recover interrupted two-file operations without losing newer answers."
+  },
+  {
     "version": "0.1.101",
     "summary": "Keep saved questions, answers and recorded evidence with written ADRs. Inspect original source captures, see changed or missing sources and open shared references explicitly. Preserve proven source commits and fingerprints across recovery. Impact previews identify affected ADRs. File review allows slower local Git checks; late source changes stop publication."
   },

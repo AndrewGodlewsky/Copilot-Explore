@@ -172,3 +172,29 @@ test('an unpublished ADR operation can be explicitly abandoned without deleting 
   f.store.fault = async () => {}; await f.store.publish(next.id); await assert.rejects(f.store.abandon(next.id), /published|saved/i);
   assert.equal(await readFile(f.file, 'utf8'), value.content);
 });
+
+test('ADR completion receipts require proven publication and association, then remain historical without replay', async t => {
+  const f = await fixture(t), p = await f.prepare();
+  await assert.rejects(f.store.complete(p.intent.id, async () => {}), /publish|complete/i);
+  await f.store.publish(p.intent.id);
+  await assert.rejects(f.store.complete(p.intent.id, async () => { throw Error('Association not durable'); }), /Association not durable/);
+  assert.equal((await f.store.readIntent()).completed, undefined);
+  const completed = await f.store.complete(p.intent.id, async current => { assert.equal(current.record.id, p.record.id); });
+  assert.equal(completed.completed, true);
+  await writeFile(f.file, 'Later explicitly edited or transitioned ADR');
+  const reopened = new AdrFileStorage({ readRoot: f.readRoot, directory: f.privateRoot, key: 'journey-one' });
+  assert.equal((await reopened.readIntent()).completed, true);
+  assert.equal((await reopened.complete(p.intent.id, async () => { throw Error('Historical proof must not be replayed'); })).completed, true);
+  await assert.rejects(reopened.publish(p.intent.id), /completed|histor/i); await assert.rejects(reopened.abandon(p.intent.id), /completed|histor/i);
+  assert.equal(await readFile(f.file, 'utf8'), 'Later explicitly edited or transitioned ADR');
+});
+
+for (const changedPart of ['destination', 'stage']) test(`ADR final authority guard cannot overwrite a ${changedPart} edit made during its await`, async t => {
+  const f = await fixture(t), first = await f.prepare(); await f.store.publish(first.intent.id);
+  const owner = new AdrFileStorage({ readRoot: f.readRoot, directory: f.privateRoot, key: 'final-guard-edit' });
+  const next = await f.prepare(owner, f.record(first.record.id, 'Reviewed update'), first.record); let guards = 0;
+  await assert.rejects(owner.publish(next.intent.id, async intent => {
+    if (++guards === 2) await writeFile(changedPart === 'destination' ? f.file : owner.stagePath(intent), 'Human correction during final guard');
+  }), /changed|identity|conflict|review/i);
+  assert.equal(guards, 2); assert.equal(await readFile(f.file, 'utf8'), changedPart === 'destination' ? 'Human correction during final guard' : first.content);
+});

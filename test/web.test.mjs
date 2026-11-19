@@ -2709,6 +2709,7 @@ test('research review preserves draft state, caret and composition, sends only t
   assert.equal(answer.selectionStart, 2); assert.equal(answer.selectionEnd, 6); assert.equal($('answer-state').value, 'assumption');
   assert.ok(!$('research-review-content').textContent.includes('RAW-DRAFT-CANARY'));
   assert.match($('research-review-dialog').textContent, /No project files/);
+  assert.match($('research-selection-policy')?.textContent ?? '', /literal.*pinned constraints/);
   assert.equal($('research-review-content').querySelectorAll('script').length, 0);
   for (const [key, value] of [['depth', 'deeper'], ['sourceFocus', 'primary'], ['recency', 'recent']]) {
     const select = $(`research-${key}`); select.focus(); select.value = value; select.dispatchEvent(new f.window.Event('change', { bubbles: true }));
@@ -2722,6 +2723,15 @@ test('research review preserves draft state, caret and composition, sends only t
   const optional = [...$('research-review-content').querySelectorAll('input[type=checkbox]')].find(n => n.dataset.nodeId === f.explorer.doc.nodes[2].id);
   optional.checked = false; optional.dispatchEvent(new f.window.Event('change', { bubbles: true }));
   await until(() => !$('research-review-start').disabled && !$('research-review-prompt').textContent.includes('OPTIONAL-SECRET'), 'excluded exact bytes');
+  const omissions = [...$('research-review-content').querySelectorAll('.review-record')].find(section => section.querySelector('h3')?.textContent.startsWith('Omitted saved records:'));
+  assert.ok(omissions, 'Omitted records must be inspectable separately from the transmitted prompt');
+  const sample = JSON.parse(omissions.querySelector('pre').textContent);
+  assert.equal(sample.total, 1); assert.equal(sample.remaining, 0);
+  assert.equal(sample.entries[0].id, f.explorer.doc.nodes[2].id);
+  assert.equal(sample.entries[0].question, f.explorer.doc.nodes[2].question);
+  assert.equal(sample.entries[0].reason, 'excluded');
+  assert.equal(Object.hasOwn(sample.entries[0], 'answer'), false);
+  assert.ok(!omissions.textContent.includes('OPTIONAL-SECRET'));
   const prompt = $('research-review-prompt').textContent;
   $('research-review-close').click(); assert.equal(f.explorer.pending, null); assert.equal(f.document.activeElement.id, 'research-request');
   assert.equal($('answer'), answer); assert.equal(answer.selectionStart, 2);

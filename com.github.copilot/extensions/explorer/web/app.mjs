@@ -2673,6 +2673,8 @@ function renderResearchReview() {
     rows.push(display('Required: current prerequisites and selected retained coverage', context.regeneration));
   }
   if (value.prepared.followup) rows.push(display('Follow-up: exact question, hypothetical status, original recommendation, complete optional evidence and exchanges', value.prepared.followup), display('Bounded source tracking across this history', coverage.followupTracking));
+  if (context.selectionPolicy) rows.push(el('p', { id: 'research-selection-policy' }, context.selectionPolicy));
+  if (coverage.omissionSample?.total) rows.push(display('Omitted saved records: review-only sample, not sent to the model; remaining counts records beyond this sample', coverage.omissionSample));
   for (const [kind, records] of [['Ancestor', context.path.slice(0, -1)], ['Other answer', context.decisionsElsewhere]]) for (const record of records) {
     const input = el('input', { type: 'checkbox', 'data-node-id': record.id }); input.checked = true;
     input.addEventListener('change', () => researchReview.exclude(record.id, !input.checked));

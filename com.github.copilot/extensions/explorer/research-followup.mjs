@@ -3,6 +3,7 @@ import { findNode, researchEvidence } from './model.mjs';
 import { prepareResearch, identity, framing, record } from './research-context.mjs';
 import { researchFraming } from './research.mjs';
 import { researchSettings, researchLimits } from './web/research-policy.mjs';
+import { researchRelevance } from './research-relevance.mjs';
 
 export const FOLLOWUP_OUTPUT_BYTES = 24576;
 export const FOLLOWUP_OUTPUT_CHARS = 12000;
@@ -82,13 +83,17 @@ const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).
 export function captureFollowup(prepared, previous) {
   const records = new Map(previous?.records ?? []);
   for (const value of prepared.dependencies.records) records.set(value.id, fingerprint(value));
-  const captured = { identity: fingerprint(prepared.dependencies.identity), framing: fingerprint(prepared.dependencies.framing), destination: fingerprint(prepared.dependencies.destination), records: [...records] };
-  if (records.size > 5000 || size(captured) > 4 * 1024 * 1024) throw new Error('Follow-up source tracking exceeds its limit. Start a new canvas.');
+  const relevanceSources = new Map(previous?.relevanceSources ?? []);
+  for (const [id, hash] of prepared.dependencies.relevanceSources ?? []) relevanceSources.set(id, hash);
+  const captured = { identity: fingerprint(prepared.dependencies.identity), framing: fingerprint(prepared.dependencies.framing), destination: fingerprint(prepared.dependencies.destination), records: [...records], ...(relevanceSources.size ? { relevanceSources: [...relevanceSources] } : {}) };
+  if (records.size > 5000 || relevanceSources.size > 5000 || size(captured) > 4 * 1024 * 1024) throw new Error('Follow-up source tracking exceeds its limit. Start a new canvas.');
   return captured;
 }
 export function sameFollowup(captured, doc, nodeId) {
   try {
     const nodes = new Map(doc.nodes.map(node => [node.id, node]));
-    return captured.identity === fingerprint(identity(doc)) && captured.framing === fingerprint(framing(doc)) && captured.destination === fingerprint(findNode(doc, nodeId).research) && captured.records.every(([id, hash]) => nodes.has(id) && fingerprint(record(nodes.get(id))) === hash);
+    if (!(captured.identity === fingerprint(identity(doc)) && captured.framing === fingerprint(framing(doc)) && captured.destination === fingerprint(findNode(doc, nodeId).research) && captured.records.every(([id, hash]) => nodes.has(id) && fingerprint(record(nodes.get(id))) === hash))) return false;
+    const reasons = captured.relevanceSources?.length ? researchRelevance(doc, nodeId).reasons : null;
+    return (captured.relevanceSources ?? []).every(([id, hash]) => reasons.has(id) && fingerprint(reasons.get(id)) === hash);
   } catch { return false; }
 }

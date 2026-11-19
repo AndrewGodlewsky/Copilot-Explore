@@ -1,12 +1,12 @@
 import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
-import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { createDocument, addQuestions, addDependency } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { prepareResearch, sameResearchSources } from '../com.github.copilot/extensions/explorer/research-context.mjs';
 import { prepareAnswerCheck, captureCheck, checkFreshness } from '../com.github.copilot/extensions/explorer/answer-check.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
@@ -43,6 +43,19 @@ test('answer check captures and compares its actual fixed sent scope', () => {
   const doc = document(), prepared = prepareAnswerCheck(doc), captured = captureCheck(prepared);
   assert.equal(captured.scope, prepared.context.scope); assert.ok(checkFreshness(captured, doc));
   assert.equal(checkFreshness({ ...captured, scope: 'path' }, doc), false);
+});
+
+test('a changed prerequisite selection rejects the old research token before any helper starts', async t => {
+  const f = await fixture(t), reviewed = await f.review();
+  const disk = JSON.parse(await readFile(f.file, 'utf8'));
+  addDependency(disk, disk.nodes[1].id, disk.nodes[2].id); disk.revision++;
+  await writeFile(f.file, JSON.stringify(disk));
+  await assert.rejects(f.start(reviewed), /Reviewed sources.*changed/); assert.equal(f.runs.length, 0);
+  const fresh = await f.review();
+  assert.ok(fresh.prepared.context.decisionsElsewhere[0].selection.includes('Explicit prerequisite'));
+  assert.equal(fresh.prepared.bytes, Buffer.byteLength(fresh.prepared.instructions) + Buffer.byteLength(fresh.prepared.prompt));
+  await f.start(fresh); await waitFor(() => f.runs.length === 1);
+  assert.equal(f.runs[0].prepared.prompt, fresh.prepared.prompt); await f.e.command('cancel');
 });
 test('start consumes one reviewed immutable payload, rejects legacy starts and permits unrelated disk changes', async t => {
   const f = await fixture(t);

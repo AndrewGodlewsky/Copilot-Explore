@@ -66,6 +66,7 @@ test('challenge bounds preserve complete tentative inputs and reject malformed h
   const doc = fixture(); doc.nodes[1].answerState = 'assumption'; doc.nodes[2].review = true;
   doc.nodes[1].research = { canary: 'PRIVATE-RESEARCH' }; doc.nodes[1].rationale = 'PRIVATE-RATIONALE';
   const prepared = prepareChallenge(doc);
+  assert.equal(prepared.context.selectionPolicy, undefined, 'Challenge without project files also keeps its existing selection');
   assert.equal(prepared.context.decisionsElsewhere.find(n => n.id === doc.nodes[1].id).answerState, 'assumption');
   assert.ok(prepared.context.decisionsElsewhere.find(n => n.id === doc.nodes[2].id).review);
   assert.ok(Object.isFrozen(prepared.dependencies.records)); assert.ok(!prepared.prompt.includes('PRIVATE-'));

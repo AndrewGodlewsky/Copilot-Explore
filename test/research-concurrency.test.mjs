@@ -7,7 +7,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
-import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { createDocument, addQuestions, addDependency } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { boundedContext, prepareResearch, sameResearchSources } from '../com.github.copilot/extensions/explorer/research-context.mjs';
 import { atomicWrite } from '../com.github.copilot/extensions/explorer/storage.mjs';
 
@@ -34,6 +34,15 @@ test('research accepts a new unrelated answer and records both actual transition
   await f.finish(); assert.equal(f.e.doc.nodes[2].answer, 'New independent answer'); assert.deepEqual(f.e.doc.nodes[1].research, { ...result, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });
   assert.equal(f.e.doc.revision, 2);
   const history = await f.e.readHistory(f.e.doc.id, 1); assert.equal(history.document.nodes[2].answer, 'New independent answer'); assert.equal(history.document.nodes[1].research, null);
+});
+
+test('a newly linked external prerequisite discards late research without replacing the newer saved map', async t => {
+  const f = await fixture(t); await f.begin();
+  const changed = JSON.parse(await readFile(f.file, 'utf8'));
+  addDependency(changed, changed.nodes[1].id, changed.nodes[2].id); changed.revision++;
+  const bytes = JSON.stringify(changed); await writeFile(f.file, bytes);
+  await f.finish(); assert.match(f.e.error, /source context changed/);
+  assert.equal(await readFile(f.file, 'utf8'), bytes); assert.equal(changed.nodes[1].research, null);
 });
 
 test('external pin edits discard research, while absent and empty pin defaults are equivalent', async t => {
@@ -72,7 +81,7 @@ test('prepared research captures only actual transmitted IDs and whole records w
   const prepared = prepareResearch(doc, doc.nodes[1].id);
   assert.ok(prepared.bytes <= 131072); assert.ok(prepared.context.truncated);
   assert.ok(prepared.context.omitted.decisionsElsewhere > 0);
-  assert.deepEqual(prepared.dependencies.records, [...prepared.context.path, ...prepared.context.decisionsElsewhere]);
+  assert.deepEqual(prepared.dependencies.records, [...prepared.context.path, ...prepared.context.decisionsElsewhere].map(({ selection, ...record }) => record));
   const included = prepared.context.decisionsElsewhere[0]; assert.equal(included.answer, '🌿'.repeat(10000));
   const omitted = doc.nodes.find(n => n.id.startsWith('source-') && !prepared.dependencies.records.some(r => r.id === n.id));
   omitted.answer = 'Changed omitted record'; assert.ok(sameResearchSources(prepared.dependencies, doc));

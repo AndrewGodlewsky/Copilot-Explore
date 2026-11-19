@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.107",
+    "summary": "Prioritize relevant saved decisions across branches during research, including explicit prerequisites, pinned constraints and project goals. Review why records were selected and which questions were omitted. Preserve uncertainty, exact input limits and draft text; reject changed relevant context while allowing unrelated edits."
+  },
+  {
       "version":  "0.1.106",
       "summary":  "Add an offline Research workspace prototype and interaction specification covering context review, concise answer options, comparisons, follow-ups and explicit draft actions. The design is ready for owner feedback; native usability and the separate internet-access policy remain pending review."
   },

@@ -178,6 +178,8 @@ test('project bytes are mandatory within exact request budget and cannot turn fi
   const prepared = prepareChallenge(doc, [], sources);
   assert.equal(prepared.bytes, Buffer.byteLength(prepared.instructions) + Buffer.byteLength(prepared.prompt));
   assert.deepEqual(prepared.context.projectSources, sources); assert.ok(prepared.bytes <= 131072);
+  assert.equal(prepared.context.selectionPolicy, undefined, 'Challenge keeps its separate context contract');
+  assert.ok(prepared.context.decisionsElsewhere.every(record => !Object.hasOwn(record, 'selection')));
   assert.ok(!JSON.stringify(prepared.dependencies).includes(sources[0].excerpt));
   doc.topic = 'x'.repeat(131072); assert.throws(() => prepareChallenge(doc, [], sources), /mandatory|limit/);
 });

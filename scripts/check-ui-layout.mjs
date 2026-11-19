@@ -44,6 +44,21 @@ const browser = await chromium.launch({ executablePath: browserPath, headless: t
 const failures = [], samples = [];
 const settle = page => page.evaluate(async () => { await document.fonts.ready; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); });
 const expect = (condition, message, detail) => { if (!condition) failures.push({ message, detail }); };
+async function revealMapControl(page, control) {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const direction = await control.evaluate(el => {
+      const r = el.getBoundingClientRect(), m = document.getElementById('map').getBoundingClientRect();
+      if (r.bottom > Math.min(m.bottom, innerHeight) - 2) return 'ArrowDown';
+      if (r.top < Math.max(m.top, 0) + 2) return 'ArrowUp';
+      if (r.right > Math.min(m.right, innerWidth) - 2) return 'ArrowRight';
+      if (r.left < Math.max(m.left, 0) + 2) return 'ArrowLeft';
+      return null;
+    });
+    if (!direction) return;
+    await page.locator('#map').focus(); await page.keyboard.press(direction); await settle(page);
+  }
+  throw Error('Map control could not be reached with bounded keyboard panning.');
+}
 async function inspectDrawer(page, label) {
   const layout = await page.locator('#question-drawer').evaluate(drawer => {
     const rect = el => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height }; };
@@ -60,7 +75,7 @@ async function inspectDrawer(page, label) {
   expect(layout.clientHeight > 40 && (layout.scrollHeight <= layout.clientHeight + 1 || ['auto', 'scroll'].includes(layout.overflow)), `${label}: tools have a usable scrolling area`, layout);
 }
 async function inspectWorkspace(page, label, { scroll = false, answer = false } = {}) {
-  const panel = await page.locator('#node-workspace').evaluate(el => ({ height: el.clientHeight, contentHeight: el.scrollHeight, overflow: getComputedStyle(el).overflowY, scrollPane: el.classList.contains('scroll-pane') }));
+  const panel = await page.locator('#node-workspace').evaluate(el => ({ height: el.clientHeight, contentHeight: el.scrollHeight, overflow: getComputedStyle(el).overflowY, scrollPane: el.classList.contains('scroll-pane'), children: [...el.children].map(child => ({ class: child.className, height: child.getBoundingClientRect().height, scrollHeight: child.scrollHeight, overflow: getComputedStyle(child).overflowY })) }));
   expect(panel.contentHeight <= panel.height + 1 || ['auto', 'scroll'].includes(panel.overflow), `${label}: overflowing workspace is manually scrollable`, panel);
   const selectors = ['#save-answer', '#question-tools-toggle', ...(answer ? ['#answer'] : [])];
   for (const selector of selectors) {
@@ -137,7 +152,9 @@ try {
         await inspectCards(page, `${scenario.name}/detail/${id}`);
         const toggle = page.locator(`#nodes [data-branch-id="${id}"]`);
         if (await toggle.count()) {
+          await revealMapControl(page, toggle);
           await toggle.click(); await settle(page); await inspectCards(page, `${scenario.name}/folded/${id}`);
+          await revealMapControl(page, toggle);
           await toggle.click();
         }
         for (let step = 1; step <= 7; step++) {
@@ -149,6 +166,8 @@ try {
       // The same writing controls remain usable after zoom and navigation.
       await page.locator('#outline-toggle').click(); await page.locator(`#outline-list [data-node-id="${parent.id}"]`).click();
       await page.locator('#outline-toggle').click(); await settle(page);
+      if (await page.locator('#node-workspace.scroll-pane').count()) await page.locator('#answer').scrollIntoViewIfNeeded();
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-writing.png`) });
       const writing = await page.evaluate(() => {
         const answer = document.getElementById('answer').getBoundingClientRect(), content = document.querySelector('.node-content').getBoundingClientRect(), map = document.getElementById('map').getBoundingClientRect();
         return { visible: Math.max(0, Math.min(answer.bottom, content.bottom, map.bottom) - Math.max(answer.y, content.y, map.y)), scrollPane: document.getElementById('node-workspace').classList.contains('scroll-pane') };
@@ -174,6 +193,33 @@ try {
       await page.locator('#question-tools-toggle').click(); await settle(page);
       await inspectDrawer(page, `${scenario.name}/drawer`);
       await inspectWorkspace(page, `${scenario.name}/drawer-card`, { scroll: true });
+      await page.locator('[data-tool-tab="research"]').click();
+      if (!await page.locator('.research-disclosure').evaluate(el => el.open)) await page.locator('#research-summary').click();
+      await page.locator('#research-request').click();
+      await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      expect((await page.locator('#research-selection-policy').innerText()).includes('pinned constraints'), `${scenario.name}: research selection policy is inspectable`, {});
+      const optional = page.locator(`#research-review-content input[data-node-id="${answered.id}"]`);
+      await optional.uncheck();
+      const omissions = page.locator('#research-review-content .review-record').filter({ has: page.locator('h3', { hasText: 'Omitted saved records:' }) });
+      await omissions.waitFor();
+      await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      const omissionText = await omissions.locator('pre').innerText(), omitted = JSON.parse(omissionText);
+      expect(omitted.entries.some(item => item.id === answered.id && item.reason === 'excluded' && !Object.hasOwn(item, 'answer')), `${scenario.name}: omitted questions retain reason without answer text`, omitted);
+      expect(!omissionText.includes(answered.answer) && !(await page.locator('#research-review-prompt').textContent()).includes(answered.answer), `${scenario.name}: excluded answer stays out of the sample and prompt`, {});
+      for (const block of [page.locator('#research-selection-policy'), omissions]) {
+        await block.scrollIntoViewIfNeeded(); await settle(page);
+        const geometry = await block.evaluate(el => {
+          const dialog = document.getElementById('research-review-dialog'), d = dialog.getBoundingClientRect(), r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, dialogLeft: d.left, dialogRight: d.right, dialogTop: d.top, dialogBottom: d.bottom, scrollWidth: dialog.scrollWidth, clientWidth: dialog.clientWidth, width: innerWidth, height: innerHeight };
+        });
+        expect(geometry.dialogLeft >= 0 && geometry.dialogRight <= geometry.width + 1 && geometry.dialogTop >= 0 && geometry.dialogBottom <= geometry.height + 1 && geometry.scrollWidth <= geometry.clientWidth + 1, `${scenario.name}: research review fits the viewport without horizontal overflow`, geometry);
+        expect(geometry.left >= geometry.dialogLeft && geometry.right <= geometry.dialogRight + 1 && Math.min(geometry.bottom, geometry.dialogBottom) - Math.max(geometry.top, geometry.dialogTop) >= 24, `${scenario.name}: research policy and omission sample can be reached by scrolling`, geometry);
+      }
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-research-review.png`) });
+      await page.keyboard.press('Escape');
+      expect(await page.locator('#research-review-dialog').evaluate(el => !el.open) && await page.locator('#research-request').evaluate(el => el === document.activeElement), `${scenario.name}: cancelling review restores its trigger focus`, {});
+      expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: research review preserves the same draft editor`, {});
+      expect(explorer.pending === null, `${scenario.name}: context review starts no model operation`, {});
       await page.locator('[data-tool-tab="details"]').click();
       await page.locator('#revisit-editor > summary').click(); await page.locator('#revisit-condition').fill('After our pilot');
       await page.locator('#revisit-condition').press('Escape'); await page.locator('#navigation-open').click(); await page.locator('#navigation-cancel').click();
@@ -219,6 +265,10 @@ try {
       // Successful ordinary saves continue locally, without asking a model.
       const beforeSaveRequests = requests;
       await page.locator('#save-answer').click();
+      await page.waitForFunction(id => document.getElementById('answer-change-dialog').open || document.getElementById('node-workspace').dataset.nodeId !== id, parent.id);
+      const needsConfirmation = await page.locator('#answer-change-dialog').evaluate(el => el.open);
+      if (scenario.name === 'wide') expect(needsConfirmation, 'wide: changing an ancestor answer requires consequence review', {});
+      if (needsConfirmation) await page.locator('#answer-change-confirm').click();
       await page.waitForFunction(id => document.getElementById('node-workspace').dataset.nodeId !== id, parent.id);
       expect(requests === beforeSaveRequests, `${scenario.name}: Save & continue makes no model request`, {});
       await page.locator('#outline-toggle').click(); await page.locator(`#outline-list [data-node-id="${parent.id}"]`).click(); await page.locator('#outline-toggle').click();

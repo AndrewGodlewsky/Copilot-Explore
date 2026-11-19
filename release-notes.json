@@ -1,7 +1,11 @@
 [
   {
+      "version":  "0.1.108",
+      "summary":  "Prioritize relevant saved decisions across branches during research, including prerequisites, pinned constraints and goals. Inspect selection reasons and omitted questions. Preserve uncertainty, input limits and drafts; reject changed relevant context while allowing unrelated edits. Keep the answer editor and actions reachable by scrolling in short panes."
+  },
+  {
     "version": "0.1.107",
-    "summary": "Prioritize relevant saved decisions across branches during research, including explicit prerequisites, pinned constraints and project goals. Review why records were selected and which questions were omitted. Preserve uncertainty, exact input limits and draft text; reject changed relevant context while allowing unrelated edits."
+    "summary": "Add a 20-case offline research benchmark with diverse topics, difficult evidence, scoped follow-ups and candidate-guidance comparisons. Include human scoring rubrics and a measured fixture baseline. Live research quality, provider cost and internet-access policy remain separate owner-reviewed decisions."
   },
   {
       "version":  "0.1.106",

@@ -15,7 +15,7 @@
 - Required target, guidance and pins remain complete; actual instructions plus prompt stay within 131,072 UTF-8 bytes. Optional records are omitted whole.
 - No repository excerpts, private drafts, historical research/rationales, ambient instructions or new network permission. Assumptions and hypothetical context never become verified decisions.
 - Preserve reviewed-token identity, explicit start, helper isolation, cancellation, saved destinations and unrelated-edit tolerance. Attached questions and briefs keep their separate selection behavior.
-- No browser/desktop automation is authorized. Declare the visible review additions `ui=true`; record its required browser gate as pending if authorization is still absent. SDK fixtures use only the installed runtime, disposable home and local model.
+- The owner authorized Brave automation for this issue on 2026-11-19. Keep the visible review additions `ui=true` and run the required local Brave checks; this does not authorize unrelated browser/desktop work. SDK fixtures use only the installed runtime, disposable home and local model.
 - Each completed release needs synchronized metadata, independent review, required gates, package validation and verified origin/main publication. Do not claim an incomplete gate or issue passed.
 
 ## Review focus
@@ -37,7 +37,7 @@ Check non-English lexical matching limitations; the difference between new relev
 
 ### Task 3: Review, verify and publish or record the concrete blocker
 
-- [ ] Prepare v0.1.107 or the next unused patch, release notes and a bounded independent review package. Record real approval after resolving findings.
+- [ ] Integrate main v0.1.107 and prepare v0.1.108 or the next unused patch, preserving release history and the research benchmark. Obtain review of the integrated candidate and record real approval after resolving findings.
 - [ ] Run all authorized required checks and package validation. Invoke verify:iteration honestly; do not supply --allow-ui without explicit owner authorization. Record any pending UI gate and exact instruction in issue 94 instead of claiming readiness.
 - [ ] If every required publication gate is satisfied, integrate and push main, verify exact remote commit and close issue 94 with evidence. Otherwise preserve the reviewable implementation and tests, comment the blocker and continue independently ready work without mixing candidates.
 

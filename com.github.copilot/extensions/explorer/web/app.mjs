@@ -1734,8 +1734,8 @@ function refreshScene(anchor = anchorPoint()) {
   const height = Math.max(80, rect.height - focusTop(selected, rect.height) - 16);
   panel.style.width = `${width}px`; panel.style.maxHeight = `${height}px`;
   panel.classList.toggle('short-pane', height < 320);
-  panel.classList.toggle('scroll-pane', height < 160);
-  if (height >= 160) panel.scrollTop = 0;
+  panel.classList.toggle('scroll-pane', height < 320);
+  if (height >= 320) panel.scrollTop = 0;
   panel.style.transform = `scale(${1 / view.zoom})`;
   panel.style.setProperty('--heading-limit', `${Math.max(112, Math.min(180, height * .35))}px`);
   const measuredHeight = expanded ? panel.offsetHeight / view.zoom : 0, logicalWidth = expanded ? width / view.zoom : 0;

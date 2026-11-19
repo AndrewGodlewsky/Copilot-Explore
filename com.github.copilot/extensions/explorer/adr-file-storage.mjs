@@ -28,13 +28,19 @@ function targetValue(value) {
   return structuredClone(value);
 }
 function validateIntent(value) {
-  if (!keys(value, 'version,id,target,content,record,base,sourceDigest,journeyId,createdAt,stage,abandoned' + (Object.hasOwn(value ?? {}, 'completed') ? ',completed' : '') + (Object.hasOwn(value ?? {}, 'completionRequired') ? ',completionRequired' : '')) || value.version !== 1 || typeof value.abandoned !== 'boolean' || Object.hasOwn(value, 'completed') && (value.completed !== true || value.abandoned || value.stage === null) || Object.hasOwn(value, 'completionRequired') && value.completionRequired !== true) invalid();
+  if (!keys(value, 'version,id,target,content,record,base,sourceDigest,journeyId,createdAt,stage,abandoned' + (Object.hasOwn(value ?? {}, 'completed') ? ',completed' : '') + (Object.hasOwn(value ?? {}, 'completionRequired') ? ',completionRequired' : '') + (Object.hasOwn(value ?? {}, 'associationBase') ? ',associationBase' : '')) || value.version !== 1 || typeof value.abandoned !== 'boolean' || Object.hasOwn(value, 'completed') && (value.completed !== true || value.abandoned || value.stage === null) || Object.hasOwn(value, 'completionRequired') && value.completionRequired !== true) invalid();
   adrFileMarker(value.id); const target = targetValue(value.target), record = validateAdrFile(value.record), base = value.base === null ? null : validateAdrFile(value.base);
   if (typeof value.content !== 'string' || !value.content.isWellFormed() || Buffer.byteLength(value.content) > ADR_FILE_LIMIT || !value.content.endsWith(adrFileMarker(record.id) + '\n') || adrBytesDigest(value.content) !== record.sha256 || record.path !== target.path || !digest(value.sourceDigest) ||
       typeof value.journeyId !== 'string' || !value.journeyId.trim() || value.journeyId.length > 100 || typeof value.createdAt !== 'string' || value.createdAt.length > 40 || !Number.isFinite(Date.parse(value.createdAt))) invalid();
   if (base ? !target.base || base.id !== record.id || base.path !== record.path || base.sha256 !== target.base.sha256 || base.id !== target.base.id : target.base !== null) invalid();
+  let associationBase;
+  if (Object.hasOwn(value, 'associationBase')) {
+    associationBase = validateAdrFile(value.associationBase);
+    if (!base || base.status !== 'proposed' || record.status !== 'proposed' || !same({ ...base, sha256: associationBase.sha256 }, associationBase)) invalid();
+  }
   if (value.stage !== null && (!keys(value.stage, 'name,identity') || typeof value.stage.name !== 'string' || !/^\.explorer-adr-[a-f0-9-]{36}\.tmp$/.test(value.stage.name) || !identity(value.stage.identity))) invalid();
   const result = { version: 1, id: value.id, target, content: value.content, record, base, sourceDigest: value.sourceDigest, journeyId: value.journeyId, createdAt: value.createdAt, stage: structuredClone(value.stage), abandoned: value.abandoned, ...(value.completed ? { completed: true } : {}), ...(value.completionRequired ? { completionRequired: true } : {}) };
+  if (associationBase) result.associationBase = associationBase;
   if (Buffer.byteLength(JSON.stringify(result)) > JOURNAL_LIMIT) throw Error('ADR write journal exceeds its 256 KiB limit.');
   return result;
 }
@@ -95,6 +101,13 @@ export class AdrFileStorage {
     } else if (data) throw Error('ADR target already exists. Choose another number or explicitly review a recorded managed draft.');
     await this.assertTarget(target); return { target, oldContent: data?.content ?? null };
   }
+  async observe(expected) {
+    const base = validateAdrFile(expected), path = base.path, root = await this.reader.root(), target = { root, path, parents: await this.parents(root, path), base: null };
+    const data = await this.fileData(target, join(root.path, path));
+    if (!data.content.endsWith(adrFileMarker(base.id) + '\n')) changed();
+    target.base = { stamp: data.stamp, sha256: data.sha256, id: base.id };
+    await this.assertTarget(target); return { target, oldContent: data.content };
+  }
   async privateRoot(directory, target, create) {
     if (target && inside(target.root.path, directory)) throw Error('ADR recovery storage must remain outside the active project.');
     const state = await directoryState(directory, create);
@@ -120,7 +133,7 @@ export class AdrFileStorage {
     } finally { await lock.release(); }
   }
   async begin(value, previousId = null) {
-    if (!keys(value, 'target,content,record,base,sourceDigest,journeyId')) invalid();
+    if (!keys(value, 'target,content,record,base,sourceDigest,journeyId' + (Object.hasOwn(value ?? {}, 'associationBase') ? ',associationBase' : ''))) invalid();
     return this.writeIntent({ ...value, version: 1, id: randomUUID(), createdAt: new Date().toISOString(), stage: null, abandoned: false, completionRequired: true }, previousId);
   }
   stagePath(intent) { return join(dirname(join(intent.target.root.path, intent.target.path)), intent.stage.name); }

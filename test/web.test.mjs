@@ -34,7 +34,7 @@ import { AdrSourcesClient } from '../com.github.copilot/extensions/explorer/web/
 import { changeReviewHandoffs } from '../com.github.copilot/extensions/explorer/review-handoffs.mjs';
 import { createPortableReference, formatPortableReference, parsePortableReference } from '../com.github.copilot/extensions/explorer/portable-reference.mjs';
 import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
-import { createDocument, contextFor, addDependency, answerNode } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { createDocument, contextFor, addDependency, addQuestions, answerNode } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { GeometryCache, viewportBounds, intersects, layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
@@ -6041,6 +6041,91 @@ async function adrFileFixture(t) {
   const reviewFile = async () => { $('adr-file-review').click(); await until(() => !$('adr-file-save').disabled, 'ADR file preview'); };
   return { ...f, root, $, editor, openFile, reviewFile };
 }
+async function adrUpdateFixture(t) {
+  const f = await adrFileFixture(t), $ = f.$; await f.openFile(); await f.reviewFile(); $('adr-file-save').click();
+  await until(() => /file and exploration association are saved/.test($('adr-file-status').textContent), 'base ADR saved');
+  const record = structuredClone(f.explorer.doc.adrFiles[0]); await uiResponse(f, 'api/adr-file', 'cancel', () => $('adr-file-close').click());
+  const openUpdates = async () => { assert.ok($('adr-updates-open'), 'update entry exists'); $('adr-updates-open').click(); await until(() => !$('adr-file-inspection').hidden && !$('adr-file-inspect').disabled, 'ADR update inspected'); };
+  return { ...f, record, openUpdates };
+}
+
+test('ADR update UI compares literal baseline, manual file and proposal, keeps edits by default and explicitly replaces', async t => {
+  const f = await adrUpdateFixture(t), $ = f.$, path = join(f.root, f.record.path), baseline = await readFile(path, 'utf8');
+  const manual = baseline.replace('<!-- copilot-explorer-adr:', 'MANUAL <script>addition</script>\n<!-- copilot-explorer-adr:'); await writeFile(path, manual);
+  await f.openUpdates(); assert.equal($('adr-file-baseline').textContent, baseline); assert.equal($('adr-file-current').textContent, manual); assert.match($('adr-file-freshness').textContent, /modified|external/i);
+  $('adr-file-update').click(); await until(() => !$('adr-file-preview').hidden, 'three-way proposal');
+  assert.equal($('adr-file-save').disabled, true); assert.equal($('adr-file-dialog').querySelector('script'), null);
+  $('adr-file-keep').click(); assert.equal(await readFile(path, 'utf8'), manual); assert.equal($('adr-file-save').disabled, true);
+  $('adr-file-update').click(); await until(() => !$('adr-file-preview').hidden, 'new proposal'); const proposed = $('adr-file-content').textContent;
+  $('adr-file-replace').checked = true; $('adr-file-replace').dispatchEvent(new f.window.Event('change')); assert.equal($('adr-file-save').disabled, false);
+  $('adr-file-save').click(); await until(() => f.explorer.doc.adrFiles[0].generated.content === proposed && !$('adr-file-refresh').disabled, 'replacement saved');
+  assert.equal(await readFile(path, 'utf8'), proposed); assert.equal($('answer'), f.editor); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ'); assert.equal(f.editor.selectionStart, 2); assert.equal(f.editor.selectionEnd, 7);
+});
+
+test('ADR update UI discloses legacy baseline and changed source scope before replacement', async t => {
+  const f = await adrUpdateFixture(t), $ = f.$, next = structuredClone(f.explorer.doc); delete next.adrFiles[0].generated; delete next.adrFiles[0].sources; await f.explorer.save(next); f.window.__updates.apply(f.explorer.snapshot());
+  await f.openUpdates(); assert.match($('adr-file-baseline').textContent, /unavailable/i); assert.match($('adr-file-freshness').textContent, /unavailable/i);
+  $('adr-file-update').click(); await until(() => !$('adr-file-preview').hidden, 'legacy proposal');
+  $('adr-file-replace').checked = true; $('adr-file-replace').dispatchEvent(new f.window.Event('change')); assert.equal($('adr-file-save').disabled, true);
+  assert.equal($('adr-file-scope-change').hidden, false); $('adr-file-scope-ack').checked = true; $('adr-file-scope-ack').dispatchEvent(new f.window.Event('change')); assert.equal($('adr-file-save').disabled, false);
+  assert.match($('adr-file-scope-note').textContent, /source|scope/i); $('adr-file-keep').click(); assert.equal(f.explorer.doc.adrFiles[0].generated, undefined);
+});
+
+test('ADR update UI keeps missing files unresolved and routes accepted records to explicit successor review', async t => {
+  const f = await adrUpdateFixture(t), $ = f.$, journey = f.explorer.doc.id;
+  const prepare = await f.explorer.adrLifecycleRequest({ action: 'prepare', journey, clientId: randomUUID(), sequence: 1, selection: { kind: 'accept', id: f.record.id } });
+  await f.explorer.adrLifecycleRequest({ action: 'save', journey, token: prepare.token, revision: f.explorer.doc.revision }); f.window.__updates.apply(f.explorer.snapshot());
+  await f.openUpdates(); assert.equal($('adr-file-update').disabled, true); assert.match($('adr-file-freshness').textContent, /accepted|successor/i);
+  $('adr-lifecycle-from-file').click(); await until(() => !$('adr-lifecycle-review').disabled, 'lifecycle routing'); assert.equal($('adr-lifecycle-selection').value, f.record.id); assert.equal($('adr-lifecycle-kind').value, 'successor');
+  $('adr-lifecycle-close').click(); await rm(join(f.root, f.record.path)); await f.openUpdates(); assert.match($('adr-file-freshness').textContent, /missing/i); assert.equal($('adr-file-update').disabled, true);
+});
+
+test('ADR update UI rereads relevant visible saves but not unrelated changes or hidden polling', async t => {
+  const f = await adrUpdateFixture(t), $ = f.$; await f.openUpdates(); const fetch = f.window.fetch; let reads = 0;
+  f.window.fetch = (path, options) => { if (path === 'api/adr-file' && JSON.parse(options.body).action === 'inspect') reads++; return fetch(path, options); };
+  const unrelated = structuredClone(f.explorer.doc); addQuestions(unrelated, unrelated.rootId, [{ question: 'Unrelated new question?', category: 'Other' }]); await f.explorer.save(unrelated); f.window.__updates.apply(f.explorer.uiSnapshot()); await delay(40); assert.equal(reads, 0);
+  const changed = structuredClone(f.explorer.doc); changed.nodes[1].answer += ' correction'; await f.explorer.save(changed); f.window.__updates.apply(f.explorer.uiSnapshot());
+  await until(() => reads === 1 && /answer changed/.test($('adr-file-freshness').textContent), 'relevant freshness refresh');
+  await uiResponse(f, 'api/adr-file', 'cancel', () => $('adr-file-close').click()); changed.nodes[1].answer += ' hidden'; await f.explorer.save({ ...changed, revision: f.explorer.doc.revision }); f.window.__updates.apply(f.explorer.uiSnapshot()); await delay(40); assert.equal(reads, 1); f.window.fetch = fetch;
+});
+
+for (const leave of ['hide', 'switch', 'suspend']) test(`ADR update UI ignores late inspection after ${leave}`, async t => {
+  const f = await adrUpdateFixture(t), $ = f.$; await f.openUpdates(); const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-file' && JSON.parse(options.body).action === 'inspect') await new Promise(resolve => { release = resolve; }); return response; };
+  $('adr-file-inspect').click(); await until(() => release, 'inspection held');
+  if (leave === 'hide') $('adr-file-close').click();
+  else if (leave === 'switch') { const next = structuredClone(f.explorer.snapshot()); next.document = createDocument('Different map'); f.window.__updates.apply(next); }
+  else f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  release(); f.window.fetch = fetch; await delay(30); assert.equal($('adr-file-inspection').hidden, true); assert.equal($('adr-file-save').disabled, true); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ');
+});
+
+test('ADR update UI opens explicit scope review and retains its return record without starting a model', async t => {
+  const f = await adrUpdateFixture(t), $ = f.$; await f.openUpdates(); $('adr-file-regenerate').click();
+  assert.equal($('adr-file-dialog').open, false); assert.equal($('adr-scope-dialog').open, true); assert.equal(f.explorer.briefWork, null);
+  $('adr-scope-close').click(); await f.openUpdates(); assert.equal($('adr-file-selection').value, f.record.id); assert.equal($('answer'), f.editor);
+});
+
+test('ADR update UI rejects a late replacement preview after relevant sources change', async t => {
+  const f = await adrUpdateFixture(t), $ = f.$; await f.openUpdates(); const fetch = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-file' && JSON.parse(options.body).selection?.kind === 'review-update') await new Promise(resolve => { release = resolve; }); return response; };
+  $('adr-file-update').click(); await until(() => release, 'replacement preview held');
+  const next = structuredClone(f.explorer.doc); next.nodes[1].answer += ' correction'; await f.explorer.save(next); f.window.__updates.apply(f.explorer.uiSnapshot());
+  release(); f.window.fetch = fetch; await until(() => /answer changed/.test($('adr-file-freshness').textContent), 'fresh source reasons');
+  assert.equal($('adr-file-save').disabled, true); assert.equal($('adr-file-preview').hidden, true); assert.equal(f.explorer.doc.adrFiles[0].generated.content, f.record.generated.content);
+});
+
+test('ADR update UI rediscovers an explicitly replaced file after a lost save response', async t => {
+  const f = await adrUpdateFixture(t), $ = f.$, path = join(f.root, f.record.path);
+  await writeFile(path, f.record.generated.content.replace('<!-- copilot-explorer-adr:', 'Manual before replacement\n<!-- copilot-explorer-adr:'));
+  await f.openUpdates(); $('adr-file-update').click(); await until(() => !$('adr-file-preview').hidden, 'update proposal'); const proposed = $('adr-file-content').textContent;
+  $('adr-file-replace').checked = true; $('adr-file-replace').dispatchEvent(new f.window.Event('change'));
+  const fetch = f.window.fetch;
+  f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-file' && JSON.parse(options.body).action === 'save') { await response.clone().json(); throw Error('Lost replacement response'); } return response; };
+  $('adr-file-save').click(); await until(() => /Lost replacement response/.test($('adr-file-status').textContent), 'ambiguous save'); f.window.fetch = fetch;
+  await uiResponse(f, 'api/adr-file', 'cancel', () => $('adr-file-close').click()); await f.poll(); await f.openUpdates();
+  assert.equal($('adr-file-current').textContent, proposed); assert.equal($('adr-file-baseline').textContent, proposed); assert.equal(await readFile(path, 'utf8'), proposed); assert.equal($('answer'), f.editor);
+});
+
 for (const outcome of ['slow preview', 'timeout']) test(`ADR file UI permits local Git preparation and still bounds a ${outcome}`, async t => {
   const f = await adrFileFixture(t), $ = f.$; await f.openFile();
   const fetch = f.window.fetch, timeout = f.window.setTimeout.bind(f.window), clear = f.window.clearTimeout.bind(f.window), timers = new Map(); let next = -1, release, signal;

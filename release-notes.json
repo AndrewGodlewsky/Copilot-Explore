@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.103",
+    "summary": "Review ADR source changes, dependencies, research staleness and scenario context. Compare the stored generated baseline, current file and regenerated proposal. Keep manual edits or explicitly replace a proposed file; accepted decisions use successors. Recover interrupted replacements and reject late file or source changes."
+  },
+  {
     "version": "0.1.102",
     "summary": "Track explicit ADR acceptance, deprecation and supersession with dated history and optional contributor names. Create proposed successors without rewriting older reasoning, then separately review acceptance. Preview every changed file, retain source uncertainty and recover interrupted two-file operations without losing newer answers."
   },

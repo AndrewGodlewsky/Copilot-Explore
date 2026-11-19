@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm, rename, link, symlink, lstat, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { AdrFileStorage } from '../com.github.copilot/extensions/explorer/adr-file-storage.mjs';
+import { AdrFileStorage, validateAdrWriteIntent } from '../com.github.copilot/extensions/explorer/adr-file-storage.mjs';
 import { adrFileMarkdown, adrArtifactDigest, adrBytesDigest } from '../com.github.copilot/extensions/explorer/adr-file.mjs';
 import { adrFileDocument, saveAdrFixture } from './helpers/adr-file.mjs';
 
@@ -27,6 +27,17 @@ test('ADR publication previews without project writes, then saves exact bytes on
   await reopened.publish(p.intent.id, async () => { throw Error('Already published must not rerun original source guard'); });
   assert.equal(await readFile(f.file, 'utf8'), p.content); assert.deepEqual(await readdir(join(f.root, 'docs/decisions')), ['0001-storage-λ.md']);
   await assert.rejects(f.prepare(), /pending|unfinished|operation|exists/i);
+});
+
+test('ADR reviewed update journal separates observed bytes from original association without accepting other metadata changes', async t => {
+  const f = await fixture(t), first = await f.prepare(); await f.store.publish(first.intent.id);
+  const current = first.content.replace('<!-- copilot-explorer-adr:', 'Manual reasoning\n<!-- copilot-explorer-adr:'); await writeFile(f.file, current);
+  const observed = await f.store.observe(first.record), replacement = f.record(first.record.id, 'Revised title');
+  const value = { ...first.intent, id: randomUUID(), target: observed.target, content: replacement.content, record: replacement.record, base: { ...first.record, sha256: adrBytesDigest(current) }, associationBase: first.record, stage: null };
+  assert.equal(validateAdrWriteIntent(value).associationBase.sha256, first.record.sha256);
+  for (const edit of [v => { v.associationBase.title += ' mismatch'; }, v => { v.associationBase.id = randomUUID(); }, v => { v.base.sha256 = first.record.sha256; }, v => { v.base = null; }, v => { v.associationBase.extra = true; }]) { const forged = structuredClone(value); edit(forged); assert.throws(() => validateAdrWriteIntent(forged)); }
+  await assert.rejects(f.store.capture(f.path, first.record), /changed|conflict/i);
+  assert.equal(await readFile(f.file, 'utf8'), current);
 });
 
 test('two ADR writers with the same target never overwrite each other', async t => {

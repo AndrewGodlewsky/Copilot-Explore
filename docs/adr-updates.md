@@ -1,0 +1,39 @@
+# Reviewing ADR freshness and updates
+
+Open **Tools → Review ADR updates** and select a recorded ADR. The existing file dialog shows the last generated baseline, the complete current Markdown and the saved-source changes that need review. **Check freshness and current file** repeats the bounded inspection. Source currentness, file state and baseline availability are separate: matching source fingerprints do not prove that the decision is correct or that its file is unchanged.
+
+The view explains changed selected questions, answers, answer certainty, review flags, parentage, guidance, included evidence, dependency relationships and upstream prerequisite fingerprints. It also compares selected research-stale flags and the scenario/preference captured with reviewed wording. Unrelated question text and disconnected dependencies do not directly enter this comparison. Existing research rules can conservatively mark selected research stale after another answer or dependency changes, because saved research lacks complete context dependencies; ADRs that include that evidence report the changed flag. Missing selected nodes remain missing; similar names are not substituted. A missing current scenario proof or historical dependency capture is reported as unavailable coverage.
+
+Dependency relationships are user assertions. New scope reviews include relevant relationships and fingerprints of upstream prerequisite records, including transitive prerequisites. They also include relationships involving a selected question. Unselected prerequisite answer text stays excluded from model input: select that question explicitly before asking the draft helper to use its answer. Dependency changes invalidate newly reviewed scope and wording, preventing old wording from acquiring a newer context capture it never reviewed. This feature performs no external research.
+
+## Regenerate and compare
+
+1. **Review source scope** opens the explicit ADR scope selection. Inspect current selected records and any research evidence, then save the reviewed scope.
+2. **Review / generate ADR wording** opens the existing draft workflow. Review exact helper input, explicitly generate, edit wording, check readiness and accept the proposed wording into the exploration. No step approves the architectural decision.
+3. Return through **Preview saved ADR file** or **Review ADR updates**. Within this page, Explorer remembers the selected record for the same journey. After a reload, select the intended record explicitly.
+4. **Compare regenerated proposal** checks current sources and the destination, then shows three complete literal texts: the stored generated baseline, the current file and the proposed replacement. Source IDs for the original and proposed selection are visible; a changed or unavailable original selection requires a separate acknowledgment.
+5. Choose **Keep current file unchanged**, or explicitly check **Replace the complete current file** and confirm **Replace reviewed proposed ADR**. No replacement is selected by default.
+
+This is whole-file conflict resolution. Explorer does not guess a text merge. Keeping the current file preserves every manual addition and leaves any stale sources unresolved. Choosing replacement discards differences that are absent from the displayed proposal, including manual additions. Incorporate desired wording through the draft editor before preparing another comparison. The baseline is the last generated text, so later lifecycle-only changes can also appear as differences; they are not assumed to be manual edits.
+
+Ordinary **Preview exact Markdown and path** retains its original strict update behavior: the file must match its recorded bytes. The separate reviewed replacement path can inspect a changed managed proposed file and require an explicit complete replacement choice. It retains both the original exploration association and the exact observed filesystem bytes/identity. A change after preview, including during final asynchronous source checks, rejects publication. Confirmation never silently changes the destination or record identity.
+
+Accepted decisions cannot regenerate in place. **Manage ADR lifecycle** opens the selected decision and selects successor creation when eligible. Review the new proposed successor and its predecessor references, then separately accept the successor if appropriate. Missing or externally modified accepted parents remain unresolved under the lifecycle's exact-byte guards; they are not silently re-baselined. Deprecated/superseded records retain the transition limits described in [ADR lifecycle](adr-lifecycle.md).
+
+## Refresh and recovery
+
+Opening, explicitly refreshing, or changing the selected record inspects one file. While the update view is open, relevant saved changes trigger one new bounded inspection. Unrelated saves do not reread that file, though the stricter write-preview token is invalidated by any saved change. Hidden/suspended views do not scan files. External Markdown edits alone are discovered on explicit refresh/open or during a later guarded preview/save; this is not a filesystem watcher.
+
+Missing files, inaccessible roots, invalid encoding, oversized files, wrong working-folder bases and unsupported linked files remain visible unresolved states. No replacement file is fabricated. Shared ADR locations retain both their original working-directory semantics and the recorded Git-root-relative path check.
+
+Confirmed replacements use the existing private recoverable writer. A timeout or closed dialog does not prove that nothing saved. Refresh saved status to inspect the exact confirmed content and retry the unfinished association/completion if permitted. Recovery preserves the original association base separately from the observed file base. After publication it may finish the historical association while retaining newer answers; conflicting associations remain blocked. See [ADR file recovery](adr-files.md).
+
+## Compatibility and limits
+
+New generated files, proposed updates and successors store optional `generated:{version:1,content}` in their portable ADR association. Lifecycle metadata changes preserve that historical baseline. Legacy records have no invented baseline; they can still compare the current file and proposal, with explicit replacement acknowledgment. Imported stored text is historical data, not independently verified generation provenance. Collaborators must commit and pull both the shared exploration and Markdown.
+
+New reviewed scopes have optional `reviewContext`, and new source captures copy that reviewed context and scenario digest into optional `freshness`. Legacy scopes retain their earlier narrow freshness behavior. The new update view discloses that their wider context is unavailable; explicitly reviewing a new scope and wording supplies it. Older plugin versions may reject these optional fields, so collaborators should use the current version.
+
+Each baseline/file and reviewed dependency context is bounded to 64 KiB. Source captures remain bounded to 64 KiB, scope input to 128 KiB, shared documents to 9 MiB, ordinary private intents to 256 KiB, requests to 16 KiB and responses to 512 KiB. Baselines and both association/file bases count toward existing journal/document limits; a large otherwise-valid file can exceed the combined limit. Exact previews and files are never clipped. The source-reason list shows at most 200 entries and explicitly reports any additional reason count.
+
+Automated coverage includes context/schema, scope/draft lifecycle, local filesystem/Git portability, interruption/restart, HTTP and jsdom behavior. Private answer text/caret stays intact, and late/hidden previews cannot authorize writes. Native narrow-pane layout, keyboard, screen-reader, theme and IME checks remain owner-performed. No browser/desktop automation was used.

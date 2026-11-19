@@ -14,6 +14,7 @@ import { readSharedDocument } from '../com.github.copilot/extensions/explorer/sh
 import { atomicWrite } from '../com.github.copilot/extensions/explorer/storage.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { adrFileDocument, saveAdrFixture } from './helpers/adr-file.mjs';
+import { adrBytesDigest } from '../com.github.copilot/extensions/explorer/adr-file.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'adr-file-flow-')), root = join(directory, 'project'), file = join(directory, 'map.explore.json'); await mkdir(root); await writeFile(file, JSON.stringify(adrFileDocument()));
@@ -49,6 +50,97 @@ test('ADR managed update previews a complete before/after comparison and keeps i
   const next = structuredClone(f.e.doc); next.adrDraft.title = 'Edited proposed title'; next.adrDraft.titleEdited = true; next.adrDraft.sections.outcome[0].text = 'Exact edited decision λ'; next.adrDraft.sections.outcome[0].edited = true; await f.e.save(next);
   const update = await f.prepare({ kind: 'update', id: original.id }); assert.equal(update.mode, 'update'); assert.equal(update.oldContent, first.content); assert.equal(update.path, first.path); assert.match(update.content, /Edited proposed title/);
   await f.save(update); assert.equal(f.e.doc.adrFiles[0].id, original.id); assert.equal(f.e.doc.adrFiles[0].path, original.path); assert.notEqual(f.e.doc.adrFiles[0].sha256, original.sha256); assert.equal(f.e.doc.adrFiles.length, 1);
+});
+
+test('ADR update review retains portable baseline, observes manual additions and requires explicit whole-file replacement', async t => {
+  const f = await fixture(t), first = await f.prepare(); await f.save(first); const record = structuredClone(f.e.doc.adrFiles[0]);
+  assert.equal(record.generated.content, first.content);
+  const manual = first.content.replace('<!-- copilot-explorer-adr:', '## Manual addition\n\nKeep this human reasoning.\n\n<!-- copilot-explorer-adr:');
+  await writeFile(join(f.root, first.path), manual);
+  const inspect = await f.request({ action: 'inspect', id: record.id, revision: f.e.doc.revision });
+  assert.equal(inspect.file.status, 'modified'); assert.equal(inspect.file.content, manual); assert.equal(inspect.freshness.status, 'current');
+  await assert.rejects(f.prepare({ kind: 'update', id: record.id }), /changed|conflict/i);
+  const draft = structuredClone(f.e.doc); draft.adrDraft.sections.outcome[0].text = 'New reviewed wording'; draft.adrDraft.sections.outcome[0].edited = true; await f.e.save(draft);
+  const preview = await f.prepare({ kind: 'review-update', id: record.id });
+  assert.equal(preview.baseline, first.content); assert.equal(preview.oldContent, manual); assert.equal(preview.requiresResolution, true); assert.match(preview.content, /New reviewed wording/);
+  await assert.rejects(f.save(preview), /resolution|replace|explicit/i); assert.equal(await readFile(join(f.root, first.path), 'utf8'), manual);
+  const result = await f.request({ action: 'save', token: preview.token, revision: f.e.doc.revision, resolution: 'replace' });
+  assert.equal(result.recovery.phase, 'complete'); assert.equal(await readFile(join(f.root, first.path), 'utf8'), preview.content);
+  assert.equal(f.e.doc.adrFiles[0].generated.content, preview.content); assert.equal(f.e.doc.adrFiles[0].id, record.id); assert.equal(f.calls(), 0);
+  assert.match((await f.e.readDrafts(f.journey)).entries[0].text, /PRIVATE_ANSWER_DRAFT/);
+});
+
+test('ADR update keep-current cancellation and unavailable legacy baseline never silently replace a file', async t => {
+  const f = await fixture(t), first = await f.prepare(); await f.save(first);
+  const next = structuredClone(f.e.doc); delete next.adrFiles[0].generated; await f.e.save(next);
+  const preview = await f.prepare({ kind: 'review-update', id: next.adrFiles[0].id });
+  assert.equal(preview.baseline, null); assert.equal(preview.requiresResolution, true);
+  const store = await f.e.adrWriter.storage(f.e), before = await readFile(store.journalFile, 'utf8');
+  await f.request({ action: 'cancel', clientId: preview.clientId, sequence: preview.sequence + 1 });
+  await assert.rejects(f.request({ action: 'save', token: preview.token, revision: f.e.doc.revision, resolution: 'replace' }), /obsolete|preview/i);
+  assert.equal(await readFile(store.journalFile, 'utf8'), before); assert.equal(await readFile(join(f.root, first.path), 'utf8'), first.content);
+});
+
+test('ADR selected-file inspection keeps missing files and unavailable scenario proof visible without model calls or writes', async t => {
+  const f = await fixture(t), first = await f.prepare(); await f.save(first); const id = f.e.doc.adrFiles[0].id;
+  await rm(join(f.root, first.path)); f.e.scenarioPolicy = async () => { throw Error('Unavailable policy'); };
+  const result = await f.request({ action: 'inspect', id, revision: f.e.doc.revision });
+  assert.equal(result.file.status, 'missing'); assert.equal(result.file.content, null); assert.equal(result.freshness.coverage.scenario, 'unavailable');
+  assert.equal(f.e.doc.adrFiles[0].id, id); assert.equal(f.calls(), 0);
+});
+
+for (const change of ['file', 'source', 'association', 'root']) test(`ADR reviewed replacement rejects intervening ${change} changes`, async t => {
+  const f = await fixture(t), first = await f.prepare(); await f.save(first); const id = f.e.doc.adrFiles[0].id;
+  const manual = first.content.replace('<!-- copilot-explorer-adr:', 'Human addition\n<!-- copilot-explorer-adr:'); await writeFile(join(f.root, first.path), manual);
+  const preview = await f.prepare({ kind: 'review-update', id }); let expected = manual;
+  if (change === 'file') { expected = manual.replace('Human addition', 'Newer human addition'); await writeFile(join(f.root, first.path), expected); }
+  if (change === 'source' || change === 'association') { const next = structuredClone(f.e.doc); if (change === 'source') next.nodes[1].answer += ' correction'; else next.adrFiles[0].title += ' correction'; await f.e.save(next); }
+  if (change === 'root') { const other = join(f.directory, 'other'); await mkdir(other); f.changeRoot(other); }
+  let result; try { result = await f.request({ action: 'save', token: preview.token, revision: f.e.doc.revision, resolution: 'replace' }); } catch (error) { assert.match(error.message, /changed|obsolete|stale|blocker|review/i); }
+  if (result) assert.notEqual(result.recovery?.fileSaved, true);
+  assert.equal(await readFile(join(f.root, first.path), 'utf8'), expected);
+});
+
+test('ADR reviewed replacement recovery retains both original association and observed file bases across restart', async t => {
+  const f = await fixture(t), first = await f.prepare(); await f.save(first); const original = structuredClone(f.e.doc.adrFiles[0]);
+  await writeFile(join(f.root, first.path), first.content.replace('<!-- copilot-explorer-adr:', 'Manual prior text\n<!-- copilot-explorer-adr:'));
+  const preview = await f.prepare({ kind: 'review-update', id: original.id });
+  f.e.adrWriter.fault = async phase => { if (phase === 'before-association') throw Error('Interrupted replacement association'); };
+  const partial = await f.request({ action: 'save', token: preview.token, revision: f.e.doc.revision, resolution: 'replace' });
+  assert.equal(partial.recovery.fileSaved, true); assert.equal(partial.recovery.associationSaved, false); assert.deepEqual(f.e.doc.adrFiles[0], original);
+  const store = await f.e.adrWriter.storage(f.e), intent = await store.readIntent(); assert.deepEqual(intent.associationBase, original); assert.notEqual(intent.base.sha256, original.sha256);
+  const next = structuredClone(f.e.doc); next.nodes[1].answer += ' NEWER_CORRECTION'; await f.e.save(next);
+  const reopened = await f.reopen(); const done = await reopened.adrFileRequest({ action: 'reconcile', journey: f.journey, operationId: partial.recovery.id, revision: reopened.doc.revision });
+  assert.equal(done.recovery.phase, 'complete'); assert.match(reopened.doc.nodes[1].answer, /NEWER_CORRECTION/); assert.equal(reopened.doc.adrFiles[0].generated.content, preview.content);
+});
+
+test('ADR reviewed replacement preserves a human edit made during the final async source guard', async t => {
+  const f = await fixture(t), first = await f.prepare(); await f.save(first); const id = f.e.doc.adrFiles[0].id;
+  const preview = await f.prepare({ kind: 'review-update', id }), original = f.e.adrWriter.checkSource.bind(f.e.adrWriter); let calls = 0;
+  const newer = first.content.replace('<!-- copilot-explorer-adr:', 'FINAL_HUMAN_EDIT\n<!-- copilot-explorer-adr:');
+  f.e.adrWriter.checkSource = async (...args) => { await original(...args); if (++calls === 2) await writeFile(join(f.root, first.path), newer); };
+  const result = await f.request({ action: 'save', token: preview.token, revision: f.e.doc.revision, resolution: 'replace' });
+  assert.equal(calls, 2); assert.notEqual(result.recovery?.fileSaved, true); assert.equal(await readFile(join(f.root, first.path), 'utf8'), newer);
+});
+
+test('ADR update inspection and replacement enforce HTTP fields, revision and accepted successor routing', async t => {
+  const f = await fixture(t), first = await f.prepare(); await f.save(first); const id = f.e.doc.adrFiles[0].id, inspect = { action: 'inspect', id, revision: f.e.doc.revision };
+  assert.equal((await f.post(inspect, { Origin: 'http://other.invalid' })).status, 403);
+  assert.equal((await f.post({ ...inspect, unknown: true })).status, 400);
+  assert.equal((await f.post({ ...inspect, revision: inspect.revision - 1 })).status, 400);
+  const lifecycle = await f.e.adrLifecycleRequest({ action: 'prepare', journey: f.journey, clientId: randomUUID(), sequence: 1, selection: { kind: 'accept', id } });
+  await f.e.adrLifecycleRequest({ action: 'save', journey: f.journey, token: lifecycle.token, revision: f.e.doc.revision });
+  const state = await f.request({ action: 'inspect', id, revision: f.e.doc.revision }); assert.equal(state.entry.status, 'accepted'); assert.equal(state.file.status, 'matches'); assert.equal(state.baseline, first.content);
+  await assert.rejects(f.prepare({ kind: 'review-update', id }), /successor|proposed/i);
+});
+
+test('ADR oversized three-way previews reject before exposing a save token or changing recovery intent', async t => {
+  const f = await fixture(t), first = await f.prepare(); await f.save(first); const next = structuredClone(f.e.doc), entry = next.adrFiles[0];
+  const huge = first.content.replace('<!-- copilot-explorer-adr:', '\0'.repeat(45000) + '<!-- copilot-explorer-adr:');
+  entry.generated.content = huge; entry.sha256 = adrBytesDigest(huge); await f.e.save(next); await writeFile(join(f.root, first.path), huge);
+  const store = await f.e.adrWriter.storage(f.e), before = await readFile(store.journalFile, 'utf8');
+  await assert.rejects(f.prepare({ kind: 'review-update', id: entry.id }), /response limit/i);
+  assert.equal(f.e.adrWriter.current, null); assert.equal(await readFile(store.journalFile, 'utf8'), before); assert.equal(await readFile(join(f.root, first.path), 'utf8'), huge);
 });
 
 test('ADR workflow rejects stale wording, readiness, root and expired reviews without writing project files', async t => {
@@ -109,10 +201,10 @@ test('ADR status lists bounded metadata rather than duplicating every historical
   const f = await fixture(t), doc = structuredClone(f.e.doc);
   doc.pins = Array.from({ length: 10 }, (_, i) => ({ id: `constraint-${String(i).padStart(20, '0')}`, text: `Constraint ${i} ` + 'x'.repeat(970) }));
   await f.e.save(saveAdrFixture(doc, (await f.e.scenarioPolicy()).label)); const p = await f.prepare(); await f.save(p);
-  const original = f.e.doc.adrFiles[0], records = Array.from({ length: 50 }, (_, i) => ({ ...structuredClone(original), id: randomUUID(), path: `docs/decisions/${i}.md` }));
+  const original = f.e.doc.adrFiles[0], records = Array.from({ length: 50 }, (_, i) => { const id = randomUUID(); return { ...structuredClone(original), id, path: `docs/decisions/${i}.md`, generated: { version: 1, content: original.generated.content.replaceAll(original.id, id) } }; });
   await f.e.save({ ...structuredClone(f.e.doc), adrFiles: records });
   const response = await f.post({ action: 'status' }); assert.equal(response.status, 200); assert.equal(response.value.entries.length, 50);
-  assert.ok(response.value.entries.every(entry => entry.hasSources === true && entry.sources === undefined)); assert.ok(Buffer.byteLength(JSON.stringify(response.value)) < 128 * 1024);
+  assert.ok(response.value.entries.every(entry => entry.hasSources === true && entry.sources === undefined && entry.generated === undefined)); assert.ok(Buffer.byteLength(JSON.stringify(response.value)) < 128 * 1024);
 });
 
 test('ADR source inspection returns one immutable capture with current or unavailable status and rejects stale bindings', async t => {

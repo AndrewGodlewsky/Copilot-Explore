@@ -473,3 +473,8 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #portable-reference-dialog textarea { display: block; width: 100%; box-sizing: border-box; margin: .4rem 0 .7rem; }
 #portable-reference-dialog button { margin: .35rem .35rem .35rem 0; }
 .portable-reference-preview { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+#adr-file-baseline, #adr-file-current { max-height: 36vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#adr-file-inspection, #adr-file-scope-note { min-width: 0; overflow-wrap: anywhere; }
+#adr-file-update-choice, #adr-file-scope-change { display: block; margin-block: 12px; }
+#adr-file-update-choice[hidden], #adr-file-scope-change[hidden] { display: none; }

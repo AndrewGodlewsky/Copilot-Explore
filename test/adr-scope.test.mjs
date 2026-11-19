@@ -151,7 +151,7 @@ test('ADR scope rejects altered request fields, wrong-purpose, replaced and canc
 
 test('ADR scope preview rejects changed selected answers, guidance and opted-in evidence', async t => {
   const f = await setup(t);
-  for (const mutate of [d => d.nodes.find(n => n.id === f.focal.id).answer += ' correction', d => d.objective += ' changed', d => d.nodes.find(n => n.id === f.focal.id).research.claims[0].limitations += ' changed']) {
+  for (const mutate of [d => d.nodes.find(n => n.id === f.focal.id).answer += ' correction', d => d.objective += ' changed', d => d.nodes.find(n => n.id === f.focal.id).research.claims[0].limitations += ' changed', d => { d.dependencies = [{ dependentId: f.focal.id, prerequisiteId: f.omitted.id }]; }, d => { d.nodes.find(n => n.id === f.focal.id).researchStale = true; }]) {
     const p = await f.preview({ selection: { ...f.selection, includeEvidence: true } }), changed = structuredClone(f.e.doc); mutate(changed); await f.e.save(changed);
     await assert.rejects(f.save(p), /changed|review/i); assert.equal(f.e.doc.adrScope, undefined);
   }

@@ -8,6 +8,7 @@ import { researchEvidence, guidanceText, pinnedConstraints } from './model.mjs';
 import { validMode } from './web/modes.mjs';
 import { RESEARCH_CONTEXT_LIMIT, SCENARIO_CONTEXT_GUIDANCE } from './research-context.mjs';
 import { savedDigest } from './review-causes.mjs';
+import { adrReviewContext, ADR_REVIEW_CONTEXT_GUIDANCE } from './adr-review-context.mjs';
 
 export const ADR_SECTIONS = ['context', 'drivers', 'alternatives', 'outcome', 'consequences', 'confirmation', 'optionDetails'];
 const keys = (value, names) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === names.split(',').sort().join(',');
@@ -24,7 +25,7 @@ export function prepareAdrDraft(doc, { scenario } = {}) {
   const scopeInput = prepareAdrScope(doc, doc.adrScope.selection, { scenario }), format = validateAdrFormat(doc.adrFormat ?? defaultAdrFormat());
   const context = { ...scopeInput.context, format: format.layout };
   const instructions = instructionText + HANDOFF_OMISSIONS;
-  const prompt = SCENARIO_CONTEXT_GUIDANCE + '\nReviewed ADR draft inputs (saved data only):\n' + JSON.stringify(context);
+  const prompt = SCENARIO_CONTEXT_GUIDANCE + '\n' + ADR_REVIEW_CONTEXT_GUIDANCE + '\nReviewed ADR draft inputs (saved data only):\n' + JSON.stringify(context);
   const bytes = Buffer.byteLength(instructions) + Buffer.byteLength(prompt);
   if (bytes > RESEARCH_CONTEXT_LIMIT) throw Error('Selected ADR draft inputs and instructions exceed the 128 KiB limit. Select fewer records or omit evidence; selected content was not truncated.');
   return freeze({ operation: 'adr-draft', context, instructions, prompt, bytes, limit: RESEARCH_CONTEXT_LIMIT, format, scope: validateAdrScope(doc.adrScope),
@@ -102,6 +103,7 @@ export function adrDraftFreshness(value, doc, scenario) {
     if (!equal(scope, validateAdrScope(doc.adrScope)) || !equal(validateAdrFormat(value.format), validateAdrFormat(doc.adrFormat ?? defaultAdrFormat()))) return 'stale';
     const fresh = briefFreshness(value, doc); if (fresh !== 'current') return fresh;
     const current = selectedInputs(doc, scope.selection.nodeIds, scope.selection.includeEvidence).context;
+    if (scope.reviewContext && !equal(scope.reviewContext, adrReviewContext(doc, scope.selection.nodeIds, scope.selection.includeEvidence))) return 'stale';
     if (!equal(current.evidence, value.evidence) || savedDigest(current.evidence) !== scope.evidenceDigest || scenario !== undefined && savedDigest(scenario) !== scope.scenarioDigest) return 'stale';
     return 'current';
   } catch { return 'stale'; }

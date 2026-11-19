@@ -25,6 +25,8 @@ Closing, changing the selected ADR, switching journeys, suspension or a changed 
 
 ## Locations and Git evidence
 
+**Review ADR updates** adds dependency, included research-staleness and scenario comparison when those were captured with the reviewed scope. It reports missing wider historical coverage rather than inferring it, and compares a portable generated baseline with the actual file and a separately reviewed proposal. The source inspector above retains its narrower selected-content meaning of “current.” See [ADR update review](adr-updates.md).
+
 Existing ADR association `path` remains relative to the attached session's current **working directory**. This preserves the original writer's destination semantics. A shared capture separately records its journey path and `adrPath` relative to the **Git repository root**. For example, an ADR written from `services/api` may have association path `docs/decisions/0001-store.md` and captured Git-relative ADR path `services/api/docs/decisions/0001-store.md`.
 
 Updates to a captured shared ADR reject a different resolved Git-relative destination, even if a same-named copy has matching bytes and a managed marker. Open the original working folder before updating that recorded file. Legacy records cannot supply this additional captured location proof and retain their existing byte/identity checks.

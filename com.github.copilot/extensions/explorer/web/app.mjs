@@ -692,6 +692,7 @@ function apply(next, reset = false) {
   if (briefOperation === 'adrDraft' && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) { adrDraftReview.close(); adrDraftReview.error = 'Saved inputs or scenario changed. Review current ADR input before generating.'; invalidateAdrReadiness('Saved inputs changed. Check readiness again; manual wording is retained.'); renderAdrDraftReview(); }
   if ($('adr-questions-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) invalidateAdrQuestions('Saved inputs or scenario changed. Refresh and review again.');
   if (adrFormat && (adrFormat.value || adrFormat.action === 'prepare') && !changedDocument && JSON.stringify(state.document) !== JSON.stringify(next.document)) invalidateAdrFormat('Saved journey changed. Review the format again before saving.');
+  const refreshAdrUpdate = adrFile?.updates && !changedDocument && adrUpdateKey(state, $('adr-file-selection').value) !== adrUpdateKey(next, $('adr-file-selection').value);
   if (adrFile && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) invalidateAdrFile('Saved inputs changed. Refresh status and review again.');
   if (adrLifecycle && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) invalidateAdrLifecycle('Saved inputs changed. Refresh status and review again.');
   if ($('adr-scope-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) {
@@ -743,6 +744,7 @@ function apply(next, reset = false) {
     acceptedIds.clear(); acceptedParentId = null;
   }
   signature = stamp; state = next;
+  if (refreshAdrUpdate && adrFile) { adrFile.inspection = null; $('adr-file-inspection').hidden = true; adrFile.needsInspect = true; scheduleAdrInspection(); }
   comments.update();
   reviewHandoffs.update();
   portableReferences.update();
@@ -785,6 +787,7 @@ function apply(next, reset = false) {
   $('adr-questions-open').hidden = !doc;
   $('adr-draft-open').hidden = !doc;
   $('adr-file-open').hidden = !doc;
+  $('adr-updates-open').hidden = !doc;
   $('adr-lifecycle-open').hidden = !doc;
   $('adr-format-open').hidden = !doc;
   $('check-answers').hidden = !doc; $('challenge-decisions').hidden = !doc;
@@ -3472,7 +3475,21 @@ $('adr-questions-start').addEventListener('click', async () => {
   else invalidateAdrQuestions($('notice').textContent || 'Refresh and review before generating again.');
 });
 
-let adrFile = null;
+let adrFile = null, adrUpdateTarget = null;
+function adrUpdateKey(snapshot, id) {
+  const doc = snapshot.document, entry = doc?.adrFiles?.find(r => r.id === id); if (!entry) return JSON.stringify([doc?.id, id, null]);
+  const selected = new Set(entry.sources?.nodes.map(n => n.record.id) ?? []), closure = new Set(selected), incoming = new Map();
+  for (const edge of doc.dependencies ?? []) { const list = incoming.get(edge.dependentId) ?? []; list.push(edge.prerequisiteId); incoming.set(edge.dependentId, list); }
+  const queue = [...closure]; for (let i = 0; i < queue.length; i++) for (const id of incoming.get(queue[i]) ?? []) if (!closure.has(id)) { closure.add(id); queue.push(id); }
+  const records = doc.nodes.filter(n => closure.has(n.id)).map(n => ({ id: n.id, parentId: n.parentId, question: n.question, answer: n.answer, answerState: n.answerState, review: n.review, kind: n.kind, origin: n.origin,
+    ...(selected.has(n.id) ? { category: n.category, ...(entry.sources?.includeEvidence ? { researchStale: n.researchStale, evidence: { basis: n.research?.basis, sources: n.research?.sources, claims: n.research?.claims } } : {}) } : {}) }));
+  return JSON.stringify([entry, records, (doc.dependencies ?? []).filter(e => closure.has(e.dependentId) || selected.has(e.prerequisiteId)), doc.topic, doc.objective, doc.successCriteria, doc.mode, doc.pins, snapshot.scenario]);
+}
+function scheduleAdrInspection() {
+  const f = adrFile; if (!adrFileCurrent(f) || !f.needsInspect || f.flight || busy || f.inspectQueued || $('adr-file-selection').value === 'new') return;
+  f.inspectQueued = true;
+  setTimeout(() => { f.inspectQueued = false; if (adrFileCurrent(f) && f.needsInspect && !f.flight && !busy) { f.needsInspect = false; void requestAdrFile('inspect'); } }, 0);
+}
 const adrSources = new AdrSourcesClient({ $, active: () => adrFileCurrent(adrFile) && !busy && !adrFile.flight,
   openReference: text => { closeAdrFile(false); portableReferences.prefill(text); } });
 const adrFileCurrent = f => !!f && adrFile === f && !closed && !suspended && f.page === pageEpoch && f.journey === (state.activeKey ?? state.document?.id) && $('adr-file-dialog').open;
@@ -3483,7 +3500,12 @@ function adrFileControls() {
   $('adr-file-number').disabled = locked || $('adr-file-selection').value !== 'new' || f?.format?.naming === 'slug';
   $('adr-file-sources').disabled = locked || $('adr-file-selection').value === 'new'; adrSources.update(locked);
   $('adr-file-review').disabled = locked || $('adr-file-selection').value !== 'new' && f?.entries?.find(record => record.id === $('adr-file-selection').value)?.status !== 'proposed';
-  $('adr-file-save').disabled = locked || !f.value || Date.now() >= f.value.expiresAt;
+  $('adr-file-inspect').disabled = locked || $('adr-file-selection').value === 'new';
+  $('adr-file-update').disabled = locked || !f?.inspection || f.inspection.entry.status !== 'proposed' || !['matches', 'modified'].includes(f.inspection.file.status) || !f.hasDraft;
+  for (const name of ['regenerate', 'draft', 'keep', 'replace', 'scope-ack']) $(`adr-file-${name}`).disabled = locked;
+  const updating = f?.value?.mode === 'review-update';
+  $('adr-file-save').disabled = locked || !f.value || Date.now() >= f.value.expiresAt || updating && (!$('adr-file-replace').checked || !$('adr-file-scope-change').hidden && !$('adr-file-scope-ack').checked);
+  $('adr-file-save').textContent = updating ? 'Replace reviewed proposed ADR' : 'Save ADR';
   $('adr-file-retry').hidden = !f?.recovery?.canReconcile; $('adr-file-retry').disabled = locked;
   $('adr-file-discard').hidden = !f?.recovery?.canDiscard; $('adr-file-discard').disabled = locked;
 }
@@ -3499,27 +3521,40 @@ function invalidateAdrFile(message = 'Destination changed. Preview the current M
 }
 function closeAdrFile(focus = false) {
   invalidateAdrFile('Reopen to inspect saved status and review again.'); adrFile = null;
+  $('adr-file-inspection').hidden = true;
   if ($('adr-file-dialog').open) $('adr-file-dialog').close(); adrFileControls();
   if (focus) $('adr-file-open').focus();
 }
 function renderAdrFileStatus(result) {
-  const f = adrFile; f.format = result.format; f.recovery = result.recovery; f.revision = result.revision; f.entries = result.entries;
+  const f = adrFile; f.format = result.format; f.recovery = result.recovery; f.revision = result.revision; f.entries = result.entries; f.hasDraft = result.hasDraft;
   const selection = $('adr-file-selection'), selected = selection.value;
   selection.replaceChildren(new Option('New ADR file', 'new'));
   for (const record of result.entries) selection.append(new Option(`${record.status} ADR: ${record.path}`, record.id));
   if ([...selection.options].some(option => option.value === selected)) selection.value = selected;
+  if (f.preselect && [...selection.options].some(option => option.value === f.preselect)) { selection.value = f.preselect; f.preselect = null; }
   const recovery = result.recovery, part = value => value === true ? 'saved' : value === false ? 'not saved' : 'unknown';
   $('adr-file-status').textContent = [result.error, recovery ? `ADR file: ${part(recovery.fileSaved)}. Exploration association: ${part(recovery.associationSaved)}. ${recovery.message}` : result.hasDraft ? 'Saved proposed wording is available. Preview the exact Markdown and destination before saving.' : 'Accept proposed ADR wording into the exploration first.'].filter(Boolean).join(' ');
   $('adr-file-recovery').hidden = !recovery?.content;
   $('adr-file-recovery-path').textContent = recovery?.path ?? ''; $('adr-file-recovery-content').textContent = recovery?.content ?? '';
+  if (f.updates && selection.value !== 'new') f.needsInspect = true;
+}
+function renderAdrInspection(result) {
+  const f = adrFile; f.inspection = result; f.updates = true; adrUpdateTarget = { journey: f.journey, id: result.entry.id };
+  $('adr-file-inspection').hidden = false;
+  $('adr-file-baseline').textContent = result.baseline ?? 'Historical generated baseline unavailable. Current file bytes are not assumed to be the original generated text.';
+  $('adr-file-current').textContent = result.file.content ?? 'Current file unavailable; no replacement has been authorized.';
+  const freshness = result.freshness;
+  $('adr-file-freshness').textContent = `${result.entry.status} ADR: ${result.entry.path}. Sources: ${freshness.status}. File: ${result.file.status}. ${result.file.message ?? ''} ${freshness.reasons.map(r => r.message).join(' ')} ${freshness.omittedReasons ? `${freshness.omittedReasons} further change reasons omitted from this bounded list.` : ''} ${result.entry.status === 'proposed' ? '' : 'Changed reasoning requires a separately reviewed successor proposal when the lifecycle permits it.'}`;
 }
 async function requestAdrFile(action) {
   const f = adrFile; if (!adrFileCurrent(f) || f.flight || busy) return;
-  const writes = adrFileWrites(action), review = f.value;
+  const writes = adrFileWrites(action), review = f.value, preparing = ['prepare', 'review-update'].includes(action), updating = action === 'review-update';
   if (action === 'save' && (!review || Date.now() >= review.expiresAt)) return invalidateAdrFile('Preview expired. Review again before saving.');
+  if (action === 'save' && review.mode === 'review-update' && (!$('adr-file-replace').checked || !$('adr-file-scope-change').hidden && !$('adr-file-scope-ack').checked)) return;
+  if (action === 'inspect') { f.updates = true; f.needsInspect = false; }
   if (action === 'reconcile' && !f.recovery?.canReconcile || action === 'discard-operation' && !f.recovery?.canDiscard) return;
   const sequence = ++f.sequence, generation = ++f.epoch, abort = new AbortController(); f.flight = abort; f.action = action;
-  const input = { action, journey: f.journey, ...(action === 'sources' ? { id: $('adr-file-selection').value, revision: state.document.revision } : action === 'prepare' ? { clientId: f.clientId, sequence, selection: $('adr-file-selection').value === 'new' ? { kind: 'new', number: f.format?.naming === 'slug' ? null : Number($('adr-file-number').value) } : { kind: 'update', id: $('adr-file-selection').value } } : action === 'save' ? { token: review.token, revision: f.revision } : writes ? { operationId: f.recovery.id, revision: f.revision } : {}) };
+  const input = { action: preparing ? 'prepare' : action, journey: f.journey, ...(['sources', 'inspect'].includes(action) ? { id: $('adr-file-selection').value, revision: state.document.revision } : preparing ? { clientId: f.clientId, sequence, selection: $('adr-file-selection').value === 'new' ? { kind: 'new', number: f.format?.naming === 'slug' ? null : Number($('adr-file-number').value) } : { kind: updating ? 'review-update' : 'update', id: $('adr-file-selection').value } } : action === 'save' ? { token: review.token, revision: f.revision, ...(review.mode === 'review-update' ? { resolution: 'replace' } : {}) } : writes ? { operationId: f.recovery.id, revision: f.revision } : {}) };
   if (writes) { busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); }
   const mapEpoch = actionEpoch, timer = setTimeout(() => abort.abort(), 60000);
   f.value = null; clearTimeout(f.expiry); $('adr-file-preview').hidden = true; adrSources.clear(); adrFileControls();
@@ -3529,14 +3564,27 @@ async function requestAdrFile(action) {
     const result = await response.json();
     if (!adrFileCurrent(f) || !writes && generation !== f.epoch || writes && mapEpoch !== actionEpoch) return;
     if (!response.ok) throw Error(result.error);
-    if (result.journey !== f.journey || action === 'prepare' && (result.clientId !== f.clientId || result.sequence !== sequence)) throw Error('ADR file response changed. Refresh and review again.');
-    if (action === 'sources') {
+    if (result.journey !== f.journey || preparing && (result.clientId !== f.clientId || result.sequence !== sequence)) throw Error('ADR file response changed. Refresh and review again.');
+    if (action === 'inspect') {
+      if (result.entry.id !== input.id || $('adr-file-selection').value !== input.id || result.revision !== input.revision || state.document.revision !== input.revision) throw Error('ADR inspection changed. Refresh and inspect again.');
+      f.revision = result.revision; renderAdrInspection(result); $('adr-file-status').textContent = 'Currentness and file comparison loaded. Regenerate wording explicitly, then compare before replacing.';
+    } else if (action === 'sources') {
       if (result.id !== input.id || result.revision !== input.revision || state.document.revision !== input.revision) throw Error('ADR source view changed. Refresh and inspect again.');
       adrSources.render(result); $('adr-file-status').textContent = 'Historical sources loaded. Inspect a portable reference explicitly to open current content.';
-    } else if (action === 'prepare') {
+    } else if (preparing) {
       f.value = result; $('adr-file-preview').hidden = false; $('adr-file-path').textContent = result.path; $('adr-file-content').textContent = result.content;
       $('adr-file-old').textContent = result.oldContent ?? ''; $('adr-file-before').hidden = result.oldContent === null; $('adr-file-notes').textContent = result.message;
       const report = result.readiness; $('adr-file-readiness').textContent = `${report.blockers} correctness blockers. ${report.items.filter(item => item.severity === 'advisory').length} advisory gaps. ${report.items.map(item => item.reason).join(' ')}`;
+      $('adr-file-replace').checked = false; $('adr-file-scope-ack').checked = false;
+      $('adr-file-update-choice').hidden = !updating; $('adr-file-keep').hidden = !updating; $('adr-file-scope-change').hidden = true; $('adr-file-scope-note').textContent = '';
+      if (updating) {
+        const entry = f.entries.find(r => r.id === $('adr-file-selection').value);
+        renderAdrInspection({ entry, baseline: result.baseline, freshness: result.freshness, file: { content: result.oldContent, status: f.inspection?.file.status ?? 'modified', message: result.requiresResolution ? 'Manual differences or an unavailable baseline require an explicit replacement choice.' : 'Current bytes match the generated baseline.' } });
+        $('adr-file-before').hidden = true;
+        const original = [...result.originalSourceIds].sort(), proposed = [...result.sourceIds].sort();
+        $('adr-file-scope-change').hidden = JSON.stringify(original) === JSON.stringify(proposed);
+        $('adr-file-scope-note').textContent = `Original source selection: ${original.join(', ') || 'unavailable'}. Proposed source selection: ${proposed.join(', ')}. Review any changed selection before replacement.`;
+      }
       $('adr-file-status').textContent = 'Read the complete proposed Markdown and path. Save ADR confirms exactly this file.';
       f.expiry = setTimeout(() => { if (adrFileCurrent(f) && f.value === result) invalidateAdrFile('Preview expired. Review again.'); }, Math.max(0, result.expiresAt - Date.now()));
     } else {
@@ -3547,18 +3595,24 @@ async function requestAdrFile(action) {
     if (adrFileCurrent(f) && (writes || generation === f.epoch)) $('adr-file-status').textContent = `${abort.signal.aborted ? 'Request timed out.' : error.message} ${writes ? 'Refresh status to check which parts saved before retrying.' : 'Review again after correcting the problem.'}`;
   } finally {
     clearTimeout(timer); if (writes && mapEpoch === actionEpoch) busy = false;
-    if (adrFileCurrent(f) && f.flight === abort) { f.flight = null; f.action = null; adrFileControls(); }
+    if (adrFileCurrent(f) && f.flight === abort) { f.flight = null; f.action = null; adrFileControls(); scheduleAdrInspection(); }
   }
 }
-$('adr-file-open').addEventListener('click', () => {
+function openAdrFile(updates = false) {
   if (!state.document || !switchAllowed('saving an ADR file')) return;
-  closeAdrFile(); adrFile = { journey: state.activeKey ?? state.document.id, page: pageEpoch, clientId: crypto.randomUUID(), sequence: 0, epoch: 0, value: null, recovery: null, flight: null, revision: state.document.revision };
+  const journey = state.activeKey ?? state.document.id, target = updates && adrUpdateTarget?.journey === journey && state.document.adrFiles?.some(r => r.id === adrUpdateTarget.id) ? adrUpdateTarget.id : updates ? state.document.adrFiles?.[0]?.id : null;
+  closeAdrFile(); adrFile = { journey, page: pageEpoch, clientId: crypto.randomUUID(), sequence: 0, epoch: 0, value: null, recovery: null, flight: null, revision: state.document.revision, updates, preselect: target, inspection: null };
   $('adr-file-selection').replaceChildren(new Option('New ADR file', 'new')); $('adr-file-number').value = '1'; $('adr-file-recovery').hidden = true;
   $('adr-file-dialog').showModal(); void requestAdrFile('status');
-});
-$('adr-file-from-draft').addEventListener('click', () => { if (!adrDraftSavePending && !briefBusy) { hideBrief(); $('adr-file-open').click(); } });
-for (const name of ['selection', 'number']) for (const event of ['input', 'change']) $(`adr-file-${name}`).addEventListener(event, () => { if (adrFileCurrent(adrFile) && !adrFile.flight) invalidateAdrFile(); });
-for (const [name, action] of [['review', 'prepare'], ['sources', 'sources'], ['save', 'save'], ['retry', 'reconcile'], ['discard', 'discard-operation']]) $(`adr-file-${name}`).addEventListener('click', () => void requestAdrFile(action));
+}
+$('adr-file-open').addEventListener('click', () => openAdrFile());
+$('adr-updates-open').addEventListener('click', () => openAdrFile(true));
+$('adr-file-from-draft').addEventListener('click', () => { if (!adrDraftSavePending && !briefBusy) { hideBrief(); openAdrFile(adrUpdateTarget?.journey === (state.activeKey ?? state.document?.id)); } });
+for (const name of ['selection', 'number']) for (const event of ['input', 'change']) $(`adr-file-${name}`).addEventListener(event, () => { if (adrFileCurrent(adrFile) && !adrFile.flight) { invalidateAdrFile(); adrFile.inspection = null; $('adr-file-inspection').hidden = true; adrFile.needsInspect = !!adrFile.updates; adrFileControls(); scheduleAdrInspection(); } });
+for (const [name, action] of [['review', 'prepare'], ['sources', 'sources'], ['inspect', 'inspect'], ['update', 'review-update'], ['save', 'save'], ['retry', 'reconcile'], ['discard', 'discard-operation']]) $(`adr-file-${name}`).addEventListener('click', () => void requestAdrFile(action));
+for (const id of ['adr-file-replace', 'adr-file-scope-ack']) $(id).addEventListener('change', adrFileControls);
+$('adr-file-keep').addEventListener('click', () => { if (adrFileCurrent(adrFile) && !adrFile.flight && !busy) invalidateAdrFile('Current file kept unchanged. No replacement was saved.'); });
+for (const [id, target] of [['adr-file-regenerate', 'adr-scope-open'], ['adr-file-draft', 'adr-draft-open']]) $(id).addEventListener('click', () => { if (adrFileCurrent(adrFile) && !adrFile.flight && !busy) { closeAdrFile(); $(target).click(); } });
 $('adr-file-refresh').addEventListener('click', async () => { const f = adrFile; if (adrFileCurrent(f) && !f.flight && await api('refresh-answer') && adrFileCurrent(f)) { invalidateAdrFile(); await requestAdrFile('status'); } });
 $('adr-file-close').addEventListener('click', () => closeAdrFile(true));
 $('adr-file-dialog').addEventListener('cancel', event => { event.preventDefault(); closeAdrFile(true); });
@@ -3609,6 +3663,7 @@ function renderAdrLifecycleStatus(result) {
   const selection = $('adr-lifecycle-selection'), selected = selection.value; selection.replaceChildren();
   for (const record of result.entries) selection.append(new Option(`${record.status} ADR: ${record.path}`, record.id));
   if ([...selection.options].some(option => option.value === selected)) selection.value = selected;
+  if (f.preselect && [...selection.options].some(option => option.value === f.preselect)) { selection.value = f.preselect; f.preselect = null; if (f.successor) $('adr-lifecycle-kind').value = 'successor'; }
   const recovery = result.recovery, panel = $('adr-lifecycle-recovery'); panel.replaceChildren(); panel.hidden = !recovery;
   if (recovery) for (const file of recovery.files) {
     const section = document.createElement('section'), details = document.createElement('details');
@@ -3666,7 +3721,7 @@ $('adr-lifecycle-open').addEventListener('click', () => {
   $('adr-lifecycle-selection').replaceChildren(); $('adr-lifecycle-number').value = '2'; $('adr-lifecycle-recovery').hidden = true;
   $('adr-lifecycle-dialog').showModal(); void requestAdrLifecycle('status');
 });
-$('adr-lifecycle-from-file').addEventListener('click', () => { if (!busy && !adrFile?.flight) { closeAdrFile(); $('adr-lifecycle-open').click(); } });
+$('adr-lifecycle-from-file').addEventListener('click', () => { if (!busy && !adrFile?.flight) { const id = $('adr-file-selection').value, record = state.document.adrFiles?.find(r => r.id === id); closeAdrFile(); $('adr-lifecycle-open').click(); if (adrLifecycle && record) { adrLifecycle.preselect = id; adrLifecycle.successor = record.status === 'accepted' || record.status === 'deprecated' && record.lifecycle?.events.some(e => e.to === 'accepted'); } } });
 for (const name of ['selection', 'kind', 'number']) for (const event of ['input', 'change']) $(`adr-lifecycle-${name}`).addEventListener(event, () => { if (adrLifecycleCurrent(adrLifecycle) && !adrLifecycle.flight) invalidateAdrLifecycle(); });
 for (const [name, action] of [['review', 'prepare'], ['save', 'save'], ['retry', 'reconcile'], ['discard', 'discard']]) $(`adr-lifecycle-${name}`).addEventListener('click', () => void requestAdrLifecycle(action));
 $('adr-lifecycle-refresh').addEventListener('click', async () => { const f = adrLifecycle; if (adrLifecycleCurrent(f) && !f.flight && await api('refresh-answer') && adrLifecycleCurrent(f)) { invalidateAdrLifecycle(); await requestAdrLifecycle('status'); } });

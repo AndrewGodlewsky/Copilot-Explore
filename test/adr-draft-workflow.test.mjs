@@ -164,6 +164,17 @@ test('ADR final acceptance check preserves an unrelated external edit made durin
   assert.deepEqual(JSON.parse(await readFile(f.file, 'utf8')), external); assert.equal(f.e.doc.adrDraft, undefined);
 });
 
+test('ADR dependency changes invalidate exact input review and generated wording without changing selected answers', async t => {
+  for (const stage of ['review', 'proposal']) {
+    const f = await fixture(t), preview = stage === 'proposal' ? await f.generate() : await f.review(), answers = f.e.doc.nodes.map(n => n.answer);
+    const next = structuredClone(f.e.doc); next.dependencies = [{ dependentId: f.focal.id, prerequisiteId: f.other.id, explanation: 'Required first' }]; await f.e.save(next);
+    if (stage === 'review') { await assert.rejects(f.action('start', { token: preview.token }), /changed|stale/i); assert.equal(f.calls.length, 0); }
+    else { assert.equal((await f.action('poll')).status, 'stale'); await assert.rejects(f.action('accept', { revision: f.e.doc.revision, edits }), /stale|changed/i); }
+    assert.equal(f.e.doc.adrDraft, undefined); assert.deepEqual(f.e.doc.nodes.map(n => n.answer), answers);
+    assert.match((await f.e.readDrafts(f.journey)).entries[0].text, /PRIVATE_DRAFT_CANARY/);
+  }
+});
+
 test('ADR scenario preference invalidates reviewed work without changing map bytes', async t => {
   const f = await fixture(t, true), p = await f.review(), before = await readFile(f.file), view = await f.e.scenarioPreferenceRequest({ action: 'inspect', journey: f.journey, revision: f.e.doc.revision });
   await f.e.scenarioPreferenceRequest({ action: 'select', journey: f.journey, revision: f.e.doc.revision, id: view.id, rationale: 'Current direction' });

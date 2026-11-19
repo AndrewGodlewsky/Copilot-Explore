@@ -22,6 +22,8 @@ Reopening preselects the saved scope. **Refresh saved journey and status** expli
 
 Selected question text, parentage, saved answer/state/review, global guidance, optional evidence and scenario label are fingerprinted. Unrelated records, timestamps and unselected research prose do not stale a saved reference. Missing selected records remain historical references and make it stale. They appear as unavailable selections that can be explicitly removed; a missing focal question must be replaced. An unavailable or unresolved scenario policy reports unknown freshness rather than claiming current. Existing scenario preference rules govern preparation; alternatives require explicit hypothetical use.
 
+New reviews also retain bounded dependency relationships, upstream prerequisite fingerprints and selected research-stale flags when evidence is included. Relevant dependency or prerequisite changes stale both scope and draft wording. The exact input shows this metadata, but unselected prerequisite answer text remains omitted and cannot support a generated statement. Legacy scopes retain their earlier narrower comparison until explicitly reviewed again. [ADR update review](adr-updates.md) discloses unavailable historical coverage.
+
 The final save checks the complete saved document after asynchronous scenario validation and history preparation, so an unrelated concurrent correction cannot be overwritten. That acceptance guard is intentionally stricter than ongoing scoped freshness.
 
 ## Portable stored contract

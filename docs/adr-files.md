@@ -10,6 +10,8 @@ To revise an existing file, select its recorded proposed ADR. Review the complet
 
 ## Interrupted operations
 
+For source freshness, portable generated baselines and an explicit complete replacement of an externally edited proposed file, use **Tools → Review ADR updates**. Its separate comparison preserves the current file by default and requires an explicit replacement choice. Ordinary previews above remain strict. See [ADR freshness and update review](adr-updates.md).
+
 Status distinguishes the project file from its exploration association. A timeout is not proof that neither saved. Reopen this dialog or use **Refresh saved journey and file status** to inspect actual saved state.
 
 | Observed state | Available action |

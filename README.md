@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.102.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.103.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 
 **Usage dashboard** compares current maps, saved answer states and structure, newly observed canvas visits/committed question growth, and retained owned-helper outcomes and usage. UTC date filters apply to observations and receipts, not current stock. Scans are bounded and explicitly refreshed; missing usage and incomplete coverage stay visible. It preserves your editor and drafts. See [metric definitions, inventory, privacy and retention](docs/usage-dashboard.md).
 
@@ -30,6 +30,8 @@ Save a local-calendar **review date** and/or **manual revisit condition** on a q
 Written ADRs retain their selected saved answers, guidance and recorded evidence in a historical source appendix. **Inspect captured sources** distinguishes original reasoning from changed or missing current sources and explicitly opens shared questions through portable references. Decision-impact previews identify affected recorded ADRs. See [durable source captures and Git/path limits](docs/adr-sources.md).
 
 **Tools → ADR lifecycle** explicitly accepts or deprecates decisions and creates proposed successors while preserving older reasoning. Accepting a successor separately supersedes its predecessor. Review every file and source warning; interrupted operations show each saved part and support explicit reconciliation. See [status history, relationships and recovery](docs/adr-lifecycle.md).
+
+**Tools → Review ADR updates** explains changed saved sources, dependencies, research staleness and scenario context. Compare the historical generated baseline, current Markdown and a separately regenerated proposal. Keep manual edits by default or explicitly replace the complete proposed file; accepted decisions use successor proposals. See [freshness, conflict choices and compatibility](docs/adr-updates.md).
 
 **Settings → Contributor name** chooses the public name for future shared questions, answers and accepted wording. Existing authors stay unchanged; unknown legacy authors remain unknown. Question details distinguish user contributions from accepted AI suggestions, and externally changed text marks old attribution historical. Names are unverified, and the local setting never infers a Git email or account identity. See [contributors and sharing limits](docs/contributors.md).
 
@@ -331,7 +333,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.102, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.102**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.103, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.103**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Settings > Map and motion** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

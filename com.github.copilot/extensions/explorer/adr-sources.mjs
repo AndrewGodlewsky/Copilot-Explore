@@ -8,6 +8,7 @@ import { answerStateError } from './web/answer-state.mjs';
 import { adrFilePath, adrFileMarker } from './adr-file.mjs';
 import { validateProjectPath } from './project-path.mjs';
 import { createPortableReference, validatePortableReference, portableReferenceStatus, formatPortableReference } from './portable-reference.mjs';
+import { validateAdrReviewContext } from './adr-review-context.mjs';
 
 export const ADR_SOURCE_LIMIT = 65536;
 const canonical = v => Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])) : v;
@@ -57,7 +58,7 @@ function mappings(value, nodes, evidence) {
   });
 }
 export function validateAdrSources(value) {
-  if (!keys(value, 'version,capturedAt,journey,adrPath,guidance,includeEvidence,nodes,evidence,references,statements,digest') || value.version !== 1 || !date(value.capturedAt) || typeof value.includeEvidence !== 'boolean' || !sha(value.digest)) invalid();
+  if (!keys(value, 'version,capturedAt,journey,adrPath,guidance,includeEvidence,nodes,evidence,references,statements,digest' + (Object.hasOwn(value ?? {}, 'freshness') ? ',freshness' : '')) || value.version !== 1 || !date(value.capturedAt) || typeof value.includeEvidence !== 'boolean' || !sha(value.digest)) invalid();
   const j = value.journey;
   if (!keys(j, 'id,rootId,createdAt,path,commit') || !id(j.id) || !id(j.rootId) || !date(j.createdAt) || j.commit !== null && (typeof j.commit !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(j.commit))) invalid();
   if (j.path === null) { if (value.adrPath !== null || j.commit !== null) invalid(); }
@@ -78,6 +79,10 @@ export function validateAdrSources(value) {
   }
   const result = { version: 1, capturedAt: value.capturedAt, journey: { id: j.id, rootId: j.rootId, createdAt: j.createdAt, path: j.path, commit: j.commit }, adrPath: value.adrPath,
     guidance: guidance(value.guidance), includeEvidence: value.includeEvidence, nodes, evidence, references, statements: mappings(value.statements, nodes, evidence) };
+  if (Object.hasOwn(value, 'freshness')) {
+    if (!keys(value.freshness, 'version,context,scenarioDigest') || value.freshness.version !== 1 || !sha(value.freshness.scenarioDigest)) invalid();
+    result.freshness = { version: 1, context: validateAdrReviewContext(value.freshness.context, nodes.map(n => n.record.id), value.includeEvidence), scenarioDigest: value.freshness.scenarioDigest };
+  }
   if (digest(result) !== value.digest) invalid();
   result.digest = value.digest;
   if (Buffer.byteLength(JSON.stringify(result)) > ADR_SOURCE_LIMIT) throw Error('ADR source capture exceeds its 64 KiB limit. Select fewer saved sources or omit research evidence; nothing was clipped.');
@@ -93,6 +98,7 @@ export function captureAdrSources(doc, location = {}, capturedAt = new Date().to
     guidance: input.guidance, includeEvidence: input.includeEvidence, nodes: input.records.map(r => ({ record: r, fingerprint: sourceFingerprint(r, input.evidence.find(e => e.nodeId === r.id) ?? null) })), evidence: input.evidence,
     references: path === null ? [] : input.records.map(r => createPortableReference(doc, path, r.id)),
     statements: Object.entries(draft.sections).flatMap(([section, items]) => items.map(item => ({ id: item.id, section, sources: structuredClone(item.sources) }))) };
+  if (draft.scope.reviewContext) value.freshness = { version: 1, context: structuredClone(draft.scope.reviewContext), scenarioDigest: draft.scope.scenarioDigest };
   return validateAdrSources({ ...value, digest: digest(value) });
 }
 export function adrSourcesStatus(value, doc, path = null) {

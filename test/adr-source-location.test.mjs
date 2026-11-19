@@ -79,7 +79,10 @@ test('source bytes or checkout changes during asynchronous Git observation rejec
 test('a recorded ADR cannot update a same-named copied file from a different working-folder base', async t => {
   const f = await fixture(t), preview = await f.prepare(); await f.save(preview); const association = f.e.doc.adrFiles[0];
   const wrong = join(f.checkout, association.path); await mkdir(dirname(wrong), { recursive: true }); await copyFile(join(f.nested, association.path), wrong); const before = await readFile(wrong);
-  f.cwd(f.checkout); await assert.rejects(f.prepare({ kind: 'update', id: association.id }), /location|directory|destination|changed/i); assert.deepEqual(await readFile(wrong), before);
+  f.cwd(f.checkout);
+  for (const kind of ['update', 'review-update']) await assert.rejects(f.prepare({ kind, id: association.id }), /location|directory|destination|changed/i);
+  const inspection = await f.e.adrFileRequest({ action: 'inspect', journey: f.e.activeKey, id: association.id, revision: f.e.doc.revision }); assert.equal(inspection.file.status, 'unavailable'); assert.equal(inspection.file.content, null);
+  assert.deepEqual(await readFile(wrong), before);
 });
 
 test('captured ADR history remains inspectable when the attached checkout is no longer available', async t => {

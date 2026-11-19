@@ -118,7 +118,7 @@ export class AdrLifecycleWorkflow {
       const sources = captureAdrSources(doc, located.location), content = adrFileMarkdown(doc.adrDraft, id, source.policy.label, sources);
       const record = { version: 1, id, path, title: doc.adrDraft.title, status: 'proposed', sha256: adrBytesDigest(content), artifactDigest: source.artifactDigest, readinessDigest: source.readiness.digest, writtenAt: at, sources };
       const linked = linkAdrSuccessor(doc.adrFiles, base.id, record), child = linked.find(record => record.id === id), updated = linked.find(record => record.id === base.id);
-      const proposed = appendAdrLifecycle(content, child); child.sha256 = adrBytesDigest(proposed);
+      const proposed = appendAdrLifecycle(content, child); child.sha256 = adrBytesDigest(proposed); child.generated = { version: 1, content: proposed };
       files = [{ step: { target: capture.target, base: null, record: child, content: proposed }, oldContent: null }, await this.existingStep(e, store, base, updated)];
     } else {
       const changed = changeAdrLifecycle(doc.adrFiles, selection, { actor, at });

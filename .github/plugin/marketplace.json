@@ -1,5 +1,5 @@
 {
   "name": "copilot-explorer",
   "owner": { "name": "AndrewGodlewsky" },
-  "plugins": [{ "name": "explorer", "source": "./", "description": "Explore ideas in an interactive question map.", "version": "0.1.102" }]
+  "plugins": [{ "name": "explorer", "source": "./", "description": "Explore ideas in an interactive question map.", "version": "0.1.103" }]
 }

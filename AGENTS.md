@@ -23,6 +23,8 @@ Explorer is a GitHub Copilot desktop plugin. `/explore` opens its native canvas.
 
 ## Verification and installation
 
+Before implementing a repository change, read [the development workflow](docs/development-workflow.md) once. Use its issue brief, independent review receipt, `verify:iteration` gate and explicit usage ledger; keep detailed logs in ignored local storage. Reload only the relevant section when scope changes or context is lost. Token targets never waive required checks, review, accessibility or release steps.
+
 Run `npm test` and `npm run check`. `npm run e2e` uses the **installed** desktop SDK/runtime selected by `COPILOT_SDK_DIR` and `COPILOT_CLI_PATH`, a disposable Copilot home, and a local model fixture. Tests must never use a paid provider or an existing user session.
 
 Install through Copilot's CLI. Do not hand-edit its databases or installed-plugin records. A local marketplace loads the checkout live; retain its directory and start a new session after edits. Normal distribution should use a cached GitHub marketplace install. Local installs may omit the native tab icon; see [integration notes](docs/copilot-integration.md).

@@ -1,7 +1,7 @@
 # Explorer for GitHub Copilot
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.103.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.104.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 
 **Usage dashboard** compares current maps, saved answer states and structure, newly observed canvas visits/committed question growth, and retained owned-helper outcomes and usage. UTC date filters apply to observations and receipts, not current stock. Scans are bounded and explicitly refreshed; missing usage and incomplete coverage stay visible. It preserves your editor and drafts. See [metric definitions, inventory, privacy and retention](docs/usage-dashboard.md).
 
@@ -309,6 +309,8 @@ Unchanged maps use conditional polling, avoiding repeated map downloads and pars
 
 ## Develop and verify
 
+For repository changes, follow [the development workflow](docs/development-workflow.md): a short issue brief, independent review, checks tied to the tested files, and optional measured token accounting. `npm run verify:iteration -- <id>` gathers the required checks into one local receipt; it does not publish or open a browser unless an authorized UI check is explicitly enabled.
+
 ```powershell
 npm ci
 npm test
@@ -333,7 +335,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.103, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.103**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.104, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.104**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Settings > Map and motion** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

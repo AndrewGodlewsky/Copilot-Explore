@@ -1526,18 +1526,18 @@ test('reviewed project copy shows exact content, excludes drafts, saves once and
   const key = f.explorer.activeKey, file = f.explorer.file, original = await readFile(file), node = f.explorer.doc.nodes[1];
   f.open(node.id); f.type('answer', 'PRIVATE draft must stay here'); const editor = $('answer');
   assert.equal($('project-copy-open').hidden, false); $('project-copy-open').click();
-  $('project-copy-preview').click(); await until(() => !$('project-copy-confirm').hidden && !$('project-copy-confirm').disabled, 'copy preview');
+  await uiResponse(f, 'api/project-copy', 'preview', () => $('project-copy-preview').click()); await until(() => !$('project-copy-confirm').hidden && !$('project-copy-confirm').disabled, 'copy preview');
   assert.equal(f.document.activeElement, $('project-copy-content')); assert.ok(!$('project-copy-content').value.includes('PRIVATE draft'));
   const content = $('project-copy-content').value, path = f.explorer.projectCopy.selection.selected.relativePath;
-  $('project-copy-confirm').click(); await until(() => !$('project-copy-continue').hidden, 'copy saved');
+  await uiResponse(f, 'api/project-copy', 'confirm', () => $('project-copy-confirm').click()); await until(() => !$('project-copy-continue').hidden, 'copy saved');
   assert.equal(f.explorer.activeKey, key); assert.equal($('answer'), editor); assert.equal(editor.value, 'PRIVATE draft must stay here');
   assert.equal(await readFile(join(project, path), 'utf8'), content); assert.deepEqual(await readFile(file), original);
-  $('project-copy-continue').click(); await until(() => !$('project-copy-dialog').open && f.explorer.snapshot().storage.scope === 'project', 'explicit continue');
+  await uiResponse(f, 'api/action', 'open-project-copy', () => $('project-copy-continue').click()); await until(() => !$('project-copy-dialog').open && f.explorer.snapshot().storage.scope === 'project', 'explicit continue');
   assert.equal(f.explorer.pending, null); assert.equal($('project-copy-open').hidden, true);
   assert.deepEqual((await f.explorer.readDrafts(f.explorer.activeKey)).entries, []);
   await f.explorer.command('open', { key, revision: f.explorer.doc.revision }); await f.poll();
   assert.equal((await f.explorer.readDrafts(key)).entries[0].text, 'PRIVATE draft must stay here');
-  $('project-copy-open').click(); $('project-copy-preview').click(); await until(() => !$('project-copy-confirm').hidden && !$('project-copy-confirm').disabled, 'existing preview');
+  $('project-copy-open').click(); await uiResponse(f, 'api/project-copy', 'preview', () => $('project-copy-preview').click()); await until(() => !$('project-copy-confirm').hidden && !$('project-copy-confirm').disabled, 'existing preview');
   assert.match($('project-copy-status').textContent, /Identical copy/);
   f.type('project-copy-folder', 'changed'); assert.equal($('project-copy-confirm').hidden, true); assert.equal($('project-copy-content').value, '');
   $('project-copy-close').click(); assert.equal(f.document.activeElement, $('project-copy-open'));
@@ -1552,7 +1552,7 @@ test('Git status refresh separates private drafts from file and Git state withou
   } }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
   f.open(node.id); f.type('answer', '  Private draft 日本語  '); const editor = $('answer'); editor.focus(); editor.setSelectionRange(2, 8);
   await f.explorer.command('questions', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.rootId }); const pending = f.explorer.pending.id;
-  assert.equal($('project-git-panel').hidden, false); $('project-git-panel').open = true; $('project-git-refresh').click();
+  assert.equal($('project-git-panel').hidden, false); $('project-git-panel').open = true; await uiResponse(f, 'api/project-git-status', undefined, () => $('project-git-refresh').click());
   await until(() => $('project-git-result').textContent.includes('Untracked'), 'Git status returned');
   assert.match($('project-editor-status').textContent, /Private.*not in the project file/); assert.match($('project-git-result').textContent, /Saved file matches/);
   assert.match($('project-git-result').textContent, /Remote freshness is unknown/); assert.equal(f.explorer.pending.id, pending);
@@ -1563,7 +1563,7 @@ test('Git status refresh separates private drafts from file and Git state withou
   await promisify(execFile)('git', ['-C', project, 'symbolic-ref', 'HEAD', 'refs/heads/status-other'], { windowsHide: true });
   f.explorer.projectObservedAt = 0; await f.poll(); assert.ok(f.explorer.projectChange);
   assert.match($('project-git-result').textContent, /Refresh to inspect/);
-  $('project-change-review').click(); await until(() => !$('project-reconcile-reload').hidden, 'same-byte branch preview'); $('project-reconcile-reload').click();
+  await uiResponse(f, 'api/project-reconciliation', 'inspect', () => $('project-change-review').click()); await until(() => !$('project-reconcile-reload').hidden, 'same-byte branch preview'); await uiResponse(f, 'api/action', 'project-reload', () => $('project-reconcile-reload').click());
   await until(() => !$('project-reconcile-dialog').open, 'same-byte branch reload');
   assert.match($('project-git-result').textContent, /Refresh to inspect/); assert.equal($('answer'), editor); assert.equal(editor.value, '  Private draft 日本語  ');
 });
@@ -2034,13 +2034,13 @@ test('comments UI posts literal discussions, replies, resolves and reopens witho
   const f = await commentFixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
   f.open(node.id); f.type('answer', 'Private draft'); const editor = $('answer'); editor.setSelectionRange(2, 5);
   $('comments-node-open').click(); assert.equal($('comments-dialog').open, true);
-  f.type('comments-text', '<script>COMMENT λ</script> https://example.test'); f.type('comments-suggestion', 'Proposed answer'); $('comments-post').click();
+  f.type('comments-text', '<script>COMMENT λ</script> https://example.test'); f.type('comments-suggestion', 'Proposed answer'); await uiResponse(f, 'api/action', 'comment-create', () => $('comments-post').click());
   await until(() => f.explorer.doc.comments?.threads.length === 1 && !$('comments-post').disabled, 'comment posted');
   assert.match($('comments-messages').textContent, /Alice <script> λ/); assert.match($('comments-messages').textContent, /<script>COMMENT λ/); assert.equal($('comments-messages').querySelector('script,a'), null);
   assert.equal(editor.value, 'Private draft'); assert.equal($('answer'), editor); assert.equal(editor.selectionStart, 2);
-  f.type('comments-text', 'A reply'); $('comments-post').click(); await until(() => f.explorer.doc.comments.threads[0].messages.length === 2 && !$('comments-post').disabled, 'reply posted');
-  $('comments-resolve').click(); await until(() => /Resolved/.test($('comments-context').textContent), 'resolved'); assert.equal($('comments-post').disabled, true);
-  $('comments-reopen').click(); await until(() => !$('comments-post').disabled, 'reopened');
+  f.type('comments-text', 'A reply'); await uiResponse(f, 'api/action', 'comment-reply', () => $('comments-post').click()); await until(() => f.explorer.doc.comments.threads[0].messages.length === 2 && !$('comments-post').disabled, 'reply posted');
+  await uiResponse(f, 'api/action', 'comment-resolve', () => $('comments-resolve').click()); await until(() => /Resolved/.test($('comments-context').textContent), 'resolved'); assert.equal($('comments-post').disabled, true);
+  await uiResponse(f, 'api/action', 'comment-reopen', () => $('comments-reopen').click()); await until(() => !$('comments-post').disabled, 'reopened');
   $('comments-close').click(); assert.equal($('answer'), editor); assert.equal(editor.value, 'Private draft'); assert.equal(f.explorer.doc.nodes[1].answer, '');
 });
 

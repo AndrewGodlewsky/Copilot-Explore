@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.104",
+    "summary": "Add a concise contributor workflow with issue briefs, independent review receipts and one verification command that detects stale evidence. Record explicit token usage without reading private journals. Preserve required quality checks and release steps while reducing repeated context and verification work. Make Git-backed UI checks wait for responses."
+  },
+  {
     "version": "0.1.103",
     "summary": "Review ADR source changes, dependencies, research staleness and scenario context. Compare the stored generated baseline, current file and regenerated proposal. Keep manual edits or explicitly replace a proposed file; accepted decisions use successors. Recover interrupted replacements and reject late file or source changes."
   },

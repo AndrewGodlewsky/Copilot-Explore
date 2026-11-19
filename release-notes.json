@@ -1,5 +1,9 @@
 [
   {
+      "version":  "0.1.104",
+      "summary":  "Create editable Markdown summaries from two retained saved versions or a chosen local Git revision and the current saved exploration. Review questions, decisions, uncertainty, dependencies, scenario lineage and linked ADR changes. Copy or download after source checks; private drafts and project excerpts stay excluded."
+  },
+  {
     "version": "0.1.103",
     "summary": "Review ADR source changes, dependencies, research staleness and scenario context. Compare the stored generated baseline, current file and regenerated proposal. Keep manual edits or explicitly replace a proposed file; accepted decisions use successors. Recover interrupted replacements and reject late file or source changes."
   },

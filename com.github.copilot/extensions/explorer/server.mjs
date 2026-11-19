@@ -14,6 +14,7 @@ const assets = new Map([
   ['app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
   ['portable-reference-client.mjs', ['portable-reference-client.mjs', 'text/javascript; charset=utf-8']],
   ['adr-sources-client.mjs', ['adr-sources-client.mjs', 'text/javascript; charset=utf-8']],
+  ['change-summary-client.mjs', ['change-summary-client.mjs', 'text/javascript; charset=utf-8']],
   ['layout.mjs', ['layout.mjs', 'text/javascript; charset=utf-8']],
   ['minimap.mjs', ['minimap.mjs', 'text/javascript; charset=utf-8']],
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
@@ -169,6 +170,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         const result = await explorer.adrFileRequest(await body(req, 16 * 1024));
         if (Buffer.byteLength(JSON.stringify(result)) > 512 * 1024) throw Error('ADR file review exceeds the response limit. Preserve the source and reduce its scope.');
         return json(200, result);
+      }
+      if (req.method === 'POST' && route === 'api/change-summary') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.changeSummaryRequest(await body(req, 2048)));
       }
       if (req.method === 'POST' && route === 'api/adr-lifecycle') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });

@@ -43,6 +43,7 @@ import { randomUUID } from 'node:crypto';
 import { FORMAT, createDocument, validateDocument, importedDocument, findNode, addQuestions, addDirection, acknowledgeDirection, candidateQuestions, acceptQuestions, answerNode, research, text, toMarkdown, guidanceText, MAX_OBJECTIVE, MAX_SUCCESS_CRITERIA, pinnedConstraints } from './model.mjs';
 import { atomicWrite } from './storage.mjs';
 import { History } from './history.mjs';
+import { ChangeSummary } from './change-summary-workflow.mjs';
 import { StorageManagement } from './storage-management.mjs';
 import { Drafts, draftBase, draftHash, matchesDraftBase } from './drafts.mjs';
 import { References, emptyReferences, validateReferenceIds } from './references.mjs';
@@ -66,6 +67,7 @@ export class Explorer {
     this.researchReview = new ResearchReview();
     this.portableReferences = new PortableReferences();
     this.scenarioPreferences = new ScenarioPreferences();
+    this.changeSummaries = new ChangeSummary();
     this.branchRestoration = new BranchRestoration();
     this.projectContext = new ProjectContext(projectRoot);
     this.adrFormats = new AdrFormatReview(projectRoot);
@@ -115,6 +117,7 @@ export class Explorer {
     this.replaceStorage(store);
   }
   replaceStorage(store) {
+    this.changeSummaries.clear();
     this.adrFormats.clear();
     this.adrWriter.clear();
     this.adrLifecycle.clear();
@@ -917,6 +920,12 @@ export class Explorer {
       return { ...result, journey, pending: !!this.pending, revision: current.revision, ...(requested !== undefined ? { snapshotRevision: requested } : {}) };
     }));
   }
+  changeSummaryRequest(input) {
+    return this.transact(() => {
+      if (this.closed || !this.doc) throw Error('Open a saved exploration before summarizing changes.');
+      return this.withDocumentLock(() => this.changeSummaries.request(this, input));
+    });
+  }
   branchRestoreRequest(input) { return this.transact(() => this.withDocumentLock(() => this.branchRestoration.request(this, input))); }
   async save(next, label = 'Map updated', contribution) {
     const before = this.doc;
@@ -1483,5 +1492,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
+  async close() { this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

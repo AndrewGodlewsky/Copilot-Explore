@@ -3,3 +3,5 @@ dist/
 .preview-data/
 .perf-baseline/
 *.log
+.iteration/
+.superpowers/

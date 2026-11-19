@@ -1576,7 +1576,7 @@ test('Git status refresh separates private drafts from file and Git state withou
   } }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
   f.open(node.id); f.type('answer', '  Private draft 日本語  '); const editor = $('answer'); editor.focus(); editor.setSelectionRange(2, 8);
   await f.explorer.command('questions', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.rootId }); const pending = f.explorer.pending.id;
-  assert.equal($('project-git-panel').hidden, false); $('project-git-panel').open = true; $('project-git-refresh').click();
+  assert.equal($('project-git-panel').hidden, false); $('project-git-panel').open = true; await uiResponse(f, 'api/project-git-status', undefined, () => $('project-git-refresh').click());
   await until(() => $('project-git-result').textContent.includes('Untracked'), 'Git status returned');
   assert.match($('project-editor-status').textContent, /Private.*not in the project file/); assert.match($('project-git-result').textContent, /Saved file matches/);
   assert.match($('project-git-result').textContent, /Remote freshness is unknown/); assert.equal(f.explorer.pending.id, pending);
@@ -1587,7 +1587,7 @@ test('Git status refresh separates private drafts from file and Git state withou
   await promisify(execFile)('git', ['-C', project, 'symbolic-ref', 'HEAD', 'refs/heads/status-other'], { windowsHide: true });
   f.explorer.projectObservedAt = 0; await f.poll(); assert.ok(f.explorer.projectChange);
   assert.match($('project-git-result').textContent, /Refresh to inspect/);
-  $('project-change-review').click(); await until(() => !$('project-reconcile-reload').hidden, 'same-byte branch preview'); $('project-reconcile-reload').click();
+  await uiResponse(f, 'api/project-reconciliation', 'inspect', () => $('project-change-review').click()); await until(() => !$('project-reconcile-reload').hidden, 'same-byte branch preview'); await uiResponse(f, 'api/action', 'project-reload', () => $('project-reconcile-reload').click());
   await until(() => !$('project-reconcile-dialog').open, 'same-byte branch reload');
   assert.match($('project-git-result').textContent, /Refresh to inspect/); assert.equal($('answer'), editor); assert.equal(editor.value, '  Private draft 日本語  ');
 });

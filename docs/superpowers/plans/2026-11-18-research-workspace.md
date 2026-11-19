@@ -20,7 +20,7 @@
 - No browser/desktop automation. Source inspection and local DOM behavior do not prove native layout, accessibility, IME or live research quality.
 - Owner feedback is an explicit definition-of-done item. Publish concrete artifacts and note the pending feedback; do not close #90 or implement dependent production UI without it.
 - Reversible design artifacts need meaningful smoke verification, not a new production test framework. Existing full npm test/check/package remain the repository publication gate. No installed SDK fixture is needed without host/model contract changes.
-- Synchronize v0.1.105 metadata and a truthful <=400-character release note; fetch, integrate and push main without force; verify remote. Retain ignored scratch notes.
+- Synchronize v0.1.106 metadata and a truthful <=400-character release note; fetch, integrate and push main without force; verify remote. Retain ignored scratch notes.
 
 ## Interfaces and review focus
 
@@ -44,6 +44,8 @@
 - [x] Run full npm test/check/package and diff check after fixes. Expected: pass; record actual counts, artifact checks and pending owner verification. No paid services or existing sessions.
 
 Verification found a pre-existing project-copy UI test racing its Git-backed save response. Its preview/save/open assertions now await the existing bounded HTTP response before checking the DOM. The focused test and final full suite passed; production behavior is unchanged. The final suite passed 1,470/1,470 tests. Task 2's final gate is `npm run check`; the full-suite and packaging receipts remain in the task ledger.
+
+Publication fetch found concurrently published v0.1.105 (`0fbeb7a`) with the new development workflow and matching project-copy test correction. Preserve that iteration, publish this design as v0.1.106, and use its required brief/review/verification receipt for the integrated candidate. The new project instructions require review of the integration delta and fresh gates; this supersedes the earlier skill's no-rereview rule for this integration. The prototype is a documentation artifact, with no production layout, interaction or host change; owner visual/design acceptance remains pending in #90. Measured token counters are unavailable and must not be invented.
 
 ### Task 3: Publish the reviewable result and record the blocker
 - [ ] Fetch remote, commit, integrate into main without discarding work, push and verify exact remote commit.

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.107",
+    "summary": "Add a 20-case offline research benchmark with diverse topics, difficult evidence, scoped follow-ups and candidate-guidance comparisons. Include human scoring rubrics and a measured fixture baseline. Live research quality, provider cost and internet-access policy remain separate owner-reviewed decisions."
+  },
+  {
       "version":  "0.1.106",
       "summary":  "Add an offline Research workspace prototype and interaction specification covering context review, concise answer options, comparisons, follow-ups and explicit draft actions. The design is ready for owner feedback; native usability and the separate internet-access policy remain pending review."
   },

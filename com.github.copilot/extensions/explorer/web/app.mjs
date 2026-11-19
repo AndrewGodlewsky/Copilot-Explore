@@ -6,6 +6,7 @@ import { CommentsClient } from './comments-client.mjs';
 import { ReviewHandoffsClient } from './review-handoffs-client.mjs';
 import { PortableReferenceClient } from './portable-reference-client.mjs';
 import { AdrSourcesClient } from './adr-sources-client.mjs';
+import { ChangeSummaryClient } from './change-summary-client.mjs';
 import { CleanupClient } from './cleanup.mjs';
 import { QuestionHelpClient } from './question-help-client.mjs';
 import { ResearchReviewClient } from './research-review-client.mjs';
@@ -277,6 +278,12 @@ const portableReferences = new PortableReferenceClient({ $, state: () => state, 
     busy = true; const epoch = ++actionEpoch; stateCursor = null; pollFlight?.abort.abort();
     return () => { if (actionEpoch === epoch) { busy = false; actionEpoch++; stateCursor = null; pollFlight?.abort.abort(); } };
   } });
+const changeSummary = new ChangeSummaryClient({ $, state: () => state, active: () => !closed && !suspended, canAct: () => !busy,
+  fetch: (...args) => fetch(...args), copyText: text => navigator.clipboard.writeText(text),
+  downloadText: text => {
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown; charset=utf-8' })), link = el('a', { href: url, download: 'exploration-changes.md' });
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+  } });
 function notice(message) { $('notice').textContent = message; $('notice').hidden = !message; }
 for (const id of ['library-reminder', 'revisit-filter']) $(id).append(...Object.entries(REVISIT_FILTERS).map(([value, label]) => el('option', { value }, label)));
 function installSearchControls(prefix, host, changed) {
@@ -345,6 +352,7 @@ const paletteCommands = [
   ['center-question', 'Center question'], ['minimap-toggle', 'Show minimap'], ['navigation-open', 'Settings'],
   ['edit-guidance', 'Edit guidance'], ['history-open', 'History'], ['recovery-open', 'Recovery'],
   ['visual-export-open', 'Export maps'], ['decision-brief', 'Decision brief'], ['implementation-handoff', 'Implementation handoff'],
+  ['change-summary-open', 'Summarize exploration changes'],
   ['adr-scope-open', 'ADR scope'],
   ['adr-questions-open', 'ADR questions'],
   ['adr-draft-open', 'ADR draft'],
@@ -748,6 +756,7 @@ function apply(next, reset = false) {
   comments.update();
   reviewHandoffs.update();
   portableReferences.update();
+  changeSummary.update();
   if ($('adr-questions-dialog').open) renderAdrQuestions();
   syncReviewQueue();
   syncComparison();
@@ -4500,6 +4509,7 @@ workspaceObserver.observe($('node-workspace'));
 const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
+  changeSummary.close(false);
   portableReferences.close(false);
   closeContributors(false);
   comments.close(false);

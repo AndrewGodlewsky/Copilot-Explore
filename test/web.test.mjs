@@ -31,6 +31,7 @@ import { CommentsClient } from '../com.github.copilot/extensions/explorer/web/co
 import { ReviewHandoffsClient } from '../com.github.copilot/extensions/explorer/web/review-handoffs-client.mjs';
 import { PortableReferenceClient } from '../com.github.copilot/extensions/explorer/web/portable-reference-client.mjs';
 import { AdrSourcesClient } from '../com.github.copilot/extensions/explorer/web/adr-sources-client.mjs';
+import { ChangeSummaryClient } from '../com.github.copilot/extensions/explorer/web/change-summary-client.mjs';
 import { changeReviewHandoffs } from '../com.github.copilot/extensions/explorer/review-handoffs.mjs';
 import { createPortableReference, formatPortableReference, parsePortableReference } from '../com.github.copilot/extensions/explorer/portable-reference.mjs';
 import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
@@ -49,6 +50,29 @@ import { draftHash, draftBase } from '../com.github.copilot/extensions/explorer/
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from '../com.github.copilot/extensions/explorer/web/answer-state.mjs';
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
+
+test('change summary app UI serves the client, compares saved versions, copies/downloads edits and invalidates without replacing private drafts', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id);
+  assert.equal((await f.window.fetch('change-summary-client.mjs')).status, 200);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'PRIVATE_SUMMARY_DRAFT'); const editor = $('answer'); editor.setSelectionRange(2, 7);
+  let copied, downloaded, filename;
+  Object.defineProperty(f.window.navigator, 'clipboard', { configurable: true, value: { writeText: async text => { copied = text; } } });
+  f.window.Blob = Blob; f.window.URL.createObjectURL = blob => { downloaded = blob; return 'blob:summary'; }; f.window.URL.revokeObjectURL = () => {};
+  f.window.HTMLAnchorElement.prototype.click = function () { filename = this.download; };
+  $('change-summary-open').click(); assert.equal($('change-summary-dialog').open, true);
+  await until(() => $('change-summary-before').options.length > 1, 'saved summary versions');
+  assert.ok([...$('change-summary-before').options].some(option => option.value === '1'));
+  $('change-summary-before').value = '1'; $('change-summary-before').dispatchEvent(new f.window.Event('change'));
+  $('change-summary-generate').click(); await until(() => !$('change-summary-copy').disabled, 'summary preview ready');
+  assert.match($('change-summary-text').value, /Added record/); assert.doesNotMatch($('change-summary-text').value, /PRIVATE_SUMMARY_DRAFT/);
+  f.type('change-summary-text', '# Edited PR summary λ'); $('change-summary-copy').click(); await until(() => copied, 'summary copied');
+  assert.equal(copied, '# Edited PR summary λ'); $('change-summary-download').click(); await until(() => downloaded, 'summary downloaded');
+  assert.equal(await downloaded.text(), copied); assert.equal(filename, 'exploration-changes.md');
+  $('change-summary-text').setSelectionRange(2, 6); const next = structuredClone(f.explorer.doc); next.objective = 'Changed saved objective'; await f.explorer.save(next); f.window.__updates.apply(f.explorer.uiSnapshot());
+  assert.equal($('change-summary-copy').disabled, true); assert.equal($('change-summary-text').value, copied); assert.equal($('change-summary-text').selectionStart, 2);
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'PRIVATE_SUMMARY_DRAFT'); assert.equal(editor.selectionStart, 2); assert.equal(editor.selectionEnd, 7);
+  f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true })); assert.equal($('change-summary-dialog').open, false);
+});
 
 test('Contributor UI saves, renames and clears only explicit names while preserving answer drafts and conflicts', async t => {
   const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
@@ -1202,7 +1226,7 @@ async function until(read, label, attempts = 250) {
 }
 
 // Git requests have their own bounded HTTP timeout; DOM rendering is separate.
-async function uiResponse(f, route, action, invoke) {
+async function uiResponse(f, route, action, invoke, expectedStatus = 200) {
   const original = f.window.fetch; let pending;
   f.window.fetch = (path, options) => {
     const response = original(path, options);
@@ -1212,7 +1236,7 @@ async function uiResponse(f, route, action, invoke) {
   try {
     invoke(); await until(() => pending, `${action} request sent`);
     const response = await pending;
-    assert.equal(response.status, 200, `${action}: ${await response.text()}`);
+    assert.equal(response.status, expectedStatus, `${action}: ${await response.text()}`);
   } finally { f.window.fetch = original; }
 }
 
@@ -1605,14 +1629,14 @@ test('project reconciliation reload keeps exact draft text and source bases whil
   await writeFile(f.explorer.file, text); f.explorer.projectObservedAt = 0; await f.poll();
   assert.equal($('project-change').hidden, false); assert.equal($('answer'), editor); assert.equal(editor.value, '  Keep my unsent 日本語 draft  ');
   $('project-change-review').click(); await until(() => !$('project-reconcile-reload').hidden, 'reconciliation preview');
-  assert.equal($('project-reconcile-content').value, text); $('project-reconcile-reload').click();
+  assert.equal($('project-reconcile-content').value, text); await uiResponse(f, 'api/action', 'project-reload', () => $('project-reconcile-reload').click());
   await until(() => !$('project-reconcile-dialog').open && f.explorer.doc.nodes[1].answer === 'Teammate answer', 'reconciliation reload');
   assert.equal($('project-change').hidden, true); assert.equal($('answer'), editor); assert.equal(editor.value, '  Keep my unsent 日本語 draft  ');
   const record = (await f.explorer.readDrafts(key)).entries.find(entry => entry.nodeId === node.id);
   assert.equal(record.text, '  Keep my unsent 日本語 draft  '); assert.equal(record.stale, true); assert.equal(await readFile(f.explorer.file, 'utf8'), text);
   const removed = JSON.parse(text); removed.journey.nodes = removed.journey.nodes.filter(item => item.id !== node.id);
   await writeFile(f.explorer.file, JSON.stringify(removed)); f.explorer.projectObservedAt = 0; await f.poll();
-  $('project-change-review').click(); await until(() => !$('project-reconcile-reload').hidden, 'removed-node preview'); $('project-reconcile-reload').click();
+  $('project-change-review').click(); await until(() => !$('project-reconcile-reload').hidden, 'removed-node preview'); await uiResponse(f, 'api/action', 'project-reload', () => $('project-reconcile-reload').click());
   await until(() => !$('project-reconcile-dialog').open && !f.explorer.doc.nodes.some(item => item.id === node.id), 'removed-node reload');
   const orphan = (await f.explorer.readDrafts(key)).entries.find(entry => entry.nodeId === node.id); assert.equal(orphan.orphaned, true); assert.equal(orphan.text, record.text);
   const denied = await fetch(new URL('api/project-reconciliation', f.window.location.href), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: '{}' }); assert.equal(denied.status, 403);
@@ -1752,6 +1776,7 @@ test('revisit UI saves independently, preserves answer and reminder drafts, and 
   $('library-archived').checked = true; $('library-archived').dispatchEvent(new f.window.Event('change', { bubbles: true }));
   await until(() => f.document.querySelector('[data-action="revisit"]'), 'archived reminder access'); f.document.querySelector('[data-action="revisit"]').click();
   await until(() => !$('node-workspace').hidden && $('node-workspace').dataset.nodeId === node.id && $('welcome').hidden, 'source opened');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'reopened answer draft recovered');
   assert.equal((await f.explorer.library.list({ archived: true })).entries.length, 1); assert.equal($('answer').value, 'UNCOMMITTED ANSWER 🌱');
   $('clear-revisit').click(); await until(() => !f.explorer.doc.nodes[1].revisit && $('revisit-status').textContent === 'No reminder saved.', 'cleared'); assert.equal($('answer').value, 'UNCOMMITTED ANSWER 🌱');
   await until(() => $('answer-status').textContent === 'Draft saved locally', 'answer draft persisted');
@@ -2053,7 +2078,7 @@ test('comments UI retains composing text and caret across polls, hide, navigatio
   $('comments-close').click(); f.open(b.id); $('comments-open').click(); f.type('comments-text', 'Other private comment'); $('comments-close').click(); f.open(a.id); $('comments-open').click(); assert.equal(editor.value, 'Unposted λ');
   const write = f.explorer.projectStore.write; f.explorer.projectStore.write = async () => { throw Error('disk full'); };
   $('comments-post').click(); await until(() => /disk full/.test($('comments-status').textContent), 'failed post', 2000).catch(() => assert.fail($('comments-status').textContent)); assert.equal(editor.value, 'Unposted λ'); assert.equal(f.explorer.doc.comments, undefined);
-  f.explorer.projectStore.write = write; $('comments-post').click(); await until(() => f.explorer.doc.comments?.threads.length === 1, 'retry posted');
+  f.explorer.projectStore.write = write; await uiResponse(f, 'api/action', 'comment-create', () => $('comments-post').click()); await until(() => f.explorer.doc.comments?.threads.length === 1, 'retry posted');
   await f.poll(); assert.equal(f.explorer.doc.comments.threads.length, 1);
 });
 
@@ -2080,9 +2105,11 @@ test('comments UI labels changed and orphan sources, pages threads, and reads pe
 });
 
 for (const leave of ['hide', 'suspend', 'switch']) test(`comments UI ignores late post replies after ${leave} and preserves newer composing text`, async t => {
-  const f = await commentFixture(t), $ = id => f.document.getElementById(id), original = f.window.fetch; let release;
-  f.window.fetch = async (...args) => { const response = await original(...args); if (args[0] === 'api/action' && JSON.parse(args[1].body).action === 'comment-create') await new Promise(resolve => { release = resolve; }); return response; };
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), original = f.window.fetch; let release, received;
+  f.window.fetch = async (...args) => { const pending = original(...args), held = args[0] === 'api/action' && JSON.parse(args[1].body).action === 'comment-create'; if (held) received = pending; const response = await pending; if (held) await new Promise(resolve => { release = resolve; }); return response; };
+  t.after(() => release?.());
   f.open(f.explorer.doc.nodes[1].id); $('comments-open').click(); f.type('comments-text', 'First post'); $('comments-post').click();
+  await until(() => received, 'post request sent'); assert.equal((await received).status, 200);
   await until(() => release, 'post reply held'); f.type('comments-text', 'Newer private text');
   if (leave === 'hide') $('comments-close').click();
   if (leave === 'suspend') { const event = new f.window.Event('pagehide'); Object.defineProperty(event, 'persisted', { value: true }); f.window.dispatchEvent(event); }
@@ -2120,31 +2147,37 @@ test('review handoff UI creates, takes, completes and reassigns without replacin
   f.open(node.id); f.type('answer', 'Private answer draft'); const editor = $('answer'); editor.setSelectionRange(2, 5);
   $('comments-node-open').click(); f.type('comments-text', 'Private comment draft'); $('comments-close').click();
   $('review-handoffs-node-open').click(); assert.equal($('review-handoffs-dialog').open, true);
-  f.type('review-handoffs-note', '<script>Review λ</script>'); f.type('review-handoffs-recipient', 'Reviewer <b>'); $('review-handoffs-create').click();
+  f.type('review-handoffs-note', '<script>Review λ</script>'); f.type('review-handoffs-recipient', 'Reviewer <b>'); await uiResponse(f, 'api/action', 'review-handoff-create', () => $('review-handoffs-create').click());
   await until(() => f.explorer.doc.reviewHandoffs?.records.length === 1 && !$('review-handoffs-take').disabled, 'handoff saved');
   assert.match($('review-handoffs-history').textContent, /Alice <script> λ/); assert.match($('review-handoffs-history').textContent, /<script>Review λ/); assert.equal($('review-handoffs-history').querySelector('script,b'), null);
-  $('review-handoffs-take').click(); await until(() => /taken handoff/i.test($('review-handoffs-context').textContent), 'responsibility taken');
-  $('review-handoffs-complete').click(); await until(() => /complete handoff/i.test($('review-handoffs-context').textContent), 'handoff complete');
-  f.type('review-handoffs-recipient', 'Next reviewer'); f.type('review-handoffs-note', 'More context needed'); $('review-handoffs-reassign').click(); await until(() => /Next reviewer/.test($('review-handoffs-context').textContent), 'handoff reassigned');
+  await uiResponse(f, 'api/action', 'review-handoff-take', () => $('review-handoffs-take').click()); await until(() => /taken handoff/i.test($('review-handoffs-context').textContent), 'responsibility taken');
+  await uiResponse(f, 'api/action', 'review-handoff-complete', () => $('review-handoffs-complete').click()); await until(() => /complete handoff/i.test($('review-handoffs-context').textContent), 'handoff complete');
+  f.type('review-handoffs-recipient', 'Next reviewer'); f.type('review-handoffs-note', 'More context needed'); await uiResponse(f, 'api/action', 'review-handoff-reassign', () => $('review-handoffs-reassign').click()); await until(() => /Next reviewer/.test($('review-handoffs-context').textContent), 'handoff reassigned');
   assert.equal(f.explorer.doc.reviewHandoffs.records[0].transitions.length, 4); assert.equal(f.explorer.doc.nodes[1].answer, '');
   $('review-handoffs-close').click(); assert.equal($('answer'), editor); assert.equal(editor.value, 'Private answer draft'); assert.equal(editor.selectionStart, 2);
   $('comments-node-open').click(); assert.equal($('comments-text').value, 'Private comment draft');
 });
 
 test('review handoff UI retries a saved action after a lost reply and preserves newer composing text', async t => {
-  const f = await commentFixture(t), $ = id => f.document.getElementById(id), original = f.window.fetch; let lose = true;
-  f.window.fetch = async (...args) => { const response = await original(...args); if (lose && args[0] === 'api/action' && JSON.parse(args[1].body).action === 'review-handoff-create') { lose = false; throw Error('Connection lost after saving'); } return response; };
+  let releasePoll; const pollGate = new Promise(resolve => { releasePoll = resolve; }); t.after(() => releasePoll());
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), original = f.window.fetch; let lose = true, received;
+  f.pauseState(() => pollGate);
+  f.window.fetch = async (...args) => { const pending = original(...args), lost = lose && args[0] === 'api/action' && JSON.parse(args[1].body).action === 'review-handoff-create'; if (lost) received = pending; const response = await pending; if (lost) { lose = false; throw Error('Connection lost after saving'); } return response; };
   f.open(f.explorer.doc.nodes[1].id); $('review-handoffs-open').click(); f.type('review-handoffs-note', 'Save once'); $('review-handoffs-create').click();
-  await until(() => /Connection lost/.test($('review-handoffs-status').textContent), 'ambiguous handoff'); f.type('review-handoffs-note', 'Keep newer text'); $('review-handoffs-retry').click();
+  await until(() => received, 'handoff request sent'); assert.equal((await received).status, 200);
+  await until(() => /Connection lost/.test($('review-handoffs-status').textContent), 'ambiguous handoff'); f.type('review-handoffs-note', 'Keep newer text');
+  // A lost reply leaves the old revision. Retry is rejected until polling observes the saved receipt.
+  await uiResponse(f, 'api/action', 'review-handoff-create', () => $('review-handoffs-retry').click(), 400); f.pauseState(null); releasePoll(); await f.poll();
   await until(() => /Previous action saved/.test($('review-handoffs-status').textContent), 'handoff retry reconciled');
   assert.equal($('review-handoffs-note').value, 'Keep newer text'); assert.equal(f.explorer.doc.reviewHandoffs.records.length, 1); assert.equal(f.explorer.doc.reviewHandoffs.records[0].transitions.length, 1);
   const posts = f.actions.filter(row => row.action === 'review-handoff-create'); assert.equal(posts.length, 2); assert.equal(posts[0].transitionId, posts[1].transitionId);
 });
 
 test('review handoff UI suspends pending replies and keeps newer composing text on resume', async t => {
-  const f = await commentFixture(t), $ = id => f.document.getElementById(id), original = f.window.fetch; let release;
-  f.window.fetch = async (...args) => { const response = await original(...args); if (args[0] === 'api/action' && JSON.parse(args[1].body).action === 'review-handoff-create') await new Promise(resolve => { release = resolve; }); return response; };
-  f.open(f.explorer.doc.nodes[1].id); $('review-handoffs-open').click(); f.type('review-handoffs-note', 'Submitted note'); $('review-handoffs-create').click(); await until(() => release, 'handoff reply held');
+  const f = await commentFixture(t), $ = id => f.document.getElementById(id), original = f.window.fetch; let release, received;
+  f.window.fetch = async (...args) => { const pending = original(...args), held = args[0] === 'api/action' && JSON.parse(args[1].body).action === 'review-handoff-create'; if (held) received = pending; const response = await pending; if (held) await new Promise(resolve => { release = resolve; }); return response; };
+  t.after(() => release?.());
+  f.open(f.explorer.doc.nodes[1].id); $('review-handoffs-open').click(); f.type('review-handoffs-note', 'Submitted note'); $('review-handoffs-create').click(); await until(() => received, 'handoff request sent'); assert.equal((await received).status, 200); await until(() => release, 'handoff reply held');
   f.type('review-handoffs-note', 'Newer note'); const hide = new f.window.Event('pagehide'); Object.defineProperty(hide, 'persisted', { value: true }); f.window.dispatchEvent(hide);
   const status = $('review-handoffs-status').textContent; release(); await delay(30); assert.equal($('review-handoffs-dialog').open, false); assert.equal($('review-handoffs-status').textContent, status);
   const show = new f.window.Event('pageshow'); Object.defineProperty(show, 'persisted', { value: true }); f.window.dispatchEvent(show); await f.poll();
@@ -2270,6 +2303,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const adrScopeDialog = document.getElementById('adr-scope-dialog');
   if (adrScopeDialog) { adrScopeDialog.showModal = () => { adrScopeDialog.open = true; }; adrScopeDialog.close = () => { adrScopeDialog.open = false; }; }
   const adrFormatDialog = document.getElementById('adr-format-dialog');
+  const summaryDialog = document.getElementById('change-summary-dialog');
+  summaryDialog.showModal = () => { summaryDialog.open = true; }; summaryDialog.close = () => { summaryDialog.open = false; };
   const adrFileDialog = document.getElementById('adr-file-dialog');
   const adrLifecycleDialog = document.getElementById('adr-lifecycle-dialog');
   if (adrLifecycleDialog) { adrLifecycleDialog.showModal = () => { adrLifecycleDialog.open = true; }; adrLifecycleDialog.close = () => { adrLifecycleDialog.open = false; }; }
@@ -2366,6 +2401,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.ReviewHandoffsClient = ReviewHandoffsClient;
   window.PortableReferenceClient = PortableReferenceClient;
   window.AdrSourcesClient = AdrSourcesClient;
+  window.ChangeSummaryClient = ChangeSummaryClient;
   window.CleanupClient = CleanupClient;
   window.QuestionHelpClient = QuestionHelpClient;
   window.ResearchReviewClient = ResearchReviewClient;
@@ -2381,7 +2417,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { AdrSourcesClient } from './adr-sources-client.mjs';", '').replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { ChangeSummaryClient } from './change-summary-client.mjs';", '').replace("import { AdrSourcesClient } from './adr-sources-client.mjs';", '').replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.empty ? !document.getElementById('library-home').hidden : options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;

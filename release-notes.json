@@ -1,7 +1,11 @@
 [
   {
-    "version": "0.1.104",
+    "version": "0.1.105",
     "summary": "Add a concise contributor workflow with issue briefs, independent review receipts and one verification command that detects stale evidence. Record explicit token usage without reading private journals. Preserve required quality checks and release steps while reducing repeated context and verification work. Make Git-backed UI checks wait for responses."
+  },
+  {
+    "version": "0.1.104",
+    "summary": "Create editable Markdown summaries from two retained saved versions or a chosen local Git revision and the current saved exploration. Review questions, decisions, uncertainty, dependencies, scenario lineage and linked ADR changes. Copy or download after source checks; private drafts and project excerpts stay excluded."
   },
   {
     "version": "0.1.103",

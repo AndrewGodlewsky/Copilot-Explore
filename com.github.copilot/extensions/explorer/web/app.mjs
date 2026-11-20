@@ -213,6 +213,46 @@ $('contributor-save').addEventListener('click', () => { void requestContributors
 $('contributor-clear').addEventListener('click', () => { void requestContributors('save', null); });
 $('contributor-refresh').addEventListener('click', () => { void requestContributors('read'); });
 
+let researchModelEpoch = 0, researchModelFlight = null, researchModelRevision = null;
+const modelDescription = model => `${model.mode === 'dedicated' ? 'Dedicated Research model' : 'Use selected chat model'}: ${model.name} (${model.id})`;
+function closeResearchModels(focus = true) {
+  researchModelEpoch++; researchModelFlight?.abort(); researchModelFlight = null; researchModelRevision = null;
+  if ($('research-model-dialog').open) { $('research-model-dialog').close(); if (focus && !closed && !suspended) $('navigation-open').focus({ preventScroll: true }); }
+}
+async function requestResearchModels(action) {
+  if (closed || suspended || !$('research-model-dialog').open || researchModelFlight || action === 'save' && researchModelRevision === null) return;
+  const epoch = ++researchModelEpoch, page = pageEpoch, journey = referenceJourney(), abort = new AbortController(); researchModelFlight = abort;
+  const current = () => !closed && !suspended && $('research-model-dialog').open && epoch === researchModelEpoch && page === pageEpoch && journey === referenceJourney();
+  const input = action === 'read' ? { action } : { action, revision: researchModelRevision, modelId: $('research-model-choice').value || null };
+  $('research-model-save').disabled = true; $('research-model-refresh').disabled = true; $('research-model-choice').disabled = true;
+  $('research-model-status').textContent = action === 'read' ? 'Loading eligible Copilot models… No research has started.' : 'Saving your model choice…';
+  try {
+    const response = await fetch('api/research-model-settings', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
+    const result = await response.json(); if (!current()) return;
+    if (!response.ok) throw Error(result.error || 'Research model settings could not be saved.');
+    if (!result.available) { researchModelRevision = null; $('research-model-effective').textContent = ''; $('research-model-status').textContent = result.problem; return; }
+    researchModelRevision = result.settings.revision;
+    const choice = $('research-model-choice'); choice.replaceChildren(el('option', { value: '' }, 'Use selected chat model'));
+    for (const model of result.models) choice.append(el('option', { value: model.id }, `${model.name} (${model.id})`));
+    if (result.settings.modelId && !result.models.some(model => model.id === result.settings.modelId)) choice.append(el('option', { value: result.settings.modelId }, `Unavailable saved model: ${result.settings.modelId}`));
+    choice.value = result.settings.modelId ?? '';
+    $('research-model-effective').textContent = result.effective ? `Saved choice — ${modelDescription(result.effective)}` : 'The effective model is currently unavailable. Your saved choice is retained.';
+    $('research-model-status').textContent = `${action === 'save' ? 'Saved. New requests will use this choice. ' : ''}${result.problem || (action === 'save' ? '' : result.models.length ? 'Available models loaded. Save to apply your choice.' : 'No eligible Copilot models are available. Refresh after checking Copilot access.')}`;
+    if (action === 'save' && researchReview.context && !researchReview.context.purpose) void researchReview.prepare();
+  } catch (error) {
+    if (current()) { researchModelRevision = null; $('research-model-status').textContent = `${error.message} Your selection is retained. Refresh before saving again.`; }
+  } finally {
+    if (researchModelFlight === abort) researchModelFlight = null;
+    if (current()) { $('research-model-refresh').disabled = false; $('research-model-choice').disabled = researchModelRevision === null; $('research-model-save').disabled = researchModelRevision === null; }
+  }
+}
+$('research-model-open').addEventListener('click', () => { if (closed || suspended) return; voice.cancel(); closeResearchModels(false); $('navigation-dialog').close(); $('research-model-dialog').showModal(); void requestResearchModels('read'); });
+$('research-model-close').addEventListener('click', () => closeResearchModels());
+$('research-model-dialog').addEventListener('cancel', event => { event.preventDefault(); closeResearchModels(); });
+$('research-model-dialog').addEventListener('close', () => { if (!$('research-model-dialog').open) closeResearchModels(false); });
+$('research-model-refresh').addEventListener('click', () => { void requestResearchModels('read'); });
+$('research-model-save').addEventListener('click', () => { void requestResearchModels('save'); });
+
 const contributorEventText = event => event ? `${event.actor ? `${event.actor.displayName} (unverified)` : 'Anonymous contributor'} · ${event.at}` : 'Contributor unknown; time unknown';
 function contributionText(record, status) {
   if (!record) return 'Contributor unknown; no recorded attribution.';
@@ -716,6 +756,7 @@ function apply(next, reset = false) {
   const anchor = changedDocument ? null : anchorPoint();
   if (changedDocument) {
     closeContributors(false);
+    closeResearchModels(false);
     comments.close(false);
     reviewHandoffs.close(false);
     closePreference(true);
@@ -2691,7 +2732,7 @@ function renderResearchReview() {
   const regeneration = researchReview.context?.purpose === 'question-regeneration';
   $('research-review-title').textContent = regeneration ? 'Regenerate follow-ups: review saved context' : challenge ? 'Challenge decisions: review selected inputs' : 'Review research context';
   $('research-review-description').textContent = regeneration ? 'Review the exact Explorer input for new questions from the corrected saved answer. Nothing runs until you choose Generate reviewed follow-ups. The attached chat retains its own history and can read the committed map; this preview shows only Explorer-supplied input.' : challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Review the Explorer-supplied input for the isolated research helper. Choices apply only to this request. Viewing or excluding context starts no inference.';
-  $('research-review-start').textContent = regeneration ? 'Generate reviewed follow-ups' : challenge ? 'Start reviewed challenge' : 'Start reviewed research';
+  $('research-review-start').textContent = regeneration ? 'Generate reviewed follow-ups' : challenge ? 'Start reviewed challenge' : 'Research';
   $('research-review-start').disabled = !value || researchReview.loading || reviewStarting || researchReview.projectDirty || (challenge && !value.prepared.canStart);
   $('research-review-refresh').disabled = researchReview.loading || reviewStarting;
   $('research-review-status').textContent = researchReview.loading ? 'Preparing context locally. No inference has started.' : researchReview.error || '';
@@ -2759,6 +2800,7 @@ function renderResearchReview() {
   }
   rows.push(el('details', {}, el('summary', {}, 'Exact Explorer input strings'), el('h3', {}, 'Instructions'), el('pre', { id: 'research-review-instructions' }, instructions), el('h3', {}, 'Prompt'), el('pre', { id: 'research-review-prompt' }, prompt)));
   area.replaceChildren(...rows);
+  if (value.prepared.model) area.prepend(el('p', { id: 'research-review-model' }, modelDescription(value.prepared.model)));
   if (focusedId) [...area.querySelectorAll('input')].find(input => input.dataset.nodeId === focusedId)?.focus({ preventScroll: true });
   if (focusedSetting) [...area.querySelectorAll('select')].find(select => select.dataset.setting === focusedSetting)?.focus({ preventScroll: true });
 }
@@ -4671,6 +4713,7 @@ window.addEventListener('pagehide', event => {
   changeSummary.close(false);
   portableReferences.close(false);
   closeContributors(false);
+  closeResearchModels(false);
   comments.close(false);
   reviewHandoffs.close(false);
   if ($('history-dialog').open) closeHistory(true);

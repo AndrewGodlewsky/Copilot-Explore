@@ -26,7 +26,7 @@ export async function readHostReadiness(parent, capabilities = installedCapabili
   if (!rpc?.model?.getCurrent || !rpc?.model?.list || !rpc?.gitHubAuth?.getStatus) { result.sdk = 'unsupported'; return result; }
   const [auth, model] = await Promise.allSettled([
     rpc.gitHubAuth.getStatus(),
-    Promise.all([rpc.model.getCurrent(), rpc.model.list({ refresh: false })]),
+    Promise.all([rpc.model.getCurrent(), rpc.model.list({ skipCache: false })]),
   ]);
   result.account = auth.status === 'fulfilled' ? auth.value?.isAuthenticated === true ? 'ready' : auth.value?.isAuthenticated === false ? 'unavailable' : 'unknown' : failure(auth.reason);
   if (model.status === 'rejected') result.model = failure(model.reason);

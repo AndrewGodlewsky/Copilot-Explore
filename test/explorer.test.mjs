@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
 import { startResearch } from './helpers/research-review.mjs';
 import { confirmAnswer } from './helpers/answer-change.mjs';
@@ -218,7 +219,7 @@ test('duplicate generated questions are not appended', () => {
   assert.equal(doc.nodes.length, 2); assert.throws(() => addQuestions(doc, doc.rootId, [question]), /already exist/);
 });
 test('queued generation and isolated research persist across reopen', async t => {
-  const { explorer, messages } = await started(t, { researcher: { run: async () => findings } });
+  const { explorer, messages } = await started(t, { researcher: { models: fixtureResearchModels, run: async () => findings } });
   assert.equal(messages[0].mode, 'enqueue'); assert.match(messages[0].prompt, /submit_questions/);
   const node = explorer.doc.nodes[1];
   await explorer.command('answer', { revision: explorer.doc.revision, nodeId: node.id, answer: 'Neighbors', expand: true });

@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as model from '../com.github.copilot/extensions/explorer/model.mjs';
@@ -90,7 +91,7 @@ test('pending and staged question work must be explicitly cancelled or dismissed
 test('cancelled owned research cannot commit a late result after restart', async t => {
   let release; t.after(() => release?.()); const f = await controller(t);
   const evidence = { basis: 'reasoning', summary: 'Old result', options: [{ title: 'A', description: 'A', pros: [], cons: [] }, { title: 'B', description: 'B', pros: [], cons: [] }], recommendation: 'A', uncertainty: 'Unknown', sources: [] };
-  f.e.researcher = { run() { return new Promise(resolve => { release = () => resolve(evidence); }); } };
+  f.e.researcher = { models: fixtureResearchModels, run() { return new Promise(resolve => { release = () => resolve(evidence); }); } };
   await startResearch(f.e, { revision: f.e.doc.revision, nodeId: f.child.id }); await new Promise(setImmediate);
   await assert.rejects(f.prepare(), /Cancel/); await f.e.command('cancel', {});
   const p = await f.prepare(); await f.e.command('restart-branch', { ...f.input, answerPreview: p.token, confirmConsequences: true }); const saved = await readFile(f.file, 'utf8');

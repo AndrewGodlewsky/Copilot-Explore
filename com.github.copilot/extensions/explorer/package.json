@@ -1,6 +1,6 @@
 {
   "name": "explorer-canvas",
-  "version": "0.1.114",
+  "version": "0.1.115",
   "type": "module",
   "description": "Explorer canvas; the Copilot runtime supplies @github/copilot-sdk."
 }

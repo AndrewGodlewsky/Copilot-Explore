@@ -3,6 +3,7 @@ import { basename, isAbsolute, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createUsageRecorder, reconcileUsageJournal } from './research-usage.mjs';
+import { eligibleCopilotModel as eligible, sameCopilotAccount as sameAccount, validResearchModelId } from './research-model.mjs';
 
 class HelperError extends Error {}
 const fail = message => new HelperError(message);
@@ -24,8 +25,6 @@ export function runtimeEnvironment(source = process.env) {
   const allowed = /^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|HOME|USERPROFILE|LOCALAPPDATA|APPDATA|XDG_CONFIG_HOME|XDG_CACHE_HOME|LANG|LC_ALL|GH_TOKEN|GITHUB_TOKEN|GH_HOST|GITHUB_HOST|GH_CONFIG_DIR|HTTPS_PROXY|HTTP_PROXY|ALL_PROXY|NO_PROXY|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR)$/i;
   return Object.fromEntries(Object.entries(source).filter(([key, value]) => allowed.test(key) && typeof value === 'string'));
 }
-const eligible = model => model?.provider?.kind === 'copilot' && typeof model.id === 'string' && (!model.policy || model.policy.state === 'enabled');
-const sameAccount = (a, b) => a?.isAuthenticated === true && b?.isAuthenticated === true && !!a.login && !!a.host && a.login.toLowerCase() === b.login?.toLowerCase() && a.host.toLowerCase() === b.host?.toLowerCase();
 
 // Only fixtures inject a runtime. Production resolves the pair supplied by the desktop bootstrap.
 export function createOwnedHelper(parent, operation, prepare, { usageDirectory, runtime = desktopRuntime, usageRecorder = createUsageRecorder, stopTimeoutMs = 10000, clock = { now: () => performance.now(), setTimeout, clearTimeout } } = {}) {
@@ -69,11 +68,15 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
     try {
       check(); stage('Checking Copilot access');
       const { sdk, path } = await deadline(runtime(), 15000); check();
+      const captured = webResearch ? context.modelCapture : null;
+      if (captured && (!['chat', 'dedicated'].includes(captured.mode) || !Number.isSafeInteger(captured.revision) || captured.revision < 0 || !validResearchModelId(captured.model?.id))) throw fail('The reviewed Research model is invalid. Refresh the review before starting.');
       const [selected, catalog, auth] = await deadline(Promise.all([
-        parent.rpc.model.getCurrent(), parent.rpc.model.list({ refresh: true }), parent.rpc.gitHubAuth.getStatus(),
+        captured ? { modelId: captured.model.id } : parent.rpc.model.getCurrent(), parent.rpc.model.list({ skipCache: true }), parent.rpc.gitHubAuth.getStatus(),
       ]), 20000); check();
       const model = catalog.list?.find(m => eligible(m) && m.id === selected.modelId);
       if (!auth.isAuthenticated) throw fail('Sign in to Copilot before using this helper.');
+      if (captured && !sameAccount(captured.account, auth)) throw fail('The Copilot account changed after review. Refresh the Research review before starting.');
+      if (captured && !model) throw fail('The reviewed Research model is unavailable for this account or policy. Review Research model settings; no replacement was selected.');
       if (!model) throw fail('Research needs an enabled Copilot model. Select one in the main chat and try again.');
       const work = await prepare(context, { controller, progress, stopWith, fail, eligible: operationEligible });
       directory = await mkdtemp(join(tmpdir(), `explorer-${operation}-`));
@@ -98,7 +101,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       }), 30000); check();
       if (session.sessionId !== sessionId) throw fail('Copilot could not isolate the research session.');
       const [helperAuth, helperModels, metadata] = await deadline(Promise.all([
-        session.rpc.gitHubAuth.getStatus(), session.rpc.model.list({ refresh: true }), session.rpc.metadata.snapshot(),
+        session.rpc.gitHubAuth.getStatus(), session.rpc.model.list({ skipCache: true }), session.rpc.metadata.snapshot(),
       ]), 20000); check();
       if (!sameAccount(auth, helperAuth)) throw fail('The research account differs from the main Copilot account. Check your Copilot sign-in.');
       if (!helperModels.list?.some(m => eligible(m) && m.id === model.id)) throw fail('The selected model is unavailable for research. Choose an enabled Copilot model.');
@@ -110,6 +113,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       ]), 15000); check();
       work.validateTools(tools);
       if (current.modelId !== model.id || !sameAccount(auth, parentAuth) || !sameAccount(auth, currentHelperAuth)) throw fail('The Copilot account or model changed while research was starting. Try again.');
+      await usage.captureModel?.(current.modelId); check();
       stage(work.stage);
       const response = await session.sendAndWait({ prompt: work.prompt }, webResearch ? remaining() : 180000);
       check(); stage('Checking result');

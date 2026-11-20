@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { isQuestion } from './web/answer-state.mjs';
 import { findNode } from './model.mjs';
 import { researchFraming } from './research.mjs';
+import { sameResearchModel, researchModelSummary } from './research-model.mjs';
 import { researchSettings, researchLimits } from './web/research-policy.mjs';
 import { prepareResearch, sameResearchSources, sameResearchDestination } from './research-context.mjs';
 
@@ -63,10 +64,12 @@ export class ResearchReview {
     const scenarioPolicy = await explorer.scenarioPolicy(), scenario = scenarioPolicy.label;
     const content = adrDraft ? prepareAdrDraft(current, { scenario }) : adrQuestions ? explorer.prepareAdrQuestionRequest(current, randomUUID(), scenario) : adrScope ? prepareAdrScope(current, input.selection, { scenario }) : regeneration ? explorer.prepareRequest('questions', input.nodeId, randomUUID(), input.scope, scenario, { document: current, retained: input.retained, excluded: input.excluded }) : handoff ? prepareHandoff(current, input.selection, { scenario }) : challenge ? Object.freeze({ ...prepareChallenge(current, input.excluded, projectCapture?.sources, { scenario }), projectCapture, projectFresh }) : input.followup !== undefined ? prepareFollowup(current, input.nodeId, input.followup, { settings, scenario, scope: input.scope, excluded: input.excluded, history: explorer.currentFollowup(current, input.nodeId) }) : Object.freeze({ ...prepareResearch(current, input.nodeId, { ...researchFraming(current, settings), scenario, scope: input.scope, excluded: input.excluded }), settings, limits: researchLimits(settings) });
     await explorer.assertScenarioPolicy(scenarioPolicy);
-    const prepared = Object.freeze({ ...content, scenarioPolicy });
+    const modelCapture = !challenge && !handoff && !adrScope && !regeneration && !savedAdr ? await explorer.captureResearchModel() : null;
+    if (explorer.closed || this.order !== order || explorer.file !== file || explorer.activeKey !== key) obsolete();
+    const prepared = Object.freeze({ ...content, scenarioPolicy, ...(modelCapture ? { modelCapture } : {}) });
     const token = randomUUID(), expiresAt = Date.now() + REVIEW_TTL;
     const response = { token, journey: input.journey, nodeId: input.nodeId, clientId: input.clientId, sequence: input.sequence, expiresAt,
-      excluded: [...input.excluded ?? []], prepared: { context: prepared.context, instructions: prepared.instructions, prompt: prepared.prompt, bytes: prepared.bytes, limit: prepared.limit, coverage: prepared.coverage, ...(regeneration || selected || savedAdr ? { operation: prepared.operation, canStart: true } : challenge ? { operation: 'challenge-review', canStart: prepared.canStart && projectFresh, projectFresh } : { settings }), limits: prepared.limits, ...(prepared.followup ? { followup: prepared.followup } : {}) } };
+      excluded: [...input.excluded ?? []], prepared: { context: prepared.context, instructions: prepared.instructions, prompt: prepared.prompt, bytes: prepared.bytes, limit: prepared.limit, coverage: prepared.coverage, ...(regeneration || selected || savedAdr ? { operation: prepared.operation, canStart: true } : challenge ? { operation: 'challenge-review', canStart: prepared.canStart && projectFresh, projectFresh } : { settings }), limits: prepared.limits, ...(prepared.followup ? { followup: prepared.followup } : {}), ...(modelCapture ? { model: researchModelSummary(modelCapture) } : {}) } };
     if (Buffer.byteLength(JSON.stringify(response), 'utf8') > REVIEW_RESPONSE_LIMIT) throw new Error('The research review exceeds its 1 MiB response limit. Reduce optional exclusions or choose a narrower scope.');
     this.current = { token, journey: input.journey, nodeId: input.nodeId, file, key, prepared, expiresAt };
     clearTimeout(this.timer); this.timer = setTimeout(() => this.clear(), REVIEW_TTL); this.timer.unref?.();
@@ -87,7 +90,9 @@ export class ResearchReview {
     if (challenge && !review.prepared.canStart) throw new Error('Select at least one saved nonempty answer to challenge. Tentative answers remain tentative.');
     this.clear(true);
     await explorer.assertScenarioPolicy(review.prepared.scenarioPolicy);
+    if (review.prepared.modelCapture && !sameResearchModel(review.prepared.modelCapture, await explorer.captureResearchModel())) throw Error('The reviewed Research model or settings changed. Refresh the review before starting.');
     const current = await explorer.readCurrent();
+    if (explorer.closed || explorer.file !== review.file || explorer.activeKey !== review.key) obsolete();
     if (review.prepared.projectCapture && (!review.prepared.projectFresh || !await explorer.projectContext.fresh(review.prepared.projectCapture))) throw new Error('Reviewed project files or working root changed or are unavailable. Explicitly refresh files and review before starting.');
     explorer.currentFollowup(current);
     if (explorer.closed || !sameResearchSources(review.prepared.dependencies, current) || ((regeneration || adrQuestions) && !sameResearchSources(review.prepared.dependencies, explorer.doc)) || (!challenge && !handoff && !adrScope && !regeneration && !adrQuestions && !adrDraft && !sameResearchDestination(review.prepared.dependencies, current))) throw new Error('Reviewed sources or saved research changed. Refresh and review context before starting.');

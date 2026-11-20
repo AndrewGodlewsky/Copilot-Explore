@@ -108,7 +108,7 @@ test('research receives each fixed exploration strategy in its isolated prompt',
 async function fixture(t, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-sdk-test-'));
   const calls = { sends: 0, stops: 0 };
-  const parent = { rpc: { model: { getCurrent: async () => ({ modelId: model.id }), list: async () => ({ list: options.models ?? [model] }) }, gitHubAuth: { getStatus: async () => auth } } };
+  const parent = { rpc: { model: { getCurrent: async () => ({ modelId: options.selectedId ?? model.id }), list: async input => { assert.deepEqual(input, { skipCache: true }); return { list: options.models ?? [model] }; } }, gitHubAuth: { getStatus: async () => options.parentAuth ?? auth } } };
   const runtime = async () => ({ path: process.execPath, sdk: { RuntimeConnection: { forStdio: value => value }, CopilotClient: class {
     constructor(config) { calls.client = config; }
     async start() { await options.start?.(calls); }
@@ -116,6 +116,7 @@ async function fixture(t, options = {}) {
     async createSession(config) {
       calls.config = config;
       return { sessionId: config.sessionId, rpc: { ...parent.rpc,
+        model: { ...parent.rpc.model, getCurrent: async () => ({ modelId: options.actualId ?? config.model }) },
         gitHubAuth: { getStatus: async () => options.auth ?? auth },
         metadata: { snapshot: async () => ({ workingDirectory: calls.client.workingDirectory, isRemote: false }) },
         tools: { initializeAndValidate: async () => {}, getCurrentMetadata: async () => ({ tools: options.tools ?? expectedTools }) },
@@ -128,8 +129,47 @@ async function fixture(t, options = {}) {
     if (calls.client) { const owned = dirname(calls.client.workingDirectory); assert.equal(dirname(resolve(owned)), resolve(tmpdir())); assert.match(owned, /explorer-research-/); await rm(owned, { recursive: true, force: true }); }
     assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true });
   });
-  return { researcher, calls, dir };
+  return { researcher, calls, dir, parent };
 }
+
+test('Research model discovery does not start a helper and reviewed dedicated/default models are pinned with receipts', async t => {
+  for (const modelId of [null, 'dedicated-model']) {
+    const options = { models: [model, { ...model, id: 'dedicated-model', name: 'Dedicated' }] };
+    const f = await fixture(t, options), metadata = await f.researcher.models();
+    assert.equal(f.calls.sends, 0); assert.equal(f.calls.client, undefined);
+    const { captureResearchModel } = await import('../com.github.copilot/extensions/explorer/research-model.mjs');
+    const modelCapture = captureResearchModel(metadata, { revision: 1, modelId });
+    options.selectedId = 'dedicated-model';
+    const doc = createDocument('Pinned'); addQuestions(doc, doc.rootId, [{ question: 'What?', category: 'Target' }]);
+    const prepared = { ...prepareResearch(doc, doc.nodes[1].id, researchFraming(doc)), modelCapture };
+    await f.researcher.run(prepared.context, { prepared });
+    assert.equal(f.calls.config.model, modelId ?? model.id); assert.equal(f.calls.sends, 1);
+    assert.equal(f.calls.prompt.includes('modelCapture'), false); assert.equal(f.calls.prompt.includes('fixture-model'), false);
+    const [id] = await readdir(join(f.dir, 'usage', 'session-state'));
+    const receipt = JSON.parse(await readFile(join(f.dir, 'usage', 'session-state', id, 'operation.json'), 'utf8'));
+    assert.equal(receipt.model, modelId ?? model.id); assert.equal(receipt.status, 'completed');
+  }
+});
+
+test('Research reviewed model rejects changed accounts, policy and actual helper model without fallback', async t => {
+  const { captureResearchModel } = await import('../com.github.copilot/extensions/explorer/research-model.mjs');
+  for (const change of [options => { options.parentAuth = { ...auth, login: 'other' }; }, options => { options.models = [{ ...model, policy: { state: 'disabled' } }]; }, options => { options.actualId = 'substituted'; }]) {
+    const options = {}, f = await fixture(t, options), modelCapture = captureResearchModel(await f.researcher.models(), { revision: 0, modelId: null });
+    change(options);
+    const doc = createDocument('Review'); addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Target' }]);
+    const prepared = { ...prepareResearch(doc, doc.nodes[1].id, researchFraming(doc)), modelCapture };
+    await assert.rejects(f.researcher.run(prepared.context, { prepared }));
+    assert.equal(f.calls.sends, 0);
+  }
+});
+
+test('Research discovery supports dedicated choice when the chat model is unavailable and sanitizes catalog failures', async t => {
+  const f = await fixture(t); f.parent.rpc.model.getCurrent = async () => { throw Error('PRIVATE-CURRENT-ERROR'); };
+  const metadata = await f.researcher.models(); assert.equal(metadata.selectedId, null); assert.equal(metadata.models[0].id, model.id); assert.equal(f.calls.sends, 0);
+  f.parent.rpc.model.list = async () => { throw Error('PRIVATE-CATALOG-ERROR'); };
+  await assert.rejects(f.researcher.models(), error => /catalog/.test(error.message) && !error.message.includes('PRIVATE'));
+  assert.equal(f.calls.client, undefined);
+});
 
 test('helper uses isolated configuration, explicit research instructions, exact tools and no parent send', async t => {
   const { researcher, calls } = await fixture(t);

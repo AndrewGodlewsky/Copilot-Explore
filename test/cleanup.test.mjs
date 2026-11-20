@@ -62,7 +62,10 @@ async function fixture(t, options = {}) {
 
 test('cleanup sends only captured text and fixed conservative instructions with zero initialized tools', async t => {
   const { cleaner, calls, dir } = await fixture(t);
+  const { ResearchModelSettings } = await import('../com.github.copilot/extensions/explorer/research-model-settings.mjs');
+  await new ResearchModelSettings({ directory: dir }).save('dedicated-research-only', 0);
   assert.equal(await cleaner.run('maybe Élodie needs 42'), 'Maybe Élodie needs 42.');
+  assert.equal(calls.config.model, model.id, 'unrelated cleanup still follows the chat despite a dedicated Research preference');
   assert.deepEqual(JSON.parse(calls.prompt), { text: 'maybe Élodie needs 42' });
   for (const word of ['meaning', 'uncertainty', 'names', 'numbers', 'voice', 'data']) assert.ok(calls.config.systemMessage.content.includes(word));
   assert.deepEqual(calls.config.availableTools, []); assert.equal(calls.config.enableConfigDiscovery, false);

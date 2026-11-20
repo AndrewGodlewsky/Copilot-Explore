@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.115",
+    "summary": "Choose a dedicated Research model in Settings, or follow your selected chat model by default. Reviews show the model; changed or unavailable choices require review before starting. Running requests keep their model, private preferences stay out of shared maps, and verified model receipts are retained."
+  },
+  {
     "version": "0.1.114",
     "summary": "Choose explicit append or previewed replacement when using research options, recommendations or selected details. Cancel safely and undo a draft change without erasing newer edits. Keep one answer editor, private draft recovery and a separate Save action. Stale previews cannot overwrite your text; keyboard controls fit narrow panes."
   },

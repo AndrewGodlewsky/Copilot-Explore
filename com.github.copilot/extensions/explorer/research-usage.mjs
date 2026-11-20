@@ -173,6 +173,11 @@ export async function createUsageRecorder(sessionId, root, operation = 'research
     let pending = Promise.resolve();
     let failure = false;
     return {
+        async captureModel(model) {
+            if (!safeId(model, 128) || lifecycle.model && lifecycle.model !== model) throw new Error('Invalid verified helper model.');
+            lifecycle.model = model;
+            await atomicWrite(join(directory, 'operation.json'), JSON.stringify(lifecycle));
+        },
         async finish(status) {
             if (!['completed', 'failed', 'cancelled'].includes(status)) throw new Error('Invalid helper outcome.');
             activeOwners.delete(lifecycle.owner.token);

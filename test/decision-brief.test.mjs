@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
 import { startResearch } from './helpers/research-review.mjs';
 import test from 'node:test';
@@ -97,7 +98,7 @@ test('brief acceptance and research completion preserve both artifacts in either
   // establish that the helper started. Cancellation must release this fixture.
   const policy = explorer.assertScenarioPolicy.bind(explorer); let delayed = false;
   explorer.assertScenarioPolicy = async value => { if (explorer.pending?.kind === 'research' && !delayed) { delayed = true; await new Promise(resolve => setTimeout(resolve, 50)); } return policy(value); };
-  explorer.researcher={run(_, { signal }){return new Promise((resolve, reject)=>{finish=()=>resolve(finding);signal.addEventListener('abort',()=>reject(Error('Fixture cancelled')),{once:true});});}};
+  explorer.researcher={models: fixtureResearchModels, run(_, { signal }){return new Promise((resolve, reject)=>{finish=()=>resolve(finding);signal.addEventListener('abort',()=>reject(Error('Fixture cancelled')),{once:true});});}};
   const request=base(explorer);await proposal(explorer,request);await startResearch(explorer, {revision:explorer.doc.revision,nodeId:explorer.doc.nodes[1].id});await waitFor(() => finish, 'Research fixture did not start');
   const accept=()=>explorer.briefRequest({...request,action:'accept',revision:explorer.doc.revision,edits:[]});const researched=async()=>{finish();await Promise.all([...explorer.researchTasks]);};
   if(first==='brief'){await accept();await researched();}else{await researched();await accept();}

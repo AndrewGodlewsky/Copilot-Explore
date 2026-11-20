@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/dashboard.mjs';
 import { optionFindings } from './helpers/research-options.mjs';
 import { recommendationFindings } from './helpers/research-recommendation.mjs';
@@ -74,6 +75,70 @@ test('change summary app UI serves the client, compares saved versions, copies/d
   assert.equal($('change-summary-copy').disabled, true); assert.equal($('change-summary-text').value, copied); assert.equal($('change-summary-text').selectionStart, 2);
   assert.equal($('answer'), editor); assert.equal(editor.value, 'PRIVATE_SUMMARY_DRAFT'); assert.equal(editor.selectionStart, 2); assert.equal(editor.selectionEnd, 7);
   f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true })); assert.equal($('change-summary-dialog').open, false);
+});
+
+test('Research model UI saves and resets a personal choice without inference or disturbing draft/editor state', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Private model draft 🌿'); const editor = $('answer'); editor.setSelectionRange(2, 7);
+  editor.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  let calls = 0; f.explorer.researcher.run = () => { calls++; throw Error('Unexpected inference'); };
+  $('navigation-open').click(); $('research-model-open').click();
+  await until(() => !$('research-model-save').disabled, 'model settings loaded');
+  assert.equal($('research-model-choice').value, ''); assert.match($('research-model-effective').textContent, /selected chat model.*Fixture model/i);
+  $('research-model-choice').value = 'fixture-dedicated'; $('research-model-save').click();
+  await until(() => /Saved/.test($('research-model-status').textContent), 'dedicated model saved');
+  assert.match($('research-model-effective').textContent, /Dedicated.*Dedicated fixture/);
+  assert.equal((await f.explorer.researchModelSettingsRequest({ action: 'read' })).settings.modelId, 'fixture-dedicated');
+  $('research-model-close').click(); assert.equal(f.document.activeElement, $('navigation-open'));
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Private model draft 🌿'); assert.equal(editor.selectionStart, 2); assert.equal(editor.selectionEnd, 7);
+  editor.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  $('navigation-open').click(); $('research-model-open').click(); await until(() => !$('research-model-save').disabled, 'persisted model loaded');
+  assert.equal($('research-model-choice').value, 'fixture-dedicated');
+  $('research-model-choice').value = ''; $('research-model-save').click(); await until(() => /Saved/.test($('research-model-status').textContent), 'default restored');
+  $('research-model-dialog').dispatchEvent(new f.window.Event('cancel', { cancelable: true }));
+  assert.equal($('research-model-dialog').open, false); assert.equal(calls, 0);
+  $('question-tools-toggle').click(); $('question-tab-research').click(); $('research-request').click();
+  await until(() => !$('research-review-start').disabled, 'review loaded'); assert.match($('research-review-model').textContent, /selected chat model.*Fixture model/i); assert.equal(calls, 0);
+});
+
+test('Research model UI retains missing choices, renders literal names and permits reset with catalog errors', async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  await f.explorer.researchModelSettingsRequest({ action: 'save', revision: 0, modelId: 'fixture-dedicated' });
+  f.explorer.researcher.models = async () => ({ ...(await fixtureResearchModels()), models: [{ id: 'fixture-model', name: '<script>Literal 🌿</script>' }] });
+  $('navigation-open').click(); $('research-model-open').click(); await until(() => !$('research-model-save').disabled, 'missing choice loaded');
+  assert.equal($('research-model-choice').value, 'fixture-dedicated'); assert.match($('research-model-status').textContent, /unavailable/);
+  assert.match($('research-model-choice').textContent, /<script>Literal/); assert.equal($('research-model-dialog').querySelector('script'), null);
+  f.explorer.researcher.models = async () => { throw Error('SECRET-FAILURE'); };
+  $('research-model-refresh').click(); await until(() => !$('research-model-refresh').disabled, 'catalog failure loaded');
+  assert.equal($('research-model-choice').value, 'fixture-dedicated'); assert.match($('research-model-status').textContent, /catalog/); assert.doesNotMatch($('research-model-status').textContent, /SECRET/);
+  $('research-model-choice').value = ''; $('research-model-save').click(); await until(() => /Saved/.test($('research-model-status').textContent), 'reset saved despite catalog error');
+  assert.equal((await f.explorer.researchModelSettings().read()).modelId, null);
+});
+
+for (const action of ['read', 'save']) for (const leave of ['hide', 'switch', 'suspend']) test(`Research model UI ignores late ${action} replies after ${leave}`, async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id), original = f.window.fetch; let release;
+  f.window.fetch = async (...args) => { const response = await original(...args); if (args[0] === 'api/research-model-settings' && JSON.parse(args[1].body).action === action) await new Promise(resolve => { release = resolve; }); return response; };
+  $('navigation-open').click(); $('research-model-open').click();
+  if (action === 'save') { await until(() => !$('research-model-save').disabled, 'model settings loaded'); $('research-model-choice').value = 'fixture-dedicated'; $('research-model-save').click(); }
+  await until(() => release, 'model reply held');
+  if (leave === 'hide') $('research-model-close').click();
+  else if (leave === 'switch') { const next = f.explorer.uiSnapshot(); next.document = createDocument('Other'); f.window.__updates.apply(next); }
+  else f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  const status = $('research-model-status').textContent; release(); await delay(30);
+  assert.equal($('research-model-dialog').open, false); assert.equal($('research-model-status').textContent, status);
+  if (action === 'save') assert.equal((await f.explorer.researchModelSettings().read()).modelId, 'fixture-dedicated');
+});
+
+test('Research model UI handles unavailable, corrupt and empty catalogs without silently choosing a model', async t => {
+  for (const mode of ['preview', 'corrupt', 'empty']) {
+    const f = await fixture(t, 340, undefined, mode !== 'preview'), $ = id => f.document.getElementById(id);
+    if (mode === 'corrupt') await writeFile(join(f.explorer.library.directory, 'research-model-settings.json'), '{broken');
+    if (mode === 'empty') f.explorer.researcher.models = async () => ({ ...(await fixtureResearchModels()), models: [] });
+    $('navigation-open').click(); $('research-model-open').click();
+    await until(() => !$('research-model-refresh').disabled, 'model load settled');
+    assert.match($('research-model-status').textContent, mode === 'corrupt' ? /preserved/ : mode === 'preview' ? /installed Explorer library/ : /unavailable/);
+    assert.equal($('research-model-save').disabled, mode !== 'empty'); assert.equal($('research-model-choice').value, ''); assert.equal(f.explorer.pending, null);
+  }
 });
 
 test('Contributor UI saves, renames and clears only explicit names while preserving answer drafts and conflicts', async t => {
@@ -393,8 +458,11 @@ for (const mode of ['empty', 'researched', 'unavailable', 'in-progress']) test(`
   $('question-drawer-close').focus(); $('question-drawer-close').click();
   assert.equal(f.document.activeElement, $('question-help-open')); assert.equal($('question-help-open').getAttribute('aria-expanded'), 'false');
   if (mode === 'unavailable') {
-    $('question-help-open').click(); $('research-request').click(); await startReviewedResearch(f);
-    await until(() => /requires the installed Copilot desktop SDK/.test($('notice').textContent), 'unavailable research explained');
+    $('question-help-open').click(); $('research-request').click();
+    await until(() => /requires the installed Copilot desktop SDK/.test($('research-review-status').textContent), 'unavailable research explained before Start');
+    assert.equal($('research-review-start').disabled, true); assert.equal(f.explorer.pending, null);
+    assert.equal(f.actions.filter(action => action.action === 'research').length, 0);
+    $('research-review-close').click();
     assert.equal($('question-help-open').disabled, false); assert.equal($('answer'), editor);
   }
 });
@@ -2464,7 +2532,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   let explorer = options.explorer ?? await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
     cleaner: options.cleaner, briefHelper: options.briefHelper, checkHelper: options.checkHelper, projectRoot: options.projectRoot,
     questionHelper: options.questionHelper,
-    researcher: { runFollowup: options.runFollowup, run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
+    researcher: { models: fixtureResearchModels, runFollowup: options.runFollowup, run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
   }).load();
   if (!options.explorer) {
   await explorer.command('start', { topic: 'A tool library' });
@@ -2543,6 +2611,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const navigationDialog = document.getElementById('navigation-dialog');
   const contributorDialog = document.getElementById('contributor-dialog');
   if (contributorDialog) { contributorDialog.showModal = () => { contributorDialog.open = true; }; contributorDialog.close = () => { contributorDialog.open = false; }; }
+  const researchModelDialog = document.getElementById('research-model-dialog');
+  researchModelDialog.showModal = () => { researchModelDialog.open = true; }; researchModelDialog.close = () => { researchModelDialog.open = false; };
   const commentsDialog = document.getElementById('comments-dialog');
   if (commentsDialog) { commentsDialog.showModal = () => { commentsDialog.open = true; }; commentsDialog.close = () => { commentsDialog.open = false; }; }
   const handoffsDialog = document.getElementById('review-handoffs-dialog');

@@ -22,7 +22,7 @@ const voiceFixture = (t, overrides = {}) => {
 
 test('read-only host seam reads cached prerequisites without tools, sessions, refresh or mutations', async () => {
   let calls = 0;
-  const parent = { rpc: { model: { getCurrent: async () => { calls++; return { modelId: canary }; }, list: async options => { assert.deepEqual(options, { refresh: false }); calls++; return { list: [{ id: canary, provider: { kind: 'copilot' }, policy: { state: 'enabled' }, nested: canary }] }; } }, gitHubAuth: { getStatus: async () => { calls++; return { isAuthenticated: true, login: canary, host: canary }; } }, tools: new Proxy({}, { get: () => assert.fail('must not initialize tools') }) }, send: () => assert.fail('must not infer') };
+  const parent = { rpc: { model: { getCurrent: async () => { calls++; return { modelId: canary }; }, list: async options => { assert.deepEqual(options, { skipCache: false }); calls++; return { list: [{ id: canary, provider: { kind: 'copilot' }, policy: { state: 'enabled' }, nested: canary }] }; } }, gitHubAuth: { getStatus: async () => { calls++; return { isAuthenticated: true, login: canary, host: canary }; } }, tools: new Proxy({}, { get: () => assert.fail('must not initialize tools') }) }, send: () => assert.fail('must not infer') };
   const result = await readHostReadiness(parent, async () => ({ protocol: 3, supported: true }));
   assert.deepEqual(result, readyHost); assert.equal(calls, 3); assert.ok(!JSON.stringify(result).includes(canary));
   assert.equal((await readHostReadiness({}, async () => ({ supported: false }))).sdk, 'unsupported');

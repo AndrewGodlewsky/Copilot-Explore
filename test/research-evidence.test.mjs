@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import test from 'node:test';
 import { confirmAnswer } from './helpers/answer-change.mjs';
 import assert from 'node:assert/strict';
@@ -117,7 +118,7 @@ test('invalid evidence, overflow, cancellation and current-disk changes preserve
   const node = addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Scope' }])[0]; node.research = evidence; node.answer = 'My unchanged answer';
   await writeFile(file, JSON.stringify(doc));
   let finish, started;
-  const e = await new Explorer({ file, researcher: { run: () => new Promise(resolve => { finish = resolve; started(); }) } }).load(); t.after(async () => { finish?.(evidence); await e.close(); });
+  const e = await new Explorer({ file, researcher: { models: fixtureResearchModels, run: () => new Promise(resolve => { finish = resolve; started(); }) } }).load(); t.after(async () => { finish?.(evidence); await e.close(); });
   for (const mode of ['unknown-ref', 'oversized', 'cancelled', 'disk-source', 'disk-destination']) {
     const ready = new Promise(resolve => { started = resolve; });
     await startResearch(e, { revision: e.doc.revision, nodeId: node.id });

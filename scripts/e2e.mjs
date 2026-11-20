@@ -223,13 +223,16 @@ try {
     else { snapshot = await action('accept-questions', { batchId: adrId, selected: [{ index: 0, question: adrCandidates[0].question }] }); assert.equal(snapshot.document.nodes.length, beforeAdr + 1); assert.equal(snapshot.document.nodes.at(-1).parentId, nodeId); }
   }
   console.log('Installed canvas accepted empty ADR results and explicit reviewed ADR candidates; ordinary empty results and cross-session callbacks rejected.');
+  const requestsBeforeResearch = requests.length;
   const reviewed = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin },
     body: JSON.stringify({ action: 'prepare', clientId: 'fixture-review-000000000001', sequence: 1, journey: snapshot.activeKey ?? snapshot.document.id, nodeId, scope: 'decisions', excluded: [] }) });
-  assert.equal(reviewed.status, 200); const review = await reviewed.json(); assert.ok(review.prepared.prompt.includes('Neighbors'));
-  assert.ok(!review.prepared.prompt.includes(projectCanary));
-  await action('research', { nodeId, journey: review.journey, token: review.token });
-  snapshot = await until(state, value => !value.pending, 'research access check');
-  assert.match(snapshot.error, /Sign in|enabled Copilot model|Checking Copilot access/);
+  assert.equal(reviewed.status, 400); const review = await reviewed.json();
+  assert.equal(review.error, 'The Copilot model catalog could not be loaded. Check Copilot sign-in and refresh Research model settings.');
+  assert.equal(review.token, undefined); assert.equal(review.prepared, undefined);
+  assert.ok(!JSON.stringify(review).includes(projectCanary));
+  snapshot = await state(); assert.equal(snapshot.pending, null);
+  assert.equal(requests.length, requestsBeforeResearch, 'Unauthenticated model discovery must fail before inference or a usable Research review.');
+  console.log('Installed anonymous runtime rejected Research during model discovery, before issuing a review token or inference.');
   const researchAction = await session.rpc.canvas.action.invoke({ instanceId, actionName: 'submit_research', input: {} }).catch(error => ({ error: error.message }));
   assert.match(JSON.stringify(researchAction), /error|not found|unknown/i);
   await action('finish');

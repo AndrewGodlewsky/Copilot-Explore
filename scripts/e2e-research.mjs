@@ -9,12 +9,13 @@ import { prepareFollowup } from '../com.github.copilot/extensions/explorer/resea
 import { createDocument, addQuestions, addDirection, addDependency } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { prepareResearch } from '../com.github.copilot/extensions/explorer/research-context.mjs';
 import { createResearcher, researchFraming } from '../com.github.copilot/extensions/explorer/research.mjs';
+import { captureResearchModel } from '../com.github.copilot/extensions/explorer/research-model.mjs';
 
 const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_PATH;
 assert.ok(sdkDirectory && cli, 'Set COPILOT_SDK_DIR and COPILOT_CLI_PATH to the installed desktop SDK/runtime.');
 const sdk = await import(pathToFileURL(join(sdkDirectory, 'index.js')).href);
 const temporary = await mkdtemp(join(tmpdir(), 'explorer-research-fixture-'));
-const calls = [], toolCalls = [], prompts = [], captured = [], sendTimeouts = [];
+const calls = [], toolCalls = [], prompts = [], captured = [], sendTimeouts = [], createdModels = [];
 const findings = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic local comparison.', options: [
   { id: 'pilot', title: 'Pilot', description: 'Small first step.', fit: 'When learning with a small group matters.', pros: ['Learn'], cons: ['Limited'] , proposedAnswer: 'I will run a pilot.', details: [{ label: 'Size', value: 'Ten people' }] },
   { id: 'launch', title: 'Launch', description: 'Broad first step.', fit: 'When broad reach matters more than setup cost.', pros: ['Reach'], cons: ['Cost'], proposedAnswer: 'I will launch broadly.', details: [] },
@@ -59,7 +60,8 @@ await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${fixture.address().port}`;
 const auth = { isAuthenticated: true, login: 'local-fixture', host: 'github.com' };
 const model = { id: 'gpt-4o', provider: { kind: 'copilot' }, policy: { state: 'enabled' } };
-const parent = { rpc: { gitHubAuth: { getStatus: async () => auth }, model: { list: async () => ({ list: [model] }), getCurrent: async () => ({ modelId: model.id }) } } };
+const dedicated = { ...model, id: 'gpt-4.1' }; let selectedId = model.id;
+const parent = { rpc: { gitHubAuth: { getStatus: async () => auth }, model: { list: async input => { assert.deepEqual(input, { skipCache: true }); return { list: [model, dedicated] }; }, getCurrent: async () => ({ modelId: selectedId }) } } };
 const owned = new Set();
 const runtime = async () => ({ path: cli, sdk: { RuntimeConnection: sdk.RuntimeConnection, CopilotClient: class {
   constructor(options) {
@@ -72,6 +74,7 @@ const runtime = async () => ({ path: cli, sdk: { RuntimeConnection: sdk.RuntimeC
   start() { return this.client.start(); }
   forceStop() { return this.client.forceStop(); }
   async createSession(config) {
+    createdModels.push(config.model);
     const session = await this.client.createSession({ ...config, enableManagedSettings: false,
       provider: { type: 'openai', baseUrl: base + '/v1', apiKey: 'fixture', wireApi: 'completions' },
       mcpServers: { 'github-mcp-server': { type: 'http', url: base + '/mcp', tools: ['*'] } },
@@ -98,7 +101,9 @@ try {
   researchDoc.pins = [{ id: 'constraint-00000000000000', text: 'Preserve the user constraint exactly' }];
   addDependency(researchDoc, target.id, prerequisite.id);
   const settings = Object.freeze({ depth: 'quick', sourceFocus: 'primary', recency: 'recent' });
-  const prepared = Object.freeze({ ...prepareResearch(researchDoc, target.id, { ...researchFraming(researchDoc, settings), excluded: [excluded.id] }), settings });
+  const modelCapture = captureResearchModel(await researcher.models(), { revision: 0, modelId: null });
+  assert.equal(owned.size, 0); assert.equal(prompts.length, 0); selectedId = dedicated.id;
+  const prepared = Object.freeze({ ...prepareResearch(researchDoc, target.id, { ...researchFraming(researchDoc, settings), excluded: [excluded.id] }), settings, modelCapture });
   findings.recommendationAssessment.decisionRefs = [{ nodeId: prerequisite.id, reason: 'Unconfirmed shared space favors testing access with a small pilot.' }];
   const expected = value => ({ ...value, recommendationAssessment: { ...value.recommendationAssessment, decisionRefs: value.recommendationAssessment.decisionRefs.map(ref => ({ ...ref, answerState: 'assumption', review: false })) }, settings });
   assert.ok(prepared.context.decisionsElsewhere.find(node => node.id === prerequisite.id).selection.includes('Explicit prerequisite'));
@@ -135,7 +140,7 @@ try {
   assert.equal(sessions.length, 1);
   const journal = await readFile(join(temporary, 'usage', 'session-state', sessions[0], 'events.jsonl'), 'utf8');
   const operation = JSON.parse(await readFile(join(temporary, 'usage', 'session-state', sessions[0], 'operation.json'), 'utf8'));
-  assert.equal(operation.operation, 'research'); assert.equal(operation.status, 'completed');
+  assert.equal(operation.operation, 'research'); assert.equal(operation.status, 'completed'); assert.equal(operation.model, model.id); assert.equal(createdModels[0], model.id);
   assert.match(journal, /session.usage_record/); assert.ok(!journal.includes('Neighbors only')); assert.ok(!journal.includes('Synthetic garden'));
   falseCitation = true;
   await assert.rejects(researcher.run(prepared.context, { prepared }), /sources.*successfully read/);
@@ -150,7 +155,8 @@ try {
   followupMode = true;
   const doc = createDocument('Scoped follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why pilot?', category: 'Target' }]);
   doc.nodes[1].research = { ...completed, basis: 'sources', sources: [{ id: 's1', title: 'Earlier imported source', url: 'https://example.com/prior', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported' }] };
-  const followup = prepareFollowup(doc, doc.nodes[1].id, { question: 'What if the budget doubles? ??', hypothetical: true }, { settings });
+  const followup = { ...prepareFollowup(doc, doc.nodes[1].id, { question: 'What if the budget doubles? ??', hypothetical: true }, { settings }), modelCapture: captureResearchModel(await researcher.models(), { revision: 1, modelId: dedicated.id }) };
+  selectedId = model.id;
   const startIndex = captured.length;
   const followupResult = await researcher.runFollowup(followup.context, { prepared: followup });
   assert.deepEqual(captured[startIndex], { instructions: followup.instructions, prompt: followup.prompt });
@@ -162,6 +168,8 @@ try {
   const followupReceipts = [];
   for (const id of await readdir(join(temporary, 'usage', 'session-state'))) followupReceipts.push(JSON.parse(await readFile(join(temporary, 'usage', 'session-state', id, 'operation.json'), 'utf8')));
   assert.deepEqual(followupReceipts.filter(item => item.operation === 'research-follow-up').map(item => item.status).sort(), ['completed', 'failed']);
+  assert.ok(followupReceipts.filter(item => item.operation === 'research-follow-up').every(item => item.model === dedicated.id));
+  assert.equal(createdModels[startIndex], dedicated.id);
   assert.ok(toolCalls.length >= 4); assert.ok(toolCalls.every(call => call.name === 'web_search'));
   hold = true;
   const controller = new AbortController();
@@ -176,6 +184,7 @@ try {
     assert.deepEqual(await researcher.run(prepared.context, { prepared }), expected(limitedFindings(count)));
   }
   assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 7);
+  console.log('PASS Research model discovery starts no inference; captured selected-chat model and dedicated follow-up model survive later chat changes; actual installed helper models and retained operation receipts match both captures.');
   console.log('PASS isolated research and scoped follow-up: linked recommendation with captured prior-context state, honest null recommendations and zero/one-option results; historical imported evidence unchanged, unread new source rejected, separate completed/failed/cancelled operation receipts, real installed MCP search, reasoning/unknown claims, rejection of search-only fabricated source/time, exact reviewed inputs, retained completed/failed receipts and cancellation/release. Successful builtin web_fetch is NOT exercised; deterministic hook tests separately cover successful read provenance. No paid provider or user session.');
 } finally {
   clearTimeout(deadline); await researcher.close();

@@ -7,6 +7,8 @@ import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
 import { ScenarioFork } from './scenario-fork.mjs';
 import { ContributorSettings } from './contributor-settings.mjs';
+import { ResearchModelSettings } from './research-model-settings.mjs';
+import { captureResearchModel, researchModelSummary, validResearchModelId } from './research-model.mjs';
 import { attributeContributions, contributionStatus } from './contributors.mjs';
 import { changeComments, commentStatuses } from './comments.mjs';
 import { changeReviewHandoffs, handoffStatuses } from './review-handoffs.mjs';
@@ -111,6 +113,46 @@ export class Explorer {
     const settings = this.contributorSettings();
     if (!settings) throw Error('Private contributor settings are unavailable. Reopen the shared journey.');
     return attributeContributions(before, next, intent, (await settings.read()).actor, new Date().toISOString());
+  }
+  researchModelSettings() {
+    const context = this.projectStore?.context, directory = this.library?.directory ?? context?.directory;
+    if (!directory) return null;
+    if (this.researchModelPreferences?.directory !== directory) this.researchModelPreferences = new ResearchModelSettings({ directory, ...(!this.library && context ? { assertPrivate: () => context.assertPrivate() } : {}) });
+    return this.researchModelPreferences;
+  }
+  async researchModels() {
+    if (!this.researcher?.models) throw Error('Research model discovery requires the installed Copilot desktop SDK.');
+    try { return await this.researcher.models(); }
+    catch { throw Error('The Copilot model catalog could not be loaded. Check Copilot sign-in and refresh Research model settings.'); }
+  }
+  async captureResearchModel() {
+    const store = this.researchModelSettings(), settings = store ? await store.read() : { revision: 0, modelId: null };
+    const metadata = await this.researchModels();
+    const latest = store ? await store.read() : settings;
+    if (store !== this.researchModelSettings() || latest.revision !== settings.revision || latest.modelId !== settings.modelId) throw Error('Research model settings changed. Refresh the review before starting.');
+    return captureResearchModel(metadata, settings);
+  }
+  async researchModelSettingsRequest(input) {
+    const keys = input && typeof input === 'object' && !Array.isArray(input) ? Object.keys(input).sort().join(',') : '';
+    if (!(input?.action === 'read' && keys === 'action' || input?.action === 'save' && keys === 'action,modelId,revision')) throw Error('Invalid Research model settings request.');
+    const store = this.researchModelSettings();
+    if (!store) {
+      if (input.action === 'save') throw Error('Private Research model settings are unavailable in this preview.');
+      return { available: false, settings: null, models: [], effective: null, problem: 'Open the installed Explorer library to choose a Research model.' };
+    }
+    let settings = await store.read(), metadata, problem = '';
+    if (input.action === 'save') {
+      if (input.modelId !== null) {
+        if (!validResearchModelId(input.modelId)) throw Error('Invalid Research model identifier.');
+        metadata = await this.researchModels();
+        captureResearchModel(metadata, { revision: input.revision, modelId: input.modelId });
+      }
+      settings = await store.save(input.modelId, input.revision);
+    }
+    try { metadata ??= await this.researchModels(); } catch (error) { problem = error.message; }
+    let effective = null;
+    if (metadata) { try { effective = researchModelSummary(captureResearchModel(metadata, settings)); } catch (error) { problem = error.message; } }
+    return { available: true, settings, models: metadata?.models ?? [], effective, problem };
   }
   async changeStorage(store) {
     if (this.projectStore !== store) await this.analytics?.flush();

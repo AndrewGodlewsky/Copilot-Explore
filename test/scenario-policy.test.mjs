@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -42,7 +43,7 @@ test('questions require explicit alternative use before answer expansion and rej
 
 test('reviewed research and handoff inputs carry the exact classification and cannot consume an obsolete preference', async t => {
   let calls = 0;
-  const { e, enable, store } = await fixture(t, { researcher: { async run() { calls++; throw Error('Unexpected inference'); }, async close() {} }, briefHelper: { async run() { calls++; throw Error('Unexpected inference'); }, async close() {} } });
+  const { e, enable, store } = await fixture(t, { researcher: { models: fixtureResearchModels, async run() { calls++; throw Error('Unexpected inference'); }, async close() {} }, briefHelper: { async run() { calls++; throw Error('Unexpected inference'); }, async close() {} } });
   const nodeId = e.doc.nodes[1].id, review = extra => ({ action: 'prepare', clientId: randomUUID(), sequence: 1, journey: e.activeKey, nodeId, scope: 'decisions', excluded: [], ...extra });
   await assert.rejects(e.reviewResearch(review()), /preferred|hypothetical/i);
   await enable(); const research = await e.reviewResearch(review()); assert.equal(research.prepared.context.scenario.classification, 'hypothetical');
@@ -130,7 +131,7 @@ test('question acceptance rechecks preference after asynchronous history prepara
 test('owned research rechecks a queued preference and discards a result returned under an obsolete selection', async t => {
   let calls = 0, captured, deliver;
   const result = { basis: 'reasoning', summary: 'Conditional research', options: [{ title: 'A', description: 'First', pros: [], cons: [] }, { title: 'B', description: 'Second', pros: [], cons: [] }], recommendation: 'A', uncertainty: 'Unverified', sources: [] };
-  const { e, a, enable, store } = await fixture(t, { researcher: { async run(context) { calls++; captured = context; return new Promise(resolve => { deliver = resolve; }); }, async close() {} } });
+  const { e, a, enable, store } = await fixture(t, { researcher: { models: fixtureResearchModels, async run(context) { calls++; captured = context; return new Promise(resolve => { deliver = resolve; }); }, async close() {} } });
   const start = async () => {
     const review = await e.reviewResearch({ action: 'prepare', clientId: randomUUID(), sequence: 1, journey: e.activeKey, nodeId: e.doc.nodes[1].id, scope: 'decisions', excluded: [] });
     await e.command('research', { journey: e.activeKey, nodeId: e.doc.nodes[1].id, token: review.token });

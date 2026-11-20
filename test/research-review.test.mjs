@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,6 +13,7 @@ import { prepareAnswerCheck, captureCheck, checkFreshness } from '../com.github.
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/web/research-review-client.mjs';
 import { ResearchReview, REVIEW_TTL } from '../com.github.copilot/extensions/explorer/research-review.mjs';
+import { createResearcher } from '../com.github.copilot/extensions/explorer/research.mjs';
 
 function document() {
   const doc = createDocument('Review \ud83c\udf3f');
@@ -22,7 +24,7 @@ function document() {
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-review-')), file = join(dir, 'map.explore.json'), doc = document(), runs = [];
   await writeFile(file, JSON.stringify(doc));
-  const e = await new Explorer({ file, researcher: { run(context, options) { runs.push({ context, ...options }); return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(Error('Cancelled')))); } } }).load();
+  const e = await new Explorer({ file, researcher: { models: fixtureResearchModels, run(context, options) { runs.push({ context, ...options }); return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(Error('Cancelled')))); } } }).load();
   t.after(async () => { await e.close(); await rm(dir, { recursive: true, force: true }); });
   let sequence = 0; const clientId = randomUUID();
   const input = extra => ({ action: 'prepare', journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, ...extra });
@@ -180,13 +182,49 @@ test('client ignores late previews after close and rapid replacement, preserving
   client.close(); for (const request of requests) respond(request);
 });
 
+for (const followup of [undefined, { question: 'Why?', hypothetical: false }]) test(`client permits slow model discovery for ${followup ? 'follow-up' : 'initial'} Research`, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let release;
+  const catalog = new Promise(resolve => { release = resolve; });
+  const researcher = createResearcher({ rpc: { model: { list: () => catalog, getCurrent: async () => ({ modelId: 'fixture-model' }) },
+    gitHubAuth: { getStatus: async () => ({ isAuthenticated: true, login: 'fixture', host: 'github.com' }) } } });
+  t.after(() => researcher.close());
+  const client = new ResearchReviewClient({ changed() {}, fetch: async (url, options) => {
+    const input = JSON.parse(options.body);
+    const models = await Promise.race([researcher.models(), new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))]);
+    return { ok: true, json: async () => ({ ...input, prepared: { model: models.models[0] } }) };
+  } });
+  client.context = { journey: 'journey', nodeId: 'target', ...(followup ? { followup } : {}) };
+  const pending = client.prepare();
+  t.mock.timers.tick(15000); await new Promise(setImmediate);
+  assert.equal(client.loading, true); assert.equal(client.error, ''); assert.equal(client.abort.signal.aborted, false);
+  release({ list: [{ id: 'fixture-model', provider: { kind: 'copilot' } }] }); await pending;
+  assert.equal(client.error, ''); assert.equal(client.value?.prepared.model.id, 'fixture-model'); assert.equal(client.loading, false);
+  t.mock.timers.tick(30000); assert.equal(client.abort.signal.aborted, false);
+});
+
+for (const purpose of [undefined, 'challenge-review']) test(`client bounds ${purpose ?? 'Research'} preparation and rejects a late response`, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let release, signal;
+  const client = new ResearchReviewClient({ changed() {}, fetch: (url, options) => {
+    signal = options.signal;
+    return new Promise(resolve => { release = () => resolve({ ok: true, json: async () => JSON.parse(options.body) }); });
+  } });
+  client.context = { journey: 'journey', nodeId: 'target', ...(purpose ? { purpose } : {}) };
+  const pending = client.prepare(), budget = purpose ? 10000 : 30000;
+  t.mock.timers.tick(budget - 1); assert.equal(signal.aborted, false);
+  t.mock.timers.tick(1); assert.equal(signal.aborted, true);
+  release(); await pending;
+  assert.equal(client.value, null); assert.match(client.error, /timed out/); assert.equal(client.loading, false);
+});
+
 test('transport response cap rejects escaped exclusion IDs without retaining a payload', async () => {
   const doc = document(), excluded = [];
   for (let i = 0; i < 2500; i++) {
     const id = String(i).padStart(4, '0') + '\u0000'.repeat(96); excluded.push(id);
     doc.nodes.push({ ...doc.nodes[2], id });
   }
-  const review = new ResearchReview(), explorer = { doc, file: 'map', activeKey: null, readCurrent: async () => doc, scenarioPolicy: async () => ({ label: { classification: 'unselected' } }), assertScenarioPolicy: async () => {} };
+  const review = new ResearchReview(), explorer = { doc, file: 'map', activeKey: null, readCurrent: async () => doc, captureResearchModel: async () => ({ mode: 'chat', revision: 0, model: (await fixtureResearchModels()).models[0], account: (await fixtureResearchModels()).account }), scenarioPolicy: async () => ({ label: { classification: 'unselected' } }), assertScenarioPolicy: async () => {} };
   await assert.rejects(review.prepare(explorer, { action: 'prepare', clientId: randomUUID(), sequence: 1, journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded }), /1 MiB response limit/);
   assert.equal(review.current, null);
 });

@@ -135,10 +135,19 @@
     <label for="contributor-name">Public display name</label><input id="contributor-name" type="text" maxlength="96" autocomplete="off" spellcheck="false" aria-describedby="contributor-preview"><p id="contributor-preview" class="quiet"></p>
     <p id="contributor-status" role="status" aria-live="polite"></p><div class="guidance-actions"><button id="contributor-close" type="button">Close</button><button id="contributor-refresh" type="button">Refresh saved name</button><button id="contributor-clear" type="button" disabled>Clear name</button><button id="contributor-save" type="button" class="primary" disabled>Save name</button></div>
   </dialog>
+  <dialog id="research-model-dialog" class="settings-dialog" aria-labelledby="research-model-title">
+    <header class="settings-heading"><h2 id="research-model-title">Research model</h2><button id="research-model-close" type="button">Close</button></header>
+    <p>Choose a model for Research and its follow-up questions. Running requests keep their reviewed model.</p>
+    <label for="research-model-choice">Model for Research</label><select id="research-model-choice" aria-describedby="research-model-effective" disabled><option value="">Use selected chat model</option></select>
+    <p id="research-model-effective" class="quiet"></p><p id="research-model-status" role="status" aria-live="polite"></p>
+    <p class="quiet">Changing this setting starts no research and leaves the chat model unchanged. The choice stays on this device.</p>
+    <div class="guidance-actions"><button id="research-model-refresh" type="button">Refresh models</button><button id="research-model-save" type="button" class="primary" disabled>Save model</button></div>
+  </dialog>
   <dialog id="navigation-dialog" class="settings-dialog" aria-labelledby="navigation-title">
     <header class="settings-heading"><h2 id="navigation-title">Settings</h2><button id="navigation-cancel" type="button">Close</button></header>
     <p class="quiet">Preferences for Explorer on this device.</p>
     <div id="voice-settings-host" class="settings-section"></div>
+    <section class="settings-section"><h3>Research</h3><button id="research-model-open" type="button" aria-haspopup="dialog">Research model</button></section>
     <section class="settings-section"><h3>Shared contributions</h3><button id="contributor-open" type="button" aria-haspopup="dialog">Contributor name</button></section>
     <details id="map-settings" class="settings-section"><summary>Map and motion</summary><form id="navigation-form"><label for="navigation-wheel">Scroll wheel and trackpad</label><select id="navigation-wheel"><option value="zoom">Zoom around pointer</option><option value="pan">Pan map</option></select><p class="quiet">Ctrl/Command+scroll always zooms. Scrolling inside a question stays with its content.</p><label for="navigation-sensitivity">Scroll sensitivity</label><input id="navigation-sensitivity" type="number" min="0.25" max="3" step="any" value="1" required><p class="quiet">Changes wheel movement only; buttons and keyboard steps stay the same.</p><label for="navigation-motion">Motion</label><select id="navigation-motion"><option value="system">Follow system</option><option value="reduce">Reduce</option><option value="full">Full</option></select><p class="quiet">Controls recording feedback animation and scrolling behavior.</p><p id="navigation-error" class="notice" role="alert" hidden></p><div class="guidance-actions"><button type="button" id="navigation-reset">Reset to defaults</button><button type="button" id="navigation-refresh" hidden>Refresh saved settings</button><button type="submit" id="navigation-save" class="primary">Save map settings</button></div></form></details>
     <details class="settings-section"><summary>Keyboard</summary><label class="settings-check"><input id="palette-shortcut" type="checkbox"> Enable Ctrl+Shift+P for Commands in this canvas</label><p class="quiet">Ctrl/Command+Enter saves your answer. Dictation shortcuts follow Copilot.</p></details>
@@ -284,7 +293,7 @@
     <p class="quiet">Guidance, pins and answers are user statements and states, not verified facts. Historical AI rationale and raw answer drafts are excluded. Ordinary research excludes prior research; a follow-up includes the displayed original recommendation and complete optional evidence and exchanges. No project files or source attachments are included. This does not erase earlier main-chat context or restrict the separate native get_exploration snapshot.</p>
     <p id="research-review-status" role="status" aria-live="polite"></p><div id="research-review-content"></div>
     <p class="quiet">This review expires after 10 minutes. Changed saved sources require a fresh review and explicit start. Cancel or reload discards these choices and preserves your answer draft.</p>
-    <div class="guidance-actions"><button id="research-review-close">Cancel</button><button id="research-review-refresh">Refresh context</button><button id="research-review-start" class="primary" disabled>Start reviewed research</button></div>
+    <div class="guidance-actions"><button id="research-review-close">Cancel</button><button id="research-review-refresh">Refresh context</button><button id="research-review-start" class="primary" disabled>Research</button></div>
   </dialog>
   <dialog id="palette-dialog" aria-labelledby="palette-title">
     <h2 id="palette-title">Commands and local search</h2>

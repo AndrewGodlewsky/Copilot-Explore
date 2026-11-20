@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import { confirmAnswer } from './helpers/answer-change.mjs';
@@ -69,7 +70,7 @@ test('large original records and exchanges omit whole with accurate measured cov
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-followup-')), file = join(dir, 'map.explore.json'), doc = document(), runs = [];
   await writeFile(file, JSON.stringify(doc));
-  const e = await new Explorer({ file, researcher: { runFollowup(context, options) { return new Promise((resolve, reject) => runs.push({ context, ...options, resolve, reject })); } } }).load();
+  const e = await new Explorer({ file, researcher: { models: fixtureResearchModels, runFollowup(context, options) { return new Promise((resolve, reject) => runs.push({ context, ...options, resolve, reject })); } } }).load();
   t.after(async () => { for (const run of runs) run.resolve(result); await e.close(); await rm(dir, { recursive: true, force: true }); });
   let sequence = 0; const clientId = randomUUID();
   const review = question => e.reviewResearch({ action: 'prepare', journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, followup: { question, hypothetical: true } });

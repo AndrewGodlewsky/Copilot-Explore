@@ -16,11 +16,13 @@ export class ResearchReviewClient {
     this.abort?.abort(); const abort = new AbortController(); this.abort = abort;
     const sequence = ++this.sequence, input = { action: 'prepare', ...this.context, clientId: this.clientId, sequence, ...(project ? { project } : {}) };
     this.value = null; this.error = ''; this.loading = true; this.changed();
-    const timeout = setTimeout(() => abort.abort(), 10000);
+    // Research also waits for the host's 20-second model metadata lookup.
+    const timeout = setTimeout(() => abort.abort(), input.purpose ? 10000 : 30000);
     try {
       const response = await this.fetch('api/research-review', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
       const value = await response.json();
       if (sequence !== this.sequence || !this.context) return;
+      abort.signal.throwIfAborted();
       if (!response.ok) throw Error(value.error);
       if (value.clientId !== this.clientId || value.sequence !== sequence || value.journey !== input.journey || value.nodeId !== input.nodeId) throw Error('Research review changed. Refresh context.');
       this.value = value;

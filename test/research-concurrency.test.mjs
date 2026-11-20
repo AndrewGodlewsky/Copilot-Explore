@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
 import { startResearch } from './helpers/research-review.mjs';
 import { confirmAnswer } from './helpers/answer-change.mjs';
@@ -19,7 +20,7 @@ async function fixture(t) {
   addQuestions(doc, doc.rootId, [{ question: 'Same question?', category: 'Target' }, { question: 'Other question?', category: 'Other' }]);
   doc.nodes[2].question = doc.nodes[1].question;
   await writeFile(file, JSON.stringify(doc));
-  const runs = [], e = await new Explorer({ file, send: async () => {}, researcher: { run(context, options) { const d = deferred(); runs.push({ ...d, context, ...options }); return d.promise; } } }).load();
+  const runs = [], e = await new Explorer({ file, send: async () => {}, researcher: { models: fixtureResearchModels, run(context, options) { const d = deferred(); runs.push({ ...d, context, ...options }); return d.promise; } } }).load();
   t.after(async () => { for (const run of runs) run.resolve(result); await e.close(); await rm(dir, { recursive: true, force: true }); });
   const command = (action, input = {}) => e.command(action, { revision: e.doc.revision, ...input });
   const begin = async ({ queued = false } = {}) => { const started = runs.length; await startResearch(e, { nodeId: doc.nodes[1].id }); if (!queued) await waitFor(() => runs.length > started, 'Research fixture helper did not start'); };

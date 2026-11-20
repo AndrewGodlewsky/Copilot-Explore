@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { startResearch } from './helpers/research-review.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -72,7 +73,7 @@ import { atomicWrite } from '../com.github.copilot/extensions/explorer/storage.m
 
 test('conditional snapshots follow real preview accept dismiss stale cancellation research and partial history commits', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'explorer-conditional-')); let work;
-  const e = new Explorer({ file: join(directory, 'map.explore.json'), target: {}, send: async () => {}, researcher: {
+  const e = new Explorer({ file: join(directory, 'map.explore.json'), target: {}, send: async () => {}, researcher: { models: fixtureResearchModels,
     run(context, options) { return new Promise((resolve, reject) => { work = { resolve, reject, ...options }; options.signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }); },
   } });
   const server = await startServer(e, { close() {} });

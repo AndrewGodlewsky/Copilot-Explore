@@ -1,3 +1,4 @@
+import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { startResearch } from './helpers/research-review.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -34,7 +35,7 @@ test('research is isolated, abortable, rejects chat callbacks and preserves answ
   const dir = await mkdtemp(join(tmpdir(), 'explorer-research-test-'));
   let resolveRun, rejectRun, signal, context; const messages = [];
   const explorer = new Explorer({ file: join(dir, 'map.explore.json'), send: async m => messages.push(m), target: {},
-    researcher: { run: (data, options) => { context = data; signal = options.signal; options.onProgress('Reading sources'); return new Promise((yes, no) => { resolveRun = yes; rejectRun = no; }); } } });
+    researcher: { models: fixtureResearchModels, run: (data, options) => { context = data; signal = options.signal; options.onProgress('Reading sources'); return new Promise((yes, no) => { resolveRun = yes; rejectRun = no; }); } } });
   t.after(async () => { resolveRun?.(findings); await explorer.close(); assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true }); });
   await explorer.command('start', { topic: 'Pilot' });
   await explorer.receive('questions', { requestId: explorer.pending.id, questions: [{ question: 'Who first?', category: 'People' }] });

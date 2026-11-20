@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { createDocument, addQuestions, answerNode, validateDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
+import { ResearchModelSettings } from '../com.github.copilot/extensions/explorer/research-model-settings.mjs';
+import { fixtureResearchModels } from '../test/helpers/research-model.mjs';
 
 if (!process.env.EXPLORER_PLAYWRIGHT_PATH) throw Error('Set EXPLORER_PLAYWRIGHT_PATH to an installed playwright/index.mjs; this check downloads nothing.');
 const { chromium } = await import(pathToFileURL(resolve(process.env.EXPLORER_PLAYWRIGHT_PATH)).href);
@@ -34,8 +36,12 @@ parent.research = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic s
   { id: 'distributed', title: 'Several storage locations', description: 'Compare another approach while keeping a private answer draft.', fit: 'When nearby access matters more than simple coordination.', proposedAnswer: 'I will arrange several nearby storage locations.', pros: ['Nearby access'], cons: ['More coordination'] },
 ], recommendation: 'Consider a small pilot first; the shared location still needs evidence.', recommendationAssessment: { optionId: 'cupboard', mainTradeoff: 'A single location makes access depend on its key holders.', reconsiderIf: 'If neighbors cannot reliably reach one location, consider distributed storage.', decisionRefs: [{ nodeId: answered.id, reason: 'The earlier cupboard answer is unresolved and needs review; confirm access before committing. 中文 🌿', answerState: 'needs-evidence', review: true }] }, uncertainty: 'Synthetic fixture; no external verification.', sources: [], claims: [{ id: 'access', text: 'Local access is unconfirmed.', basis: 'unknown', evidence: [], limitations: 'Synthetic fixture; no real evidence.' }] };
 validateDocument(doc); await writeFile(file, JSON.stringify(doc));
-let requests = 0, voiceReady = false, voiceJob;
-const explorer = await new Explorer({ file, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; } }).load();
+let requests = 0, voiceReady = false, voiceJob, modelCatalogError = false;
+const explorer = await new Explorer({ file, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
+  models: async () => { if (modelCatalogError) throw Error('Synthetic catalog failure'); return fixtureResearchModels(); },
+  run: async () => { requests++; throw Error('Layout checks must not start inference'); },
+} }).load();
+const modelSettings = new ResearchModelSettings({ directory }); explorer.researchModelSettings = () => modelSettings;
 const server = await startServer(explorer, {
   status: async () => ({ ready: voiceReady, error: voiceReady ? '' : 'Dictation is disabled in this layout fixture.', shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, label: 'Ctrl + Space', mode: 'push_to_talk' }),
   start(id) { return voiceJob = { id, phase: 'loading' }; },
@@ -326,6 +332,33 @@ try {
       expect(await page.locator('#research-review-dialog').evaluate(el => !el.open) && await page.locator('#research-request').evaluate(el => el === document.activeElement), `${scenario.name}: cancelling review restores its trigger focus`, {});
       expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: research review preserves the same draft editor`, {});
       expect(explorer.pending === null, `${scenario.name}: context review starts no model operation`, {});
+      await page.locator('#navigation-open').click(); await page.locator('#research-model-open').click();
+      await page.waitForFunction(() => !document.getElementById('research-model-save').disabled);
+      expect(await page.locator('#research-model-choice').inputValue() === '', `${scenario.name}: model starts with selected chat default`, {});
+      await page.locator('#research-model-choice').focus(); await page.keyboard.press('End');
+      expect(await page.locator('#research-model-choice').inputValue() === 'fixture-dedicated', `${scenario.name}: dedicated model can be chosen by keyboard`, {});
+      await page.keyboard.press('Tab'); expect(await page.locator('#research-model-refresh').evaluate(el => el === document.activeElement), `${scenario.name}: model refresh is keyboard reachable`, {});
+      await page.keyboard.press('Tab'); expect(await page.locator('#research-model-save').evaluate(el => el === document.activeElement), `${scenario.name}: model save is keyboard reachable`, {});
+      await page.keyboard.press('Enter'); await page.waitForFunction(() => document.getElementById('research-model-status').textContent.startsWith('Saved.'));
+      for (const id of ['research-model-choice', 'research-model-effective', 'research-model-save', 'research-model-close']) {
+        const control = page.locator('#' + id); await control.scrollIntoViewIfNeeded();
+        const bounds = await control.evaluate(el => { const r = el.getBoundingClientRect(), d = el.closest('dialog').getBoundingClientRect(); return { left: r.left, right: r.right, height: r.height, visible: Math.min(r.bottom, d.bottom) - Math.max(r.top, d.top), width: innerWidth, dialogLeft: d.left, dialogRight: d.right, overflow: el.closest('dialog').scrollWidth > el.closest('dialog').clientWidth + 1 }; });
+        expect(bounds.left >= 0 && bounds.right <= bounds.width + 1 && bounds.visible >= Math.min(bounds.height, 24) - 1 && !bounds.overflow, `${scenario.name}: ${id} fits and is reachable`, bounds);
+      }
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-research-model.png`) });
+      await page.keyboard.press('Escape');
+      expect(await page.locator('#navigation-open').evaluate(el => el === document.activeElement), `${scenario.name}: model settings restore focus`, {});
+      expect(await editor.evaluate(el => el === document.getElementById('answer') && el.value === 'Keep this private draft') && await composer.evaluate(el => el === document.getElementById('followup-question') && el.value === 'Keep my question 日本語 🌿'), `${scenario.name}: model settings preserve draft and discussion`, {});
+      await page.locator('#research-request').click(); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      expect((await page.locator('#research-review-model').textContent()).includes('Dedicated Research model'), `${scenario.name}: review names dedicated model`, {});
+      expect(await page.locator('#research-review-start').textContent() === 'Research', `${scenario.name}: action stays Research`, {});
+      await page.keyboard.press('Escape');
+      modelCatalogError = true;
+      await page.locator('#navigation-open').click(); await page.locator('#research-model-open').click(); await page.waitForFunction(() => !document.getElementById('research-model-refresh').disabled);
+      expect(await page.locator('#research-model-choice').inputValue() === 'fixture-dedicated' && (await page.locator('#research-model-status').textContent()).includes('catalog'), `${scenario.name}: unavailable choice stays visible`, {});
+      await page.locator('#research-model-choice').selectOption(''); await page.locator('#research-model-save').click(); await page.waitForFunction(() => document.getElementById('research-model-status').textContent.startsWith('Saved.'));
+      expect((await modelSettings.read()).modelId === null, `${scenario.name}: reset works during catalog failure`, {});
+      modelCatalogError = false; await page.keyboard.press('Escape');
       await page.locator('#replace-option-distributed').click();
       expect(await page.locator('#research-draft-preview').isVisible(), `${scenario.name}: pending replacement is visible before a source change`, {});
       const stale = structuredClone(explorer.doc); stale.nodes.find(n => n.id === parent.id).researchStale = true; await explorer.save(stale);

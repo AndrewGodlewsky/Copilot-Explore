@@ -8,6 +8,7 @@ export { boundedContext } from './research-context.mjs';
 import { modePolicy } from './web/modes.mjs';
 import { ANSWER_CONTEXT_GUIDANCE } from './web/answer-state.mjs';
 import { createOwnedHelper, deadline } from './owned-helper.mjs';
+import { researchModelCatalog } from './research-model.mjs';
 import { researchSettings, researchLimits, researchSettingsText } from './web/research-policy.mjs';
 export { hostRuntime, runtimeEnvironment } from './owned-helper.mjs';
 const researchInstructions = await readFile(new URL('./research/skills/explorer-research/SKILL.md', import.meta.url), 'utf8');
@@ -118,7 +119,12 @@ export function createResearcher(parent, options = {}) {
   };
   const helper = createOwnedHelper(parent, 'research', prepare, options);
   const followup = createOwnedHelper(parent, 'research-follow-up', prepare, options);
-  return { runFollowup(context, options = {}) {
+  return { async models() {
+    let values;
+    try { values = await deadline(Promise.all([parent.rpc.model.list({ skipCache: true }), parent.rpc.model.getCurrent().catch(() => null), parent.rpc.gitHubAuth.getStatus()]), 20000); }
+    catch { throw Error('The Copilot model catalog could not be loaded. Check Copilot sign-in and refresh Research model settings.'); }
+    return researchModelCatalog(...values);
+  }, runFollowup(context, options = {}) {
     if (!options.prepared?.followup) throw new Error('Review the follow-up before starting.');
     return followup.run(options.prepared, options);
   }, run(context, options = {}) {

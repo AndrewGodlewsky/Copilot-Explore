@@ -66,10 +66,11 @@ const explorer = await new Explorer({ file, projectRoot: async () => directory, 
   briefRuns++;
   const output = Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: `${section}: not established by this fixture.`, kind: 'unknown', sources: [] }]]));
   output.purpose = [{ id: 'purpose', text: 'Synthetic <script>literal</script> 🌿 ' + 'λ'.repeat(400), kind: 'file-backed', sources: [{ id: prepared.context.sources[0].id, quote: '<script>literal</script> 🌿' }] }];
+  output.architecture = [{ id: 'architecture', text: 'Synthetic captured module structure. ' + 'λ'.repeat(350), kind: 'file-backed', sources: [{ id: prepared.context.sources[0].id, quote: '<script>literal</script> 🌿' }] }];
   return parseProjectBrief(JSON.stringify(output), prepared);
 } }, projectQuestionHelper: { close: async () => {}, run: async prepared => {
   assert.ok(prepared.prompt.includes('Reviewed user correction 🌿')); assert.ok(projectQuestionDraft && !prepared.prompt.includes(projectQuestionDraft)); projectQuestionRuns++;
-  return [{ question: 'Should the current design change for café users 🌿?', category: 'Design', rationale: 'The future choice remains open.', importance: 'high', importanceReason: 'It affects later decisions.' }];
+  return [{ question: 'Should the current design change for café users 🌿?', category: 'Design', rationale: 'The future choice remains open.', importance: 'high', importanceReason: 'It affects later decisions.', claimIds: prepared.projectBrief.claims.slice(0, 2).map(claim => claim.id) }];
 } }, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
   models: async () => { if (modelCatalogError) throw Error('Synthetic catalog failure'); return fixtureResearchModels(); },
   run: async (_, { prepared, onReport }) => {
@@ -514,7 +515,17 @@ try {
       await page.locator('#research-review-start').focus(); await page.keyboard.press('Enter');
       await page.waitForFunction(() => document.getElementById('preview-title')?.textContent === 'Review project questions');
       expect(projectQuestionRuns === beforeProjectQuestions + 1 && explorer.doc.nodes.length === beforeProjectNodes && await editor.inputValue() === projectQuestionDraft, `${scenario.name}: project suggestions require acceptance and preserve the editor`, {});
-      await page.locator('#dismiss-questions').click(); await page.waitForFunction(() => !document.getElementById('question-preview'));
+      await page.locator('#candidate-rationale-0 > summary').focus(); await page.keyboard.press('Enter');
+      const projectExplanation = page.locator('#candidate-rationale-0 .project-question-context');
+      expect((await projectExplanation.textContent()).includes('User assertion') && (await projectExplanation.textContent()).includes('File-backed interpretation') && (await projectExplanation.textContent()).includes('Reviewed files:'), `${scenario.name}: question explanation resolves approved claims and files`, {});
+      expect(await projectExplanation.locator('script,img,a').count() === 0, `${scenario.name}: project explanations remain literal text without file links`, {});
+      const correction = page.locator('#candidate-project-0-review'); await correction.scrollIntoViewIfNeeded();
+      const provenanceBounds = await correction.evaluate(el => { const r = el.getBoundingClientRect(), pane = el.closest('#question-drawer'); return { left: r.left, right: r.right, width: innerWidth, scroll: pane.scrollWidth, client: pane.clientWidth }; });
+      expect(provenanceBounds.left >= 0 && provenanceBounds.right <= provenanceBounds.width + 1 && provenanceBounds.scroll <= provenanceBounds.client + 1, `${scenario.name}: project provenance and correction fit the pane`, provenanceBounds);
+      await correction.focus(); await page.keyboard.press('Enter'); await page.waitForFunction(() => document.getElementById('project-mode-dialog').open && !document.getElementById('project-mode-return').disabled);
+      expect(!explorer.preview && await editor.inputValue() === projectQuestionDraft && projectQuestionRuns === beforeProjectQuestions + 1, `${scenario.name}: correction navigation dismisses only the preview and preserves the answer`, {});
+      await page.locator('#project-mode-return').click(); await page.waitForFunction(() => document.getElementById('research-review-dialog').open);
+      await page.locator('#research-review-close').click();
       await page.locator('#project-questions').click(); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
       await page.locator('#project-questions-files').focus(); await page.keyboard.press('Enter');
       await page.waitForFunction(() => !document.getElementById('project-mode-target-find').disabled);

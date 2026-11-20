@@ -118,10 +118,10 @@ export function candidateQuestions(doc, parentId, values) {
   });
 }
 function generation(value, question, category) {
-  if (!value || Object.keys(value).some(k => !['requestId', 'originalQuestion', 'originalCategory', 'adjusted'].includes(k))) throw new Error('Invalid question generation provenance.');
+  if (!value || Object.keys(value).some(k => !['requestId', 'originalQuestion', 'originalCategory', 'adjusted', 'source'].includes(k)) || Object.hasOwn(value, 'source') && value.source !== 'project-brief') throw new Error('Invalid question generation provenance.');
   const result = { requestId: text(value.requestId, 'Generation request ID', 100), originalQuestion: text(value.originalQuestion, 'Original question', 600), originalCategory: text(value.originalCategory, 'Original category', 60), adjusted: value.adjusted };
   if (typeof result.adjusted !== 'boolean' || result.adjusted !== (question !== result.originalQuestion) || category !== result.originalCategory) throw new Error('Invalid question adjustment provenance.');
-  return result;
+  return { ...result, ...(value.source === 'project-brief' ? { source: 'project-brief' } : {}) };
 }
 export function acceptQuestions(doc, parentId, batch, selected) {
   if (!Array.isArray(selected) || !selected.length || selected.length > 6) throw new Error('Select at least one preview question (at most six).');
@@ -135,7 +135,7 @@ export function acceptQuestions(doc, parentId, batch, selected) {
   const next = structuredClone(doc), nodes = addQuestions(next, parentId, validated);
   nodes.forEach((node, i) => {
     const original = batch.questions[selected[i].index];
-    node.generation = generation({ requestId: batch.id, originalQuestion: original.question, originalCategory: original.category, adjusted: node.question !== original.question }, node.question, node.category);
+    node.generation = generation({ requestId: batch.id, originalQuestion: original.question, originalCategory: original.category, adjusted: node.question !== original.question, ...(batch.purpose === 'project-questions' ? { source: 'project-brief' } : {}) }, node.question, node.category);
     if (Object.hasOwn(original, 'rationale')) node.rationale = text(original.rationale, 'Question rationale', 1000);
     Object.assign(node, questionImportance(original));
   });
@@ -374,6 +374,7 @@ export function validateDocument(value) {
     if (Object.hasOwn(node, 'revisit') && !isQuestion(node)) throw new Error('Only ordinary questions can have revisit reminders.');
     if (Object.hasOwn(node, 'kind') && (node.kind !== 'direction' || node.id === value.rootId)) throw new Error('Invalid node kind.');
     if (Object.hasOwn(node, 'rationale') && (node.id === value.rootId || !isQuestion(node) || !node.generation)) throw new Error('Only generated ordinary questions can have a rationale.');
+    if (node.generation?.source === 'project-brief' && (node.id === value.rootId || !isQuestion(node))) throw new Error('Only generated ordinary questions can have project provenance.');
     if (!isQuestion(node) && node.kind === 'direction' && (node.answer !== '' || Object.hasOwn(node, 'answerState') || node.research !== null || Object.hasOwn(node, 'generation'))) throw new Error('A direction cannot have an answer, answer state, research or AI generation provenance.');
     const error = answerStateError(node.answer, Object.hasOwn(node, 'answerState') ? node.answerState : effectiveAnswerState(node));
     if (error) throw new Error(error);

@@ -7,6 +7,19 @@ import { Explorer } from '../com.github.copilot/extensions/explorer/controller.m
 import { contextFor, toMarkdown, validateDocument, createDocument, candidateQuestions, acceptQuestions, MAX_NODES, MAX_DOCUMENT_BYTES } from '../com.github.copilot/extensions/explorer/model.mjs';
 
 const questions = [{ question: 'Who first?', category: 'People' }, { question: 'When?', category: 'Time' }];
+test('project origin marker is strict and ordinary suggestions cannot attach private provenance', () => {
+  const doc = createDocument('Origin markers'), candidate = { ...questions[0], claimIds: ['private'], source: 'project-brief' };
+  const batch = { id: 'request', questions: [candidate] };
+  const ordinary = acceptQuestions(doc, doc.rootId, batch, [{ index: 0, question: candidate.question }]);
+  assert.equal(ordinary.document.nodes[1].generation.source, undefined);
+  const project = acceptQuestions(doc, doc.rootId, { ...batch, purpose: 'project-questions' }, [{ index: 0, question: candidate.question }]);
+  assert.equal(validateDocument(project.document).nodes[1].generation.source, 'project-brief'); assert.ok(!JSON.stringify(project.document).includes('private'));
+  for (const invalid of ['file-backed', null, {}, 'project-brief ']) {
+    const copy = structuredClone(project.document); copy.nodes[1].generation.source = invalid; assert.throws(() => validateDocument(copy), /provenance/i);
+  }
+  const copy = structuredClone(project.document); copy.nodes[1].generation.claimIds = ['private']; assert.throws(() => validateDocument(copy), /provenance/i);
+  const root = structuredClone(project.document); root.nodes[0].generation = { ...root.nodes[1].generation, originalQuestion: root.nodes[0].question, originalCategory: root.nodes[0].category }; assert.throws(() => validateDocument(root), /provenance/i);
+});
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-proposals-'));
   const e = await new Explorer({ file: join(dir, 'map.explore.json'), send: async () => {} }).load();

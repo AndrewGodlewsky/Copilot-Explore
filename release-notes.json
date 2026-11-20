@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.129",
+    "summary": "See which reviewed project claims motivated each suggested question, with file-backed interpretation, inference, unknown and user-assertion labels and source filenames. Correct the brief before explicitly generating again. Expired context is labeled honestly; private references stay out of shared files and existing answers and drafts stay intact."
+  },
+  {
     "version": "0.1.128",
     "summary": "Find files relevant to a saved question using your approved brief and optional direction. Review filename-match reasons, shared constraints and omissions before choosing files. Added scope requires an explicit read and new brief approval; stale suggestions reject and your answer draft stays intact. Brief acceptance now stays disabled until refresh completes."
   },

@@ -6,7 +6,8 @@ import { prepareProjectQuestions, parseProjectQuestions } from '../com.github.co
 
 const claim = (text, kind = 'file-backed', section = 'stack') => ({ id: 'claim-one', text, kind, section });
 const brief = (...claims) => ({ revision: 3, claims });
-const question = text => ({ question: text, category: 'Design', rationale: 'This unresolved choice affects the goal.', importance: 'high', importanceReason: 'Changing the decision affects the branch.' });
+const question = text => ({ question: text, category: 'Design', rationale: 'This unresolved choice affects the goal.', importance: 'high', importanceReason: 'Changing the decision affects the branch.', claimIds: ['claim-one'] });
+const approved = { projectBrief: brief(claim('Reviewed fact.')) };
 
 test('paired synthetic project cases include established facts while retaining unresolved choices and user uncertainty', () => {
   // Authored examples define the desired relevance contract, not a live-model quality measurement.
@@ -28,7 +29,7 @@ test('paired synthetic project cases include established facts while retaining u
     assert.match(grounded.instructions, /already established/i); assert.match(grounded.instructions, /inferences.*uncertain/is);
     assert.ok(!grounded.prompt.includes('invoke_canvas_action'));
     assert.equal(grounded.bytes, Buffer.byteLength(grounded.instructions + grounded.prompt));
-    const suggestions = parseProjectQuestions(JSON.stringify({ questions: [question(sample.focused)] }));
+    const suggestions = parseProjectQuestions(JSON.stringify({ questions: [question(sample.focused)] }), grounded);
     assert.equal(suggestions[0].question, sample.focused); assert.notEqual(suggestions[0].question, sample.generic);
     assert.equal(doc.nodes.length, 2); assert.equal(target.answer, 'Still exploring alternatives');
   }
@@ -36,14 +37,24 @@ test('paired synthetic project cases include established facts while retaining u
 
 test('project question output preserves Unicode and rejects answers, invented fields, missing reasoning and oversized batches', () => {
   const valid = { questions: [question('What should change for café users 🌿?')] };
-  assert.equal(parseProjectQuestions(JSON.stringify(valid))[0].question, valid.questions[0].question);
+  assert.equal(parseProjectQuestions(JSON.stringify(valid), approved)[0].question, valid.questions[0].question);
   for (const invalid of [{ ...valid, answer: 'Yes' }, { questions: [{ ...valid.questions[0], answer: 'Yes' }] },
     { questions: [{ question: 'Why?', category: 'Design' }] }, { questions: [] }, { questions: Array(7).fill(valid.questions[0]) },
     { questions: [{ ...valid.questions[0], importance: 'certain' }] }, { questions: [{ ...valid.questions[0], question: 'x'.repeat(601) }] }]) {
-    assert.throws(() => parseProjectQuestions(JSON.stringify(invalid)));
+    assert.throws(() => parseProjectQuestions(JSON.stringify(invalid), approved));
   }
   assert.throws(() => parseProjectQuestions('```json\n{}\n```'));
   assert.throws(() => parseProjectQuestions(' '.repeat(65537)));
+});
+
+test('question provenance accepts only bounded unique IDs from the exact reviewed brief', () => {
+  const candidate = question('Which constraint can change?');
+  assert.deepEqual(parseProjectQuestions(JSON.stringify({ questions: [candidate] }), approved)[0].claimIds, ['claim-one']);
+  for (const claimIds of [undefined, [], ['unknown'], ['claim-one', 'claim-one'], ['README.md:14'], Array(6).fill('claim-one'), 'claim-one', [null]]) {
+    assert.throws(() => parseProjectQuestions(JSON.stringify({ questions: [{ ...candidate, claimIds }] }), approved));
+  }
+  assert.throws(() => parseProjectQuestions(JSON.stringify({ questions: [{ ...candidate, files: ['README.md'] }] }), approved));
+  assert.throws(() => parseProjectQuestions(JSON.stringify({ questions: [candidate] }), { projectBrief: brief({ ...claim('Another fact'), id: 'other' }) }));
 });
 
 test('project grounding rejects insufficient or oversized briefs and freshness uses the same bounded relevance operation', () => {

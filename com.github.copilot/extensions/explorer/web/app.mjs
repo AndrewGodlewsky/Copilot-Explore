@@ -62,7 +62,7 @@ let projectBrief;
 const projectMode = new ProjectModeClient({ $, fetch: (...args) => fetch(...args), journey: () => state.activeKey ?? state.document?.id, active: () => !closed && !suspended,
   onChange: () => projectBrief?.scopeChanged(), briefState: () => projectBrief?.value, onReturn: nodeId => { if (state.document?.nodes.some(node => node.id === nodeId)) openResearchReview(nodeId, undefined, 'project-questions'); } });
 projectBrief = new ProjectBriefClient({ $, fetch: (...args) => fetch(...args), journey: () => state.activeKey ?? state.document?.id, active: () => !closed && !suspended,
-  scope: () => projectMode.value, changed: () => projectMode.render() });
+  scope: () => projectMode.value, changed: () => { projectMode.render(); queueMicrotask(() => { if (expanded && !closed && !libraryView && state.document?.nodes.some(node => node.id === selected)) renderWorkspace(); }); } });
 function impactKey(document) {
   if (!impactKeys.has(document)) impactKeys.set(document, decisionImpactKey(document));
   return impactKeys.get(document);
@@ -2546,12 +2546,13 @@ function renderWorkspace() {
       why.addEventListener('toggle', () => { if (why.isConnected) ui.importanceOpen = why.open; });
       return why;
     });
-    update('rationale', [node.rationale, node.generation], () => {
+    const projectExplanation = node.generation?.source === 'project-brief' ? projectBrief.explain(state.projectQuestions?.[node.id]) : null;
+    update('rationale', [node.rationale, node.generation, projectExplanation, !!state.pending], () => {
       if (node.rationale) {
         const why = el('details', { id: 'question-rationale', class: 'question-rationale' }, el('summary', { id: 'question-rationale-summary' }, 'Why this question?'),
           el('p', { class: 'quiet' }, 'Historical model explanation for the original suggested wording and context. It is not a user fact, decision, or confidence score.'),
           node.generation?.adjusted ? el('p', { class: 'quiet' }, 'Original suggested wording: ', node.generation.originalQuestion) : null,
-          el('p', {}, node.rationale));
+          el('p', {}, node.rationale), projectExplanation ? renderProjectExplanation(projectExplanation, node.parentId, 'question-project') : null);
         why.open = ui.rationaleOpen;
         why.addEventListener('toggle', () => { if (why.isConnected) ui.rationaleOpen = why.open; });
         return why;
@@ -2591,6 +2592,7 @@ function renderWorkspace() {
     if (preview && ui.toolsPreview !== preview.id) { ui.toolsPreview = preview.id; revealQuestionWork(); }
     update('preview', preview?.id ?? null, () => preview ? renderQuestionPreview() : null);
     if (preview) {
+      for (const edit of previewEdits.questions) edit.updateProjectContext?.();
       $('preview-stale').hidden = !preview.stale;
       $('accept-questions').disabled = preview.stale || !previewEdits.questions.some(q => q.selected);
       if (preview.stale) $('preview-retry').hidden = false;
@@ -2690,6 +2692,21 @@ function renderQuestionFeedback() {
     branches = currentBranches(); refreshScene();
   }));
 }
+function renderProjectExplanation(explanation, parentId, prefix, previewId) {
+  const section = el('section', { class: 'project-question-context', 'aria-label': 'Reviewed project context' });
+  const labels = { 'file-backed': 'File-backed interpretation', inference: 'Inference', unknown: 'Unknown', user: 'User assertion' };
+  section.append(el('p', { class: 'quiet' }, explanation.state === 'current' ? 'Reviewed project context — current at the last check. These claims motivated the original wording; they do not prove the interpretation or answer the question.' : explanation.state === 'stale' ? 'Project context is stale or no longer approved. Review the current brief before generating again. Historical wording and answers are unchanged.' : 'Project context is unavailable in this canvas. The saved origin marker does not retain private brief claims or files. Review a current brief to generate new questions.'));
+  for (const claim of explanation.claims ?? []) section.append(el('p', {}, el('strong', {}, `${labels[claim.kind]}: `), claim.text,
+    el('span', { class: 'quiet' }, claim.files.length ? ` — Reviewed files: ${claim.files.join(', ')}` : ' — No file evidence cited.')));
+  section.append(el('p', { class: 'quiet' }, 'Correct or remove a claim in the project brief, approve it, then return to review a new request. New questions are added only after acceptance; existing answers stay saved.'),
+    button(previewId ? 'Dismiss preview & review brief' : 'Review project brief', async () => {
+      if (state.pending) return;
+      if (previewId && (state.preview?.id !== previewId || !await api('dismiss-questions', { batchId: previewId }))) return;
+      const parent = state.document?.nodes.find(node => node.id === parentId);
+      if (parent && !closed && !suspended) projectMode.open({ nodeId: parent.id, question: parent.question });
+    }, { id: `${prefix}-review`, disabled: !!state.pending }));
+  return section;
+}
 function renderQuestionPreview() {
   const batch = state.preview, edits = previewEdits.questions;
   const section = el('section', { id: 'question-preview', class: 'question-preview', 'aria-labelledby': 'preview-title' },
@@ -2716,6 +2733,18 @@ function renderQuestionPreview() {
         el('p', {}, batch.questions[index].rationale));
       why.open = edit.rationaleOpen;
       why.addEventListener('toggle', () => { if (why.isConnected) edit.rationaleOpen = why.open; });
+      if (batch.purpose === 'project-questions') {
+        const context = el('div'); let stamp;
+        edit.updateProjectContext = () => {
+          if (state.preview?.id !== batch.id) return;
+          const explanation = projectBrief.explain({ ...state.preview.projectContext, claimIds: state.preview.questions[index].claimIds }), next = JSON.stringify([explanation, !!state.pending]);
+          if (next === stamp) return; stamp = next;
+          const focused = context.contains(document.activeElement);
+          context.replaceChildren(renderProjectExplanation(explanation, batch.nodeId, `candidate-project-${index}`, batch.id));
+          if (focused) context.querySelector('button').focus({ preventScroll: true });
+        };
+        why.append(context); edit.updateProjectContext();
+      }
       row.append(why);
     }
     section.append(row);

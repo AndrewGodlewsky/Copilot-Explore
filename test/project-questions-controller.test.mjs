@@ -1,24 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
-import { createDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { createDocument, toMarkdown } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { parseProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
 
-async function fixture(t, { hold = false, unavailable = false, approve = true } = {}) {
+async function fixture(t, { hold = false, unavailable = false, approve = true, claimIds } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'explorer-project-questions-')), root = join(directory, 'project'), file = join(directory, 'map.json');
   await mkdir(root); await promisify(execFile)('git', ['init', '--quiet', root], { windowsHide: true });
   const canary = 'PRIVATE_PROJECT_QUESTION_FACT 🌿'; await writeFile(join(root, 'README.md'), canary);
   const doc = createDocument('Question grounding'), ordinary = [], calls = []; await writeFile(file, JSON.stringify(doc)); let working = root, release, signal;
   const helper = { close: async () => {}, run: async (prepared, options) => {
     calls.push(prepared); signal = options.signal; if (hold) await new Promise(resolve => { release = resolve; }); signal.throwIfAborted();
-    return [{ question: 'Should the existing design change for café users 🌿?', category: 'Design', rationale: 'The future choice is unresolved.', importance: 'high', importanceReason: 'It changes future work.' }];
+    return [{ question: 'Should the existing design change for café users 🌿?', category: 'Design', rationale: 'The future choice is unresolved.', importance: 'high', importanceReason: 'It changes future work.', claimIds: claimIds ?? [prepared.projectBrief.claims.find(claim => claim.kind === 'user').id] }];
   } };
   const projectBriefHelper = { close: async () => {}, run: async prepared => parseProjectBrief(JSON.stringify(Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: 'Unknown.', kind: 'unknown', sources: [] }]]))), prepared) };
   const explorer = await new Explorer({ file, projectRoot: () => working, projectBriefHelper, projectQuestionHelper: unavailable ? undefined : helper, send: async input => { ordinary.push(input); } }).load();
@@ -47,10 +47,66 @@ test('project questions use only a purpose-reviewed helper and stage Unicode sug
   await assert.rejects(f.explorer.receive('questions', { requestId, questions: [] }), /owned|isolated/i);
   await assert.rejects(f.explorer.receive('fail', { requestId, message: 'Spoofed attached chat failure' }), /owned|isolated/i);
   f.release(); await waitFor(() => !f.explorer.pending); assert.equal(f.explorer.preview.questions.length, 1);
-  assert.equal(await readFile(f.file, 'utf8'), before); assert.ok(!JSON.stringify(f.explorer.nativeSnapshot()).includes(f.canary));
+  assert.equal(await readFile(f.file, 'utf8'), before); assert.ok(!JSON.stringify(await f.explorer.nativeSnapshot()).includes(f.canary));
   assert.ok(!JSON.stringify(f.explorer.uiSnapshot()).includes(f.canary)); await f.accept();
   assert.equal(f.explorer.doc.nodes.length, 2); assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.match(f.explorer.doc.nodes[1].question, /café users 🌿/);
   assert.ok(!(await readFile(f.file, 'utf8')).includes(f.canary)); await assert.rejects(f.start(review));
+});
+
+test('injected helpers cannot stage unreviewed provenance and accepted references remain private and expire', async t => {
+  const invalid = await fixture(t, { claimIds: ['README.md'] }); await invalid.start(await invalid.review()); await waitFor(() => !invalid.explorer.pending);
+  assert.equal(invalid.explorer.preview, null); assert.match(invalid.explorer.error, /invalid|review/i);
+  const f = await fixture(t); await f.start(await f.review()); await waitFor(() => !!f.explorer.preview);
+  const captureId = f.explorer.projectBrief.draft.captureId, claimId = f.explorer.preview.questions[0].claimIds[0];
+  assert.equal(f.explorer.uiSnapshot().preview.projectContext.captureId, captureId);
+  await f.accept(); const node = f.explorer.doc.nodes[1];
+  assert.equal(node.generation.source, 'project-brief');
+  assert.deepEqual(f.explorer.uiSnapshot().projectQuestions[node.id].claimIds, [claimId]);
+  const native = await f.explorer.nativeSnapshot(); assert.ok(native.document.nodes.some(saved => saved.id === node.id && saved.question === node.question));
+  for (const output of [await readFile(f.file, 'utf8'), JSON.stringify(native), toMarkdown(f.explorer.doc), JSON.stringify(await f.explorer.readHistory(f.doc.id))]) {
+    for (const privateValue of [claimId, captureId, f.canary, 'README.md']) assert.ok(!output.includes(privateValue));
+  }
+  const cursor = f.explorer.pollSnapshot().cursor;
+  await f.brief('revoke', { revision: f.explorer.projectBrief.revision });
+  const poll = f.explorer.pollSnapshot(cursor); assert.ok(poll.snapshot); assert.deepEqual(poll.snapshot.projectQuestions[node.id], { state: 'stale' });
+  assert.ok(!JSON.stringify(poll.snapshot).includes(claimId));
+  const current = await f.brief('status'); await f.brief('approve', { revision: current.revision, changes: { edits: [], remove: [], additions: [] } });
+  assert.deepEqual(f.explorer.uiSnapshot().projectQuestions[node.id], { state: 'stale' }, 'new approval cannot relabel historical references');
+  await f.explorer.command('import', { revision: f.explorer.doc.revision, document: f.explorer.doc });
+  assert.deepEqual(f.explorer.uiSnapshot().projectQuestions, {}, 'imported marker cannot recover transient context');
+});
+
+test('edited subset keeps the original claim binding and moved files expire references without rewriting answers', async t => {
+  const f = await fixture(t), run = f.explorer.projectQuestionHelper.run;
+  f.explorer.projectQuestionHelper.run = async (prepared, options) => {
+    const [first] = await run(prepared, options);
+    return [first, { ...first, question: 'Which unresolved constraint needs evidence?', claimIds: [prepared.projectBrief.claims[0].id] }];
+  };
+  await f.start(await f.review()); await waitFor(() => !!f.explorer.preview);
+  const batch = f.explorer.preview, expected = batch.questions[1].claimIds;
+  const result = await f.explorer.command('accept-questions', { revision: f.explorer.doc.revision, batchId: batch.id, selected: [{ index: 1, question: 'Which constraint needs evidence first?' }] });
+  const id = result.acceptedIds[0]; assert.deepEqual(result.projectQuestions[id].claimIds, expected);
+  assert.equal(f.explorer.doc.nodes[1].generation.adjusted, true);
+  await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: id, answer: 'Keep this decision 🌿', answerState: 'tentative' });
+  await rename(join(f.root, 'README.md'), join(f.root, 'moved.md')); await f.scope('status');
+  assert.deepEqual(f.explorer.uiSnapshot().projectQuestions[id], { state: 'stale' });
+  assert.equal(f.explorer.doc.nodes[1].answer, 'Keep this decision 🌿');
+});
+
+test('brief correction changes only a later explicitly reviewed request and leaves accepted answers intact', async t => {
+  const f = await fixture(t); await f.start(await f.review()); await waitFor(() => !!f.explorer.preview); await f.accept();
+  const node = f.explorer.doc.nodes[1]; await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Keep my saved answer', answerState: 'decided' });
+  await f.brief('revoke', { revision: f.explorer.projectBrief.revision });
+  const current = await f.brief('status'), claim = current.draft.sections.purpose.find(claim => claim.kind === 'user');
+  await f.brief('approve', { revision: current.revision, changes: { edits: [{ id: claim.id, text: 'Corrected project purpose' }], remove: [current.draft.sections.stack[0].id], additions: [] } });
+  assert.equal(f.calls.length, 1); const review = await f.review(); assert.ok(review.prepared.projectBrief.claims.some(claim => claim.text === 'Corrected project purpose'));
+  assert.ok(!review.prepared.projectBrief.claims.some(claim => claim.id === current.draft.sections.stack[0].id));
+  assert.equal(f.explorer.doc.nodes[1].answer, 'Keep my saved answer'); assert.equal(f.explorer.doc.nodes.length, 2);
+  assert.deepEqual(f.explorer.uiSnapshot().projectQuestions[node.id], { state: 'stale' });
+  const run = f.explorer.projectQuestionHelper.run;
+  f.explorer.projectQuestionHelper.run = async (...args) => (await run(...args)).map(question => ({ ...question, question: 'What does the corrected purpose change?' }));
+  await f.start(review); await waitFor(() => !!f.explorer.preview); assert.equal(f.explorer.doc.nodes.length, 2);
+  await f.accept(); assert.equal(f.explorer.doc.nodes.length, 3); assert.equal(f.explorer.doc.nodes[1].answer, 'Keep my saved answer');
 });
 
 test('revoking a brief or disabling scope aborts owned questions and cannot install a late preview', async t => {

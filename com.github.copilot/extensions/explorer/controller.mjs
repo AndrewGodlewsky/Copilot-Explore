@@ -8,7 +8,7 @@ import { ProjectContext } from './project-context.mjs';
 import { ProjectMode } from './project-mode.mjs';
 import { branchFileBasis, branchFileContext } from './project-branch-files.mjs';
 import { ProjectBriefWorkspace } from './project-brief-workspace.mjs';
-import { prepareProjectQuestions } from './project-questions.mjs';
+import { prepareProjectQuestions, validateProjectQuestions } from './project-questions.mjs';
 import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
@@ -73,7 +73,7 @@ export class Explorer {
   constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, briefHelper, checkHelper, projectBriefHelper, projectQuestionHelper, projectRoot, timeoutMs = 240000 }) {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
-    this.preview = null; this.questionSource = null;
+    this.preview = null; this.questionSource = null; this.projectQuestionOrigins = new Map();
     this.researchReview = new ResearchReview();
     this.reuseInstance = randomUUID();
     this.reconsideration = null; this.researchAttempt = null;
@@ -180,7 +180,7 @@ export class Explorer {
     this.replaceStorage(store);
   }
   replaceStorage(store) {
-    this.projectMode.clear(); this.projectBrief.clear();
+    this.projectMode.clear(); this.projectBrief.clear(); this.projectQuestionOrigins.clear();
     this.changeSummaries.clear();
     this.adrFormats.clear();
     this.adrWriter.clear();
@@ -541,7 +541,7 @@ export class Explorer {
     // The only in-place public mutations are pending.progress and preview.stale.
     const stamp = [this.doc, this.activeKey, !!this.library, this.error, this.projectChange,
       JSON.stringify(this.pending), this.preview, this.preview?.stale,
-      this.questionSource, this.scenarioPreferences.observation, this.contextCoverage, this.recoveryNotice, this.exportObservation, this.followup, this.reconsideration, this.researchAttempt];
+      this.questionSource, this.scenarioPreferences.observation, this.contextCoverage, this.recoveryNotice, this.exportObservation, this.followup, this.reconsideration, this.researchAttempt, JSON.stringify(this.projectQuestionContexts())];
     if (!this.pollStamp || stamp.some((value, index) => value !== this.pollStamp[index])) {
       this.pollStamp = stamp; this.pollCursor = randomUUID();
     }
@@ -554,12 +554,29 @@ export class Explorer {
       catch { stale = true; } // Another canvas can remove the parent before an explicit refresh.
     }
     const preview = this.preview ? { ...this.preview, stale } : null;
+    if (preview?.purpose === 'project-questions' && stale) {
+      preview.projectContext = { state: 'stale' };
+      preview.questions = preview.questions.map(({ claimIds, ...question }) => question);
+    }
     const source = this.questionSource;
     const questionRetry = !preview && !this.pending && /saved question context changed/.test(this.error) && source?.journey === (this.activeKey ?? this.doc?.id) ? { purpose: source.purpose ?? 'questions', nodeId: source.nodeId } : null;
     if (this.contributionView?.document !== this.doc) this.contributionView = { document: this.doc, value: contributionStatus(this.doc) };
     if (this.commentView?.document !== this.doc) this.commentView = { document: this.doc, value: commentStatuses(this.doc) };
     if (this.reviewHandoffView?.document !== this.doc) this.reviewHandoffView = { document: this.doc, value: handoffStatuses(this.doc) };
-    return { ...this.snapshot(), reviewHandoffs: structuredClone(this.reviewHandoffView.value), comments: structuredClone(this.commentView.value), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), reconsideration: this.reconsiderationSnapshot(), researchAttempt: this.researchAttemptSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
+    return { ...this.snapshot(), projectQuestions: this.projectQuestionContexts(), reviewHandoffs: structuredClone(this.reviewHandoffView.value), comments: structuredClone(this.commentView.value), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), reconsideration: this.reconsiderationSnapshot(), researchAttempt: this.researchAttemptSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
+  }
+  projectQuestionContexts() {
+    if (!this.projectQuestionOrigins.size) return {};
+    const nodes = new Map(this.doc?.nodes.map(node => [node.id, node])), result = {};
+    for (const [id, origin] of this.projectQuestionOrigins) {
+      const node = nodes.get(id), generation = node?.generation;
+      if (this.closed || origin.journey !== (this.activeKey ?? this.doc?.id) || generation?.source !== 'project-brief' || generation.requestId !== origin.requestId || generation.originalQuestion !== origin.originalQuestion || generation.originalCategory !== origin.originalCategory) {
+        this.projectQuestionOrigins.delete(id); continue;
+      }
+      if (origin.guard && !this.projectBrief.approvalCurrent(origin.guard)) { origin.guard = null; origin.claimIds = null; }
+      result[id] = origin.guard ? { state: 'current', captureId: origin.guard.capture.id, revision: origin.guard.approval.revision, claimIds: [...origin.claimIds] } : { state: 'stale' };
+    }
+    return result;
   }
   async checkQuestionSource(nodeId) {
     const source = this.questionSource;
@@ -642,6 +659,7 @@ export class Explorer {
   projectBriefRequest(input) { const pending = this.projectBrief.request(input); this.invalidateProjectQuestions(); return pending.finally(() => this.invalidateProjectQuestions()); }
   invalidateProjectQuestions() {
     this.projectBrief.observe();
+    this.projectQuestionContexts();
     if (this.researchReview.current?.prepared.projectApproval && !this.projectBrief.approvalCurrent(this.researchReview.current.prepared.projectApproval)) this.researchReview.clear();
     if (!this.questionSource?.projectApproval || this.projectBrief.approvalCurrent(this.questionSource.projectApproval)) return;
     if (this.pending?.owner === 'project-questions') { this.clearPending(); this.error = 'The saved question context changed. Review the current project brief or use ordinary questions.'; }
@@ -1228,8 +1246,9 @@ export class Explorer {
         if (!active()) return;
         if (this.file !== work.file || this.activeKey !== work.key) throw Error('The question journey changed. Review and generate again.');
         await this.checkQuestionSource(nodeId); if (!active()) return;
-        const questions = candidateQuestions(this.doc, nodeId, result);
-        this.preview = { id, journey: this.activeKey ?? this.doc.id, nodeId, questions, stale: false, purpose: 'project-questions' };
+        const checked = validateProjectQuestions(result, prepared.projectBrief);
+        const questions = candidateQuestions(this.doc, nodeId, checked).map((question, index) => ({ ...question, claimIds: checked[index].claimIds }));
+        this.preview = { id, journey: this.activeKey ?? this.doc.id, nodeId, questions, stale: false, purpose: 'project-questions', projectContext: { state: 'current', captureId: prepared.projectApproval.capture.id, revision: prepared.projectBrief.revision } };
         this.clearPending(); this.error = '';
       })).catch(error => this.transact(() => { if (active()) { this.clearPending(); this.error = error.message; } }));
       this.researchTasks.add(task); void task.finally(() => this.researchTasks.delete(task)); return;
@@ -1559,6 +1578,10 @@ export class Explorer {
             const accepted = acceptQuestions(this.doc, batch.nodeId, batch, input.selected);
             if (batch.purpose === 'adr-questions') validateAdrQuestions(this.doc, batch.nodeId, accepted.ids.map(id => findNode(accepted.document, id)));
             await this.commitCurrentLocked(await this.fresh(), accepted.document, 'Questions accepted', () => this.checkQuestionSource(batch.nodeId), { kind: 'new-nodes', ids: accepted.ids, origin: 'ai' }); acceptedIds = accepted.ids;
+            if (batch.purpose === 'project-questions') accepted.ids.forEach((id, index) => {
+              const original = batch.questions[input.selected[index].index];
+              this.projectQuestionOrigins.set(id, { journey: batch.journey, requestId: batch.id, originalQuestion: original.question, originalCategory: original.category, guard: this.questionSource.projectApproval, claimIds: [...original.claimIds] });
+            });
           });
           this.preview = null; this.questionSource = null;
           return { ...this.uiSnapshot(), acceptedIds, acceptedParentId: batch.nodeId };
@@ -1581,7 +1604,7 @@ export class Explorer {
           await this.request('questions', this.doc.rootId, input.scope);
           break;
         case 'import':
-          this.projectMode.clear(); this.projectBrief.clear();
+          this.projectMode.clear(); this.projectBrief.clear(); this.projectQuestionOrigins.clear();
           if (this.library) {
             const record = await this.library.import(input.document, { asCopy: input.asCopy }); this.dashboard?.invalidate();
             if (record.conflict) return { ...this.snapshot(), importConflict: { entries: record.conflict } };
@@ -1732,5 +1755,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.projectMode.clear(); this.projectBrief.clear(); this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close(), this.projectBriefHelper?.close(), this.projectQuestionHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
+  async close() { this.projectMode.clear(); this.projectBrief.clear(); this.projectQuestionOrigins.clear(); this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close(), this.projectBriefHelper?.close(), this.projectQuestionHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

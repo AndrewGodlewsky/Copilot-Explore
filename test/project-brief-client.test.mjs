@@ -38,6 +38,21 @@ async function fixture(t) {
     journey: value => { journey = value; client.observe(); }, tick: async () => { now += 10000; await client.checkStatus(); await waitFor(() => !client.loading); } };
 }
 
+test('question explanations resolve only the exact approved local brief without network or supporting quotes', async t => {
+  const f = await fixture(t); await f.generate(); await f.click('approve');
+  const value = f.client.value, claim = value.draft.sections.purpose[0];
+  const reference = { state: 'current', captureId: value.draft.captureId, revision: value.revision, claimIds: [claim.id, value.draft.sections.stack[0].id] };
+  const before = f.requests.length, explanation = f.client.explain(reference);
+  assert.equal(explanation.state, 'current'); assert.equal(explanation.claims[0].text, claim.text);
+  assert.equal(explanation.claims[0].kind, 'file-backed'); assert.deepEqual(explanation.claims[0].files, ['README.md']);
+  assert.equal(explanation.claims[1].kind, 'unknown'); assert.ok(!JSON.stringify(explanation).includes('quote'));
+  assert.equal(f.requests.length, before, 'display cannot read or request context');
+  for (const changed of [{ ...reference, revision: reference.revision + 1 }, { ...reference, captureId: 'other' }, { ...reference, claimIds: ['README.md'] }, { state: 'stale' }]) assert.equal(f.client.explain(changed).state, 'stale');
+  assert.equal(f.client.explain().state, 'unavailable');
+  await f.click('revoke'); assert.equal(f.client.explain(reference).state, 'stale');
+  await f.click('approve'); assert.equal(f.client.explain(reference).state, 'stale');
+});
+
 test('brief UI reviews exact input, generates only explicitly, edits provenance and approves the reviewed revision', async t => {
   const f = await fixture(t); await f.click('prepare'); assert.equal(f.sends(), 0);
   assert.match(f.$('project-brief-input').textContent, /Community tools/); assert.equal(f.$('project-brief-input').querySelector('script'), null);

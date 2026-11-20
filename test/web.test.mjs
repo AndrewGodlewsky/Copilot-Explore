@@ -53,6 +53,7 @@ import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/
 import { researchProfiles, profileLabel } from '../com.github.copilot/extensions/explorer/web/research-guidance.mjs';
 import { ProjectModeClient } from '../com.github.copilot/extensions/explorer/web/project-mode-client.mjs';
 import { ProjectBriefClient } from '../com.github.copilot/extensions/explorer/web/project-brief-client.mjs';
+import { parseProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
 import { researchSettingsText } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
 import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
@@ -62,12 +63,12 @@ import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/
 import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
 
 test('project question review shows approved claims without research settings and retains the answer draft through preview', async t => {
-  const calls = [], guard = {};
+  const calls = [], guard = { capture: { id: 'fixture-capture' }, approval: { revision: 2 } };
   const f = await fixture(t, 340, undefined, false, { before: async explorer => {
     explorer.projectBrief.approvedInput = async () => ({ guard, brief: { revision: 2, claims: [{ id: 'fixture', section: 'stack', text: 'PRIVATE_CONTEXT <img src=x> 🌿', kind: 'user' }] } });
     explorer.projectBrief.approvalCurrent = value => value === guard;
     explorer.projectBrief.assertApproval = async value => { assert.equal(value, guard); };
-    explorer.projectQuestionHelper = { close() {}, run: async prepared => { calls.push(prepared); return [{ question: 'Should the current design change?', category: 'Design', rationale: 'The future choice is open.', importance: 'high', importanceReason: 'It affects later decisions.' }]; } };
+    explorer.projectQuestionHelper = { close() {}, run: async prepared => { calls.push(prepared); return [{ question: 'Should the current design change?', category: 'Design', rationale: 'The future choice is open.', importance: 'high', importanceReason: 'It affects later decisions.', claimIds: ['fixture'] }]; } };
   } });
   const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id); f.type('answer', 'Keep my unsaved answer 🌿');
   const editor = $('answer'); editor.focus(); editor.setSelectionRange(4, 9);
@@ -81,6 +82,57 @@ test('project question review shows approved claims without research settings an
   assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep my unsaved answer 🌿'); assert.equal(editor.selectionStart, 4);
   assert.equal(f.explorer.doc.nodes.length, 3); $('accept-questions').click(); await until(() => f.explorer.doc.nodes.length === 4, 'explicit project acceptance');
   assert.equal(f.explorer.doc.nodes.at(-1).answer, ''); assert.ok(!JSON.stringify(f.explorer.doc).includes('PRIVATE_CONTEXT'));
+  await until(() => !f.explorer.preview && !!f.explorer.uiSnapshot().projectQuestions[f.explorer.doc.nodes.at(-1).id], 'accepted context binding');
+  f.window.__updates.apply(f.explorer.uiSnapshot()); f.open(f.explorer.doc.nodes.at(-1).id);
+  assert.match($('question-rationale').textContent, /Project context is stale/);
+  const reopened = f.explorer.uiSnapshot(); reopened.projectQuestions = {}; f.window.__updates.apply(reopened);
+  assert.match($('question-rationale').textContent, /unavailable in this canvas/);
+  assert.equal($('question-project-review').textContent, 'Review project brief');
+});
+
+test('project question explanations show reviewed provenance and correction navigation preserves drafts and candidate caret', async t => {
+  let root; const calls = [];
+  const f = await fixture(t, 340, undefined, false, { projectRoot: () => root, before: async explorer => {
+    root = dirname(explorer.file); await promisify(execFile)('git', ['init', '--quiet', root], { windowsHide: true });
+    await writeFile(join(root, 'README.md'), 'SYNTHETIC_QUOTE_CANARY');
+    explorer.projectBriefHelper = { close() {}, run: async prepared => {
+      const output = Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: 'Not established.', kind: 'unknown', sources: [] }]]));
+      output.purpose = [{ id: 'purpose', text: 'Project café <img src=x> 🌿', kind: 'file-backed', sources: [{ id: prepared.context.sources[0].id, quote: 'SYNTHETIC_QUOTE_CANARY' }] }];
+      output.architecture = [{ id: 'architecture', text: 'Inferred modular design', kind: 'inference', sources: [] }];
+      return parseProjectBrief(JSON.stringify(output), prepared);
+    } };
+    explorer.projectQuestionHelper = { close() {}, run: async prepared => { calls.push(prepared); return [{ question: `Which constraint should change (${calls.length})?`, category: 'Design', rationale: 'The future constraint is unresolved.', importance: 'medium', importanceReason: 'It affects implementation.', claimIds: prepared.projectBrief.claims.slice(0, 5).map(claim => claim.id) }]; } };
+  } });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id); f.type('answer', 'Private answer draft 🌿');
+  const editor = $('answer'); editor.focus(); editor.setSelectionRange(3, 7);
+  $('navigation-open').click(); $('project-mode-open').click(); await until(() => !$('project-mode-prepare').disabled, 'scope ready');
+  f.type('project-mode-paths', 'README.md'); $('project-mode-prepare').click(); await until(() => !$('project-mode-approve').disabled, 'scope review');
+  $('project-mode-approve').click(); await until(() => !$('project-mode-read').disabled, 'read authorization');
+  $('project-mode-read').click(); await until(() => !$('project-brief-prepare').disabled, 'captured inputs');
+  $('project-brief-prepare').click(); await until(() => !$('project-brief-start').disabled, 'brief review');
+  $('project-brief-start').click(); await until(() => f.explorer.projectBrief.work?.status === 'result', 'brief result');
+  await f.window.__updates.poll(); await until(() => !$('project-brief-approve').disabled, 'editable brief');
+  f.type('project-brief-add-text', 'My local constraint'); $('project-brief-approve').click(); await until(() => f.explorer.projectBrief.approval && $('project-brief-approve').disabled, 'approved brief');
+  $('project-mode-close').click(); $('project-questions').click(); await until(() => !$('research-review-start').disabled, 'project review');
+  $('research-review-start').click(); await until(() => !!f.explorer.preview, 'question preview'); f.window.__updates.apply(f.explorer.uiSnapshot());
+  let why = $('candidate-rationale-0'); why.open = true; why.dispatchEvent(new f.window.Event('toggle'));
+  assert.match(why.textContent, /File-backed interpretation.*Project café <img src=x> 🌿/s); assert.match(why.textContent, /README.md/);
+  for (const label of ['Inference', 'Unknown', 'User assertion']) assert.ok(why.textContent.includes(label));
+  assert.ok(!why.textContent.includes('SYNTHETIC_QUOTE_CANARY')); assert.equal(why.querySelector('img'), null);
+  $('accept-questions').click(); await until(() => !f.explorer.preview && f.explorer.doc.nodes.length === 4, 'accepted provenance');
+  f.window.__updates.apply(f.explorer.uiSnapshot()); f.open(f.explorer.doc.nodes.at(-1).id);
+  assert.match($('question-rationale').textContent, /current at the last check/); assert.match($('question-rationale').textContent, /README.md/);
+  f.open(node.id); assert.equal($('answer').value, 'Private answer draft 🌿');
+  const retainedEditor = $('answer'); $('project-questions').click(); await until(() => !$('research-review-start').disabled, 'second project review');
+  $('research-review-start').click(); await until(() => !!f.explorer.preview, 'second question preview'); f.window.__updates.apply(f.explorer.uiSnapshot());
+  why = $('candidate-rationale-0'); why.open = true; why.dispatchEvent(new f.window.Event('toggle'));
+  f.type('candidate-question-0', 'Which constraint should change first?'); const wording = $('candidate-question-0'); wording.focus(); wording.setSelectionRange(4, 8);
+  f.explorer.projectBrief.invalidate('Synthetic expired scope'); f.window.__updates.apply(f.explorer.uiSnapshot());
+  assert.equal($('candidate-question-0'), wording); assert.equal(wording.selectionStart, 4); assert.equal(why.open, true);
+  assert.match(why.textContent, /stale/); assert.ok(!why.textContent.includes('README.md')); assert.equal($('answer'), retainedEditor); assert.equal(retainedEditor.value, 'Private answer draft 🌿');
+  $('candidate-project-0-review').click(); await until(() => $('project-mode-dialog').open, 'correction navigation');
+  assert.equal(f.explorer.preview, null); assert.equal(calls.length, 2); assert.equal(f.explorer.doc.nodes.length, 4);
+  assert.equal($('project-mode-target-question').textContent, node.question); assert.equal(retainedEditor.value, 'Private answer draft 🌿');
 });
 
 test('unavailable project question review offers explicit ordinary generation without changing the draft', async t => {

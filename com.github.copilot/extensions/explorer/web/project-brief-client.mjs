@@ -20,6 +20,15 @@ export class ProjectBriefClient {
   control(id) { return this.$(`project-brief-${id}`); }
   element(tag, text) { const node = this.window.document.createElement(tag); if (text !== undefined) node.textContent = text; return node; }
   captureId() { const scope = this.scope(); return scope?.state === 'active' ? scope.receipt?.id : undefined; }
+  explain(reference) {
+    if (!reference) return { state: 'unavailable' };
+    const value = this.value, draft = value?.draft;
+    if (reference.state !== 'current' || this.paused || this.uncertainState || this.dirty || !value?.approved || !value.captureAvailable || value.journey !== this.journey() ||
+      !draft || reference.captureId !== draft.captureId || reference.captureId !== this.captureId() || reference.revision !== value.revision || !Array.isArray(reference.claimIds) || !reference.claimIds.length) return { state: 'stale' };
+    const claims = new Map(Object.values(draft.sections).flat().map(claim => [claim.id, claim])), files = new Map(draft.sources.map(source => [source.id, source.name]));
+    if (reference.claimIds.some(id => !claims.has(id))) return { state: 'stale' };
+    return { state: 'current', claims: reference.claimIds.map(id => { const claim = claims.get(id); return { text: claim.text, kind: claim.kind, files: claim.sources.map(source => files.get(source.id)) }; }) };
+  }
   matches(value, input) { return value.purpose === input.purpose && value.clientId === input.clientId && value.sequence === input.sequence && value.journey === input.journey; }
   input(action, extra = {}) { return { action, purpose: 'project-brief', clientId: this.clientId, sequence: ++this.sequence, journey: this.boundJourney, ...extra }; }
   invalidate() { this.generation++; this.abort?.abort(); this.abort = null; this.loading = false; }

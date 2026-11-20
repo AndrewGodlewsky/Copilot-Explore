@@ -32,6 +32,7 @@ import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/
 import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/web/research-review-client.mjs';
 import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from '../com.github.copilot/extensions/explorer/web/research-freshness.mjs';
 import { researchSettingsText } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
+import { researchProfiles, profileLabel } from '../com.github.copilot/extensions/explorer/web/research-guidance.mjs';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
 import { NextQuestion } from '../com.github.copilot/extensions/explorer/web/next-question.mjs';
 import { reviewQueue, reviewContext } from '../com.github.copilot/extensions/explorer/web/review-queue.mjs';
@@ -70,6 +71,7 @@ const imports = [
   "import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';",
   "import { ResearchReviewClient } from './research-review-client.mjs';",
   "import { researchSettingsText } from './research-policy.mjs';",
+  "import { researchProfiles, profileLabel } from './research-guidance.mjs';",
   "import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';",
   "import { NextQuestion } from './next-question.mjs';",
   "import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';",
@@ -113,7 +115,7 @@ export async function domFixture(document) {
   };
   Object.assign(window, { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice, DecisionImpact, impactPath, decisionImpactKey, criticalPaths, searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, attachDashboard, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
     ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
-  Object.assign(window, { reviewQueue, reviewContext, CommentsClient, ReviewHandoffsClient, PortableReferenceClient, AdrSourcesClient, ChangeSummaryClient });
+  Object.assign(window, { researchProfiles, profileLabel, reviewQueue, reviewContext, CommentsClient, ReviewHandoffsClient, PortableReferenceClient, AdrSourcesClient, ChangeSummaryClient });
   const source = imports.reduce((text, statement) => text.replace(statement, ''), appScript)
     .replace('void poll();', 'window.__perf = { renderMap, renderWorkspace, renderOutline, poll, select, zoom, pan: (dx, dy) => { view.x += dx; view.y += dy; transform(); }, geometry: () => geometryCache.value, stopPoll: () => clearTimeout(pollTimer) }; void poll();');
   window.eval(source);

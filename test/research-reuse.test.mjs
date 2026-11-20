@@ -23,6 +23,14 @@ function fixture(count = 0) {
   return { doc, nodeId, input, options, prepared, exchange, history, candidate };
 }
 
+test('a different selected profile or altered exchange provenance cannot reuse an answer', () => {
+  const f = fixture(), profile = { id: 'product-service', version: 1 };
+  assert.ok(f.candidate());
+  assert.equal(f.candidate({ settings: { ...f.prepared.settings, profile } }), null);
+  f.exchange.profile = profile;
+  assert.equal(f.candidate(), null, 'changing provenance invalidates the private result hash');
+});
+
 test('exact completed follow-up reuses original exchange and dates without retaining another prompt', () => {
   for (const count of [0, 1, 2, 3]) {
     const f = fixture(count), before = JSON.stringify(f.history), candidate = f.candidate();

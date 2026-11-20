@@ -12,6 +12,7 @@ import { CleanupClient } from './cleanup.mjs';
 import { QuestionHelpClient } from './question-help-client.mjs';
 import { ResearchReviewClient } from './research-review-client.mjs';
 import { researchSettingsText } from './research-policy.mjs';
+import { researchProfiles, profileLabel } from './research-guidance.mjs';
 import { effectiveMode, MODES } from './modes.mjs';
 import { attachNavigation } from './navigation.mjs';
 import { attachMinimap } from './minimap.mjs';
@@ -2846,6 +2847,7 @@ function researchReviewSummary(prepared) {
   if (context.objective) summary.append(el('p', {}, `Objective: ${concise(context.objective)}`));
   summary.append(el('p', {}, `${prior.length} earlier records included · ${context.pins.length} pinned constraints · ${coverage.omitted.path + coverage.omitted.decisionsElsewhere} records omitted. ${context.scope === 'path' ? 'Ancestor path only.' : 'Ancestor path and relevant answers elsewhere.'} Exact inputs explains the selection and omissions.`));
   if (prior.length) summary.append(el('ul', { class: 'review-prior' }, ...prior.slice(-3).map(record => el('li', {}, `${concise(record.question)} — ${ANSWER_STATES[record.answerState] ?? 'Journey guidance'}${record.review ? ' · needs review' : ''}`))));
+  if (prepared.guidance) summary.append(el('p', { id: 'research-review-guidance' }, `${profileLabel(settings.profile)} ${prepared.guidance.reason}`));
   if (model) summary.append(el('p', { id: 'research-review-model' }, modelDescription(model)));
   summary.append(el('p', { id: 'research-review-effort' }, `${comparison ? 'Reconsideration' : settings.depth[0].toUpperCase() + settings.depth.slice(1)}: up to ${limits.timeLimitMs / 1000} seconds including setup, and ${limits.toolAttemptLimit} tool attempts. This is an effort limit, not a completion or price estimate.`),
     el('p', { id: 'research-review-sources' }, comparison ? 'Model provider: receives the reviewed inputs. No new retrieval: this tool-free reconsideration uses only the included saved context and prior research. Prior claims and sources remain historical, not newly verified evidence.' : 'Model provider: receives the reviewed inputs. External sources: search and page retrieval may send queries and page requests to external services, subject to host permissions.'));
@@ -2915,15 +2917,17 @@ function renderResearchReview() {
   const { topic, objective, successCriteria, mode, pins } = context;
   const controls = el('section', { class: 'review-record research-preferences' }, el('h3', {}, 'Research preferences'));
   for (const [key, label, choices] of (challenge || regeneration || reconsideration ? [] : [
+    ['profile', 'Topic guidance', researchProfiles.map(profile => [profile.id, profile.title])],
     ['depth', 'Depth', [['quick', 'Quick - 60 seconds / 8 tool attempts'], ['standard', 'Standard - 180 seconds / 24 tool attempts'], ['deeper', 'Deeper - 300 seconds / 40 tool attempts']]],
     ['sourceFocus', 'Source focus', [['balanced', 'Balanced evidence'], ['primary', 'Prefer primary sources']]],
     ['recency', 'Recency', [['any', 'No recency preference'], ['recent', 'Prefer recent sources when relevant']]],
   ])) {
     const select = el('select', { 'data-setting': key, id: `research-${key}` }, ...choices.map(([id, title]) => el('option', { value: id }, title)));
-    select.value = settings[key]; select.disabled = reviewStarting;
-    select.addEventListener('change', () => { if (select.isConnected && researchReview.context) researchReview.settings({ ...researchReview.context.settings, [key]: select.value }); });
+    select.value = key === 'profile' ? settings.profile.id : settings[key]; select.disabled = reviewStarting;
+    select.addEventListener('change', () => { if (select.isConnected && researchReview.context) researchReview.settings({ ...researchReview.context.settings, [key]: key === 'profile' ? { id: select.value, version: researchProfiles.find(profile => profile.id === select.value).version } : select.value }); });
     controls.append(el('label', {}, label, select));
   }
+  if (value.prepared.guidance) controls.append(el('p', {}, value.prepared.guidance.applicability), el('details', { id: 'research-guidance-detail' }, el('summary', {}, 'Selected topic guidance'), el('pre', {}, value.prepared.guidance.text)), el('p', { class: 'quiet' }, 'Guidance changes the comparison criteria, not tool permissions or the effort limit. General handles mixed or unfamiliar topics.'));
     const rows = [...(challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : regeneration ? [el('p', {}, 'Question generation is queued in the attached chat. Cancellation rejects its result but does not stop the chat turn. No isolated research helper or web retrieval is started by this action.')] : reconsideration ? [] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. ${regeneration ? 'Needs-review answer text is withheld; required prerequisites and selected coverage are shown below.' : 'Saved journey records are complete; project prefixes are labeled separately.'}`),
     display('Required: committed journey guidance and mode', { topic, objective, successCriteria, mode, pins }),
       display(challenge ? 'Required: journey root' : 'Required: selected question and committed answer state', context.path.at(-1))];
@@ -2955,7 +2959,7 @@ function renderResearchReview() {
   if (ordinary) {
     const effort = rows.find(row => row.id === 'research-settings-summary');
     area.replaceChildren(researchReviewSummary(value.prepared),
-      ...(reconsideration ? [] : [el('details', { id: 'research-review-advanced' }, el('summary', {}, 'Effort and source preferences'), controls, effort)]),
+      ...(reconsideration ? [] : [el('details', { id: 'research-review-advanced' }, el('summary', {}, 'Guidance, effort and source preferences'), controls, effort)]),
       el('details', { id: 'research-review-exact' }, el('summary', {}, 'Exact inputs, exclusions and omissions'), el('p', { class: 'quiet' }, $('research-review-privacy').textContent), ...rows.filter(row => row !== controls && row !== effort)));
   } else area.replaceChildren(...rows);
   for (const id of openDetails) { const detail = $(id); if (area.contains(detail)) detail.open = true; }
@@ -3048,7 +3052,7 @@ function updateFollowupHistory(node) {
       }, { id: 'followup-clear', disabled: !!state.pending }));
     if (value.dropped) rows.push(el('p', { class: 'quiet' }, `${value.dropped} older complete exchanges omitted by the four-exchange / 64 KiB retention limit.`));
     for (const exchange of value.exchanges) {
-      const result = exchange.result, block = el('section', { class: 'research-claim', id: 'followup-exchange-' + exchange.id, tabindex: '-1' }, el('h4', {}, exchange.hypothetical ? 'Hypothetical follow-up' : 'Follow-up question'), el('p', { class: 'quiet', id: 'followup-reused-' + exchange.id, hidden: '' }), el('p', {}, exchange.question), el('p', {}, result.answer), el('p', {}, `Uncertainty: ${result.uncertainty}`));
+      const result = exchange.result, block = el('section', { class: 'research-claim', id: 'followup-exchange-' + exchange.id, tabindex: '-1' }, el('h4', {}, exchange.hypothetical ? 'Hypothetical follow-up' : 'Follow-up question'), el('p', { class: 'quiet', id: 'followup-reused-' + exchange.id, hidden: '' }), el('p', {}, exchange.question), el('p', { class: 'quiet', 'data-followup-profile': exchange.id }, profileLabel(exchange.profile)), el('p', {}, result.answer), el('p', {}, `Uncertainty: ${result.uncertainty}`));
       for (const claim of result.claims) {
         const detail = el('details', {}, el('summary', {}, `${claim.text} (${claim.basis === 'sources' ? 'source-linked model interpretation' : claim.basis})`), el('p', { class: 'quiet', 'data-followup-exchange': exchange.id, 'data-followup-claim': claim.id }, claimFreshnessText(claim, researchFreshness(result))), el('p', {}, `Limitations: ${claim.limitations}`));
         for (const reference of claim.evidence) {

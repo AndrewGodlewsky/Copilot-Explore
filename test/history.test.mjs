@@ -160,7 +160,7 @@ test('history covers supported mutations and restores sourced provenance without
   for (const label of ['Answer or state changed', 'Question added', 'Questions accepted', 'Research replaced', 'Guidance changed']) assert.ok(labels.includes(label), label);
   await command('questions', { nodeId }); const late = e.pending.id; await command('cancel');
   await command('restore', { snapshotRevision: sourcedRevision });
-  assert.deepEqual(e.doc.nodes[1].research, { ...sourced, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } }); assert.equal(e.doc.nodes[1].answer, '  My decision ??\n');
+  assert.deepEqual(e.doc.nodes[1].research, { ...sourced, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any', profile: { id: 'general', version: 1 } } }); assert.equal(e.doc.nodes[1].answer, '  My decision ??\n');
   await assert.rejects(e.receive('questions', { requestId: late, questions: [{ question: 'Late?', category: 'Scope' }] }), /cancelled/);
   const imported = structuredClone(e.doc); imported.objective = 'Same-ID import'; await command('import', { document: imported });
   assert.equal((await e.readHistory(e.doc.id)).current.label, 'Imported saved map');

@@ -53,6 +53,6 @@ test('research is isolated, abortable, rejects chat callbacks and preserves answ
   await begin(); await delay(0); rejectRun(new Error('Research unavailable')); await delay(10);
   assert.equal(explorer.pending, null); assert.match(explorer.error, /Research unavailable/); assert.equal(explorer.doc.nodes[1].answer, 'My decision');
   await begin(); await delay(0); resolveRun({ ...findings, settings: { depth: 'quick', sourceFocus: 'primary', recency: 'recent' } }); await Promise.all([...explorer.researchTasks]);
-  assert.equal(explorer.pending, null); assert.deepEqual(explorer.doc.nodes[1].research, { ...findings, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });
+  assert.equal(explorer.pending, null); assert.deepEqual(explorer.doc.nodes[1].research, { ...findings, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any', profile: { id: 'general', version: 1 } } });
   assert.equal(messages.length, 1);
 });

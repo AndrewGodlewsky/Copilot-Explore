@@ -50,6 +50,7 @@ import { DraftClient } from '../com.github.copilot/extensions/explorer/web/draft
 import { CleanupClient } from '../com.github.copilot/extensions/explorer/web/cleanup.mjs';
 import { QuestionHelpClient } from '../com.github.copilot/extensions/explorer/web/question-help-client.mjs';
 import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/web/research-review-client.mjs';
+import { researchProfiles, profileLabel } from '../com.github.copilot/extensions/explorer/web/research-guidance.mjs';
 import { researchSettingsText } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
 import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
@@ -2917,6 +2918,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice });
   window.ResearchReviewClient = ResearchReviewClient;
   window.researchSettingsText = researchSettingsText;
+  Object.assign(window, { researchProfiles, profileLabel });
   window.attachDashboard = attachDashboard; window.attachNavigation = attachNavigation; window.attachMinimap = attachMinimap;
   const mini = document.getElementById('minimap-map');
   mini.getBoundingClientRect = () => ({ left: 12, top: height + 8, width: Math.min(180, (width - 24) * .4), height: 80 });
@@ -2928,7 +2930,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, polling: () => !!pollFlight, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './research-freshness.mjs';", "").replace("import { ChangeSummaryClient } from './change-summary-client.mjs';", '').replace("import { AdrSourcesClient } from './adr-sources-client.mjs';", '').replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { researchProfiles, profileLabel } from './research-guidance.mjs';", "").replace("import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './research-freshness.mjs';", "").replace("import { ChangeSummaryClient } from './change-summary-client.mjs';", '').replace("import { AdrSourcesClient } from './adr-sources-client.mjs';", '').replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.empty ? !document.getElementById('library-home').hidden : options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -3247,6 +3249,38 @@ test('inline Research review summarizes saved inputs and keeps disclosures local
   assert.equal($('answer'), answer); assert.equal(answer.value, 'Still private');
   $('research-answer-draft').click(); assert.equal(f.document.activeElement, answer); assert.ok($('question-tools-research').contains(panel));
   $('research-review-close').click(); assert.ok($('research-review-dialog').contains(panel)); assert.equal(f.explorer.pending, null);
+});
+
+test('topic guidance is reviewable and keyboard reachable; changing it retains drafts, focus and earlier turn labels', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const next = structuredClone(e.doc); next.nodes[1].research = structuredClone(findings);
+    next.nodes[1].research.settings = { depth: 'standard', sourceFocus: 'balanced', recency: 'any', profile: { id: 'software-version', version: 1 } };
+    await e.save(next);
+  }, runFollowup: async () => ({ answer: 'A pilot is reversible.', uncertainty: 'Synthetic reasoning.', claims: [{ id: 'c1', text: 'Try a pilot.', basis: 'reasoning', evidence: [], limitations: 'Not verified.' }], sources: [] }) });
+  const $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep my private draft');
+  $('question-tab-research').click();
+  f.type('followup-question', 'Why this option?'); $('followup-review').click();
+  await until(() => !$('research-review-start').disabled, 'inherited profile review');
+  assert.equal($('research-profile').value, 'software-version'); assert.match($('research-review-guidance').textContent, /Retained/);
+  $('research-review-advanced').open = true; $('research-guidance-detail').open = true;
+  const token = f.explorer.researchReview.current.token, select = $('research-profile'); select.focus();
+  select.value = 'concept-design'; select.dispatchEvent(new f.window.Event('change'));
+  await until(() => !$('research-review-start').disabled && f.explorer.researchReview.current.token !== token, 'new profile reviewed');
+  assert.equal(f.document.activeElement.id, 'research-profile'); assert.equal($('research-guidance-detail').open, true);
+  assert.match($('research-review-guidance').textContent, /concept-design v1.*Selected/);
+  assert.match($('research-review-instructions').textContent, /reversibility/);
+  assert.ok(!$('research-review-instructions').textContent.includes('Prefer official versioned documentation'));
+  assert.equal($('answer').value, 'Keep my private draft');
+  await startReviewedResearch(f); await until(() => f.explorer.followup?.exchanges.length === 1 && $('followup-history').textContent.includes('concept-design v1'), 'recorded turn profile');
+  const id = f.explorer.followup.exchanges[0].id;
+  $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'next profile inherited');
+  assert.equal($('research-profile').value, 'concept-design');
+  const nextSelect = $('research-profile'); nextSelect.value = 'general'; nextSelect.dispatchEvent(new f.window.Event('change'));
+  await until(() => !$('research-review-start').disabled && $('research-profile').value === 'general', 'explicit General');
+  assert.match($('followup-history').querySelector(`[data-followup-profile="${id}"]`).textContent, /concept-design v1/);
+  assert.equal($('answer').value, 'Keep my private draft');
+  $('research-answer-draft').click(); assert.equal(f.document.activeElement.id, 'answer');
 });
 
 test('inline Research review keeps the full literal question and exposes large omitted context without inference', async t => {

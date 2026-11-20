@@ -33,6 +33,35 @@ async function fixture(t) {
   const start = value => e.command('research', { journey: doc.id, nodeId: doc.nodes[1].id, token: value.token });
   return { e, file, doc, runs, input, review, start };
 }
+
+test('profile changes replace one-use reviews and record completed follow-up provenance without relabeling prior turns', async t => {
+  const f = await fixture(t), profile = id => ({ id, version: 1 });
+  const settings = id => ({ depth: 'standard', sourceFocus: 'balanced', recency: 'any', profile: profile(id) });
+  const prior = await f.review(), selected = await f.review({ settings: settings('software-version') });
+  await assert.rejects(f.start(prior), /review/);
+  assert.deepEqual(selected.prepared.settings.profile, profile('software-version'));
+  assert.match(selected.prepared.guidance.reason, /Selected/);
+  assert.match(selected.prepared.instructions, /official versioned documentation/);
+  const next = structuredClone(f.e.doc); next.nodes[1].research = freshnessFindings(); next.nodes[1].research.settings = settings('software-version'); await f.e.save(next);
+  const followup = { question: 'How would we trial it?', hypothetical: false }, turns = [];
+  f.e.researcher.runFollowup = (_, options) => new Promise(resolve => turns.push({ options, resolve }));
+  const result = { answer: 'Try a reversible pilot.', uncertainty: 'Synthetic reasoning.', claims: [{ id: 'c1', text: 'Try a pilot.', basis: 'reasoning', evidence: [], limitations: 'Synthetic.' }], sources: [] };
+  const begin = value => f.e.command('research-follow-up', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, token: value.token });
+  const inherited = await f.review({ followup }); assert.deepEqual(inherited.prepared.settings.profile, profile('software-version'));
+  await begin(inherited); await waitFor(() => turns.length === 1); turns[0].resolve(result); await waitFor(() => !f.e.pending);
+  assert.equal(f.e.error, '');
+  const originalExchange = structuredClone(f.e.currentFollowup().exchanges[0]);
+  const override = await f.review({ followup, settings: settings('concept-design') });
+  await begin(override); await waitFor(() => turns.length === 2); await f.e.command('cancel'); turns[1].resolve(result);
+  await Promise.all([...f.e.researchTasks]); assert.deepEqual(f.e.currentFollowup().exchanges, [originalExchange]);
+  const retry = await f.review({ followup, settings: settings('concept-design') });
+  await begin(retry); await waitFor(() => turns.length === 3); turns[2].resolve(result); await waitFor(() => !f.e.pending);
+  assert.deepEqual(f.e.currentFollowup().exchanges[0], originalExchange);
+  assert.deepEqual(f.e.currentFollowup().exchanges[1].profile, profile('concept-design'));
+  assert.deepEqual((await f.review({ followup })).prepared.settings.profile, profile('concept-design'));
+  assert.deepEqual((await f.review({ followup, settings: settings('general') })).prepared.settings.profile, profile('general'));
+  assert.deepEqual(f.e.doc.nodes[1].research.settings.profile, profile('software-version'));
+});
 test('evidence age crossing a boundary after review, while queued or during inference preserves saved research', async t => {
   for (const phase of ['review', 'queue', 'result']) {
     const f = await fixture(t), next = structuredClone(f.e.doc); next.nodes[1].research = freshnessFindings(); next.nodes[1].answer = 'My independent answer'; await f.e.save(next);

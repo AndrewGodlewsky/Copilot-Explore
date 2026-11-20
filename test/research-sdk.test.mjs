@@ -6,7 +6,7 @@ import { join, dirname, resolve } from 'node:path';
 import { createResearcher, researchFraming, publicUrl, boundedContext, hostRuntime } from '../com.github.copilot/extensions/explorer/research.mjs';
 import { prepareResearch } from '../com.github.copilot/extensions/explorer/research-context.mjs';
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
-import { researchSettings, researchLimits } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
+import { researchSettings, guidedResearchSettings, researchLimits } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { prepareFollowup } from '../com.github.copilot/extensions/explorer/research-followup.mjs';
 import { operationEvidence } from '../com.github.copilot/extensions/explorer/operation-recovery.mjs';
 import { createUsageRecorder } from '../com.github.copilot/extensions/explorer/research-usage.mjs';
@@ -16,6 +16,21 @@ import { limitationFindings } from './helpers/research-limitations.mjs';
 import { freshnessFindings, FRESHNESS_NOW } from './helpers/research-freshness.mjs';
 import { answerNode, addDirection } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { effortReport } from '../com.github.copilot/extensions/explorer/research-effort.mjs';
+
+test('each topic profile uses the same isolated helper and authoritative selection, ignoring forged model metadata', async t => {
+  for (const id of ['general', 'software-version', 'product-service', 'concept-design']) {
+    const settings = { ...researchSettings(), profile: { id, version: 1 } };
+    const { researcher, calls } = await fixture(t, { result: { ...result, settings: { profile: { id: 'forged', version: 999 } } } });
+    const output = await researcher.run(context, { settings });
+    assert.deepEqual(output.settings, settings);
+    assert.ok(calls.config.systemMessage.content.includes(`(${id} v1)`));
+    assert.equal(calls.sends, 1);
+    assert.equal(calls.config.enableSkills, false);
+    assert.equal(calls.config.skipCustomInstructions, true);
+    assert.deepEqual(calls.config.skillDirectories, []);
+    assert.deepEqual(calls.config.availableTools, ['builtin:web_fetch', 'mcp:web_search']);
+  }
+});
 
 test('owned research follow-up sends reviewed strings, credits prior and current sources separately and attributes retained receipts', async t => {
   const doc = createDocument('Follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Target' }]);
@@ -398,7 +413,7 @@ test('Research discovery supports dedicated choice when the chat model is unavai
 
 test('helper uses isolated configuration, explicit research instructions, exact tools and no parent send', async t => {
   const { researcher, calls } = await fixture(t);
-  assert.deepEqual(await researcher.run(context), { ...result, settings: researchSettings() });
+  assert.deepEqual(await researcher.run(context), { ...result, settings: guidedResearchSettings().settings });
   assert.ok(calls.timeout > 170000 && calls.timeout <= 180000);
   assert.equal(calls.sends, 1); assert.equal(calls.stops, 1);
   assert.equal(calls.config.requestExtensions, false); assert.equal(calls.config.enableFileHooks, false);
@@ -511,7 +526,7 @@ test('unread citations are rejected; successful page reads are required for sour
   } });
   const observed = await good.researcher.run(context);
   assert.equal(observed.sources[0].provenance, 'recorded-read'); assert.ok(Number.isFinite(Date.parse(observed.sources[0].retrievedAt)));
-  assert.deepEqual(observed, { ...sourced, sources: [{ ...sourced.sources[0], retrievedAt: observed.sources[0].retrievedAt, provenance: 'recorded-read' }], settings: researchSettings() });
+  assert.deepEqual(observed, { ...sourced, sources: [{ ...sourced.sources[0], retrievedAt: observed.sources[0].retrievedAt, provenance: 'recorded-read' }], settings: guidedResearchSettings().settings });
 });
 
 test('overlapping fetches without hook IDs cannot credit an unread page', async t => {
@@ -574,7 +589,7 @@ test('new helper comparisons require concise option identity while accepting hon
     const limited = structuredClone(result); limited.options.length = count; limited.optionsLimit = 'More evidence is needed to compare alternatives.';
     limited.recommendationAssessment.optionId = null;
     const current = await fixture(t, { result: limited });
-    assert.deepEqual(await current.researcher.run(context), { ...limited, settings: researchSettings() });
+    assert.deepEqual(await current.researcher.run(context), { ...limited, settings: guidedResearchSettings().settings });
   }
 });
 
@@ -585,10 +600,10 @@ test('raw Unicode bytes and SDK character envelope accept their exact boundaries
     claims: Array.from({ length: 12 }, (_, i) => ({ id: `c${i}`, text: '界'.repeat(1000), basis: 'reasoning', evidence: [], limitations: '界'.repeat(1000) })) };
   const json = JSON.stringify(value), raw = json + ' '.repeat(160000 - Buffer.byteLength(json));
   assert.ok(raw.length < 80000); assert.equal(Buffer.byteLength(raw), 160000);
-  const exact = await fixture(t, { content: raw }); assert.deepEqual(await exact.researcher.run(context), { ...value, settings: researchSettings() });
+  const exact = await fixture(t, { content: raw }); assert.deepEqual(await exact.researcher.run(context), { ...value, settings: guidedResearchSettings().settings });
   const over = await fixture(t, { content: raw + ' ' }); await assert.rejects(over.researcher.run(context), /invalid comparison/);
   const small = JSON.stringify(result), chars = small + ' '.repeat(80000 - small.length);
-  const exactChars = await fixture(t, { content: chars }); assert.deepEqual(await exactChars.researcher.run(context), { ...result, settings: researchSettings() });
+  const exactChars = await fixture(t, { content: chars }); assert.deepEqual(await exactChars.researcher.run(context), { ...result, settings: guidedResearchSettings().settings });
   const overChars = await fixture(t, { content: chars + ' ' }); await assert.rejects(overChars.researcher.run(context), /invalid comparison/);
 });
 
@@ -668,7 +683,7 @@ for (const depth of ['quick', 'standard', 'deeper']) {
     const { researcher, calls } = await fixture(t, { clock, start: () => clock.advance(1234), result: { ...result, settings: { depth: 'forged' } } });
     const output = await researcher.run(context, { settings });
     assert.equal(clock.limit, limits.timeLimitMs); assert.equal(calls.timeout, limits.timeLimitMs - 1234);
-    assert.deepEqual(output.settings, settings); assert.equal(calls.sends, 1);
+    assert.deepEqual(output.settings, guidedResearchSettings(settings).settings); assert.equal(calls.sends, 1);
     assert.match(calls.config.systemMessage.content, new RegExp(`${limits.toolAttemptLimit} tool attempts`));
     assert.match(calls.config.systemMessage.content, /Prioritize original studies/); assert.match(calls.config.systemMessage.content, /do not.*invent dates/);
     assert.doesNotMatch(calls.config.systemMessage.content, /at most 4 searches/);
@@ -775,5 +790,5 @@ test('new helper requires an explicit recommendation assessment and accepts no j
   const raw = recommendationFindings(); raw.recommendationAssessment.optionId = null;
   raw.recommendation = 'No location or access evidence is available to prefer either choice.';
   const none = await fixture(t, { result: raw });
-  assert.deepEqual(await none.researcher.run(context), { ...raw, settings: researchSettings() });
+  assert.deepEqual(await none.researcher.run(context), { ...raw, settings: guidedResearchSettings().settings });
 });

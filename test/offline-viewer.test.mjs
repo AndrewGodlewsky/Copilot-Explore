@@ -25,6 +25,17 @@ function fixture() {
 }
 const hash = text => createHash('sha256').update(text).digest('base64');
 
+test('offline research preserves a recorded profile version and leaves legacy provenance unrecorded', () => {
+  for (const recorded of [false, true]) {
+    const { doc, a } = fixture();
+    if (recorded) a.research.settings = { depth: 'quick', sourceFocus: 'primary', recency: 'recent', profile: { id: 'product-service', version: 1 } };
+    const snapshot = viewer.viewerSnapshot(doc, [{ nodeId: a.id, answer: false, research: true }]);
+    const dom = new JSDOM(viewer.viewerArtifact(snapshot).content, { runScripts: 'dangerously' });
+    assert.match(dom.window.document.getElementById('detail').textContent, recorded ? /Products and services \(product-service v1\)/ : /Profile not recorded/);
+    dom.window.close();
+  }
+});
+
 test('offline selected research keeps its reconsideration warning without exposing review source identities', () => {
   const { doc, a } = fixture(); a.researchStale = true; a.reviewCauses = { changes: [{ sourceId: 'PRIVATE_CAUSE', baseDigest: 'a'.repeat(64), revision: 1 }], earlier: false };
   const snapshot = viewer.viewerSnapshot(doc, [{ nodeId: a.id, answer: false, research: true }]);

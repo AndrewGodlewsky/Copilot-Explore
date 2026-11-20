@@ -124,7 +124,7 @@ try {
   excluded.answer = 'EXCLUDED-INSTALLED-CANARY\u0000\ud83c\udf3f<script>';
   researchDoc.pins = [{ id: 'constraint-00000000000000', text: 'Preserve the user constraint exactly' }];
   addDependency(researchDoc, target.id, prerequisite.id);
-  const settings = Object.freeze({ depth: 'quick', sourceFocus: 'primary', recency: 'recent' });
+  const settings = Object.freeze({ depth: 'quick', sourceFocus: 'primary', recency: 'recent', profile: Object.freeze({ id: 'software-version', version: 1 }) });
   const modelCapture = captureResearchModel(await researcher.models(), { revision: 0, modelId: null });
   assert.equal(owned.size, 0); assert.equal(prompts.length, 0); selectedId = dedicated.id;
   const prepared = Object.freeze({ ...prepareResearch(researchDoc, target.id, { ...researchFraming(researchDoc, settings), excluded: [excluded.id] }), settings, modelCapture });
@@ -160,6 +160,9 @@ try {
   assert.equal(toolCalls[0].name, 'web_search');
   assert.ok(progress.includes('Searching the web'));
   assert.ok(JSON.stringify(prompts).includes('explorer-research'));
+  assert.ok(JSON.stringify(prompts).includes('software-version v1'));
+  assert.ok(JSON.stringify(prompts).includes('official versioned documentation'));
+  assert.ok(!JSON.stringify(prompts).includes('region, currency and variant'));
   assert.ok(JSON.stringify(prompts).includes('Neighbors only'));
   assert.ok(JSON.stringify(prompts).includes('Choose a shared garden 🌿'));
   assert.ok(JSON.stringify(prompts).includes('Neighbors agree on one place'));

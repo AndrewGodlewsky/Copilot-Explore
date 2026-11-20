@@ -1226,7 +1226,7 @@ export class Explorer {
         if (prepared.followup) {
           const previous = this.currentFollowup(current, nodeId);
           if ((previous?.id ?? null) !== prepared.historyId) throw new Error('Follow-up history changed. Review and ask again.');
-          const exchange = { id: randomUUID(), question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, result: followupResult(result) };
+          const exchange = { id: randomUUID(), question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, profile: prepared.settings.profile, result: followupResult(result) };
           const all = [...previous?.exchanges ?? [], exchange], exchanges = retainExchanges(all);
           const dependencies = prepared.followupDependencies;
           const reuse = !findNode(current, nodeId).researchStale && createReuseRecord({ ...prepared, reuseNamespace: namespace === prepared.reuseNamespace ? namespace : null }, exchange);

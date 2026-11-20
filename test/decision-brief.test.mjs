@@ -102,7 +102,7 @@ test('brief acceptance and research completion preserve both artifacts in either
   const request=base(explorer);await proposal(explorer,request);await startResearch(explorer, {revision:explorer.doc.revision,nodeId:explorer.doc.nodes[1].id});await waitFor(() => finish, 'Research fixture did not start');
   const accept=()=>explorer.briefRequest({...request,action:'accept',revision:explorer.doc.revision,edits:[]});const researched=async()=>{finish();await Promise.all([...explorer.researchTasks]);};
   if(first==='brief'){await accept();await researched();}else{await researched();await accept();}
-  assert.deepEqual(explorer.doc.nodes[1].research,{ ...finding, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any' } });assert.ok(explorer.doc.brief);assert.equal(briefFreshness(explorer.doc.brief,explorer.doc),'current');assert.equal(explorer.doc.revision,2);
+  assert.deepEqual(explorer.doc.nodes[1].research,{ ...finding, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any', profile: { id: 'general', version: 1 } } });assert.ok(explorer.doc.brief);assert.equal(briefFreshness(explorer.doc.brief,explorer.doc),'current');assert.equal(explorer.doc.revision,2);
   const previous=await explorer.readHistory(explorer.doc.id,1);assert.equal(!!previous.document.brief,first==='brief');assert.equal(!!previous.document.nodes[1].research,first==='research');
  }
 });

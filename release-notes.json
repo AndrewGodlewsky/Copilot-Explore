@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.123",
+    "summary": "Choose General, Software and versions, Products and services, or Concepts and design tradeoffs guidance in Research review. Inspect the profile and version before starting. Follow-ups retain their reviewed profile, earlier answers keep their own labels, and changing guidance disables incompatible answer reuse. Profiles preserve existing tools and effort limits."
+  },
+  {
     "version": "0.1.122",
     "summary": "Reopen an eligible previous answer to an exact follow-up without another model or source request. Review the choice explicitly, keep original source dates and provenance, and clear transient discussion without losing saved research or drafts. Changed context, model, project or freshness disables reuse; Research always starts new work."
   },

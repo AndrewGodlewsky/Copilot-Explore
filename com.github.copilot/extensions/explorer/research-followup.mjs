@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { findNode, researchEvidence } from './model.mjs';
 import { prepareResearch, identity, framing, record, sameReviewedResearchFreshness } from './research-context.mjs';
 import { researchFraming } from './research.mjs';
-import { researchSettings, researchLimits } from './web/research-policy.mjs';
+import { researchSettings, guidedResearchSettings, researchLimits } from './web/research-policy.mjs';
 import { checkedSourceDateObservations, researchFreshness } from './web/research-freshness.mjs';
 import { researchRelevance } from './research-relevance.mjs';
 
@@ -39,6 +39,8 @@ export function prepareFollowup(doc, nodeId, input, { settings = researchSetting
   input = followupInput(input); const original = findNode(doc, nodeId).research;
   if (!original) throw new Error('Research this question before asking a follow-up.');
   const exchanges = history?.exchanges ?? [];
+  const guided = guidedResearchSettings(settings, exchanges.at(-1)?.profile ?? original.settings?.profile);
+  settings = guided.settings;
   const followup = { ...input, recommendation: original.recommendation, original: [], exchanges: [], coverage: { originalIncluded: 0, originalOmitted: 3 + original.options.length, exchangesIncluded: 0, exchangesOmitted: exchanges.length, previouslyDropped: history?.dropped ?? 0 } };
   if (original.optionsVersion === 1) Object.assign(followup, { optionsVersion: 1, ...(original.optionsLimit ? { optionsLimit: original.optionsLimit } : {}) });
   if (original.recommendationAssessment) followup.recommendationAssessment = structuredClone(original.recommendationAssessment);
@@ -59,7 +61,7 @@ export function prepareFollowup(doc, nodeId, input, { settings = researchSetting
   // Recompute once with final omission counters, including when the last candidate did not fit.
   prepared = prepare();
   const dependencies = captureFollowup(prepared, history?.dependencies);
-  return freeze({ ...prepared, preparedAt: now, coverage: { ...prepared.coverage, followupTracking: { records: dependencies.records.length, recordLimit: 5000, bytes: size(dependencies), byteLimit: 4194304 } }, settings, limits: researchLimits(settings), followup: structuredClone(followup), historyId: history?.id ?? null, followupDependencies: dependencies });
+  return freeze({ ...prepared, preparedAt: now, coverage: { ...prepared.coverage, followupTracking: { records: dependencies.records.length, recordLimit: 5000, bytes: size(dependencies), byteLimit: 4194304 } }, settings, guidance: guided.guidance, limits: researchLimits(settings), followup: structuredClone(followup), historyId: history?.id ?? null, followupDependencies: dependencies });
 }
 export function parseFollowup(content, prepared, pages, dateEvidence = new Map(), now = Date.now()) {
   if (!sameReviewedResearchFreshness(prepared, now)) throw Error('Reviewed evidence freshness changed. Review the evidence before asking again.');

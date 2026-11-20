@@ -391,7 +391,15 @@ try {
       if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-research-review-summary.png`) });
       await page.locator('#research-review-advanced > summary').focus(); await page.keyboard.press('Enter');
       await page.keyboard.press('Tab');
-      expect(await page.locator('#research-depth').evaluate(el => el === document.activeElement), `${scenario.name}: advanced preferences are keyboard reachable`, {});
+      expect(await page.locator('#research-profile').evaluate(el => el === document.activeElement), `${scenario.name}: topic guidance is keyboard reachable`, {});
+      await page.locator('#research-profile').selectOption('software-version');
+      await page.waitForFunction(() => !document.getElementById('research-review-start').disabled && document.getElementById('research-review-guidance').textContent.includes('software-version v1'));
+      expect(await page.locator('#research-profile').evaluate(el => el === document.activeElement), `${scenario.name}: reviewed profile retains focus`, {});
+      await page.locator('#research-guidance-detail > summary').click();
+      await inspectWorkspace(page, `${scenario.name}/research-guidance`, { scroll: true });
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-research-guidance.png`) });
+      await page.locator('#research-guidance-detail > summary').click();
+      await page.locator('#research-depth').focus();
       await page.keyboard.press('Escape');
       expect(await page.locator('#research-review-inline').evaluate(el => !el.hidden), `${scenario.name}: Escape from a preference select retains review`, {});
       await page.locator('#research-review-advanced > summary').click();

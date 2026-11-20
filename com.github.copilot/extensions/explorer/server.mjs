@@ -31,6 +31,7 @@ const assets = new Map([
   ['cleanup.mjs', ['cleanup.mjs', 'text/javascript; charset=utf-8']],
   ['question-help-client.mjs', ['question-help-client.mjs', 'text/javascript; charset=utf-8']],
   ['research-review-client.mjs', ['research-review-client.mjs', 'text/javascript; charset=utf-8']],
+  ['research-guidance.mjs', ['research-guidance.mjs', 'text/javascript; charset=utf-8']],
   ['research-policy.mjs', ['research-policy.mjs', 'text/javascript; charset=utf-8']],
   ['question-help-context.mjs', ['question-help-context.mjs', 'text/javascript; charset=utf-8']],
   ['modes.mjs', ['modes.mjs', 'text/javascript; charset=utf-8']],

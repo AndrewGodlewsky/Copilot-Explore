@@ -54,6 +54,7 @@ export function renderOfflineViewer(snapshot) {
     };
     section.append(el('p', r.basis === 'sources' ? 'Consulted sources. A recorded read does not establish claim support or truth.' : 'Model reasoning; not externally verified.'));
     paragraph(section, 'Summary', r.summary);
+    paragraph(section, 'Topic guidance', r.guidance ?? 'Profile not recorded in this export.');
     if (r.optionsLimit) paragraph(section, 'Limited options', r.optionsLimit);
     for (const option of r.options) {
       const article = el('section'); article.append(el('h3', option.title), el('p', option.description));

@@ -10,7 +10,7 @@ import { recommendationFindings } from './helpers/research-recommendation.mjs';
 import { startResearch } from './helpers/research-review.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
 import { randomUUID } from 'node:crypto';
-const settings = { depth: 'standard', sourceFocus: 'balanced', recency: 'any' };
+const settings = { depth: 'standard', sourceFocus: 'balanced', recency: 'any', profile: { id: 'general', version: 1 } };
 const report = (partial = null, overrides = {}) => ({ settings, reason: 'deadline', elapsedMs: 180001, toolAttempts: 2, duplicateAttempts: 0, deliveredTextUnits: 15, truncatedResults: 0, assessment: null, partial, ...overrides });
 function checkpoint() {
   const value = recommendationFindings(); value.recommendationAssessment.optionId = null;
@@ -63,7 +63,7 @@ test('cancellation and changed on-disk sources reject late partial reports', asy
 });
 
 test('malformed effort, mismatched settings and winner-bearing partials cannot enter the drawer', async t => {
-  for (const invalid of [report(null, { toolAttempts: 999 }), report(null, { settings: { ...settings, depth: 'deeper' } }), report(research(recommendationFindings())), report(null, { price: 0 })]) {
+  for (const invalid of [report(null, { toolAttempts: 999 }), report(null, { settings: { ...settings, depth: 'deeper' } }), report(null, { settings: { ...settings, profile: { id: 'product-service', version: 1 } } }), report(research(recommendationFindings())), report(null, { price: 0 })]) {
     const f = await fixture(t), run = await f.start(), before = await readFile(f.file, 'utf8');
     assert.throws(() => run.onReport(invalid), /effort|partial|settings/i);
     run.reject(Error('Invalid report')); await f.settle(); assert.equal(f.e.uiSnapshot().researchAttempt, null); assert.equal(await readFile(f.file, 'utf8'), before);

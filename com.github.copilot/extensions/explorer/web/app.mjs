@@ -233,7 +233,7 @@ const minimap = attachMinimap({ document, window,
     const rect = $('map').getBoundingClientRect();
     view.x = rect.width / 2 - point.x * view.zoom; view.y = rect.height / 2 - point.y * view.zoom; transform();
   }, leaveEditor: () => voice.cancel() });
-const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, researchOpen: false, rationaleOpen: false, helpOpen: false, manualOpen: false, question: '' }); return nodeUi.get(id); };
+const uiFor = id => { if (!nodeUi.has(id)) nodeUi.set(id, { scroll: 0, rationaleOpen: false, helpOpen: false, manualOpen: false, question: '' }); return nodeUi.get(id); };
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -677,7 +677,6 @@ function captureWorkspace() {
   if (content && !panel.hidden) {
     const ui = uiFor(panel.dataset.nodeId);
     ui.scroll = content.scrollTop;
-    ui.researchOpen = $('question-drawer').querySelector('.research-disclosure')?.open ?? false;
     ui.rationaleOpen = $('question-drawer').querySelector('#question-rationale')?.open ?? false;
     ui.importanceOpen = $('question-drawer').querySelector('#question-importance')?.open ?? false;
     ui.helpOpen = $('question-drawer').querySelector('#question-help')?.open ?? false;
@@ -1960,7 +1959,10 @@ function setQuestionToolTab(name) {
   if (body.dataset.activeTab) ui.toolScrolls[body.dataset.activeTab] = body.scrollTop;
   body.dataset.activeTab = name;
   ui.toolsTab = name;
-  if (name === 'research' && $('research-summary')) $('research-summary').parentElement.open = true;
+  $('question-drawer').dataset.tab = name;
+  $('question-drawer-title').textContent = name === 'research' ? 'Research' : 'Question tools';
+  if ($('research-answer-draft')) $('research-answer-draft').hidden = name !== 'research' || !$('answer');
+  if ($('research-workspace-status')) $('research-workspace-status').hidden = name !== 'research';
   if (name === 'context' && $('question-context')) $('question-context').open = true;
   for (const tab of $('question-drawer').querySelectorAll('[data-tool-tab]')) {
     const active = tab.dataset.toolTab === name;
@@ -2031,7 +2033,19 @@ function renderWorkspace() {
     ui.toolsExpanded = !ui.toolsExpanded; drawer.dataset.expanded = String(ui.toolsExpanded);
     size.textContent = ui.toolsExpanded ? 'Reduce' : 'Expand'; size.setAttribute('aria-expanded', String(ui.toolsExpanded)); scheduleLayout();
   }, { id: 'question-drawer-size', 'aria-expanded': String(!!ui.toolsExpanded), 'aria-label': 'Expand or reduce question tools' });
-  drawer.append(el('header', { class: 'question-drawer-header' }, el('div', { class: 'question-drawer-heading' }, el('h2', { id: 'question-drawer-title' }, 'Question tools'), el('p', { id: 'question-drawer-context' }, node.question)), el('div', { class: 'actions' }, size, button('Close', () => setQuestionTools(false), { id: 'question-drawer-close', 'aria-label': 'Close question tools' }))));
+  const answerDraft = button('Answer draft', () => {
+    const answer = $('answer'); if (!current() || !answer) return;
+    if (ui.toolsExpanded) size.click();
+    answer.focus({ preventScroll: true });
+    requestAnimationFrame(() => {
+      if (!current() || $('answer') !== answer) return;
+      const scroller = !outlineMode && panel.classList.contains('scroll-pane') ? panel : content;
+      scroller.scrollTop += answer.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
+      revealQuestionStage(answer);
+    });
+  }, { id: 'research-answer-draft', hidden: true });
+  drawer.append(el('header', { class: 'question-drawer-header' }, el('div', { class: 'question-drawer-heading' }, el('h2', { id: 'question-drawer-title' }, 'Question tools'), el('p', { id: 'question-drawer-context' }, node.question)), el('div', { class: 'actions' }, answerDraft, size, button('Close', () => setQuestionTools(false), { id: 'question-drawer-close', 'aria-label': 'Close question tools' }))));
+  drawer.append(el('p', { id: 'research-workspace-status', class: 'quiet', hidden: true }));
   const tabs = el('div', { class: 'question-tool-tabs', role: 'tablist', 'aria-label': 'Question tools' }), toolPanels = {};
   for (const [name, label] of [['explore', 'Explore'], ['research', 'Research'], ['details', 'Answer details'], ['context', 'Context']]) {
     const tab = button(label, () => setQuestionToolTab(name), { id: `question-tab-${name}`, role: 'tab', 'data-tool-tab': name, 'aria-controls': `question-tools-${name}` });
@@ -2050,9 +2064,14 @@ function renderWorkspace() {
   const update = (name, value, build) => {
     const part = regions.get(name), stamp = JSON.stringify(value);
     if (part.stamp === stamp) return;
-    const focused = part.area.contains(document.activeElement) ? document.activeElement.id : null;
+    const focused = part.area.contains(document.activeElement) ? document.activeElement : null;
     part.stamp = stamp; part.area.replaceChildren(...[build()].flat().filter(Boolean));
-    if (focused) ($(focused) ?? $('expanded-title'))?.focus({ preventScroll: true });
+    if (focused) {
+      const replacement = focused.id ? $(focused.id) : null;
+      const tab = part.area.closest('[data-tool-panel]')?.dataset.toolPanel;
+      const fallback = tab ? $(`question-tab-${tab}`) : $('expanded-title');
+      (replacement && !replacement.disabled && !replacement.closest('[hidden]') ? replacement : fallback)?.focus({ preventScroll: true });
+    }
   };
   workspace = owner;
   const context = el('details', { id: 'question-context', class: 'question-context' }, el('summary', {}, 'Context & navigation'));
@@ -2345,6 +2364,9 @@ function renderWorkspace() {
   }
   region('research', toolPanels.research);
   region('followup', toolPanels.research);
+  regions.get('research').area.id = 'research-results-region';
+  regions.get('followup').area.id = 'research-conversation-region';
+  toolPanels.research.prepend(el('h3', { id: 'research-workspace-question' }, node.question));
   region('children', toolPanels.context);
   if (root || !isQuestion(node)) {
     panel.append(el('div', { class: 'workspace-savebar' }, toolsToggle));
@@ -2385,6 +2407,13 @@ function renderWorkspace() {
     updateImpact();
     updateRevisit();
     $('question-drawer-context').textContent = node.question;
+    $('research-workspace-question').textContent = node.question;
+    const researchRunning = ['research', 'research-follow-up'].includes(state.pending?.kind) && state.pending.nodeId === node.id;
+    const sourceStatus = node.research ? `${node.researchStale ? 'Historical' : 'Saved'} · ${node.research.basis === 'sources' ? 'Consulted sources' : 'Model reasoning (unverified)'}` : 'No research yet';
+    const researchStatus = researchRunning ? `Research in progress · ${sourceStatus}` : sourceStatus;
+    if ($('research-workspace-status').textContent !== researchStatus) $('research-workspace-status').textContent = researchStatus;
+    regions.get('followup').area.hidden = !node.research;
+    toolPanels.research.dataset.hasResearch = String(!!node.research);
     const pendingParent = ['research', 'research-follow-up'].includes(state.pending?.kind) ? toolPanels.research : toolPanels.explore;
     if (state.pending && regions.get('pending').area.parentElement !== pendingParent) pendingParent.prepend(regions.get('pending').area);
     const ancestors = [];
@@ -2470,9 +2499,8 @@ function renderWorkspace() {
     }, { id: 'refresh-question-context' }) : null);
     update('research', node.research ?? null, () => {
       if (root || !isQuestion(node)) return;
-      const research = el('details', { class: 'research-disclosure' }, el('summary', { id: 'research-summary' }, 'Research options')); research.open = ui.researchOpen;
-      research.addEventListener('toggle', () => { if (research.isConnected) { ui.researchOpen = research.open; scheduleLayout(); } });
-      research.append(el('p', { class: 'quiet' }, 'A separate researcher compares possibilities using your saved answers and states. Review its context before starting. Suggestions stay separate from your answer; normal Copilot usage applies.'), button(node.research ? 'Research again' : 'Research options', () => { research.open = true; ui.researchOpen = true; openResearchReview(node.id); }, { id: 'research-request', disabled: pending }));
+      const research = el('section', { class: 'research-workspace', 'aria-labelledby': 'research-summary' }, el('h3', { id: 'research-summary' }, 'Answer options'));
+      research.append(el('p', { class: 'quiet' }, 'Compare possibilities using your saved answers and states. Review the context before starting. Suggestions stay separate from your answer; normal Copilot usage applies.'), button('Research', () => openResearchReview(node.id), { id: 'research-request', disabled: pending }));
       research.append(el('p', { id: 'research-stale-warning', class: 'review-warning', hidden: !node.researchStale }, 'Retained research needs reconsideration after saved reasoning changed. It has not been refreshed.'));
       if (node.research) research.append(renderResearch(node));
       return research;

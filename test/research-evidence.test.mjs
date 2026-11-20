@@ -111,17 +111,18 @@ test('evidence rejects unknown top-level fields and normalized URL expansion ove
   assert.throws(() => research(value), /serialized limit/);
 });
 
-test('invalid evidence, overflow, cancellation and current-disk changes preserve prior research and saved answers', async t => {
+test('invalid evidence, overflow, cancellation and current-disk changes preserve prior research and saved answers', { timeout: 10000 }, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-evidence-save-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const file = join(dir, 'map.explore.json'), doc = createDocument('Evidence');
   const node = addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Scope' }])[0]; node.research = evidence; node.answer = 'My unchanged answer';
   await writeFile(file, JSON.stringify(doc));
-  let finish;
-  const e = await new Explorer({ file, researcher: { run: () => new Promise(resolve => { finish = resolve; }) } }).load(); t.after(async () => { finish?.(evidence); await e.close(); });
+  let finish, started;
+  const e = await new Explorer({ file, researcher: { run: () => new Promise(resolve => { finish = resolve; started(); }) } }).load(); t.after(async () => { finish?.(evidence); await e.close(); });
   for (const mode of ['unknown-ref', 'oversized', 'cancelled', 'disk-source', 'disk-destination']) {
+    const ready = new Promise(resolve => { started = resolve; });
     await startResearch(e, { revision: e.doc.revision, nodeId: node.id });
-    // Starting the owned task is scheduled after the command releases its writer lock.
-    await new Promise(resolve => setImmediate(resolve));
+    // Policy checks can still be pending after the command releases its writer lock.
+    await ready;
     const value = structuredClone(evidence);
     if (mode === 'unknown-ref') value.claims[0].evidence[0].sourceId = 'nonexistent';
     if (mode === 'oversized') value.claims[0].text = 'x'.repeat(1001);

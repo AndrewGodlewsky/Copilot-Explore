@@ -365,6 +365,75 @@ test('question drawer keeps secondary tools out of answering and preserves mount
   assert.equal($('answer'), answer); assert.equal(body.hidden, true); assert.equal($('revisit-condition').value, 'Next month');
 });
 
+test('Research workspace exposes results directly and returns to the retained answer draft', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].research = findings; await e.save(doc);
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); $('question-tools-toggle').click(); $('question-tab-research').click();
+  assert.equal($('research-summary').closest('details'), null, 'no redundant research disclosure');
+  assert.equal($('research-request').textContent, 'Research');
+  assert.equal($('research-workspace-question').textContent, f.explorer.doc.nodes[1].question);
+  assert.ok($('research-results-region').contains(f.document.querySelector('.option')));
+  assert.ok($('research-conversation-region').contains($('followup-question')));
+  const editor = $('answer'), composer = $('followup-question'), body = $('question-tools-body');
+  f.type('answer', 'My private answer 🌿'); chooseState(f, 'needs-evidence'); editor.setSelectionRange(3, 9);
+  f.type('followup-question', 'What changes for 日本語 and λ?'); composer.setSelectionRange(2, 7);
+  $('question-drawer-size').click(); assert.equal($('question-drawer').dataset.expanded, 'true');
+  body.scrollTop = 131; composer.focus(); await f.poll();
+  assert.equal($('followup-question'), composer); assert.equal(f.document.activeElement, composer); assert.equal(body.scrollTop, 131);
+  $('question-tab-details').click(); body.scrollTop = 42; $('question-tab-research').click(); assert.equal(body.scrollTop, 131);
+  $('research-answer-draft').click(); await delay(20);
+  assert.equal($('question-drawer').dataset.expanded, 'false'); assert.equal($('question-drawer').hidden, false);
+  assert.equal($('answer'), editor); assert.equal(f.document.activeElement, editor); assert.equal(editor.value, 'My private answer 🌿');
+  assert.equal(editor.selectionStart, 3); assert.equal(editor.selectionEnd, 9); assert.equal($('answer-state').value, 'needs-evidence');
+  assert.equal($('followup-question'), composer); assert.equal(composer.value, 'What changes for 日本語 and λ?');
+  assert.equal(composer.selectionStart, 2); assert.equal(composer.selectionEnd, 7); assert.equal(body.scrollTop, 131);
+  assert.equal(f.explorer.pending, null); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  $('question-tab-context').click(); assert.equal($('research-answer-draft').hidden, true);
+  $('question-tab-research').click(); assert.equal($('research-answer-draft').hidden, false);
+});
+
+test('Research workspace keeps question and operation state visible without taking focus from writing', async t => {
+  const f = await fixture(t, 280), $ = id => f.document.getElementById(id), a = f.explorer.doc.nodes[1];
+  f.open(a.id); $('question-tools-toggle').click(); $('question-tab-research').click();
+  assert.match($('research-workspace-status').textContent, /No research yet/);
+  assert.equal($('research-conversation-region').hidden, true);
+  $('research-request').click(); await startReviewedResearch(f);
+  await until(() => f.explorer.pending?.kind === 'research', 'research started');
+  const editor = $('answer'); f.type('answer', 'Still writing λ'); editor.focus(); editor.setSelectionRange(2, 5);
+  await f.poll(); assert.match($('research-workspace-status').textContent, /Research in progress/);
+  $('question-drawer-close').click(); assert.ok(f.explorer.pending); await f.poll();
+  assert.equal($('question-drawer').hidden, true, 'polling does not reopen dismissed research');
+  f.resolveResearch(findings); await until(() => f.explorer.doc.nodes[1].research && !f.explorer.pending, 'research saved and helper released'); await f.poll();
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Still writing λ'); assert.equal(editor.selectionStart, 2);
+  assert.equal(f.document.activeElement, editor); assert.equal($('question-drawer').hidden, true);
+  $('question-drawer-handle').click(); assert.match($('research-workspace-status').textContent, /Model reasoning/);
+  assert.equal($('research-conversation-region').hidden, false);
+  const stale = structuredClone(f.explorer.doc); stale.nodes[1].researchStale = true; await f.explorer.save(stale); await f.poll();
+  assert.match($('research-workspace-status').textContent, /Historical/);
+  $('research-request').click(); await startReviewedResearch(f);
+  await until(() => f.explorer.pending?.kind === 'research', 'replacement research started'); await f.poll();
+  assert.match($('research-workspace-status').textContent, /Research in progress/);
+  assert.match($('research-workspace-status').textContent, /Historical/);
+  assert.match($('research-workspace-status').textContent, /Model reasoning/);
+  $('cancel-request').click(); await until(() => !f.explorer.pending, 'replacement cancelled'); await f.poll();
+  assert.match($('research-workspace-status').textContent, /Historical/);
+  const failed = f.explorer.uiSnapshot(); failed.error = 'Research failed. Try again.'; f.window.__updates.apply(failed);
+  assert.equal($('research-request').disabled, false); assert.equal($('answer'), editor); assert.equal(editor.value, 'Still writing λ');
+});
+
+test('Research workspace restores focus after replacement removes an evidence disclosure without an ID', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].research = { ...findings, claims: [{ id: 'c1', text: 'Reasoning claim', basis: 'reasoning', evidence: [], limitations: 'No source verification' }] }; await e.save(doc);
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); $('question-tools-toggle').click(); $('question-tab-research').click();
+  const disclosure = f.document.querySelector('.research-claim summary'); assert.equal(disclosure.id, ''); disclosure.focus();
+  assert.equal(f.document.activeElement, disclosure);
+  const next = structuredClone(f.explorer.doc); next.nodes[1].research = { ...findings, summary: 'Replacement findings' }; await f.explorer.save(next); await f.poll();
+  assert.equal(disclosure.isConnected, false); assert.equal(f.document.activeElement, $('question-tab-research'));
+  assert.equal(f.explorer.pending, null);
+});
+
 test('constrained question stage reveals focused card controls without resetting user scroll on polling', async t => {
   const f = await fixture(t), $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
   const stage = $('question-stage'), save = $('save-answer');
@@ -461,7 +530,7 @@ test('Commands reveals a closed question drawer before opening a tool review', a
   const command = $('palette-commands').querySelector('[data-command="research-request"]');
   assert.equal(command.getAttribute('aria-disabled'), 'false'); command.click();
   await until(() => $('research-review-dialog').open, 'review opened');
-  assert.equal($('question-tools-body').hidden, false); assert.equal($('research-summary').parentElement.open, true);
+  assert.equal($('question-tools-body').hidden, false); assert.equal($('question-tools-research').hidden, false);
   assert.equal(f.document.querySelector('[data-tool-tab=research]').getAttribute('aria-selected'), 'true');
   assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep my private text'); assert.equal(f.explorer.pending, null);
 });
@@ -3747,7 +3816,7 @@ test('late background reads cannot undo a completed save in the UI', async t => 
 
 for (const wholeCard of [false, true]) test(`adding research scrolls only its editor at 300% zoom (${wholeCard ? 'whole card' : 'answer pane'})`, async t => {
   const f = await fixture(t), node = f.explorer.doc.nodes[1]; f.open(node.id);
-  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
+  f.document.getElementById('question-tab-research').click(); f.document.getElementById('research-request').click(); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research request'); f.resolveResearch(findings);
   await until(() => f.document.getElementById('use-recommendation'), 'research rendered');
   f.window.__updates.zoom(3);
@@ -3823,7 +3892,7 @@ test('branch controls hide only descendants, preserve active draft and reveal fr
 test('folded research completion and root folding keep saved content and full exports', async t => {
   const f = await fixture(t, 340, undefined, false, { before: e => e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, category: 'People', question: 'Invite nearby?' }) });
   const [root, a, , child] = f.explorer.doc.nodes;
-  f.open(child.id); f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
+  f.open(child.id); f.document.getElementById('question-tab-research').click(); f.document.getElementById('research-request').click(); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research started');
   f.document.querySelector(`[data-branch-id="${a.id}"]`).click();
   assert.equal(f.document.querySelector(`#nodes [data-node-id="${child.id}"]`), null);
@@ -3866,9 +3935,9 @@ test('folding the expanded node keeps its editor while outline branch focus stay
 test('research callbacks and follow-ups work inside a narrow expanded node without replacing a draft', async t => {
   const f = await fixture(t, 340), a = f.explorer.doc.nodes[1];
   f.open(a.id); f.type('answer', 'My own thought');
-  f.document.querySelector('.research-disclosure summary').click();
-  assert.ok(f.document.querySelector('.research-disclosure').open);
-  f.click('Research options'); await startReviewedResearch(f);
+  f.document.getElementById('question-tab-research').click();
+  assert.equal(f.document.getElementById('question-tools-research').hidden, false);
+  f.document.getElementById('research-request').click(); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research requested');
   f.type('answer', 'My own thought, still editing');
   f.resolveResearch(findings);
@@ -3905,7 +3974,7 @@ test('typing while saving survives the response and editing does not drag the ca
 test('recommendations and selected details append to editable drafts with safe undo', async t => {
   const f = await fixture(t, 340), a = f.explorer.doc.nodes[1]; f.open(a.id);
   f.type('answer', 'My own words');
-  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
+  f.document.getElementById('question-tab-research').click(); f.document.getElementById('research-request').click(); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research requested');
   const richer = structuredClone(findings); richer.proposedAnswer = 'I will run a pilot.';
   richer.options[0].proposedAnswer = 'I will start on my block.';
@@ -3935,7 +4004,7 @@ test('recommendations and selected details append to editable drafts with safe u
 test('pending work remains reachable from the whole map and cancellation preserves drafts', async t => {
   const f = await fixture(t), a = f.explorer.doc.nodes[1]; f.open(a.id);
   f.type('answer', 'Keep this while researching');
-  f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
+  f.document.getElementById('question-tab-research').click(); f.document.getElementById('research-request').click(); await startReviewedResearch(f);
   await until(() => !f.document.getElementById('request-status').hidden, 'request status');
   f.document.getElementById('fit').click();
   f.document.getElementById('request-status').click();
@@ -3976,13 +4045,13 @@ test('a rejected stale save keeps the answer draft available', async t => {
 
 test('keyboard focus survives research, cancellation, and background map updates', async t => {
   const f = await fixture(t), [a, b] = f.explorer.doc.nodes.slice(1); f.open(a.id);
-  f.document.querySelector('.research-disclosure summary').click();
-  const research = [...f.document.querySelectorAll('#node-workspace button, #question-drawer button')].find(e => e.textContent === 'Research options');
+  f.document.getElementById('question-tab-research').click();
+  const research = f.document.getElementById('research-request');
   research.focus(); research.click(); await startReviewedResearch(f);
   await until(() => f.document.querySelector('#question-drawer .pending'), 'pending controls');
   assert.equal(f.document.activeElement.textContent, 'Cancel request');
   f.click('Cancel request'); await until(() => !f.document.querySelector('#question-drawer .pending'), 'cancellation rendered');
-  assert.equal(f.document.activeElement.id, 'expanded-title');
+  assert.equal(f.document.activeElement.id, 'question-tab-research');
   f.document.getElementById('fit').click();
   const target = f.document.querySelector(`[data-node-id="${a.id}"]`); assert.equal(target.tagName, 'BUTTON', 'edge identity cannot shadow node controls'); target.focus();
   await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: b.id, answer: 'Repairs from a shared fund' });
@@ -4347,7 +4416,7 @@ test('dictated text and recommendation undo persist without committing an answer
   await until(() => /^Listening/.test(f.document.getElementById('voice-status').textContent), 'listening'); key(f, 'keyup');
   await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'dictation persisted');
   assert.equal((await f.explorer.readDrafts(f.explorer.doc.id)).entries[0].text, 'our neighbors');
-  f.click('Research options'); await startReviewedResearch(f); await until(() => f.explorer.pending?.kind === 'research', 'research pending');
+  f.document.getElementById('research-request').click(); await startReviewedResearch(f); await until(() => f.explorer.pending?.kind === 'research', 'research pending');
   f.resolveResearch(findings); await until(() => f.document.getElementById('use-recommendation'), 'recommendation ready');
   f.document.getElementById('use-recommendation').click();
   await until(() => f.document.getElementById('answer-status').textContent === 'Draft saved locally', 'addition persisted');
@@ -5101,7 +5170,7 @@ test('collapsing an ancestor exits focus safely and hidden research does not ret
     await e.command('add', { revision: e.doc.revision, nodeId: e.doc.nodes[2].id, category: 'Trust', question: 'Repair tools?' });
   } });
   const [root, a, b, a1, b1] = f.explorer.doc.nodes;
-  f.open(b1.id); f.document.querySelector('.research-disclosure summary').click(); f.click('Research options'); await startReviewedResearch(f);
+  f.open(b1.id); f.document.getElementById('question-tab-research').click(); f.document.getElementById('research-request').click(); await startReviewedResearch(f);
   await until(() => f.explorer.pending?.kind === 'research', 'research started');
   f.open(a1.id); f.type('answer', 'Keep this draft'); chooseState(f, 'needs-evidence');
   f.document.getElementById('focus-branch').click();

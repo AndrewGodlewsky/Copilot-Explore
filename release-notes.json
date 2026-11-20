@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.109",
+    "summary": "Open Research directly in the bottom drawer, with findings and follow-ups beside each other in wide panes and stacked in narrow panes. Return to your existing answer editor with Answer draft while retaining drafts, selection and discussion. Keep question identity and research status visible, and record the approved workspace design."
+  },
+  {
       "version":  "0.1.108",
       "summary":  "Prioritize relevant saved decisions across branches during research, including prerequisites, pinned constraints and goals. Inspect selection reasons and omitted questions. Preserve uncertainty, input limits and drafts; reject changed relevant context while allowing unrelated edits. Keep the answer editor and actions reachable by scrolling in short panes."
   },

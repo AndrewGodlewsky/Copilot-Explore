@@ -29,6 +29,10 @@ for (const node of [parent, answered]) addQuestions(doc, node.id, [
 answerNode(doc, answered.id, 'Use the community center cupboard. Keep a spare key with two nearby neighbors and review this arrangement after the first month.', 'needs-evidence');
 answered.review = true;
 answered.revisit = { date: '2020-01-01', condition: 'After the first month', acknowledgedAt: null };
+parent.research = { basis: 'reasoning', summary: 'Synthetic saved options for layout checks.', options: [
+  { title: 'A small shared cupboard', description: '日本語 🌿 A long explanation with an unbroken reference: ' + 'abcdefghλ'.repeat(32), pros: ['Simple handovers'], cons: ['Limited availability'] },
+  { title: 'Several storage locations', description: 'Compare another approach while keeping a private answer draft.', pros: ['Nearby access'], cons: ['More coordination'] },
+], recommendation: 'Consider a small pilot first.', uncertainty: 'Synthetic fixture; no external verification.', sources: [] };
 validateDocument(doc); await writeFile(file, JSON.stringify(doc));
 let requests = 0, voiceReady = false, voiceJob;
 const explorer = await new Explorer({ file, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; } }).load();
@@ -66,7 +70,7 @@ async function inspectDrawer(page, label) {
     return { drawer: rect(drawer), host: rect(drawer.parentElement), viewport: { width: innerWidth, height: innerHeight },
       insideCard: !!drawer.closest('#node-workspace'), insideWorld: !!drawer.closest('#world'),
       body: rect(body), scrollHeight: body.scrollHeight, clientHeight: body.clientHeight, overflow: getComputedStyle(body).overflowY,
-      controls: ['#question-drawer-close', '#question-drawer-size', '[data-tool-tab][aria-selected="true"]'].map(s => ({ selector: s, ...rect(document.querySelector(s)) })) };
+      controls: ['#question-drawer-close', '#question-drawer-size', '[data-tool-tab][aria-selected="true"]', ...(document.getElementById('research-answer-draft')?.hidden === false ? ['#research-answer-draft'] : [])].map(s => ({ selector: s, ...rect(document.querySelector(s)) })) };
   });
   expect(!layout.insideCard && !layout.insideWorld, `${label}: drawer is outside the card and zoomed map`, layout);
   expect(layout.drawer.left >= -1 && layout.drawer.right <= layout.viewport.width + 1 && layout.drawer.width >= layout.host.width - 2, `${label}: drawer uses the full available screen width`, layout);
@@ -194,7 +198,37 @@ try {
       await inspectDrawer(page, `${scenario.name}/drawer`);
       await inspectWorkspace(page, `${scenario.name}/drawer-card`, { scroll: true });
       await page.locator('[data-tool-tab="research"]').click();
-      if (!await page.locator('.research-disclosure').evaluate(el => el.open)) await page.locator('#research-summary').click();
+      await settle(page); await inspectDrawer(page, `${scenario.name}/research-compact`);
+      const researchGeometry = await page.evaluate(() => {
+        const rect = id => { const r = document.getElementById(id).getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; };
+        const body = document.getElementById('question-tools-body');
+        return { results: rect('research-results-region'), conversation: rect('research-conversation-region'), scrollWidth: body.scrollWidth, clientWidth: body.clientWidth, pageWidth: document.documentElement.scrollWidth, viewport: innerWidth };
+      });
+      expect(researchGeometry.scrollWidth <= researchGeometry.clientWidth + 1 && researchGeometry.pageWidth <= researchGeometry.viewport + 1, `${scenario.name}: long Unicode research stays within the drawer and page`, researchGeometry);
+      expect(scenario.width >= 760 ? researchGeometry.conversation.left >= researchGeometry.results.right && Math.abs(researchGeometry.conversation.top - researchGeometry.results.top) < 1 : researchGeometry.conversation.top >= researchGeometry.results.bottom, `${scenario.name}: conversation uses the approved responsive placement`, researchGeometry);
+      await page.locator('#question-drawer-size').click(); await settle(page); await inspectDrawer(page, `${scenario.name}/research-expanded`);
+      const composer = await page.locator('#followup-question').elementHandle();
+      await page.locator('#followup-question').fill('Keep my question 日本語 🌿');
+      await page.locator('#followup-question').press('Home'); await page.locator('#followup-question').press('Shift+ArrowRight');
+      const composerSelection = await composer.evaluate(el => [el.selectionStart, el.selectionEnd]);
+      await page.locator('[data-tool-tab="details"]').click(); await page.locator('[data-tool-tab="research"]').click();
+      expect(await composer.evaluate(el => el.isConnected && el === document.getElementById('followup-question') && el.value === 'Keep my question 日本語 🌿'), `${scenario.name}: tab changes retain the follow-up composer`, {});
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-research-workspace.png`) });
+      await page.locator('#research-answer-draft').click(); await settle(page);
+      expect(await editor.evaluate(el => el === document.activeElement && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: Answer draft focuses the original editor`, {});
+      expect(await page.locator('#question-drawer').getAttribute('data-expanded') === 'false', `${scenario.name}: Answer draft reduces the drawer`, {});
+      expect(JSON.stringify(await composer.evaluate(el => [el.selectionStart, el.selectionEnd])) === JSON.stringify(composerSelection), `${scenario.name}: Answer draft retains follow-up selection`, {});
+      const returnedEditor = await editor.evaluate(el => {
+        const answer = el.getBoundingClientRect(); let top = 0, bottom = innerHeight;
+        for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+          if (['auto', 'scroll', 'hidden', 'clip'].includes(getComputedStyle(parent).overflowY)) {
+            const rect = parent.getBoundingClientRect(); top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom);
+          }
+        }
+        return { visible: Math.min(answer.bottom, bottom) - Math.max(answer.top, top), top, bottom };
+      });
+      expect(returnedEditor.visible >= 48, `${scenario.name}: Answer draft reveals writing space before any test-assisted scrolling`, returnedEditor);
+      await inspectWorkspace(page, `${scenario.name}/research-answer-return`, { answer: true, scroll: true });
       await page.locator('#research-request').click();
       await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
       expect((await page.locator('#research-selection-policy').innerText()).includes('pinned constraints'), `${scenario.name}: research selection policy is inspectable`, {});

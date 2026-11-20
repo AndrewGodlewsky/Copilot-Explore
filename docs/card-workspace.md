@@ -1,8 +1,20 @@
-# Card workspace, v0.1.65
+# Card workspace
 
 Explorer helps people follow branching questions and record their own answers. The approved Option A design keeps the existing Segoe UI typography, blue branch connections and restrained light/dark palette. The card is a writing surface; occasional tools occupy the bottom of the Explorer viewport.
 
 ## What changed
+
+### Research drawer shell, v0.1.109
+
+The Research tab opens directly onto existing findings, with no second disclosure to open. The full question is available above the results; the header retains question identity and a research/source-state summary. Existing follow-ups sit beside findings at wide widths and below them in narrow panes. The same drawer scroll container, expansion controls and keyboard tabs remain in use.
+
+**Answer draft** reduces the drawer and reveals/focuses the existing answer editor. It preserves text, selection, answer state, the follow-up composer and per-tab scroll. Polling and result delivery do not reopen a dismissed drawer or save an answer. The entry button is labeled **Research**; exact request review still uses the existing dialog until #101.
+
+The [approved design](research-workspace-design.md) distinguishes this shell from the remaining content, conversation and request-review issues. It also records all four explicit owner decisions. This iteration does not change research tools, internet policy or model selection.
+
+The owner-authorized Brave fixture passed five viewport/theme combinations (1200×900, 460×780, 360×640, 720×480 and 280×640), with 522 card samples and zero layout failures. It checks long Unicode research, columns/stacking, compact/expanded controls, retained composer/editor state, map zoom independence and immediate Answer draft visibility before any test-assisted scrolling. Final release evidence is recorded in #91. Native Copilot rendering, physical IME and screen-reader acceptance remain separate from these synthetic checks. Results below are historical measurements for their named versions.
+
+### Original drawer foundation, v0.1.65
 
 - The card contains the question, answer, compact Record control, Save & continue and More options. Voice progress and critical answer recovery remain beside the editor. Voice preferences remain in the global Settings gear.
 - More options opens a full-width non-modal drawer outside both the card and transformed map. The drawer takes space from the working view, leaving the map usable above. Expand/reduce and close remain in its header, alongside the selected question. A slim bottom handle reopens the drawer.
@@ -16,7 +28,7 @@ The selected design and implementation decisions are recorded in [the drawer des
 
 [Revisit this answer](revisiting-answers.md) coordinates retaining affected descendants, forking a separate scenario, and restarting a branch. Its bottom-drawer chooser preserves the editor and uses each existing domain workflow; temporarily unavailable or stale choices provide a reason and a recovery action.
 
-## Current verification
+## v0.1.65 verification
 
 The final Brave run passes 550 rendered card samples with no layout failures across 1200x900, 460x780, 360x640, 720x480 and 280x640 in light/dark scenarios. It checks full-width drawer placement, expanded/reduced sizing, tabs, editor/reminder retention, voice states, Map/Outline, zoom independence, multiline notices and card actions within all clipping ancestors. Save & continue makes no model request; explicit Explore deeper uses one local fixture request. Independent code review and the scoped short-height correction review have no remaining findings.
 

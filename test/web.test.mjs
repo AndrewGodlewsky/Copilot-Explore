@@ -101,6 +101,18 @@ test('project question fallback explains the existing saved-answer prerequisite 
   assert.equal($('answer').value, 'Unsent draft'); assert.equal(f.explorer.pending, null);
 });
 
+test('project question file selection opens for the selected branch and returns without replacing the answer draft', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id); f.type('answer', 'Keep this unsent branch draft 🌿');
+  const editor = $('answer'); editor.focus(); editor.setSelectionRange(3, 7);
+  $('project-questions').click(); await until(() => $('project-questions-files'), 'branch file entry');
+  $('project-questions-files').click(); await until(() => $('project-mode-dialog').open, 'branch scope dialog');
+  assert.equal($('project-mode-target').hidden, false); assert.equal($('project-mode-target-question').textContent, node.question);
+  assert.equal($('project-mode-target-find').disabled, true, 'an approved brief is required');
+  $('project-mode-return').click(); await until(() => $('research-review-dialog').open && $('project-questions-fallback'), 'return to question review');
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep this unsent branch draft 🌿'); assert.equal(editor.selectionStart, 3);
+  assert.equal(f.explorer.pending, null); assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
+
 test('research attempt partials stay separate and deeper review preserves drafts, disclosures and focus', async t => {
   let run; let sends = 0;
   const f = await fixture(t, 340, undefined, false, { runResearch: (_, options) => { sends++; return new Promise((resolve, reject) => { run = { ...options, resolve, reject }; }); } });
@@ -2823,6 +2835,9 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const server = await startServer(explorer, voice);
   const dom = new JSDOM(await (await fetch(server.url)).text(), { url: server.url, runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom, document = window.document;
+  const projectModeDialog = document.getElementById('project-mode-dialog');
+  projectModeDialog.showModal = () => { projectModeDialog.open = true; };
+  projectModeDialog.close = () => { projectModeDialog.open = false; };
   const exportDialog = document.getElementById('export-dialog');
   exportDialog.showModal = () => { exportDialog.open = true; };
   exportDialog.close = () => { exportDialog.open = false; };
@@ -6307,9 +6322,14 @@ test('another canvas replacing historical accepted brief preserves fresh proposa
  const post = body => fetch(server.url + 'api/brief', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(server.url).origin }, body: JSON.stringify(body) });
  assert.equal((await post({ ...request, action: 'start' })).status, 200); await other.toolFreeTask;
  assert.equal((await post({ ...request, action: 'accept', revision: other.doc.revision, edits: [] })).status, 200);
- let observed = false; const originalFetch = f.window.fetch;
+ let observed = false, refreshDelivered = false, releaseRefresh, releasePoll; const originalFetch = f.window.fetch;
+ t.after(() => { releaseRefresh?.(); releasePoll?.(); });
  f.window.fetch = async (...args) => {
+  const action = args[1]?.body && JSON.parse(args[1].body).action;
+  const followup = args[0] === 'api/brief' && action === 'poll' && refreshDelivered;
   const response = await originalFetch(...args);
+  if (args[0] === 'api/action' && action === 'refresh-answer') { await new Promise(resolve => { releaseRefresh = resolve; }); refreshDelivered = true; }
+  if (followup) { await new Promise(resolve => { releasePoll = resolve; }); refreshDelivered = false; }
   if (args[0] === 'api/brief') {
    const value = await response.clone().json();
    if (value.status === 'proposal' && value.unavailableSources?.length === 0) observed = true;
@@ -6319,7 +6339,12 @@ test('another canvas replacing historical accepted brief preserves fresh proposa
  await until(() => observed && !$('accept-brief').disabled, 'fresh proposal polled after external acceptance');
  assert.equal($('brief-content').querySelector('[data-brief-statement="goal"]'), editor);
  assert.equal(editor.value, 'Unsaved reviewed wording \u03bb'); assert.equal(editor.selectionStart, 4); assert.equal(editor.selectionEnd, 11); assert.equal(f.document.activeElement, editor);
- $('refresh-brief').click(); await until(() => f.explorer.doc.revision === other.doc.revision && !$('accept-brief').disabled, 'current revision refreshed');
+ $('refresh-brief').click(); await until(() => releaseRefresh, 'refresh response held after server update');
+ assert.equal(f.explorer.doc.revision, other.doc.revision);
+ assert.equal($('accept-brief').disabled, true, 'Accept stays disabled before the browser consumes Refresh');
+ releaseRefresh(); await until(() => releasePoll, 'post-refresh brief poll held');
+ assert.equal($('accept-brief').disabled, true, 'Accept stays disabled until the refreshed proposal is displayed');
+ releasePoll(); await until(() => f.window.__updates.document().revision === other.doc.revision && !$('accept-brief').disabled, 'current revision rendered and brief ready');
  assert.equal($('brief-content').querySelector('[data-brief-statement="goal"]'), editor);
  $('accept-brief').click(); await until(() => f.explorer.doc.brief.sections.goal[0].text === 'Unsaved reviewed wording \u03bb', 'retained text accepted');
  assert.equal(f.explorer.doc.brief.sections.goal[0].edited, true);

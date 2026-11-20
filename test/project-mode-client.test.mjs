@@ -20,6 +20,56 @@ async function fixture(t) {
   return { $, window, client, requests, reply, tick: (milliseconds = 10000) => { now += milliseconds; return client.checkStatus(); }, setJourney: value => { journey = value; }, setActive: value => { active = value; }, intercept: value => { intercept = value; } };
 }
 
+test('branch suggestions require explicit selection and show omissions without reading or changing the answer', async t => {
+  const f = await fixture(t); f.client.briefState = () => ({ approved: true }); let returned;
+  f.client.onReturn = nodeId => { returned = nodeId; };
+  f.intercept(input => ({ ...f.reply(input), state: input.action === 'disable' ? 'off' : 'active', ...(input.action === 'target' ? { inventory: {
+    candidates: [{ name: 'src/billing.ts', bytes: 20, reason: 'Saved question filename matches: billing' }], skipped: [], examined: 5, directories: 2, truncated: false,
+    target: { nodeId: 'question-a', question: 'Billing <script>literal</script>', direction: input.direction, briefRevision: 4, suggested: ['src/billing.ts'], omitted: 1, omittedShared: ['docs/constraints.md'] },
+  } } : {}) }));
+  f.client.open({ nodeId: 'question-a', question: 'Billing <script>literal</script>' }); await waitFor(() => !f.client.loading);
+  f.$('project-mode-direction').value = 'Invoice export'; f.$('project-mode-target-find').click(); await waitFor(() => !f.client.loading);
+  assert.equal(f.requests.at(-1).action, 'target'); assert.equal(f.requests.at(-1).direction, 'Invoice export');
+  assert.equal(f.requests.some(request => request.action === 'read'), false); assert.equal(f.$('project-mode-paths').value, 'notes.md');
+  assert.match(f.$('project-mode-target-summary').textContent, /brief revision 4/); assert.match(f.$('project-mode-target-summary').textContent, /docs\/constraints.md/);
+  assert.equal(f.$('project-mode-target').querySelector('script'), null);
+  f.$('project-mode-use-suggestions').click(); await waitFor(() => f.requests.at(-1).action === 'disable');
+  assert.equal(f.$('project-mode-paths').value, 'src/billing.ts'); assert.equal(f.$('project-mode-read').disabled, true);
+  f.$('project-mode-return').click(); assert.equal(returned, 'question-a'); assert.equal(f.$('project-mode-dialog').open, false);
+});
+
+test('editing branch direction or leaving during discovery discards late suggestions without disabling approved scope', async t => {
+  for (const action of ['edit', 'close']) {
+    const f = await fixture(t); f.client.briefState = () => ({ approved: true }); f.client.open({ nodeId: 'a', question: 'Billing' }); await waitFor(() => !f.client.loading);
+    let release; f.intercept(input => input.action === 'target' ? new Promise(resolve => { release = () => resolve({ ...f.reply(input), inventory: { candidates: [], target: { suggested: ['old.ts'] } } }); }) : f.reply(input));
+    f.$('project-mode-target-find').click(); await waitFor(() => release);
+    if (action === 'edit') { f.$('project-mode-direction').value = 'Changed'; f.$('project-mode-direction').dispatchEvent(new f.window.Event('input')); }
+    else f.$('project-mode-close').click();
+    release(); await new Promise(setImmediate);
+    assert.equal(f.$('project-mode-use-suggestions').disabled, true); assert.equal(f.requests.at(-1).action, 'cancel');
+    assert.equal(f.$('project-mode-direction').value, action === 'edit' ? 'Changed' : '');
+  }
+});
+
+test('opening a different branch does not adopt a previous branch inventory from delayed cancellation', async t => {
+  const f = await fixture(t);
+  f.intercept(input => ({ ...f.reply(input), inventory: { candidates: [{ name: 'old.ts', bytes: 1, reason: 'Old branch' }], target: { nodeId: 'old', direction: '', suggested: ['old.ts'] } } }));
+  f.client.open({ nodeId: 'new', question: 'New branch' }); await waitFor(() => !f.client.loading);
+  assert.equal(f.client.inventory, null); assert.equal(f.$('project-mode-candidates').children.length, 0); assert.equal(f.$('project-mode-use-suggestions').disabled, true);
+});
+
+test('editing only the search direction does not cancel an explicitly approved file read', async t => {
+  const f = await fixture(t); f.client.open({ nodeId: 'a', question: 'Billing' }); await waitFor(() => !f.client.loading);
+  f.$('project-mode-paths').value = 'notes.md'; f.$('project-mode-prepare').click(); await waitFor(() => !!f.client.value?.token);
+  f.$('project-mode-approve').click(); await waitFor(() => !!f.client.value?.readToken);
+  let release; const receipt = { id: randomUUID(), sources: [] };
+  f.intercept(input => input.action === 'read' ? new Promise(resolve => { release = () => resolve({ ...f.reply(input), state: 'active', receipt }); }) : f.reply(input));
+  f.$('project-mode-read').click(); await waitFor(() => release);
+  f.$('project-mode-direction').value = 'Other files'; f.$('project-mode-direction').dispatchEvent(new f.window.Event('input'));
+  release(); await new Promise(setImmediate);
+  assert.equal(f.requests.at(-1).action, 'read'); assert.equal(f.client.value.receipt.id, receipt.id);
+});
+
 test('project scope dialog reviews exact paths/purpose, enables only after review and renders project names literally', async t => {
   const f = await fixture(t); f.$('project-mode-open').click(); await waitFor(() => f.requests.length && !f.client.loading);
   assert.equal(f.$('project-mode-dialog').open, true); assert.equal(f.$('project-mode-approve').disabled, true);

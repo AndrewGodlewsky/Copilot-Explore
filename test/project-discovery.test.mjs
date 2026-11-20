@@ -7,8 +7,23 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ProjectContext } from '../com.github.copilot/extensions/explorer/project-context.mjs';
 import { ProjectDiscovery, DISCOVERY_LIMITS, validateProjectExclusions } from '../com.github.copilot/extensions/explorer/project-discovery.mjs';
+import { branchFileContext } from '../com.github.copilot/extensions/explorer/project-branch-files.mjs';
+import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
 
 const exec = promisify(execFile);
+
+test('targeted discovery finds distinct source files with no content reads and retains the existing exclusion policy', async t => {
+  const f = await fixture(t, { 'docs/constraints.md': 'shared', 'src/billing.ts': 'billing', 'src/reminders.ts': 'reminders', 'src/billing-secret.ts': 'secret', 'src/billing-large.ts': 'x'.repeat(65537), 'src/billing-ignored.ts': 'ignored', '.gitignore': 'src/billing-ignored.ts\n', 'dist/billing.ts': 'generated' });
+  const doc = createDocument('Plan product'); addQuestions(doc, doc.rootId, [{ question: 'Plan billing', category: 'Billing' }, { question: 'Plan reminders', category: 'Reminders' }]);
+  const brief = { sections: { purpose: [], architecture: [], stack: [], conventions: [], constraints: [{ text: 'Keep data local', kind: 'file-backed', sources: [{ id: 'shared' }] }] }, sources: [{ id: 'shared', name: 'docs/constraints.md' }] };
+  const billing = await f.discovery.discover([], { target: branchFileContext(doc, doc.nodes[1].id, '', brief, 2) });
+  const reminders = await f.discovery.discover([], { target: branchFileContext(doc, doc.nodes[2].id, '', brief, 2) });
+  assert.deepEqual(billing.candidates.map(file => file.name), ['src/billing.ts', 'docs/constraints.md']);
+  assert.deepEqual(reminders.candidates.map(file => file.name), ['src/reminders.ts', 'docs/constraints.md']);
+  assert.deepEqual(billing.target.suggested, ['src/billing.ts', 'docs/constraints.md']);
+  assert.ok(billing.skipped.some(file => /billing-secret/.test(file.name))); assert.ok(billing.skipped.some(file => /billing-ignored/.test(file.name))); assert.ok(billing.skipped.some(file => /billing-large/.test(file.name)));
+  assert.deepEqual((await f.discovery.discover(['src/'], { target: branchFileContext(doc, doc.nodes[1].id, '', brief, 2) })).candidates.map(file => file.name), ['docs/constraints.md']);
+});
 async function fixture(t, files = {}, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'explorer-discovery-')), root = join(directory, 'project');
   await mkdir(root); const globalConfig = join(directory, 'empty-git-config'); await writeFile(globalConfig, '');

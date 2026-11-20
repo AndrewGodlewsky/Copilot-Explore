@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.128",
+    "summary": "Find files relevant to a saved question using your approved brief and optional direction. Review filename-match reasons, shared constraints and omissions before choosing files. Added scope requires an explicit read and new brief approval; stale suggestions reject and your answer draft stays intact. Brief acceptance now stays disabled until refresh completes."
+  },
+  {
     "version": "0.1.127",
     "summary": "Review your approved project brief and saved map context to generate project-aware questions with a separate tool-free helper. Inspect and accept suggestions without changing your answers. Changed context blocks stale results; ordinary generation remains available and unsaved drafts stay private."
   },

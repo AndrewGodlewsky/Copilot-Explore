@@ -1,0 +1,12 @@
+# Branch-specific file suggestions — issue 115
+
+Extend the approved project-question workflow on v0.1.127. Reuse the current scope dialog and exact approval/read/brief controls; no new workspace layout or broader repository reader is required.
+
+1. Add an explicit Find branch files path from Project questions. Show the saved target and optional short direction in the scope dialog. Explain that matching is local filename/brief context matching, not semantic verification. Ordinary questions remain available.
+2. Derive matching inputs server-side from the current approved brief and saved target/ancestor questions, answer states and shared map guidance. Bind asynchronous discovery to these inputs and the brief approval; reject stale results. Do not use private editor drafts or client-provided claims.
+3. Reuse ProjectDiscovery traversal, Git ignore/default exclusions, canonical identities and budgets. Targeted discovery includes matching source files beyond generic entry points. Rank a bounded list with explicit reasons, shared-constraint sources and a small suggested selection. Show omissions and allow removal/manual validated paths. Never read new file contents while discovering.
+4. Viewing suggestions preserves current approval. Applying selections revokes the old scope through existing controls. Require exact scope approval, explicit local read, exact brief-input review, brief generation and approval before new files can affect Project questions. Reuse #114 freshness and preview acceptance; raw excerpts never go directly into question requests.
+5. Add behavioral tests for distinct branch matches, shared constraints, unknown/no-match fallback, exclusions/limits, stale asynchronous inputs, exact approval/read transitions, unrelated file tolerance and draft preservation. Check keyboard/narrow/short layouts in authorized Brave and the installed disposable runtime fixture.
+6. Publish v0.1.128 after independent review, full frozen gates and complete package validation. Integrate/push main without force, verify remote SHA and update the issue. Preserve native/live-model limitations and unavailable usage counters.
+
+The full suite exposed an existing decision-brief Refresh race: acceptance stayed enabled before the browser received the new map revision. Refresh now shares the brief request lock through its following poll. A deliberately delayed map response and proposal response verify disabled acceptance, retained editor/caret and eventual acceptance of the edited wording.

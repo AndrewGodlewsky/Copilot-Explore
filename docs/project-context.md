@@ -20,6 +20,8 @@ Discovery and project-question reads require Git and a local repository. Bounded
 
 ## Reviewed project brief
 
+For deeper exploration, **Find branch files** in the Project questions review can suggest matching source paths and reviewed shared-constraint sources. It uses the same bounded discovery, exclusions and explicit scope/read controls. Changing scope requires a replacement brief review and approval. See [branch file selection](project-questions.md#find-files-for-a-branch) for matching limits and omissions.
+
 After reading the reviewed files, choose **Review brief request**. Expand **Exact request inputs** to inspect the literal instructions, captured excerpts, saved user corrections and byte count. Only **Generate brief** consumes this one-use ten-minute review token and starts the owned isolated helper. It uses the selected eligible Copilot chat model with matching account checks, no tools, no ambient instructions/skills, cancellation and content-free retained usage receipts. It does not use the dedicated Research model preference. Model work can incur normal usage and is not offline.
 
 The result covers purpose, architecture, stack, conventions and constraints. Each section has up to five generated claims, with explicit unknowns where evidence is missing. Labels distinguish **File-backed claim**, **Inference**, **Unknown** and **User assertion**. File-backed claims require a captured source ID and a literal quote within that excerpt. Expand evidence to inspect the relative file name, full-file/excerpt hashes and supporting quote. Validation checks provenance and literal presence, not the truth of the model's interpretation. All content renders as text.

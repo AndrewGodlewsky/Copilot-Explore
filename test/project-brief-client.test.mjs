@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { JSDOM } from 'jsdom';
 import { ProjectBriefClient } from '../com.github.copilot/extensions/explorer/web/project-brief-client.mjs';
+import { ProjectModeClient } from '../com.github.copilot/extensions/explorer/web/project-mode-client.mjs';
 import { ProjectBriefWorkspace } from '../com.github.copilot/extensions/explorer/project-brief-workspace.mjs';
 import { parseProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
@@ -77,6 +78,35 @@ test('close cancels owned generation, ignores a late reply and journey changes c
   f.$('project-mode-close').click(); await waitFor(() => f.signal().aborted); f.release(); await new Promise(setImmediate);
   assert.equal(f.client.value?.draft, undefined); assert.equal(f.workspace.draft, null);
   f.journey('journey-b'); assert.equal(f.$('project-brief-input').textContent, ''); assert.equal(f.$('project-brief-claims').textContent, '');
+});
+
+test('return to project questions cancels brief review and generation but preserves an approved brief and answer draft', async t => {
+  for (const stage of ['prepare', 'review', 'start', 'helper', 'approved']) await t.test(stage, async t => {
+    const f = await fixture(t); let returned, releaseRequest;
+    f.$('project-mode-dialog').close = function () { this.open = false; };
+    const mode = new ProjectModeClient({ $: f.$, fetch: async () => ({ ok: true, json: async () => ({}) }), journey: () => 'journey-a', active: () => true,
+      briefState: () => f.client.value, onReturn: nodeId => { returned = nodeId; } });
+    mode.target = { nodeId: 'target', question: 'Billing' }; mode.render();
+    const answer = f.window.document.createElement('textarea'); answer.value = 'Keep my answer draft'; f.window.document.body.append(answer);
+    let pending, approved;
+    if (stage === 'approved') { await f.generate(); await f.click('approve'); approved = f.workspace.draft; }
+    else {
+      if (stage !== 'prepare') await f.click('prepare');
+      if (['prepare', 'start'].includes(stage)) {
+        f.intercept(input => { if (input.action === stage) return new Promise(resolve => { releaseRequest = resolve; }); });
+        pending = f.client.act(stage); await waitFor(() => releaseRequest);
+      } else if (stage === 'helper') { f.hold(); await f.click('start'); await waitFor(() => f.ready()); }
+    }
+    const cancels = f.requests.filter(input => input.action === 'cancel').length;
+    f.$('project-mode-return').click(); await new Promise(setImmediate);
+    assert.equal(f.$('project-mode-dialog').open, false); assert.equal(returned, 'target'); assert.equal(answer.value, 'Keep my answer draft');
+    assert.equal(f.requests.filter(input => input.action === 'cancel').length, cancels + (stage === 'approved' ? 0 : 1));
+    if (stage === 'helper') { assert.equal(f.signal().aborted, true); f.release(); await new Promise(setImmediate); }
+    releaseRequest?.(); await pending;
+    assert.equal(f.workspace.preview, null); assert.equal(f.client.value?.token, undefined);
+    if (stage === 'approved') { assert.equal(f.workspace.draft, approved); assert.equal(f.client.value.approved, true); }
+    else { assert.equal(f.workspace.draft, null); assert.equal(f.client.value?.draft, undefined); assert.equal(f.sends(), stage === 'helper' ? 1 : 0); }
+  });
 });
 
 test('lost cancellation stays pending while hidden and cannot expose a late result for approval', async t => {

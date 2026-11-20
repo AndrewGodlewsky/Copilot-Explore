@@ -10,7 +10,7 @@ const changed = () => Error('Project scope changed or expired. Review the curren
 
 /** Scope consent and explicit local reads never authorize a helper request. */
 export class ProjectMode {
-  constructor(reader, currentJourney, now = Date.now, discovery = new ProjectDiscovery(reader)) { Object.assign(this, { reader, currentJourney, now, discovery }); this.epoch = 0; this.clear(); }
+  constructor(reader, currentJourney, now = Date.now, discovery = new ProjectDiscovery(reader), targetContext = null) { Object.assign(this, { reader, currentJourney, now, discovery, targetContext }); this.epoch = 0; this.clear(); }
   clearScope() { this.preview = this.approved = this.readConsent = this.readCapture = this.receipt = null; this.approvedPolicy = false; }
   clear() { this.epoch++; this.pending?.abort(); this.pending = null; this.clearScope(); this.inventory = null; this.observedRoot = null; this.clientId = this.journey = null; this.sequence = 0; }
   projectIdentity() { return this.journey === this.currentJourney() ? structuredClone(this.observedRoot) : null; }
@@ -50,10 +50,11 @@ export class ProjectMode {
   async request(input) {
     const action = input?.action, keys = input && typeof input === 'object' && !Array.isArray(input) ? Object.keys(input).sort().join(',') : '';
     const policyReview = Object.hasOwn(input ?? {}, 'exclusions');
-    const expected = action === 'discover' ? 'action,clientId,exclusions,journey,purpose,sequence' : action === 'prepare' ? `action,clientId,${policyReview ? 'exclusions,' : ''}journey,paths,purpose,sequence` : ['approve', 'read'].includes(action) ? 'action,clientId,journey,purpose,sequence,token' : 'action,clientId,journey,purpose,sequence';
-    if (!['status', 'discover', 'prepare', 'approve', 'read', 'cancel', 'disable'].includes(action) || keys !== expected || input.purpose !== purpose ||
+    const expected = action === 'target' ? 'action,clientId,direction,exclusions,journey,nodeId,purpose,sequence' : action === 'discover' ? 'action,clientId,exclusions,journey,purpose,sequence' : action === 'prepare' ? `action,clientId,${policyReview ? 'exclusions,' : ''}journey,paths,purpose,sequence` : ['approve', 'read'].includes(action) ? 'action,clientId,journey,purpose,sequence,token' : 'action,clientId,journey,purpose,sequence';
+    if (!['status', 'target', 'discover', 'prepare', 'approve', 'read', 'cancel', 'disable'].includes(action) || keys !== expected || input.purpose !== purpose ||
       typeof input.journey !== 'string' || !input.journey || input.journey.length > 100 || typeof input.clientId !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.clientId) ||
-      !Number.isSafeInteger(input.sequence) || input.sequence < 1 || ['approve', 'read'].includes(action) && (typeof input.token !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.token))) throw Error('Invalid project scope request.');
+      !Number.isSafeInteger(input.sequence) || input.sequence < 1 || ['approve', 'read'].includes(action) && (typeof input.token !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.token)) ||
+      action === 'target' && (typeof input.nodeId !== 'string' || !input.nodeId || input.nodeId.length > 100 || typeof input.direction !== 'string' || input.direction.length > 500)) throw Error('Invalid project scope request.');
     if (!this.currentJourney()) throw Error('This canvas is closed or has no active journey.');
     if (input.journey !== this.currentJourney()) throw changed();
     if (this.journey !== input.journey) { this.clear(); this.journey = input.journey; }
@@ -69,7 +70,7 @@ export class ProjectMode {
       ...(this.inventory ? { inventory: Object.fromEntries(Object.entries(this.inventory).filter(([key]) => key !== 'root')) } : {}),
       ...(state === 'active' && this.readConsent ? { readToken: this.readConsent.token } : {}), ...(state === 'active' && this.receipt ? { receipt: this.receipt } : {}), message });
     if (action === 'disable') { this.clearScope(); this.inventory = null; return view('off', null); }
-    if (action === 'cancel') this.preview = null;
+    if (action === 'cancel') { this.preview = null; if (this.inventory?.target) this.inventory = null; }
     if (action === 'prepare' || action === 'discover') this.clearScope();
     if (this.preview && this.now() > this.preview.expires) this.preview = null;
     if (this.readConsent && this.now() > this.readConsent.expires) this.readConsent = null;
@@ -81,6 +82,18 @@ export class ProjectMode {
       return view('unavailable', null, null, 'A current local project is unavailable. Ordinary exploration still works.');
     }
     if (this.inventory && !same(this.inventory.root, root)) this.inventory = null;
+    if (action === 'target') {
+      this.inventory = null;
+      if (!this.targetContext) throw Error('Branch file suggestions are unavailable. Use ordinary questions or select files manually.');
+      const exclusions = validateProjectExclusions(input.exclusions);
+      const inventory = await this.work(async signal => {
+        const target = await this.targetContext(input, signal); current(); signal.throwIfAborted();
+        const inventory = await this.discovery.discover(exclusions, { signal, target }); current(); signal.throwIfAborted();
+        await target.check(); current(); signal.throwIfAborted(); return inventory;
+      }); current();
+      if (!same(inventory.root, root)) throw changed(); this.inventory = inventory;
+      return view('active', this.approved, null, 'Branch suggestions use local filename matches and reviewed shared sources. No new source contents were read. Changing scope requires a new read and brief approval.');
+    }
     if (action === 'discover') {
       const exclusions = validateProjectExclusions(input.exclusions);
       const inventory = await this.work(signal => this.discovery.discover(exclusions, { signal })); current();

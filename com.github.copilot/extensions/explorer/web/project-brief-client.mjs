@@ -13,7 +13,7 @@ export class ProjectBriefClient {
     }
     this.control('discard-changes').addEventListener('click', () => { this.dirty = false; this.formKey = undefined; this.render(); });
     for (const id of ['add-text', 'add-section']) this.control(id).addEventListener('input', () => { this.dirty = true; this.render(); });
-    $('project-mode-close').addEventListener('click', () => this.close());
+    for (const id of ['project-mode-close', 'project-mode-return']) $(id).addEventListener('click', () => this.close());
     $('project-mode-dialog').addEventListener('cancel', () => this.close());
     this.render();
   }

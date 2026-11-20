@@ -97,3 +97,42 @@ test('project approval revoked during the last asynchronous map read cannot pass
   f.explorer.readCurrent = async () => { const current = await read(); if (verified) f.explorer.projectBrief.approval = null; return current; };
   await assert.rejects(f.explorer.checkQuestionSource(f.doc.rootId), /changed/); assert.equal(f.explorer.preview.stale, true);
 });
+
+test('branch discovery preserves approval and cannot read added files before exact scope/read consent', async t => {
+  const f = await fixture(t); await mkdir(join(f.root, 'src')); await writeFile(join(f.root, 'src/billing.ts'), 'NEW BILLING CONTENT');
+  const original = f.explorer.projectContext.read.bind(f.explorer.projectContext), reads = [];
+  f.explorer.projectContext.read = async (...args) => { reads.push(args[1]); return original(...args); };
+  const approval = f.explorer.projectBrief.approval, before = await readFile(f.file, 'utf8');
+  const found = await f.scope('target', { nodeId: f.doc.rootId, direction: 'billing', exclusions: [] });
+  assert.deepEqual(found.inventory.target.suggested, ['src/billing.ts']); assert.equal(f.explorer.projectBrief.approval, approval);
+  assert.equal(found.state, 'active'); assert.ok(!reads.includes('src/billing.ts')); assert.equal(f.calls.length, 0);
+  await assert.rejects(f.scope('target', { nodeId: f.doc.rootId, direction: '', exclusions: [], claims: [] }), /invalid/i);
+  const preview = await f.scope('prepare', { paths: ['README.md', 'src/billing.ts'], exclusions: [] });
+  assert.equal(f.explorer.projectBrief.approval, null); await assert.rejects(f.review(), /brief/i); assert.ok(!reads.includes('src/billing.ts'));
+  const enabled = await f.scope('approve', { token: preview.token }); assert.ok(!reads.includes('src/billing.ts'));
+  const captured = await f.scope('read', { token: enabled.readToken }); assert.equal(captured.receipt.sources[1].excerpt, 'NEW BILLING CONTENT');
+  await assert.rejects(f.review(), /brief/i); assert.equal(await readFile(f.file, 'utf8'), before); assert.equal(f.calls.length, 0);
+});
+
+test('branch discovery rejects changed approval, root, target context or cancelled operation before returning suggestions', async t => {
+  for (const change of ['brief', 'root', 'map', 'cancel']) {
+    const f = await fixture(t); let release, entered;
+    const waiting = new Promise(resolve => { entered = resolve; }), discover = f.explorer.projectMode.discovery.discover.bind(f.explorer.projectMode.discovery);
+    f.explorer.projectMode.discovery.discover = async (...args) => { const value = await discover(...args); entered(); await new Promise(resolve => { release = resolve; }); return value; };
+    const pending = f.scope('target', { nodeId: f.doc.rootId, direction: '', exclusions: [] }); const rejected = assert.rejects(pending, /changed|obsolete|abort/i);
+    try {
+      await waiting;
+      if (change === 'brief') await f.brief('revoke', { revision: f.explorer.projectBrief.revision });
+      if (change === 'root') f.setRoot(join(dirname(f.root), 'missing'));
+      if (change === 'map') { const doc = JSON.parse(await readFile(f.file, 'utf8')); doc.objective = 'Changed saved branch objective'; doc.revision++; await writeFile(f.file, JSON.stringify(doc)); }
+      if (change === 'cancel') await f.scope('cancel');
+    } finally { release?.(); }
+    await rejected; assert.ok(!f.explorer.projectMode.inventory?.target); assert.equal(f.calls.length, 0);
+  }
+});
+
+test('unrelated unselected file edits do not discard a valid pending project question result', async t => {
+  const f = await fixture(t, { hold: true }); await f.start(await f.review()); await waitFor(() => f.ready());
+  await writeFile(join(f.root, 'unrelated.md'), 'Unselected file changed'); f.release(); await waitFor(() => !!f.explorer.preview);
+  await f.accept(); assert.equal(f.explorer.doc.nodes.length, 2); assert.equal(f.explorer.doc.nodes[1].answer, '');
+});

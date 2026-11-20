@@ -23,6 +23,7 @@ await mkdir(output, { recursive: true });
 const directory = await mkdtemp(join(tmpdir(), 'explorer-ui-layout-')), file = join(directory, 'layout.explore.json');
 await promisify(execFile)('git', ['init', '--quiet', directory], { windowsHide: true });
 await writeFile(join(directory, 'README.md'), 'Synthetic project excerpt <script>literal</script> 🌿. No model request.');
+await writeFile(join(directory, 'billing.ts'), 'Synthetic billing branch <script>literal</script> 🌿. No executable code.');
 const doc = createDocument('I want to build a neighborhood tool-sharing library');
 const [parent, answered, leaf] = addQuestions(doc, doc.rootId, [
   { category: 'Long category for neighborhood logistics', question: 'Where will the tools be physically kept between loans, and who will open the storage room?', importance: 'high', importanceReason: 'Storage controls access.' },
@@ -514,6 +515,33 @@ try {
       await page.waitForFunction(() => document.getElementById('preview-title')?.textContent === 'Review project questions');
       expect(projectQuestionRuns === beforeProjectQuestions + 1 && explorer.doc.nodes.length === beforeProjectNodes && await editor.inputValue() === projectQuestionDraft, `${scenario.name}: project suggestions require acceptance and preserve the editor`, {});
       await page.locator('#dismiss-questions').click(); await page.waitForFunction(() => !document.getElementById('question-preview'));
+      await page.locator('#project-questions').click(); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      await page.locator('#project-questions-files').focus(); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => !document.getElementById('project-mode-target-find').disabled);
+      const approvalBeforeFiles = explorer.projectBrief.approval, briefBeforeFiles = briefRuns;
+      await page.locator('#project-mode-direction').fill('billing');
+      await page.locator('#project-mode-target-find').focus(); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => !document.getElementById('project-mode-use-suggestions').disabled);
+      expect(explorer.projectBrief.approval === approvalBeforeFiles && briefRuns === briefBeforeFiles && projectQuestionRuns === beforeProjectQuestions + 1, `${scenario.name}: branch discovery preserves approval and starts no model`, {});
+      expect((await page.locator('#project-mode-candidates').textContent()).includes('Direction filename matches: billing'), `${scenario.name}: branch file relevance is explained`, {});
+      for (const id of ['project-mode-direction', 'project-mode-target-find', 'project-mode-target-summary', 'project-mode-use-suggestions', 'project-mode-return']) {
+        const control = page.locator('#' + id); await control.scrollIntoViewIfNeeded();
+        const bounds = await control.evaluate(el => { const r = el.getBoundingClientRect(), d = el.closest('dialog'); return { left: r.left, right: r.right, width: innerWidth, scroll: d.scrollWidth, client: d.clientWidth }; });
+        expect(bounds.left >= 0 && bounds.right <= bounds.width + 1 && bounds.scroll <= bounds.client + 1, `${scenario.name}: branch file controls fit the pane`, bounds);
+      }
+      await page.locator('#project-mode-use-suggestions').focus(); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.getElementById('project-mode-indicator').hidden);
+      expect(await page.locator('#project-mode-paths').inputValue() === 'billing.ts' && !explorer.projectBrief.approval && await editor.inputValue() === projectQuestionDraft, `${scenario.name}: changing scope revokes approval and preserves the draft`, {});
+      await page.locator('#project-mode-prepare').click(); await page.waitForFunction(() => !document.getElementById('project-mode-approve').disabled);
+      await page.locator('#project-mode-approve').click(); await page.waitForFunction(() => !document.getElementById('project-mode-read').disabled);
+      await page.locator('#project-mode-read').click(); await page.waitForFunction(() => !document.getElementById('project-brief-prepare').disabled);
+      await page.locator('#project-brief-prepare').click(); await page.waitForFunction(() => !document.getElementById('project-brief-start').disabled);
+      expect((await page.locator('#project-brief-input').textContent()).includes('Synthetic billing branch'), `${scenario.name}: new file appears only in the new reviewed brief request`, {});
+      await page.locator('#project-brief-start').click(); await page.waitForFunction(() => !document.getElementById('project-brief-approve').disabled);
+      await page.locator('#project-brief-approve').click(); await page.waitForFunction(() => document.getElementById('project-mode-indicator-text').textContent.includes('brief approved'));
+      await page.locator('#project-mode-return').focus(); await page.keyboard.press('Enter'); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      expect(await editor.inputValue() === projectQuestionDraft && (await page.locator('#research-review-content').textContent()).includes('Reviewed user correction 🌿'), `${scenario.name}: refreshed branch brief retains corrections and the answer draft`, {});
+      await page.locator('#research-review-close').click();
       await editor.fill('Keep this private draft');
       if (priorToolTab) await page.locator(`[data-tool-tab="${priorToolTab}"]`).click();
       if (!toolsWereOpen) await page.locator('#question-tools-toggle').click();

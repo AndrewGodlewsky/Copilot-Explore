@@ -3,6 +3,7 @@ import { join, basename, extname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { validateProjectPaths } from './project-context.mjs';
+import { suggestBranchFiles } from './project-branch-files.mjs';
 
 const exec = promisify(execFile), same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export const DISCOVERY_LIMITS = Object.freeze({ depth: 3, directories: 40, entries: 300, candidates: 40, milliseconds: 5000, exclusions: 10 });
@@ -67,7 +68,7 @@ export class ProjectDiscovery {
     if ((await this.ignored(root, names.length ? names : ['explorer-policy-probe.md'], budget)).size && names.length) throw Error('Selected project files include a Git-ignored path.');
     if (!same(await budget.checked(() => this.reader.root()), root)) throw Error('Project changed. Review the current scope again.');
   }
-  async discover(exclusions, { signal } = {}) {
+  async discover(exclusions, { signal, target } = {}) {
     const omitted = validateProjectExclusions(exclusions), budget = this.budget(signal), root = await budget.checked(() => this.reader.root());
     await this.ignored(root, ['explorer-policy-probe.md'], budget);
     const candidates = [], skipped = [], queue = [{ name: '', depth: 0 }]; let examined = 0, directories = 0, truncated = false;
@@ -103,8 +104,8 @@ export class ProjectDiscovery {
         if (excluded(name, omitted)) { skip(name, 'Explicit exclusion'); continue; }
         if (isGenerated(name)) { skip(name, 'Generated or vendor content'); continue; }
         if (entry.isDirectory() && item.depth >= DISCOVERY_LIMITS.depth) { skip(name, 'Traversal depth limit'); truncated = true; continue; }
-        const reason = entry.isDirectory() ? null : relevance(name);
-        if (!entry.isDirectory() && !reason) { skip(name, 'Not a context entry point'); continue; }
+        const reason = entry.isDirectory() ? null : target ? target.match(name) : relevance(name);
+        if (!entry.isDirectory() && !reason) { skip(name, target ? 'No filename or reviewed shared-source match for this branch' : 'Not a context entry point'); continue; }
         eligible.push({ name, directory: entry.isDirectory(), reason });
       }
       const ignored = await this.ignored(root, eligible.map(entry => entry.name), budget);
@@ -119,6 +120,8 @@ export class ProjectDiscovery {
     if (!same(await budget.checked(() => this.reader.root()), root)) throw Error('Project changed. Discover again.');
     candidates.sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
     for (const extra of candidates.slice(DISCOVERY_LIMITS.candidates)) skip(extra.name, 'Candidate limit');
-    return { root, candidates: candidates.slice(0, DISCOVERY_LIMITS.candidates).map(({ priority, ...file }) => file), skipped, examined, directories, truncated, limits: DISCOVERY_LIMITS, exclusions: omitted };
+    const visible = candidates.slice(0, DISCOVERY_LIMITS.candidates).map(({ priority, ...file }) => file);
+    return { root, candidates: visible, skipped, examined, directories, truncated, limits: DISCOVERY_LIMITS, exclusions: omitted,
+      ...(target ? { target: suggestBranchFiles(visible, target) } : {}) };
   }
 }

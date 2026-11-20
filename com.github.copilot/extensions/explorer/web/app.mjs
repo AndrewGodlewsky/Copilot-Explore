@@ -60,7 +60,7 @@ let criticalPrior = null, criticalDocument = null, criticalResult = null;
 const impactKeys = new WeakMap();
 let projectBrief;
 const projectMode = new ProjectModeClient({ $, fetch: (...args) => fetch(...args), journey: () => state.activeKey ?? state.document?.id, active: () => !closed && !suspended,
-  onChange: () => projectBrief?.scopeChanged(), briefState: () => projectBrief?.value });
+  onChange: () => projectBrief?.scopeChanged(), briefState: () => projectBrief?.value, onReturn: nodeId => { if (state.document?.nodes.some(node => node.id === nodeId)) openResearchReview(nodeId, undefined, 'project-questions'); } });
 projectBrief = new ProjectBriefClient({ $, fetch: (...args) => fetch(...args), journey: () => state.activeKey ?? state.document?.id, active: () => !closed && !suspended,
   scope: () => projectMode.value, changed: () => projectMode.render() });
 function impactKey(document) {
@@ -2919,7 +2919,11 @@ function renderResearchReview() {
       if (context?.purpose !== 'project-questions' || !ordinaryQuestionsReady() || state.pending || state.preview || reviewStarting) return;
       closeResearchReview(false); await api('questions', { nodeId: context.nodeId });
     }, { id: 'project-questions-fallback', disabled: !ordinaryQuestionsReady() || !!state.pending || !!state.preview || reviewStarting }),
-    button('Review project brief', () => { if (!reviewStarting) { closeResearchReview(false); projectMode.open(); } }, { id: 'project-questions-brief', disabled: reviewStarting }));
+    button('Review project brief', () => { if (!reviewStarting) { closeResearchReview(false); projectMode.open(); } }, { id: 'project-questions-brief', disabled: reviewStarting }),
+    button('Find branch files', () => {
+      const node = state.document.nodes.find(node => node.id === researchReview.context?.nodeId);
+      if (!reviewStarting && node) { closeResearchReview(false); projectMode.open({ nodeId: node.id, question: node.question }); }
+    }, { id: 'project-questions-files', disabled: reviewStarting }));
   if (challenge) {
     const input = el('textarea', { id: 'project-paths', rows: '3', maxlength: '1204', 'aria-label': 'Project file paths, one relative path per line' }); input.value = researchReview.projectDraft; input.disabled = researchReview.loading || reviewStarting;
     input.addEventListener('input', () => { researchReview.projectDraft = input.value; researchReview.projectDirty = true; $('research-review-start').disabled = true; });
@@ -4594,7 +4598,7 @@ async function requestBrief(action) {
   if (briefOperation === 'adrDraft' && adrDraftSavePending && ['start', 'accept'].includes(action)) return;
   if (briefOperation === 'adrDraft' && action === 'accept' && (!currentAdrReadiness() || adrReadinessReport.blockers)) return;
   if (action === 'start' && !briefReviewReady()) { $(briefOperation === 'adrDraft' ? 'adr-draft-review-status' : 'handoff-preview-status').textContent = 'Review current saved input again before starting.'; return; }
-  if (!briefId || briefBusy || closed || suspended || action === 'accept' && busy) return;
+  if (!briefId || briefBusy || closed || suspended || ['accept', 'refresh'].includes(action) && busy) return;
   const writesMap = action === 'accept';
   const readiness = briefOperation === 'adrDraft' && writesMap ? { digest: adrReadinessReport.digest, acknowledged: [...adrReadinessAcks] } : null;
   if (briefOperation === 'adrDraft' && ['start', 'accept', 'discard'].includes(action)) invalidateAdrReadiness('Check the resulting draft before accepting.');
@@ -4602,15 +4606,20 @@ async function requestBrief(action) {
   const mapEpoch = actionEpoch;
   const epoch = briefEpoch, id = briefId, journey = briefJourney, abort = new AbortController(); briefAbort = abort;
   const readinessEpoch = adrReadinessEpoch;
-  const timer = setTimeout(() => abort.abort(), 5000);
+  let timer;
   briefBusy = true;
   if (briefOperation === 'adrDraft' && writesMap) {
     adrDraftSavePending = true;
     $('brief-status').textContent = 'Saving ADR wording. The wording is read-only until the save outcome is checked; it can still be selected and copied.';
   }
   renderAdrDraftReview();
-  for (const name of ['generate-brief', 'accept-brief', 'discard-brief']) $(name).disabled = true;
+  for (const name of ['generate-brief', 'accept-brief', 'discard-brief', 'refresh-brief']) $(name).disabled = true;
   try {
+    if (action === 'refresh') {
+      if (!await api('refresh-answer') || epoch !== briefEpoch || id !== briefId || closed || suspended) return;
+      action = 'poll';
+    }
+    timer = setTimeout(() => abort.abort(), 5000);
     const response = await fetch(`api/${briefRoute()}`, { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' },
       body: JSON.stringify({ action, id, journey, ...(briefOperation !== 'brief' && action === 'start' ? { token: briefReview().value.token } : {}), ...(action === 'accept' ? { revision: state.document.revision, edits: briefOperation === 'adrDraft' ? adrWordingEdits() : [...briefEdits].map(([id, text]) => ({ id, text })), ...(readiness ? { readiness } : {}) } : {}) }) });
     const result = await response.json();
@@ -4633,7 +4642,7 @@ async function requestBrief(action) {
     if (briefOperation === 'adrDraft' && readinessCurrent) updateAdrReadiness(result.readiness);
   } catch (error) {
     if (epoch === briefEpoch && !closed) { $('brief-status').textContent = `${error.message} Brief freshness is unknown until the saved journey can be checked.${adrDraftSavePending ? ' ADR wording remains read-only and copyable until its save outcome is checked; use Refresh to check again.' : ''}`; $('accept-brief').hidden = true; }
-  } finally { clearTimeout(timer); if (writesMap && mapEpoch === actionEpoch) busy = false; if (epoch === briefEpoch) { briefBusy = false; $('generate-brief').disabled = briefView?.status === 'pending' || !briefReviewReady(); $('accept-brief').disabled = briefOperation === 'adrDraft' && (adrDraftSavePending || briefView?.status !== 'proposal'); $('discard-brief').disabled = false; renderAdrDraftReview(); } }
+  } finally { clearTimeout(timer); if (writesMap && mapEpoch === actionEpoch) busy = false; if (epoch === briefEpoch) { briefBusy = false; $('generate-brief').disabled = briefView?.status === 'pending' || !briefReviewReady(); $('accept-brief').disabled = briefOperation === 'adrDraft' && (adrDraftSavePending || briefView?.status !== 'proposal'); $('discard-brief').disabled = false; $('refresh-brief').disabled = false; renderAdrDraftReview(); } }
 }
 function renderBrief() {
   const value = briefView, adr = briefOperation === 'adrDraft', liveProposal = value?.status === 'proposal' ? value.proposal : null;
@@ -4706,7 +4715,7 @@ $('decision-brief').addEventListener('click', () => {
 $('generate-brief').addEventListener('click', () => { voice.cancel(); void requestBrief('start'); });
 $('discard-brief').addEventListener('click', () => void requestBrief('discard'));
 $('accept-brief').addEventListener('click', () => void requestBrief('accept'));
-$('refresh-brief').addEventListener('click', async () => { if (await api('refresh-answer')) await requestBrief('poll'); });
+$('refresh-brief').addEventListener('click', () => void requestBrief('refresh'));
 function hideBrief() { if (briefOperation === 'adrDraft') { adrDraftReview.close(); invalidateAdrReadiness('Recheck readiness when returning to edited wording.'); } $('brief-dialog').close(); $(briefOperation === 'adrDraft' ? 'adr-draft-open' : briefOperation === 'handoff' ? 'implementation-handoff' : 'decision-brief').focus(); }
 $('close-brief').addEventListener('click', hideBrief);
 $('brief-dialog').addEventListener('cancel', event => { if (briefOperation === 'adrDraft') { event.preventDefault(); hideBrief(); } });

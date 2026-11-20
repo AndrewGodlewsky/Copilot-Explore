@@ -20,9 +20,19 @@
     <header class="settings-heading"><h2 id="project-mode-title">Use project context</h2><button id="project-mode-close" type="button">Close</button></header>
     <p id="project-mode-state" role="status" aria-live="polite"></p>
     <p>Copilot working folder</p><p id="project-mode-project"></p>
-    <p>Purpose: project-aware questions. Find candidates and review their names and sizes first. Only “Read reviewed files” reads their contents, locally. These steps start no AI request.</p>
+    <p>Purpose: project-aware questions. Find candidates and review their names and sizes first. New file contents are read only through “Read reviewed files”, locally. Freshness checks can recheck previously approved files. These steps start no AI request.</p>
     <details><summary>Exclude files or folders</summary><label for="project-mode-exclusions">Exact relative paths, one per line</label><textarea id="project-mode-exclusions" rows="3" maxlength="2409" spellcheck="false" placeholder="docs/private/&#10;src/internal.ts" aria-describedby="project-mode-exclusions-help"></textarea><p id="project-mode-exclusions-help" class="quiet">Up to 10 paths. End a folder with /. No wildcards. Git ignore rules and default exclusions also apply to manual selections.</p></details>
     <button id="project-mode-discover" type="button">Find candidate files</button>
+    <section id="project-mode-target" hidden aria-labelledby="project-mode-target-title">
+      <h3 id="project-mode-target-title">Files for this branch</h3><p id="project-mode-target-question"></p>
+      <label for="project-mode-direction">Optional direction for file suggestions</label><textarea id="project-mode-direction" rows="2" maxlength="500" aria-describedby="project-mode-target-help"></textarea>
+      <p id="project-mode-target-help" class="quiet">Suggestions use literal filename matches to the saved branch, approved brief and this direction. They are hints, not verified relevance. Unsaved answers are excluded. Approve a current brief first; no new files are read and no model runs during discovery.</p>
+      <button id="project-mode-target-find" type="button">Find branch files</button>
+      <p id="project-mode-target-summary" class="quiet" role="status"></p>
+      <button id="project-mode-use-suggestions" type="button" disabled>Use suggested files</button>
+      <p class="quiet">This replaces the selected paths below. Remove anything irrelevant, then review scope, read the reviewed files and approve a new brief before generating questions.</p>
+      <button id="project-mode-return" type="button">Return to project questions</button>
+    </section>
     <p id="project-mode-discovery-summary" class="quiet"></p><div id="project-mode-candidates" role="group" aria-label="Candidate project files"></div>
     <details id="project-mode-skips" hidden><summary>Why files were skipped</summary><ul id="project-mode-skipped"></ul></details>
     <label for="project-mode-paths">Relative project files, one per line</label>

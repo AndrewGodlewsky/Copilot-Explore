@@ -6,6 +6,7 @@ import { deadline } from './owned-helper.mjs';
 import { comparisonInput, comparisonResult } from './research-comparison.mjs';
 import { ProjectContext } from './project-context.mjs';
 import { ProjectMode } from './project-mode.mjs';
+import { branchFileBasis, branchFileContext } from './project-branch-files.mjs';
 import { ProjectBriefWorkspace } from './project-brief-workspace.mjs';
 import { prepareProjectQuestions } from './project-questions.mjs';
 import { ProjectRepository } from './project-repository.mjs';
@@ -81,7 +82,7 @@ export class Explorer {
     this.changeSummaries = new ChangeSummary();
     this.branchRestoration = new BranchRestoration();
     this.projectContext = new ProjectContext(projectRoot);
-    this.projectMode = new ProjectMode(this.projectContext, () => this.closed ? null : this.activeKey ?? this.doc?.id);
+    this.projectMode = new ProjectMode(this.projectContext, () => this.closed ? null : this.activeKey ?? this.doc?.id, Date.now, undefined, (input, signal) => this.prepareBranchFiles(input, signal));
     this.adrFormats = new AdrFormatReview(projectRoot);
     this.adrWriter = new AdrFileWorkflow(projectRoot);
     this.adrLifecycle = new AdrLifecycleWorkflow(projectRoot);
@@ -650,6 +651,17 @@ export class Explorer {
     if (!this.projectQuestionHelper) throw Error('Project questions require the installed Copilot SDK helper. Use ordinary questions while it is unavailable.');
     const input = await this.projectBrief.approvedInput();
     return Object.freeze({ ...prepareProjectQuestions(document, nodeId, input.brief, options), projectApproval: input.guard });
+  }
+  async prepareBranchFiles(input, signal) {
+    const approved = await this.projectBrief.approvedInput({ signal }), document = await this.readCurrent(); signal.throwIfAborted();
+    const target = branchFileContext(document, input.nodeId, input.direction, approved.guard.draft, approved.brief.revision);
+    const check = async () => {
+      signal.throwIfAborted(); await this.projectBrief.assertApproval(approved.guard, { signal });
+      const current = await this.readCurrent(); signal.throwIfAborted();
+      if (this.closed || input.journey !== (this.activeKey ?? this.doc?.id) || !this.projectBrief.approvalCurrent(approved.guard) ||
+        JSON.stringify(branchFileBasis(current, input.nodeId)) !== JSON.stringify(target.basis)) throw Error('Branch context changed. Review the current question and brief before finding files again.');
+    };
+    await check(); return { ...target, check };
   }
   async readCurrent() {
     if (this.projectStore) {

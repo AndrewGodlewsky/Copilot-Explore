@@ -1,6 +1,6 @@
 export class ProjectModeClient {
-  constructor({ $, fetch, journey, active, now = Date.now, onChange = () => {}, briefState = () => null }) {
-    Object.assign(this, { $, fetch, journey, active, now, onChange, briefState }); this.clientId = globalThis.crypto.randomUUID(); this.sequence = 0; this.generation = 0;
+  constructor({ $, fetch, journey, active, now = Date.now, onChange = () => {}, briefState = () => null, onReturn = () => {} }) {
+    Object.assign(this, { $, fetch, journey, active, now, onChange, briefState, onReturn }); this.clientId = globalThis.crypto.randomUUID(); this.sequence = 0; this.generation = 0;
     this.value = null; this.loading = false; this.error = ''; this.boundJourney = journey();
     this.window = this.control('dialog').ownerDocument.defaultView;
     this.control('open').addEventListener('click', () => this.open());
@@ -10,6 +10,10 @@ export class ProjectModeClient {
     this.control('paths').addEventListener('input', () => this.edit());
     this.control('exclusions').addEventListener('input', () => { this.inventory = null; this.edit(); });
     this.control('discover').addEventListener('click', () => { this.inventory = null; void this.request('discover', { exclusions: this.lines('exclusions') }); });
+    this.control('target-find').addEventListener('click', () => { if (this.target) { this.inventory = null; void this.request('target', { nodeId: this.target.nodeId, direction: this.control('direction').value, exclusions: this.lines('exclusions') }); } });
+    this.control('direction').addEventListener('input', () => { this.inventory = null; if (this.loading && this.action === 'target') { this.invalidate(); this.notify('cancel'); } this.render(); });
+    this.control('use-suggestions').addEventListener('click', () => { if (!this.loading && this.inventory?.target?.suggested.length) { this.control('paths').value = this.inventory.target.suggested.join('\n'); this.edit(); this.control('paths').focus(); } });
+    this.control('return').addEventListener('click', () => { const target = this.target; this.close(false); if (target) this.onReturn(target.nodeId); });
     this.control('prepare').addEventListener('click', () => void this.request('prepare', { paths: this.lines('paths'), exclusions: this.lines('exclusions') }));
     this.control('approve').addEventListener('click', () => { if (this.value?.token) void this.request('approve', { token: this.value.token }); });
     this.control('read').addEventListener('click', () => { if (this.value?.readToken) void this.request('read', { token: this.value.readToken }); });
@@ -22,7 +26,7 @@ export class ProjectModeClient {
   edit() { this.invalidate(); this.error = 'Scope changed. Review the selected files again.'; this.notify('disable'); this.render(); }
   accept(value, action) {
     if (['unavailable', 'stale'].includes(value.state) || value.project && this.inventory?.root !== value.project.root) this.inventory = null;
-    if (value.inventory) this.inventory = { ...value.inventory, root: value.project?.root };
+    if (value.inventory) this.inventory = !value.inventory.target || value.inventory.target.nodeId === this.target?.nodeId && value.inventory.target.direction === this.control('direction').value ? { ...value.inventory, root: value.project?.root } : null;
     this.value = value;
     if (['off', 'unavailable', 'stale'].includes(value.state) || action === 'prepare' && value.state === 'review') this.revoking = false;
     if (this.revoking) this.uncertain();
@@ -44,13 +48,14 @@ export class ProjectModeClient {
   }
   observe() {
     if (this.boundJourney !== this.journey()) {
-      this.close(false); this.value = null; this.inventory = null; this.revoking = false; this.boundJourney = this.journey(); this.control('paths').value = ''; this.control('exclusions').value = ''; this.error = '';
+      this.close(false); this.value = null; this.inventory = null; this.target = null; this.revoking = false; this.boundJourney = this.journey(); this.control('paths').value = ''; this.control('exclusions').value = ''; this.control('direction').value = ''; this.error = '';
     }
     this.render();
   }
-  open() {
+  open(target = null) {
     if (!this.active() || !this.journey()) return;
-    this.observe(); if (this.$('navigation-dialog').open) this.$('navigation-dialog').close(); this.control('dialog').showModal();
+    this.observe(); if (target?.nodeId !== this.target?.nodeId) { this.control('direction').value = ''; this.inventory = null; } this.target = target;
+    if (this.$('navigation-dialog').open) this.$('navigation-dialog').close(); this.control('dialog').showModal();
     this.control('close').focus(); void this.request('status');
   }
   close(focus = true) {
@@ -111,6 +116,12 @@ export class ProjectModeClient {
     this.control('discover').disabled = this.loading || value?.state === 'unavailable';
     this.control('read').disabled = this.loading || !value?.readToken;
     this.control('disable').disabled = this.loading || !active && !uncertain && value?.state !== 'review';
+    this.control('target').hidden = !this.target;
+    this.control('target-question').textContent = this.target?.question ?? '';
+    this.control('target-find').disabled = this.loading || !this.target || !brief?.approved || this.revoking;
+    const suggestions = this.inventory?.target;
+    this.control('use-suggestions').disabled = this.loading || !suggestions?.suggested.length || suggestions.nodeId !== this.target?.nodeId || suggestions.direction !== this.control('direction').value;
+    this.control('target-summary').textContent = suggestions ? `Suggestions from brief revision ${suggestions.briefRevision}: ${suggestions.suggested.length} files. ${suggestions.omitted} other candidates omitted from the suggested selection. ${suggestions.omittedShared.length ? `Shared constraint sources not selected: ${suggestions.omittedShared.join(', ')}. Review any lost constraints in the replacement brief.` : 'No reviewed shared-source names were omitted.'} ${!suggestions.suggested.length ? 'No useful files found. You can return to ordinary questions or enter validated paths manually.' : ''}` : '';
     this.renderInventory(); this.renderReceipt();
   }
   element(tag, text) { const node = this.window.document.createElement(tag); if (text !== undefined) node.textContent = text; return node; }

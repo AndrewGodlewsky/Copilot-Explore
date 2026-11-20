@@ -55,8 +55,8 @@ validateDocument(doc); await writeFile(file, JSON.stringify(doc));
 const offlineDoc = structuredClone(doc), offlineFile = join(directory, 'support.html');
 offlineDoc.nodes.find(node => node.id === parent.id).research.sources[0].title = 'X'.repeat(300);
 await writeFile(offlineFile, viewerArtifact(viewerSnapshot(validateDocument(offlineDoc), [{ nodeId: parent.id, answer: false, research: true }])).content);
-let requests = 0, comparisons = 0, effortRuns = 0, effortFixture = false, voiceReady = false, voiceJob, modelCatalogError = false;
-const explorer = await new Explorer({ file, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
+let requests = 0, comparisons = 0, effortRuns = 0, effortFixture = false, followupRuns = 0, followupFixture = false, voiceReady = false, voiceJob, modelCatalogError = false;
+const explorer = await new Explorer({ file, projectRoot: async () => directory, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
   models: async () => { if (modelCatalogError) throw Error('Synthetic catalog failure'); return fixtureResearchModels(); },
   run: async (_, { prepared, onReport }) => {
     if (!effortFixture) { requests++; throw Error('Layout checks must not start inference'); }
@@ -74,7 +74,12 @@ const explorer = await new Explorer({ file, target: { instanceId: 'ui-layout-che
       recommendation: { optionId: 'distributed', reason: 'Synthetic hypothetical priorities favor nearby access.', changed: 'Volunteer coverage is explicitly prioritized.', unchanged: 'Actual participation remains unknown.' }, uncertainty: 'Fixture only. No model or new retrieval.' };
   },
 } }).load();
-explorer.researcher.runFollowup = explorer.researcher.run;
+explorer.researcher.runFollowup = async (...args) => {
+  if (!followupFixture) return explorer.researcher.run(...args);
+  followupRuns++;
+  return { answer: 'Previous answer <img src=x onerror=bad()> 日本語 🌿. Keep the original evidence dates when considering this synthetic pilot.', uncertainty: 'Synthetic reasoning, not new verification.',
+    claims: [structuredClone(parent.research.claims.find(claim => claim.id === 'judgment'))], sources: [{ ...structuredClone(parent.research.sources[0]), evidenceOrigin: { origin: 'original', sourceId: 'fixture-source' } }] };
+};
 const modelSettings = new ResearchModelSettings({ directory }); explorer.researchModelSettings = () => modelSettings;
 const server = await startServer(explorer, {
   status: async () => ({ ready: voiceReady, error: voiceReady ? '' : 'Dictation is disabled in this layout fixture.', shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, label: 'Ctrl + Space', mode: 'push_to_talk' }),
@@ -541,6 +546,31 @@ try {
       expect(await badges.count() === 0 && (await page.locator('#recommendation-compatibility').innerText()).includes('no linked option'), `${scenario.name}: older results retain text without a guessed winner`, {});
       const restored = structuredClone(explorer.doc); restored.nodes.find(n => n.id === parent.id).research = structuredClone(parent.research); await explorer.save(restored);
       await page.waitForFunction(() => document.querySelectorAll('.research .option').length === 2 && document.querySelectorAll('[data-recommendation-badge]').length === 1);
+      const savedBeforeReuse = JSON.stringify(explorer.doc), followupsBefore = followupRuns;
+      followupFixture = true;
+      await page.locator('#followup-hypothetical').check(); await page.locator('#followup-review').click();
+      await page.waitForFunction(() => !document.getElementById('research-review-start').disabled); await page.locator('#research-review-start').click();
+      await page.waitForFunction(() => document.getElementById('followup-history').textContent.includes('Previous answer <img'));
+      const exchange = explorer.followup.exchanges.at(-1), sourceDetail = await page.locator('#followup-history details').first().elementHandle();
+      await page.locator('#followup-history details summary').first().focus(); await page.keyboard.press('Enter');
+      await page.locator('#followup-review').click(); await page.locator('#research-review-reuse').waitFor();
+      await page.locator('#research-review-reuse').scrollIntoViewIfNeeded(); await inspectDrawer(page, scenario.name + '/reuse-review');
+      if (screenshots) await page.screenshot({ path: join(output, scenario.name + '-reuse-review.png') });
+      await page.locator('#research-review-reuse').focus(); await page.keyboard.press('Enter');
+      await page.locator('#followup-reused-' + exchange.id).waitFor();
+      expect(followupRuns === followupsBefore + 1 && explorer.followup.exchanges.at(-1).id === exchange.id && JSON.stringify(explorer.doc) === savedBeforeReuse, scenario.name + ': explicit reuse starts no helper and preserves the original exchange and saved map', {});
+      expect(await sourceDetail.evaluate(el => el.isConnected && el.open) && await page.locator('#followup-exchange-' + exchange.id).evaluate(el => document.activeElement === el), scenario.name + ': reuse preserves source disclosure and focuses the previous response', {});
+      expect((await page.locator('#followup-history').innerText()).includes('no new model or source request') && await page.locator('#followup-history img').count() === 0, scenario.name + ': reused answer is literal and is not presented as a new check', {});
+      const reusePosition = await page.locator('#followup-reused-' + exchange.id).evaluate(el => ({ label: { top: el.getBoundingClientRect().top, bottom: el.getBoundingClientRect().bottom }, body: { top: document.getElementById('question-tools-body').getBoundingClientRect().top, bottom: document.getElementById('question-tools-body').getBoundingClientRect().bottom } }));
+      expect(reusePosition.label.top >= reusePosition.body.top - 1 && reusePosition.label.top + 20 <= reusePosition.body.bottom + 1, scenario.name + ': the reuse notice starts in view when returning to the previous answer', reusePosition);
+      await inspectDrawer(page, scenario.name + '/reused-answer');
+      if (screenshots) await page.screenshot({ path: join(output, scenario.name + '-reused-answer.png') });
+      await page.locator('#followup-review').click(); await page.locator('#research-review-reuse').waitFor();
+      await page.locator('#research-review-start').click(); await page.waitForFunction(() => document.querySelectorAll('#followup-history > .research-claim').length === 2);
+      expect(followupRuns === followupsBefore + 2, scenario.name + ': explicit Research bypasses reuse and starts exactly one new fixture helper', {});
+      await page.locator('#followup-clear').focus(); await page.keyboard.press('Enter'); await page.locator('#followup-clear').waitFor({ state: 'detached' });
+      expect(followupRuns === followupsBefore + 2 && explorer.followup === null && JSON.stringify(explorer.doc) === savedBeforeReuse && await editor.evaluate(el => el === document.getElementById('answer') && el.value === 'Keep this private draft') && await composer.evaluate(el => el === document.getElementById('followup-question') && el.value === 'Keep my question 日本語 🌿' && document.activeElement === el), scenario.name + ': clear history preserves drafts, restores composer focus and starts no helper', {});
+      followupFixture = false;
       await page.locator('[data-tool-tab="details"]').click();
       await page.locator('#revisit-editor > summary').click(); await page.locator('#revisit-condition').fill('After our pilot');
       await page.locator('#revisit-condition').press('Escape'); await page.locator('#navigation-open').click(); await page.locator('#navigation-cancel').click();
@@ -622,6 +652,7 @@ try {
   }
   assert.equal(requests, 1, 'only the explicit Explore deeper check reaches the local send fixture; no provider is called');
   assert.equal(effortRuns, 5, 'one explicit synthetic effort pass per viewport; no automatic deeper pass');
+  assert.equal(followupRuns, 10, 'two explicit synthetic follow-ups per viewport; reuse and clear start none');
   await writeFile(join(output, 'layout-results.json'), JSON.stringify({ samples, failures }, null, 2));
   console.log(`${samples.length} card samples; ${failures.length} layout failures. Evidence: ${output}`);
   for (const failure of failures.slice(0, 16)) console.log(failure.message);

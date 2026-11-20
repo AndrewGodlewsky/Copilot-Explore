@@ -2451,6 +2451,37 @@ test('research follow-up keeps typing and focus during polling, renders prior ev
   f.open(f.explorer.doc.nodes[2].id); f.open(node.id); assert.match(f.document.getElementById('followup-history').textContent, /Consider a pilot/); assert.equal(f.document.getElementById('followup-question').value, 'Next question 🌿');
 });
 
+test('reviewed previous answer reuse and explicit history clear preserve drafts, sources and open disclosures', async t => {
+  let calls = 0;
+  const output = { answer: 'Consider a pilot <script>literal</script>', uncertainty: 'Prior reasoning, not fresh verification.', claims: [{ id: 'c1', text: 'Prior reasoning', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Prior paraphrase' }], limitations: 'Old evidence' }], sources: [{ id: 's1', title: 'Prior source', url: 'https://example.com/prior', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported', evidenceOrigin: { origin: 'original', sourceId: 's1' } }] };
+  const f = await fixture(t, 340, undefined, false, { before: async e => { e.projectContext.readRoot = async () => dirname(e.file); const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.command('import', { revision: e.doc.revision, document: doc }); }, runFollowup: async () => { calls++; return output; } });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  const question = $('followup-question'), answer = $('answer');
+  const type = (element, text) => { element.value = text; element.dispatchEvent(new f.window.Event('input', { bubbles: true })); };
+  type(question, 'Why a pilot? 🌿'); type(answer, 'Keep my answer draft'); $('followup-hypothetical').click(); $('followup-review').click();
+  await until(() => !$('research-review-start').disabled, 'first follow-up review'); await startReviewedResearch(f);
+  await until(() => $('followup-history').textContent.includes('Consider a pilot'), 'complete follow-up');
+  const saved = await readFile(f.explorer.file, 'utf8'), exchangeId = f.explorer.followup.exchanges[0].id;
+  const sourceDetail = $('followup-history').querySelector('details'); sourceDetail.open = true;
+  $('followup-review').click(); await until(() => $('research-review-reuse'), 'eligible previous answer');
+  assert.equal($('research-review-start').textContent, 'Research'); assert.equal($('research-review-reuse').textContent, 'Use previous answer');
+  assert.match($('research-review-summary').textContent, /no new model or source request/i);
+  $('research-review-reuse').click(); await until(() => f.explorer.followup.reuseNotice && $('research-review-inline').hidden, 'reused answer');
+  assert.equal(calls, 1); assert.equal(f.explorer.followup.exchanges.length, 1);
+  assert.equal($('followup-question'), question); assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep my answer draft');
+  assert.equal($('followup-history').querySelector('details'), sourceDetail); assert.equal(sourceDetail.open, true);
+  assert.equal(f.document.activeElement, $('followup-exchange-' + exchangeId));
+  assert.match($('followup-history').textContent, /2020-01-01/); assert.match($('followup-history').textContent, /no new model or source request/i); assert.equal($('followup-history').querySelector('script'), null);
+  const reusedText = $('followup-reused-' + exchangeId).firstChild; await delay(1400);
+  assert.equal($('followup-reused-' + exchangeId).firstChild, reusedText, 'unchanged polling must not repeat the live announcement');
+  type(question, 'Keep my next question draft'); $('followup-clear').click();
+  await until(() => f.explorer.followup === null && !$('followup-clear'), 'history cleared');
+  assert.equal($('followup-question'), question); assert.equal(question.value, 'Keep my next question draft'); assert.equal(f.document.activeElement, question);
+  assert.equal(answer.value, 'Keep my answer draft'); assert.equal(await readFile(f.explorer.file, 'utf8'), saved);
+  $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'cleared history review'); assert.equal($('research-review-reuse'), null);
+  await startReviewedResearch(f); await until(() => calls === 2 && f.explorer.followup, 'explicit fresh follow-up');
+});
+
 test('unchanged follow-up history updates age at the boundary without replacing open disclosures or drafts', async t => {
   let finish, now = FRESHNESS_NOW;
   const clock = t.mock.method(Date, 'now', () => now);
@@ -3193,7 +3224,8 @@ test('inline Research review summarizes saved inputs and keeps disclosures local
   assert.match($('research-review-summary').textContent, /Unsaved answer draft is excluded/);
   assert.match($('research-review-sources').textContent, /Model provider/);
   assert.match($('research-review-sources').textContent, /search.*page retrieval/);
-  assert.match($('research-review-sources').textContent, /without new retrieval.*not yet available/);
+  assert.match($('research-review-sources').textContent, /subject to host permissions/);
+  assert.equal($('research-review-reuse'), null, 'initial research cannot offer an ineligible prior answer');
   assert.equal($('research-review-exact').open, false); assert.equal($('research-review-advanced').open, false);
   $('research-review-exact').open = true; $('research-review-advanced').open = true;
   $('research-review-strings').open = true; await delay(20);

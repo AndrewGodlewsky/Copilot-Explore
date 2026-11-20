@@ -59,7 +59,7 @@ export function prepareFollowup(doc, nodeId, input, { settings = researchSetting
   // Recompute once with final omission counters, including when the last candidate did not fit.
   prepared = prepare();
   const dependencies = captureFollowup(prepared, history?.dependencies);
-  return freeze({ ...prepared, coverage: { ...prepared.coverage, followupTracking: { records: dependencies.records.length, recordLimit: 5000, bytes: size(dependencies), byteLimit: 4194304 } }, settings, limits: researchLimits(settings), followup: structuredClone(followup), historyId: history?.id ?? null, followupDependencies: dependencies });
+  return freeze({ ...prepared, preparedAt: now, coverage: { ...prepared.coverage, followupTracking: { records: dependencies.records.length, recordLimit: 5000, bytes: size(dependencies), byteLimit: 4194304 } }, settings, limits: researchLimits(settings), followup: structuredClone(followup), historyId: history?.id ?? null, followupDependencies: dependencies });
 }
 export function parseFollowup(content, prepared, pages, dateEvidence = new Map(), now = Date.now()) {
   if (!sameReviewedResearchFreshness(prepared, now)) throw Error('Reviewed evidence freshness changed. Review the evidence before asking again.');

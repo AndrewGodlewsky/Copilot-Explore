@@ -2610,7 +2610,7 @@ function renderWorkspace() {
     update('followup', !!node.research, () => node.research ? renderFollowup(node) : null);
     updateFollowupHistory(node);
     ui.comparisonSync?.();
-    for (const id of ['research-request', 'followup-review', 'research-deeper-review', 'save-deeper', 'regenerate-followups']) if ($(id)) $(id).disabled = pending;
+    for (const id of ['research-request', 'followup-review', 'followup-clear', 'research-deeper-review', 'save-deeper', 'regenerate-followups']) if ($(id)) $(id).disabled = pending;
     if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending?.kind);
     if ($('save-answer')) $('save-answer').disabled = pending && !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind);
     for (const id of ['generate-questions', 'add-direction', 'restart-branch', 'fork-scenario']) if ($(id)) $(id).disabled = pending || !!state.preview;
@@ -2848,8 +2848,26 @@ function researchReviewSummary(prepared) {
   if (prior.length) summary.append(el('ul', { class: 'review-prior' }, ...prior.slice(-3).map(record => el('li', {}, `${concise(record.question)} — ${ANSWER_STATES[record.answerState] ?? 'Journey guidance'}${record.review ? ' · needs review' : ''}`))));
   if (model) summary.append(el('p', { id: 'research-review-model' }, modelDescription(model)));
   summary.append(el('p', { id: 'research-review-effort' }, `${comparison ? 'Reconsideration' : settings.depth[0].toUpperCase() + settings.depth.slice(1)}: up to ${limits.timeLimitMs / 1000} seconds including setup, and ${limits.toolAttemptLimit} tool attempts. This is an effort limit, not a completion or price estimate.`),
-    el('p', { id: 'research-review-sources' }, comparison ? 'Model provider: receives the reviewed inputs. No new retrieval: this tool-free reconsideration uses only the included saved context and prior research. Prior claims and sources remain historical, not newly verified evidence.' : 'Model provider: receives the reviewed inputs. External sources: search and page retrieval may send queries and page requests to external services, subject to host permissions. Help without new retrieval is not yet available in Research.'));
+    el('p', { id: 'research-review-sources' }, comparison ? 'Model provider: receives the reviewed inputs. No new retrieval: this tool-free reconsideration uses only the included saved context and prior research. Prior claims and sources remain historical, not newly verified evidence.' : 'Model provider: receives the reviewed inputs. External sources: search and page retrieval may send queries and page requests to external services, subject to host permissions.'));
+  if (prepared.reuse) {
+    const reviewed = researchReview.value;
+    summary.append(el('p', { id: 'research-reuse-summary' }, `Your last answer to this exact follow-up is eligible for reuse. It was completed ${prepared.reuse.completedAt}. Use previous answer sends no new model or source request and keeps the original source dates. Research sends the reviewed inputs for a new answer.`),
+      button('Use previous answer', () => { if (researchReview.value === reviewed && !reviewStarting) void reuseReviewedFollowup(reviewed); }, { id: 'research-review-reuse', disabled: reviewStarting || !!state.pending }));
+  }
   return summary;
+}
+async function reuseReviewedFollowup(value) {
+  const sequence = researchReview.sequence; reviewStarting = true; renderResearchReview();
+  const result = await api('research-follow-up-reuse', { journey: value.journey, nodeId: value.nodeId, token: value.token });
+  reviewStarting = false;
+  if (sequence !== researchReview.sequence) { if (researchReview.context) renderResearchReview(); return; }
+  if (result) {
+    closeResearchReview(false);
+    const target = $('followup-exchange-' + value.prepared.reuse.exchangeId);
+    revealQuestionTool(target);
+    target?.focus({ preventScroll: true });
+  }
+  else { researchReview.value = null; researchReview.error = $('notice').textContent || 'Refresh the review before reusing the previous answer.'; renderResearchReview(); }
 }
 function renderResearchReview() {
   const area = $('research-review-content'), value = researchReview.value;
@@ -2997,7 +3015,18 @@ function renderFollowup(node) {
 function updateFollowupHistory(node) {
   const area = $('followup-history'); if (!area) return;
   const value = state.followup?.nodeId === node.id && state.followup.journey === (state.activeKey ?? state.document.id) ? state.followup : null;
-  const signature = JSON.stringify(value);
+  const { reuseNotice, ...history } = value ?? {};
+  const signature = JSON.stringify(value ? history : null);
+  const showReuse = () => {
+    for (const exchange of value?.exchanges ?? []) {
+      const label = $('followup-reused-' + exchange.id); if (!label) continue;
+      label.hidden = value.historical || reuseNotice?.exchangeId !== exchange.id;
+      if (!label.hidden) {
+        const text = `Previous answer reused; no new model or source request. Originally completed ${reuseNotice.completedAt}. Source dates are unchanged.`;
+        if (label.textContent !== text) label.textContent = text;
+      }
+    }
+  };
   if (area.dataset.value === signature) {
     for (const exchange of value?.exchanges ?? []) {
       const age = researchFreshness(exchange.result);
@@ -3006,15 +3035,20 @@ function updateFollowupHistory(node) {
         if (item.textContent !== text) item.textContent = text;
       }
     }
-    return;
+    showReuse(); return;
   }
   area.dataset.value = signature;
   const rows = [];
   if (value) {
     rows.push(el('p', { class: 'quiet' }, value.historical ? 'Historical follow-ups: saved source context or original research changed. A new request starts a fresh history.' : 'Follow-ups to this original research; saved answers are unchanged.'));
+    rows.push(el('p', { class: 'quiet' }, 'This canvas keeps up to four complete follow-ups within 64 KiB. Clear removes this discussion and its reusable answer; your saved research and drafts stay available.'),
+      button('Clear follow-up history', async () => {
+        const result = await api('followup-clear', { journey: value.journey, nodeId: node.id, historyId: value.id });
+        if (result && selected === node.id && (state.activeKey ?? state.document.id) === value.journey) $('followup-question')?.focus({ preventScroll: true });
+      }, { id: 'followup-clear', disabled: !!state.pending }));
     if (value.dropped) rows.push(el('p', { class: 'quiet' }, `${value.dropped} older complete exchanges omitted by the four-exchange / 64 KiB retention limit.`));
     for (const exchange of value.exchanges) {
-      const result = exchange.result, block = el('section', { class: 'research-claim' }, el('h4', {}, exchange.hypothetical ? 'Hypothetical follow-up' : 'Follow-up question'), el('p', {}, exchange.question), el('p', {}, result.answer), el('p', {}, `Uncertainty: ${result.uncertainty}`));
+      const result = exchange.result, block = el('section', { class: 'research-claim', id: 'followup-exchange-' + exchange.id, tabindex: '-1' }, el('h4', {}, exchange.hypothetical ? 'Hypothetical follow-up' : 'Follow-up question'), el('p', { class: 'quiet', id: 'followup-reused-' + exchange.id, hidden: '' }), el('p', {}, exchange.question), el('p', {}, result.answer), el('p', {}, `Uncertainty: ${result.uncertainty}`));
       for (const claim of result.claims) {
         const detail = el('details', {}, el('summary', {}, `${claim.text} (${claim.basis === 'sources' ? 'source-linked model interpretation' : claim.basis})`), el('p', { class: 'quiet', 'data-followup-exchange': exchange.id, 'data-followup-claim': claim.id }, claimFreshnessText(claim, researchFreshness(result))), el('p', {}, `Limitations: ${claim.limitations}`));
         for (const reference of claim.evidence) {
@@ -3028,6 +3062,7 @@ function updateFollowupHistory(node) {
     }
   }
   area.replaceChildren(...rows);
+  showReuse();
 }
 
 function renderComparison(node, ui, selectDetail, addSelected, replaceSelected) {

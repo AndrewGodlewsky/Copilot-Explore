@@ -1,6 +1,8 @@
 import { scenarioMarkdown, scenarioExportNote } from './scenario-export.mjs';
 import { handoffMarkdown, captureHandoff, handoffFreshness, acceptHandoff, validateHandoff } from './implementation-handoff.mjs';
 import { followupResult, retainExchanges, sameFollowup } from './research-followup.mjs';
+import { createReuseRecord, reusableFollowup, reuseNamespace } from './research-reuse.mjs';
+import { deadline } from './owned-helper.mjs';
 import { comparisonInput, comparisonResult } from './research-comparison.mjs';
 import { ProjectContext } from './project-context.mjs';
 import { ProjectRepository } from './project-repository.mjs';
@@ -69,6 +71,7 @@ export class Explorer {
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
     this.researchReview = new ResearchReview();
+    this.reuseInstance = randomUUID();
     this.reconsideration = null; this.researchAttempt = null;
     this.portableReferences = new PortableReferences();
     this.scenarioPreferences = new ScenarioPreferences();
@@ -1042,8 +1045,14 @@ export class Explorer {
   }
   followupSnapshot() {
     if (!this.followup) return null;
-    const { dependencies, scenarioPolicy, ...value } = this.followup;
+    const { dependencies, scenarioPolicy, reuse, ...value } = this.followup;
     return structuredClone({ ...value, scenario: scenarioPolicy?.label, historical: !this.currentFollowup() });
+  }
+  async researchReuseNamespace() {
+    try {
+      const root = await deadline(this.projectContext.root(), 2000);
+      return reuseNamespace({ root, binding: this.reuseInstance, file: this.file, journey: this.activeKey ?? this.doc?.id });
+    } catch { return null; }
   }
   reconsiderationFresh(value, doc = this.doc) {
     const node = doc?.nodes.find(item => item.id === value?.nodeId);
@@ -1195,6 +1204,8 @@ export class Explorer {
       const task = run.then(result => this.transact(() => this.withDocumentLock(async () => {
         if (!active()) return;
         if (this.file !== work.file || this.activeKey !== work.key) throw new Error('The research journey changed. The result was discarded.');
+        const namespace = prepared.followup && prepared.reuseNamespace ? await this.researchReuseNamespace() : null;
+        if (!active()) return;
         const current = await this.readCurrent();
         await this.assertScenarioPolicy(scenarioPolicy);
         this.currentFollowup(current);
@@ -1218,8 +1229,9 @@ export class Explorer {
           const exchange = { id: randomUUID(), question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, result: followupResult(result) };
           const all = [...previous?.exchanges ?? [], exchange], exchanges = retainExchanges(all);
           const dependencies = prepared.followupDependencies;
+          const reuse = !findNode(current, nodeId).researchStale && createReuseRecord({ ...prepared, reuseNamespace: namespace === prepared.reuseNamespace ? namespace : null }, exchange);
           this.doc = current;
-          this.followup = { id: randomUUID(), journey: this.activeKey ?? current.id, nodeId, dependencies, scenarioPolicy, exchanges, dropped: (previous?.dropped ?? 0) + all.length - exchanges.length, historical: false };
+          this.followup = { id: randomUUID(), journey: this.activeKey ?? current.id, nodeId, dependencies, scenarioPolicy, exchanges, dropped: (previous?.dropped ?? 0) + all.length - exchanges.length, historical: false, ...(reuse ? { reuse } : {}) };
           retainReport(current);
           this.clearPending(); this.error = ''; return;
         }
@@ -1270,6 +1282,14 @@ export class Explorer {
   }
   command(action, input = {}) {
     return this.transact(async () => {
+      if (action === 'followup-clear') {
+        const value = this.followup;
+        if (this.pending) throw Error('Wait for the current request or cancel it before clearing follow-up history.');
+        if (this.closed || !value || input.historyId !== value.id || input.nodeId !== value.nodeId || input.journey !== value.journey || input.journey !== (this.activeKey ?? this.doc?.id) || input.revision !== this.doc?.revision) throw Error('This follow-up history is obsolete or changed.');
+        this.researchReview.clear(); this.followup = null;
+        if (this.researchAttempt?.kind === 'research-follow-up' && this.researchAttempt.nodeId === input.nodeId) this.researchAttempt = null;
+        return this.uiSnapshot();
+      }
       if (action === 'research-attempt-clear') {
         const attempt = this.researchAttemptSnapshot();
         if (!attempt || input.id !== attempt.id || input.nodeId !== attempt.nodeId || input.journey !== attempt.journey) throw Error('This research attempt is obsolete or changed.');
@@ -1349,13 +1369,21 @@ export class Explorer {
         });
         return this.uiSnapshot();
       }
-      if (['research', 'research-follow-up', 'research-reconsideration'].includes(action)) {
+      if (['research', 'research-follow-up', 'research-follow-up-reuse', 'research-reconsideration'].includes(action)) {
         if (!isQuestion(findNode(this.doc, input.nodeId))) throw new Error('Select a question to research.');
         if (this.pending) throw new Error('Wait for Copilot or cancel the current request first.');
         this.requireResearchRelease();
         await this.withDocumentLock(async () => {
-          const prepared = await this.researchReview.consume(this, { ...input, purpose: action });
-          await this.request(action, input.nodeId, undefined, prepared);
+          const prepared = await this.researchReview.consume(this, { ...input, purpose: action === 'research-follow-up-reuse' ? 'research-follow-up' : action });
+          if (action === 'research-follow-up-reuse') {
+            const namespace = await this.researchReuseNamespace(), current = await this.readCurrent();
+            await this.assertScenarioPolicy(prepared.scenarioPolicy);
+            const modelCapture = await this.captureResearchModel();
+            const history = this.currentFollowup(current, input.nodeId);
+            const reuse = !this.closed && prepared.reuse && reusableFollowup(current, input.nodeId, { question: prepared.followup.question, hypothetical: prepared.followup.hypothetical }, { ...prepared.reusePolicy, settings: prepared.settings, scenario: prepared.scenarioPolicy.label, namespace, modelCapture, history });
+            if (!reuse || history?.id !== prepared.historyId || reuse.exchangeId !== prepared.reuse.exchangeId) throw Error('The previous answer is no longer eligible for reuse. Refresh the review or choose Research.');
+            this.doc = current; this.followup = { ...history, reuseNotice: reuse }; this.error = '';
+          } else await this.request(action, input.nodeId, undefined, prepared);
         });
         return this.uiSnapshot();
       }

@@ -161,7 +161,7 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .research-followup { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; font-size: 13px; overflow-wrap: anywhere; }
 .research-followup input[type="checkbox"] { width: auto; margin: 12px 6px 12px 0; cursor: pointer; }
 .research-followup textarea { max-height: 240px; }
-.option-comparison { border-block: 1px solid var(--line); padding-block: 14px; margin-block: 14px; }
+.option-comparison { border-block: 1px solid var(--line); padding-block: 14px; margin-block: 14px; container-type: inline-size; }
 .comparison-controls { min-width: 0; margin-block: 12px; border: 1px solid var(--line); }
 .comparison-controls > div { margin-block: 12px; }
 .comparison-controls select { max-width: 100%; }
@@ -169,6 +169,18 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .comparison-scroll table { border-collapse: collapse; width: 100%; table-layout: fixed; min-width: 36rem; }
 .comparison-scroll th, .comparison-scroll td { border: 1px solid var(--line); padding: 10px; vertical-align: top; text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }
 .comparison-scroll caption { text-align: left; font-weight: 600; margin-block: 8px; }
+.comparison-option-label { display: none; }
+.comparison-result { margin-block: 16px; padding-block: 12px; border-top: 2px solid var(--line); }
+#comparison-custom-label { display: block; width: 100%; max-width: 100%; box-sizing: border-box; margin-block: 8px; }
+@container (max-width: 620px) {
+  .comparison-scroll caption { display: block; width: auto; }
+  .comparison-scroll table, .comparison-scroll tbody, .comparison-scroll tr, .comparison-scroll th, .comparison-scroll td { display: block; width: auto; min-width: 0; }
+  .comparison-scroll thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .comparison-scroll tr { margin-block: 12px; }
+  .comparison-scroll td { border-top: 0; }
+  .comparison-scroll th[scope="row"] { background: var(--surface); }
+  .comparison-option-label { display: block; }
+}
 
 .handoff-sources { max-height: 18rem; overflow-y: auto; }
 #export-dialog { max-height: calc(100dvh - 32px); overflow: auto; box-sizing: border-box; }

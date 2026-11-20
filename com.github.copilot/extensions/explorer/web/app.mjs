@@ -238,7 +238,7 @@ async function requestResearchModels(action) {
     choice.value = result.settings.modelId ?? '';
     $('research-model-effective').textContent = result.effective ? `Saved choice — ${modelDescription(result.effective)}` : 'The effective model is currently unavailable. Your saved choice is retained.';
     $('research-model-status').textContent = `${action === 'save' ? 'Saved. New requests will use this choice. ' : ''}${result.problem || (action === 'save' ? '' : result.models.length ? 'Available models loaded. Save to apply your choice.' : 'No eligible Copilot models are available. Refresh after checking Copilot access.')}`;
-    if (action === 'save' && researchReview.context && !researchReview.context.purpose) void researchReview.prepare();
+    if (action === 'save' && researchReview.context && (!researchReview.context.purpose || researchReview.context.purpose === 'research-reconsideration')) void researchReview.prepare();
   } catch (error) {
     if (current()) { researchModelRevision = null; $('research-model-status').textContent = `${error.message} Your selection is retained. Refresh before saving again.`; }
   } finally {
@@ -861,7 +861,7 @@ function apply(next, reset = false) {
   if (state.preview) $('request-status').textContent = `${state.preview.questions.length} questions to review (not saved)`;
   if (state.pending) {
     const work = doc.nodes.find(n => n.id === state.pending.nodeId);
-    $('request-status').textContent = `${['research', 'research-follow-up'].includes(state.pending.kind) ? 'Researching' : 'Finding questions for'} ${work?.category ?? 'this map'}…`;
+    $('request-status').textContent = `${['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? 'Researching' : 'Finding questions for'} ${work?.category ?? 'this map'}…`;
   }
   renderWorkspace(); refreshScene(anchor); renderOutline();
   if (compactFocused && changedDocument) $('map').focus({ preventScroll: true });
@@ -2079,7 +2079,7 @@ function revealQuestionTool(target) {
 }
 function revealQuestionWork() {
   setQuestionTools(true);
-  setQuestionToolTab(['research', 'research-follow-up'].includes(state.pending?.kind) ? 'research' : 'explore');
+  setQuestionToolTab(['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending?.kind) ? 'research' : 'explore');
   if ($('question-tools-body')) $('question-tools-body').scrollTop = 0;
   uiFor(selected).toolsScroll = 0;
 }
@@ -2256,7 +2256,7 @@ function renderWorkspace() {
       button('Clean My Answer', () => { voice.cancel(); void cleanup.start(); }, { id: 'clean-answer', disabled: !answer.value.trim() }),
       el('div', { id: 'cleanup-review', 'aria-live': 'polite' }));
     const savebar = el('div', { class: 'workspace-savebar' }, helpOpen, toolsToggle,
-      button('Save & continue', () => { voice.cancel(); void save(false); }, { id: 'save-answer', class: 'primary', 'aria-label': 'Save & continue', title: 'Save and open an existing useful question; Ctrl/Command + Enter', disabled: pending && !['research', 'research-follow-up'].includes(state.pending.kind) }));
+      button('Save & continue', () => { voice.cancel(); void save(false); }, { id: 'save-answer', class: 'primary', 'aria-label': 'Save & continue', title: 'Save and open an existing useful question; Ctrl/Command + Enter', disabled: pending && !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) }));
     toolPanels.explore.append(el('p', { class: 'quiet' }, 'Save this answer and ask Copilot for follow-up questions to review.'), button('Explore deeper', () => { voice.cancel(); void save(true); }, { id: 'save-deeper', title: 'Save this answer and ask Copilot for follow-up questions', 'aria-label': 'Save answer and explore deeper', disabled: pending }));
     toolPanels.explore.append(button('Regenerate follow-ups', () => {
       if (!current() || !switchAllowed('reviewing replacement questions')) return;
@@ -2495,13 +2495,13 @@ function renderWorkspace() {
     updateRevisit();
     $('question-drawer-context').textContent = node.question;
     $('research-workspace-question').textContent = node.question;
-    const researchRunning = ['research', 'research-follow-up'].includes(state.pending?.kind) && state.pending.nodeId === node.id;
+    const researchRunning = ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending?.kind) && state.pending.nodeId === node.id;
     const sourceStatus = node.research ? `${node.researchStale ? 'Historical' : 'Saved'} · ${node.research.basis === 'sources' ? 'Consulted sources' : 'Model reasoning (unverified)'}` : 'No research yet';
     const researchStatus = researchRunning ? `Research in progress · ${sourceStatus}` : sourceStatus;
     if ($('research-workspace-status').textContent !== researchStatus) $('research-workspace-status').textContent = researchStatus;
     regions.get('followup').area.hidden = !node.research;
     toolPanels.research.dataset.hasResearch = String(!!node.research);
-    const pendingParent = ['research', 'research-follow-up'].includes(state.pending?.kind) ? toolPanels.research : toolPanels.explore;
+    const pendingParent = ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending?.kind) ? toolPanels.research : toolPanels.explore;
     if (state.pending && regions.get('pending').area.parentElement !== pendingParent) pendingParent.prepend(regions.get('pending').area);
     const ancestors = [];
     for (let n = byId.get(node.parentId); n; n = byId.get(n.parentId)) ancestors.push([n.id, n.category, n.question]);
@@ -2544,7 +2544,7 @@ function renderWorkspace() {
     update('pending', [state.pending, byId.get(state.pending?.nodeId)?.category], () => {
       if (pending) {
         const workNode = byId.get(state.pending.nodeId);
-        return el('div', { class: 'pending', role: 'status' }, el('strong', {}, ['research', 'research-follow-up'].includes(state.pending.kind) ? `${state.pending.progress ?? 'Researching'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, ['research', 'research-follow-up'].includes(state.pending.kind) ? 'Research runs separately from your chat. Cancelling stops its helper.' : 'Cancelling discards the result; the chat turn may still finish.'));
+        return el('div', { class: 'pending', role: 'status' }, el('strong', {}, ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? `${state.pending.progress ?? 'Researching'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? 'Research runs separately from your chat. Cancelling stops its helper.' : 'Cancelling discards the result; the chat turn may still finish.'));
       }
     });
     update('review', [node.review, isQuestion(node), pending], () => node.review ? el('div', { class: 'note' },
@@ -2603,9 +2603,10 @@ function renderWorkspace() {
     });
     update('followup', !!node.research, () => node.research ? renderFollowup(node) : null);
     updateFollowupHistory(node);
+    ui.comparisonSync?.();
     for (const id of ['research-request', 'followup-review', 'save-deeper', 'regenerate-followups']) if ($(id)) $(id).disabled = pending;
-    if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up'].includes(state.pending?.kind);
-    if ($('save-answer')) $('save-answer').disabled = pending && !['research', 'research-follow-up'].includes(state.pending.kind);
+    if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending?.kind);
+    if ($('save-answer')) $('save-answer').disabled = pending && !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind);
     for (const id of ['generate-questions', 'add-direction', 'restart-branch', 'fork-scenario']) if ($(id)) $(id).disabled = pending || !!state.preview;
     if (root && $('generate-questions')) $('generate-questions').textContent = doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions';
     if ($('manual-question').value !== ui.question) $('manual-question').value = ui.question;
@@ -2720,13 +2721,14 @@ function renderQuestionPreview() {
   }
   return section;
 }
-function openResearchReview(nodeId, followup, purpose) {
-  if (!purpose && (!expanded || libraryView || nodeId !== selected || !$('research-review-inline'))) return;
+function openResearchReview(nodeId, followup, purpose, comparison) {
+  const inline = !purpose || purpose === 'research-reconsideration';
+  if (inline && (!expanded || libraryView || nodeId !== selected || !$('research-review-inline'))) return;
   const returnTarget = document.activeElement;
   closeResearchReview(false);
   voice.cancel(); researchReviewReturn = returnTarget;
   $('research-review-content').replaceChildren();
-  if (purpose) $('research-review-dialog').showModal();
+  if (!inline) $('research-review-dialog').showModal();
   else {
     setQuestionTools(true); setQuestionToolTab('research');
     if (!uiFor(selected).toolsExpanded) $('question-drawer-size').click();
@@ -2734,8 +2736,8 @@ function openResearchReview(nodeId, followup, purpose) {
     const host = $('research-review-inline'); host.hidden = false; host.append($('research-review-panel'));
     revealQuestionTool($('research-review-panel'));
   }
-  $(purpose ? 'research-review-close' : 'research-review-title').focus({ preventScroll: true });
-  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: purpose === 'challenge-review' ? 'decisions' : $('context-scope').value, ...(purpose ? { purpose } : {}), ...(followup ? { followup } : {}) });
+  $(inline ? 'research-review-title' : 'research-review-close').focus({ preventScroll: true });
+  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: purpose === 'challenge-review' ? 'decisions' : $('context-scope').value, ...(purpose ? { purpose } : {}), ...(followup ? { followup } : {}), ...(comparison ? { comparison } : {}) });
 }
 function closeResearchReview(restoreFocus = true) {
   const wasOpen = !!inlineResearchReview || $('research-review-dialog').open;
@@ -2748,18 +2750,19 @@ function closeResearchReview(restoreFocus = true) {
   if (restoreFocus && wasOpen && researchReviewReturn?.isConnected && !researchReviewReturn.closest('[hidden]')) researchReviewReturn.focus({ preventScroll: true });
 }
 function researchReviewSummary(prepared) {
-  const { context, coverage, settings, limits, followup, model } = prepared;
+  const { context, coverage, settings, limits, followup, model, comparison } = prepared;
   const target = context.path.at(-1), prior = [...context.path.slice(0, -1), ...context.decisionsElsewhere];
   const concise = text => [...text].length > 220 ? `${[...text].slice(0, 220).join('')}… (full text in Exact inputs)` : text;
   const summary = el('section', { id: 'research-review-summary' }, el('h3', { id: 'research-review-question' }, target.question));
   if (followup) summary.append(el('p', { id: 'research-review-followup' }, `Follow-up${followup.hypothetical ? ' (hypothetical)' : ''}: ${followup.question}`));
+  if (comparison) summary.append(el('p', {}, `Hypothetical priorities: ${comparison.criteria.map(item => `${item.label} (${item.priority})`).join('; ')}. Compare ${comparison.options.length} existing options; prior claims are not rechecked.`));
   summary.append(el('p', {}, `Saved answer: ${ANSWER_STATES[target.answerState] ?? 'No answer'}${target.review ? ' · needs review' : ''}. Unsaved answer draft is excluded. Mode: ${MODES[context.mode].label}.`));
   if (context.objective) summary.append(el('p', {}, `Objective: ${concise(context.objective)}`));
   summary.append(el('p', {}, `${prior.length} earlier records included · ${context.pins.length} pinned constraints · ${coverage.omitted.path + coverage.omitted.decisionsElsewhere} records omitted. ${context.scope === 'path' ? 'Ancestor path only.' : 'Ancestor path and relevant answers elsewhere.'} Exact inputs explains the selection and omissions.`));
   if (prior.length) summary.append(el('ul', { class: 'review-prior' }, ...prior.slice(-3).map(record => el('li', {}, `${concise(record.question)} — ${ANSWER_STATES[record.answerState] ?? 'Journey guidance'}${record.review ? ' · needs review' : ''}`))));
   if (model) summary.append(el('p', { id: 'research-review-model' }, modelDescription(model)));
-  summary.append(el('p', { id: 'research-review-effort' }, `${settings.depth[0].toUpperCase() + settings.depth.slice(1)}: up to ${limits.timeLimitMs / 1000} seconds including setup, and ${limits.toolAttemptLimit} tool attempts. This is an effort limit, not a completion or price estimate.`),
-    el('p', { id: 'research-review-sources' }, 'Model provider: receives the reviewed inputs. External sources: search and page retrieval may send queries and page requests to external services, subject to host permissions. Help without new retrieval is not yet available in Research.'));
+  summary.append(el('p', { id: 'research-review-effort' }, `${comparison ? 'Reconsideration' : settings.depth[0].toUpperCase() + settings.depth.slice(1)}: up to ${limits.timeLimitMs / 1000} seconds including setup, and ${limits.toolAttemptLimit} tool attempts. This is an effort limit, not a completion or price estimate.`),
+    el('p', { id: 'research-review-sources' }, comparison ? 'Model provider: receives the reviewed inputs. No new retrieval: this tool-free reconsideration uses only the included saved context and prior research. Prior claims and sources remain historical, not newly verified evidence.' : 'Model provider: receives the reviewed inputs. External sources: search and page retrieval may send queries and page requests to external services, subject to host permissions. Help without new retrieval is not yet available in Research.'));
   return summary;
 }
 function renderResearchReview() {
@@ -2770,12 +2773,13 @@ function renderResearchReview() {
   const focusedDisclosure = area.contains(document.activeElement) && document.activeElement.tagName === 'SUMMARY' ? document.activeElement.parentElement.id : null;
   const challenge = researchReview.context?.purpose === 'challenge-review';
   const regeneration = researchReview.context?.purpose === 'question-regeneration';
+  const reconsideration = researchReview.context?.purpose === 'research-reconsideration';
   const ordinary = !challenge && !regeneration;
   $('research-review-privacy').hidden = ordinary;
   $('research-review-close').textContent = ordinary ? 'Back' : 'Cancel';
-  $('research-review-title').textContent = regeneration ? 'Regenerate follow-ups: review saved context' : challenge ? 'Challenge decisions: review selected inputs' : 'Review research context';
-  $('research-review-description').textContent = regeneration ? 'Review the exact Explorer input for new questions from the corrected saved answer. Nothing runs until you choose Generate reviewed follow-ups. The attached chat retains its own history and can read the committed map; this preview shows only Explorer-supplied input.' : challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Check the saved context and effort, then choose Research. Your answer stays yours.';
-  $('research-review-start').textContent = regeneration ? 'Generate reviewed follow-ups' : challenge ? 'Start reviewed challenge' : 'Research';
+  $('research-review-title').textContent = reconsideration ? 'Review hypothetical priorities' : regeneration ? 'Regenerate follow-ups: review saved context' : challenge ? 'Challenge decisions: review selected inputs' : 'Review research context';
+  $('research-review-description').textContent = reconsideration ? 'Review your hypothetical priorities and the exact saved inputs. Reconsideration suggests a comparison for you to accept or keep aside; it never saves an answer.' : regeneration ? 'Review the exact Explorer input for new questions from the corrected saved answer. Nothing runs until you choose Generate reviewed follow-ups. The attached chat retains its own history and can read the committed map; this preview shows only Explorer-supplied input.' : challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Check the saved context and effort, then choose Research. Your answer stays yours.';
+  $('research-review-start').textContent = reconsideration ? 'Reconsider recommendation' : regeneration ? 'Generate reviewed follow-ups' : challenge ? 'Start reviewed challenge' : 'Research';
   $('research-review-start').disabled = !value || researchReview.loading || reviewStarting || researchReview.projectDirty || (challenge && !value.prepared.canStart);
   $('research-review-refresh').disabled = researchReview.loading || reviewStarting;
   $('research-review-status').textContent = (researchReview.loading ? 'Preparing context. No inference has started.' : researchReview.error || '') + (ordinary && !value && area.children.length ? ' Previous inputs are shown below and cannot be started; refresh and review again.' : '');
@@ -2806,7 +2810,7 @@ function renderResearchReview() {
   const display = (label, item) => el('section', { class: 'review-record' }, el('h3', {}, label), el('pre', {}, JSON.stringify(item, null, 2)));
   const { topic, objective, successCriteria, mode, pins } = context;
   const controls = el('section', { class: 'review-record research-preferences' }, el('h3', {}, 'Research preferences'));
-  for (const [key, label, choices] of (challenge || regeneration ? [] : [
+  for (const [key, label, choices] of (challenge || regeneration || reconsideration ? [] : [
     ['depth', 'Depth', [['quick', 'Quick - 60 seconds / 8 tool attempts'], ['standard', 'Standard - 180 seconds / 24 tool attempts'], ['deeper', 'Deeper - 300 seconds / 40 tool attempts']]],
     ['sourceFocus', 'Source focus', [['balanced', 'Balanced evidence'], ['primary', 'Prefer primary sources']]],
     ['recency', 'Recency', [['any', 'No recency preference'], ['recent', 'Prefer recent sources when relevant']]],
@@ -2816,7 +2820,7 @@ function renderResearchReview() {
     select.addEventListener('change', () => { if (select.isConnected && researchReview.context) researchReview.settings({ ...researchReview.context.settings, [key]: select.value }); });
     controls.append(el('label', {}, label, select));
   }
-    const rows = [...(challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : regeneration ? [el('p', {}, 'Question generation is queued in the attached chat. Cancellation rejects its result but does not stop the chat turn. No isolated research helper or web retrieval is started by this action.')] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. ${regeneration ? 'Needs-review answer text is withheld; required prerequisites and selected coverage are shown below.' : 'Saved journey records are complete; project prefixes are labeled separately.'}`),
+    const rows = [...(challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : regeneration ? [el('p', {}, 'Question generation is queued in the attached chat. Cancellation rejects its result but does not stop the chat turn. No isolated research helper or web retrieval is started by this action.')] : reconsideration ? [] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. ${regeneration ? 'Needs-review answer text is withheld; required prerequisites and selected coverage are shown below.' : 'Saved journey records are complete; project prefixes are labeled separately.'}`),
     display('Required: committed journey guidance and mode', { topic, objective, successCriteria, mode, pins }),
       display(challenge ? 'Required: journey root' : 'Required: selected question and committed answer state', context.path.at(-1))];
   if (challenge) {
@@ -2824,11 +2828,12 @@ function renderResearchReview() {
     if (!context.projectSources?.length) rows.push(el('p', { id: 'project-empty' }, researchReview.projectDraft.trim() ? 'No files are attached to this preview. Read/refresh the entered paths or remove them before starting.' : 'No project files selected.'));
     if (!value.prepared.projectFresh) rows.push(el('p', { id: 'project-stale', class: 'notice' }, 'Project files or working root changed or are unavailable. These are the previously reviewed excerpts. Explicitly read/refresh files and review again before starting.'));
     for (const source of context.projectSources ?? []) rows.push(el('section', { class: 'review-record' }, el('h3', {}, `Project source: ${source.name}`), el('p', {}, `${source.excerptBytes} / ${source.bytes} UTF-8 bytes included${source.truncated ? ' (prefix excerpt)' : ' (complete file)'}. ${value.prepared.projectFresh ? 'Current at last check.' : 'Stale or unavailable.'} Source ${source.id}; SHA-256 ${source.fingerprint}`), el('pre', {}, source.excerpt)));
-  } else if (!regeneration) rows.unshift(el('p', { class: 'quiet' }, 'Project files are excluded from web research and follow-ups. Selected files are available only in an explicit Challenge decisions review.'));
+  } else if (!regeneration) rows.unshift(el('p', { class: 'quiet' }, 'Project files are excluded from Research, follow-ups and reconsideration. Selected files are available only in an explicit Challenge decisions review.'));
   if (regeneration) {
     rows.unshift(retainedControls());
     rows.push(display('Required: current prerequisites and selected retained coverage', context.regeneration));
   }
+  if (reconsideration) { const compared = display('Required: all compared options, prior research and hypothetical priorities', value.prepared.comparison); compared.id = 'research-review-comparison'; rows.push(compared); }
   if (value.prepared.followup) rows.push(display('Follow-up: exact question, hypothetical status, original recommendation, complete optional evidence and exchanges', value.prepared.followup), display('Bounded source tracking across this history', coverage.followupTracking));
   if (context.selectionPolicy) rows.push(el('p', { id: 'research-selection-policy' }, context.selectionPolicy));
   if (coverage.omissionSample?.total) rows.push(display('Omitted saved records: review-only sample, not sent to the model; remaining counts records beyond this sample', coverage.omissionSample));
@@ -2846,7 +2851,7 @@ function renderResearchReview() {
   if (ordinary) {
     const effort = rows.find(row => row.id === 'research-settings-summary');
     area.replaceChildren(researchReviewSummary(value.prepared),
-      el('details', { id: 'research-review-advanced' }, el('summary', {}, 'Effort and source preferences'), controls, effort),
+      ...(reconsideration ? [] : [el('details', { id: 'research-review-advanced' }, el('summary', {}, 'Effort and source preferences'), controls, effort)]),
       el('details', { id: 'research-review-exact' }, el('summary', {}, 'Exact inputs, exclusions and omissions'), el('p', { class: 'quiet' }, $('research-review-privacy').textContent), ...rows.filter(row => row !== controls && row !== effort)));
   } else area.replaceChildren(...rows);
   for (const id of openDetails) { const detail = $(id); if (area.contains(detail)) detail.open = true; }
@@ -2862,6 +2867,10 @@ $('research-review-start').addEventListener('click', async () => {
   if (!value || reviewStarting || researchReview.loading) return;
   reviewStarting = true; renderResearchReview();
   const sequence = researchReview.sequence;
+  if (value.prepared.operation === 'research-reconsideration') {
+    const preferences = uiFor(value.nodeId).comparison;
+    if (preferences) preferences.run = { generation: preferences.generation, previousId: state.reconsideration?.proposal?.id };
+  }
   if (value.prepared.operation === 'challenge-review') {
     const result = await requestCheck('start', undefined, value.token);
     reviewStarting = false;
@@ -2870,7 +2879,7 @@ $('research-review-start').addEventListener('click', async () => {
     else { researchReview.value = null; researchReview.error = $('check-status').textContent; renderResearchReview(); }
     return;
   }
-  const result = await api(value.prepared.operation === 'question-regeneration' ? 'regenerate-questions' : value.prepared.followup ? 'research-follow-up' : 'research', { journey: value.journey, nodeId: value.nodeId, token: value.token });
+  const result = await api(value.prepared.operation === 'research-reconsideration' ? 'research-reconsideration' : value.prepared.operation === 'question-regeneration' ? 'regenerate-questions' : value.prepared.followup ? 'research-follow-up' : 'research', { journey: value.journey, nodeId: value.nodeId, token: value.token });
   reviewStarting = false;
   if (sequence !== researchReview.sequence) { if (researchReview.context) renderResearchReview(); return; }
   if (result) { closeResearchReview(); $('cancel-request')?.focus({ preventScroll: true }); }
@@ -2924,56 +2933,144 @@ function updateFollowupHistory(node) {
   area.replaceChildren(...rows);
 }
 
-function renderComparison(r, ui, selectDetail, addSelected, replaceSelected) {
-  const criteria = [{ label: 'Description', field: 'description' }, { label: 'Pros', field: 'pros' }, { label: 'Cons', field: 'cons' }];
+function renderComparison(node, ui, selectDetail, addSelected, replaceSelected) {
+  const r = node.research, journey = referenceJourney(), key = JSON.stringify(r);
   const labels = new Set(r.options.flatMap(option => (option.details ?? []).map(detail => detail.label)));
-  for (const label of labels) criteria.push({ label });
-  ui.comparison ??= { open: false, selected: criteria.map(() => true), priorities: criteria.map(() => 'normal') };
+  ui.comparison ??= { open: false, custom: [], selected: [...labels].map(() => true), priorities: [...labels].map(() => 'normal'), generation: 0 };
   const preferences = ui.comparison;
+  const criteria = [...labels].map(label => ({ label })).concat(preferences.custom.map(label => ({ label })));
+  const priorities = { high: 'High', normal: 'Normal', low: 'Low' };
+  const normalized = label => label.normalize('NFKC').toLowerCase().trim().replace(/\s+/gu, ' ');
+  const input = () => ({ criteria: criteria.flatMap((criterion, index) => preferences.selected[index] ? [{ id: `criterion-${index}`, label: criterion.label, priority: preferences.priorities[index] }] : []) });
   const comparison = el('details', { id: 'option-comparison', class: 'option-comparison' }, el('summary', { id: 'comparison-summary' }, 'Compare options'));
+  const currentNode = () => comparison.isConnected && !closed && !suspended && journey === referenceJourney() && selected === node.id && expanded && !libraryView &&
+    state.document.nodes.find(item => item.id === node.id && JSON.stringify(item.research) === key);
+  const matching = entry => entry?.journey === journey && entry.nodeId === node.id;
+  const sameCriteria = entry => JSON.stringify(input().criteria) === JSON.stringify(entry.comparison.criteria);
+  const eligible = entry => !!currentNode() && !currentNode().researchStale && !state.pending && !reviewStarting && !entry.historical && sameCriteria(entry) &&
+    preferences.run?.generation === preferences.generation && preferences.run.previousId !== entry.id;
   comparison.open = preferences.open;
   comparison.addEventListener('toggle', () => { if (comparison.isConnected) { preferences.open = comparison.open; scheduleLayout(); } });
   comparison.append(el('p', { class: 'quiet' }, 'Compare saved model judgments. Cell source support is unknown: the separate Claims and evidence section does not establish support for these values. Unknown means no saved value, not a zero score.'),
-    el('p', { class: 'quiet' }, 'Choose criteria and your priorities. High rows appear first, then Normal, then Low. Priorities express your preferences, not evidence quality. Tradeoffs remain yours to judge; no score or winner is calculated. The saved recommendation stays unchanged.'),
-    el('p', { class: 'quiet' }, 'These choices and selected details stay in this panel through node navigation. Changing journeys, reloading, or replacing saved research or sources resets them. Exact detail labels are matched; duplicate values are kept separately. Hiding a criterion does not clear selected details.'));
-  const controls = el('fieldset', { class: 'comparison-controls' }, el('legend', {}, 'Criteria and personal priorities'));
-  const body = el('tbody'), table = el('table', { id: 'comparison-table' }, el('caption', {}, 'Saved option comparison'),
-    el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, 'Criterion / your priority'), r.options.map(option => el('th', { scope: 'col' }, option.title)))), body);
-  const priorities = { high: 'High', normal: 'Normal', low: 'Low' };
+    el('p', { class: 'quiet' }, 'Choose up to eight criteria for a hypothetical reconsideration. High rows appear first, then Normal, then Low. Priorities express your preferences, not evidence quality. Editing them does not call a model or change a saved decision.'),
+    el('p', { class: 'quiet' }, 'Local choices and selected details survive node navigation; changing journeys, reloading, or replacing research resets them. Exact saved labels are matched and duplicate values kept. Hiding a criterion does not clear selected details. One accepted comparison and one proposal are retained per canvas until it closes or switches journeys; they are not saved in the repository.'));
+  const controls = el('fieldset', { id: 'comparison-controls', class: 'comparison-controls' }, el('legend', {}, 'Criteria and personal priorities'));
+  const body = el('tbody', { role: 'rowgroup' }), table = el('table', { id: 'comparison-table', role: 'table' }, el('caption', {}, 'Saved option details'),
+    el('thead', { role: 'rowgroup' }, el('tr', { role: 'row' }, el('th', { scope: 'col', role: 'columnheader' }, 'Criterion / your priority'), r.options.map(option => el('th', { scope: 'col', role: 'columnheader' }, option.title)))), body);
+  const currentArea = el('section', { id: 'comparison-current', class: 'comparison-result', hidden: true });
+  const proposalArea = el('section', { id: 'comparison-proposal', class: 'comparison-result', hidden: true });
+  const status = el('p', { id: 'comparison-priority-status', role: 'status' });
+  const issue = () => {
+    const chosen = input().criteria;
+    if (!chosen.length) return 'Select a saved criterion or add one that matters for this question.';
+    if (chosen.length > 8) return `${chosen.length} criteria selected. Select at most eight before reconsidering; all saved details remain available.`;
+    if (new Set(chosen.map(item => normalized(item.label))).size !== chosen.length) return 'Some selected labels differ only in case or spacing. Select one of each for reconsideration.';
+    return currentNode()?.researchStale ? 'Saved research needs review. Research again before reconsidering.' : '';
+  };
+  const reconsider = button('Reconsider recommendation', () => {
+    if (!currentNode() || issue() || state.pending || reviewStarting) return;
+    openResearchReview(node.id, undefined, 'research-reconsideration', input());
+  }, { id: 'comparison-reconsider' });
+  const sync = () => {
+    if (!currentNode()) return;
+    const reason = issue(); status.textContent = reason || 'Ready to review. Reconsideration uses existing research and saved context, with no new retrieval.';
+    reconsider.disabled = !!reason || !!state.pending || reviewStarting;
+    for (const [role, area] of [['current', currentArea], ['proposal', proposalArea]]) {
+      const entry = state.reconsideration?.[role], present = matching(entry);
+      area.hidden = !present;
+      const signature = JSON.stringify([present ? entry : null, preferences.generation, !!state.pending, reviewStarting]);
+      if (area.dataset.signature === signature) continue;
+      const focus = area.contains(document.activeElement) ? document.activeElement.id : null;
+      area.dataset.signature = signature; area.replaceChildren();
+      if (!present) { if (focus) reconsider.focus({ preventScroll: true }); continue; }
+      const usable = role === 'proposal' && eligible(entry);
+      area.append(renderComparisonResult(entry, role), el('p', { class: 'quiet' }, entry.historical ? 'Historical comparison: saved context changed. Review current research before reconsidering.' :
+        role === 'proposal' && !usable ? 'This proposal cannot be used now. Wait for active work, or review and reconsider again after changing priorities or reopening the panel.' :
+          !sameCriteria(entry) ? 'The priorities above differ from the priorities used for this comparison.' : 'Hypothetical comparison only. Your saved research, recommendation and answer remain unchanged.'));
+      if (role === 'proposal') area.append(el('div', { class: 'actions' },
+        button('Use revised comparison', async () => {
+          if (!currentNode() || !eligible(entry) || state.reconsideration?.proposal?.id !== entry.id) return;
+          await api('comparison-accept', { id: entry.id, journey, nodeId: node.id, comparison: input() });
+        }, { id: 'comparison-use', disabled: !usable }),
+        button('Keep current comparison', async () => {
+          if (!currentNode() || state.reconsideration?.proposal?.id !== entry.id) return;
+          await api('comparison-dismiss', { id: entry.id, journey, nodeId: node.id });
+        }, { id: 'comparison-keep' })));
+      if (focus) (area.querySelector(`#${focus}:not(:disabled)`) ?? reconsider).focus({ preventScroll: true });
+    }
+    scheduleLayout();
+  };
+  ui.comparisonSync = sync;
+  const changed = () => {
+    preferences.generation++;
+    if (researchReview.context?.purpose === 'research-reconsideration' && researchReview.context.nodeId === node.id) closeResearchReview(false);
+    renderRows(); sync();
+  };
   const renderRows = () => {
     const rows = criteria.map((criterion, index) => ({ ...criterion, index })).filter(criterion => preferences.selected[criterion.index]);
     rows.sort((a, b) => Object.keys(priorities).indexOf(preferences.priorities[a.index]) - Object.keys(priorities).indexOf(preferences.priorities[b.index]));
-    body.replaceChildren(...rows.map(criterion => el('tr', {}, el('th', { scope: 'row' }, `${criterion.label}${criterion.field ? ' (model judgment)' : ' (detail)'} · ${priorities[preferences.priorities[criterion.index]]}`), r.options.map((option, optionIndex) => {
-      const cell = el('td');
-      const values = criterion.field ? (Array.isArray(option[criterion.field]) ? option[criterion.field] : [option[criterion.field]]).filter(Boolean) : (option.details ?? []).map((detail, index) => ({ ...detail, index })).filter(detail => detail.label === criterion.label);
-      if (!values.length) return el('td', {}, 'Unknown — no saved value.');
+    body.replaceChildren(...rows.map(criterion => el('tr', { role: 'row' }, el('th', { scope: 'row', role: 'rowheader' }, `${criterion.label} · ${priorities[preferences.priorities[criterion.index]]}`), r.options.map((option, optionIndex) => {
+      const cell = el('td', { role: 'cell' }, el('strong', { class: 'comparison-option-label', 'aria-hidden': 'true' }, option.title));
+      const values = (option.details ?? []).map((detail, index) => ({ ...detail, index })).filter(detail => detail.label === criterion.label);
+      if (!values.length) { cell.append(el('p', {}, 'Unknown — no saved value.')); return cell; }
       cell.append(el('p', { class: 'quiet' }, 'Model judgment · Cell source support unknown'));
       for (const value of values) {
-        if (criterion.field) cell.append(el('p', {}, value));
-        else {
-          const detailId = `detail-${optionIndex}-${value.index}`, id = `comparison-${detailId}`, checkbox = el('input', { type: 'checkbox', id, 'aria-label': `Select ${criterion.label} from ${option.title}: ${value.value}` });
-          checkbox.checked = ui.selectedDetails.has(detailId);
-          checkbox.addEventListener('change', () => { if (checkbox.isConnected) selectDetail(detailId, checkbox.checked); });
-          cell.append(el('label', { class: 'research-detail', for: id }, checkbox, el('span', {}, value.value)));
-        }
+        const detailId = `detail-${optionIndex}-${value.index}`, id = `comparison-${detailId}`, checkbox = el('input', { type: 'checkbox', id, 'aria-label': `Select ${criterion.label} from ${option.title}: ${value.value}` });
+        checkbox.checked = ui.selectedDetails.has(detailId);
+        checkbox.addEventListener('change', () => { if (checkbox.isConnected) selectDetail(detailId, checkbox.checked); });
+        cell.append(el('label', { class: 'research-detail', for: id }, checkbox, el('span', {}, value.value)));
       }
       return cell;
     }))));
-    if (!rows.length) body.append(el('tr', {}, el('td', { colspan: String(r.options.length + 1) }, 'Select at least one criterion to compare.')));
+    if (!rows.length) body.append(el('tr', { role: 'row' }, el('td', { role: 'cell', colspan: String(r.options.length + 1) }, 'Select at least one criterion to compare. Older research without details can use a custom criterion below.')));
     scheduleLayout();
   };
-  criteria.forEach((criterion, index) => {
+  const addControl = (criterion, index) => {
     const id = `comparison-criterion-${index}`, checkbox = el('input', { type: 'checkbox', id }); checkbox.checked = preferences.selected[index];
-    checkbox.addEventListener('change', () => { if (checkbox.isConnected) { preferences.selected[index] = checkbox.checked; renderRows(); } });
+    checkbox.addEventListener('change', () => { if (currentNode() && preferences.selected[index] !== checkbox.checked) { preferences.selected[index] = checkbox.checked; changed(); } });
     const priorityId = `comparison-priority-${index}`, priority = el('select', { id: priorityId }, Object.entries(priorities).map(([value, label]) => el('option', { value }, label))); priority.value = preferences.priorities[index];
-    priority.addEventListener('change', () => { if (priority.isConnected && Object.hasOwn(priorities, priority.value)) { preferences.priorities[index] = priority.value; renderRows(); } });
-    controls.append(el('div', {}, el('label', { class: 'research-detail', for: id }, checkbox, `${criterion.label}${criterion.field ? ' (model judgment)' : ' (detail)'}`), el('label', { for: priorityId }, `Your priority: ${criterion.label}`), priority));
-  });
-  comparison.append(controls, el('div', { class: 'comparison-scroll', role: 'region', tabindex: '0', 'aria-label': 'Option comparison, scroll horizontally to read all options' }, table));
+    priority.addEventListener('change', () => { if (currentNode() && Object.hasOwn(priorities, priority.value) && preferences.priorities[index] !== priority.value) { preferences.priorities[index] = priority.value; changed(); } });
+    controls.append(el('div', {}, el('label', { class: 'research-detail', for: id }, checkbox, criterion.label), el('label', { for: priorityId }, `Your priority: ${criterion.label}`), priority));
+  };
+  criteria.forEach(addControl);
+  const custom = el('input', { id: 'comparison-custom-label', type: 'text', maxlength: '160' });
+  const addCriterion = button('Add criterion', () => {
+    if (!currentNode()) return;
+    const label = custom.value;
+    if (!label.trim() || label.length > 160 || preferences.custom.length >= 8 || criteria.some(item => normalized(item.label) === normalized(label))) return notice('Use a distinct, nonempty criterion of at most 160 characters. You can add up to eight custom criteria.');
+    const index = criteria.length; criteria.push({ label }); preferences.custom.push(label); preferences.selected.push(true); preferences.priorities.push('normal');
+    addControl(criteria[index], index); custom.value = ''; changed(); custom.focus({ preventScroll: true });
+  }, { id: 'comparison-add-criterion' });
+  comparison.append(controls, el('label', { for: custom.id }, 'Add a criterion for this question (up to 160 characters)'), custom, addCriterion, status, reconsider,
+    currentArea, proposalArea, el('div', { class: 'comparison-scroll', role: 'region', tabindex: '0', 'aria-label': 'Saved option details' }, table));
   if (labels.size) comparison.append(el('div', { class: 'actions' },
     button('Append selected details', addSelected, { id: 'comparison-add-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' }),
     button('Replace with selected details…', replaceSelected, { id: 'comparison-replace-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' })));
   renderRows(); return comparison;
+}
+
+function renderComparisonResult(entry, role) {
+  const { criteria, options, prior } = entry.comparison, { recommendation, cells, uncertainty } = entry.result;
+  const chosen = options.find(option => option.id === recommendation.optionId);
+  const section = el('div', {}, el('h3', {}, role === 'proposal' ? 'Proposed comparison' : 'Current hypothetical comparison'),
+    el('p', {}, chosen ? `Suggested option: ${chosen.title}` : 'No option recommended yet'), el('p', {}, recommendation.reason),
+    el('p', {}, el('strong', {}, 'Changed reasoning: '), recommendation.changed), el('p', {}, el('strong', {}, 'Unchanged reasoning: '), recommendation.unchanged),
+    el('p', { class: 'quiet' }, `${modelDescription(entry.model)} No new retrieval. Prior claim references are historical model interpretations, not new verification.`));
+  const table = el('table', { role: 'table' }, el('caption', {}, 'Comparison using reviewed hypothetical priorities'),
+    el('thead', { role: 'rowgroup' }, el('tr', { role: 'row' }, el('th', { scope: 'col', role: 'columnheader' }, 'Criterion / reviewed priority'), options.map(option => el('th', { scope: 'col', role: 'columnheader' }, option.title)))),
+    el('tbody', { role: 'rowgroup' }, criteria.map(criterion => el('tr', { role: 'row' }, el('th', { scope: 'row', role: 'rowheader' }, `${criterion.label} · ${criterion.priority}`), options.map(option => {
+      const value = cells.find(cell => cell.criterionId === criterion.id && cell.optionId === option.id);
+      const cell = el('td', { role: 'cell' }, el('strong', { class: 'comparison-option-label', 'aria-hidden': 'true' }, option.title), el('p', {}, value.explanation),
+        el('p', { class: 'basis' }, value.basis === 'unknown' ? 'Unknown support' : value.basis === 'reasoning' ? 'Model reasoning' : 'Prior claim reference · not newly verified'));
+      if (value.claimIds.length) cell.append(el('details', {}, el('summary', {}, 'Inspect prior claims'), value.claimIds.map(id => {
+        const claim = prior.claims.find(item => item.id === id);
+        return el('div', {}, el('p', {}, `${id}: ${claim.text}`), el('p', { class: 'quiet' }, `Prior basis: ${claim.basis}. Limitations: ${claim.limitations}`),
+          claim.evidence.map(evidence => { const source = prior.sources.find(item => item.id === evidence.sourceId); return el('p', {}, `${evidence.paraphrase} — Prior source: ${source.title}; ${source.url}. ${source.retrievedAt ? `Recorded retrieval: ${source.retrievedAt}; ${source.provenance}.` : 'Retrieval time unknown.'}`); }));
+      })));
+      return cell;
+    })))));
+  section.append(el('div', { class: 'comparison-scroll', role: 'region', tabindex: '0', 'aria-label': 'Reviewed option comparison' }, table), el('p', {}, el('strong', {}, 'Uncertainty: '), uncertainty));
+  return section;
 }
 
 function renderResearch(node) {
@@ -3107,7 +3204,7 @@ function renderResearch(node) {
     button('Append recommendation', () => add(chosen ? chosen.proposedAnswer : r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation', 'data-draft-suggestion': 'true' }),
     button('Replace with recommendation…', event => replace(chosen ? chosen.proposedAnswer : r.proposedAnswer ?? r.recommendation, event.currentTarget), { id: 'replace-recommendation', 'data-draft-suggestion': 'true' })));
   section.append(recommendation);
-  if (r.options.length > 1) section.append(renderComparison(r, ui, selectDetail, addSelected, replaceSelected));
+  if (r.options.length) section.append(renderComparison(node, ui, selectDetail, addSelected, replaceSelected));
   if (details.length) section.append(el('div', { class: 'actions' },
     button('Append selected details', addSelected, { id: 'add-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' }),
     button('Replace with selected details…', replaceSelected, { id: 'replace-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' })));

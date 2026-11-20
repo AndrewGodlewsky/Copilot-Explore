@@ -36,10 +36,15 @@ parent.research = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic s
   { id: 'distributed', title: 'Several storage locations', description: 'Compare another approach while keeping a private answer draft.', fit: 'When nearby access matters more than simple coordination.', proposedAnswer: 'I will arrange several nearby storage locations.', pros: ['Nearby access'], cons: ['More coordination'] },
 ], recommendation: 'Consider a small pilot first; the shared location still needs evidence.', recommendationAssessment: { optionId: 'cupboard', mainTradeoff: 'A single location makes access depend on its key holders.', reconsiderIf: 'If neighbors cannot reliably reach one location, consider distributed storage.', decisionRefs: [{ nodeId: answered.id, reason: 'The earlier cupboard answer is unresolved and needs review; confirm access before committing. 中文 🌿', answerState: 'needs-evidence', review: true }] }, uncertainty: 'Synthetic fixture; no external verification.', sources: [], claims: [{ id: 'access', text: 'Local access is unconfirmed.', basis: 'unknown', evidence: [], limitations: 'Synthetic fixture; no real evidence.' }] };
 validateDocument(doc); await writeFile(file, JSON.stringify(doc));
-let requests = 0, voiceReady = false, voiceJob, modelCatalogError = false;
+let requests = 0, comparisons = 0, voiceReady = false, voiceJob, modelCatalogError = false;
 const explorer = await new Explorer({ file, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
   models: async () => { if (modelCatalogError) throw Error('Synthetic catalog failure'); return fixtureResearchModels(); },
   run: async () => { requests++; throw Error('Layout checks must not start inference'); },
+  runReconsideration: async (_, { prepared }) => {
+    comparisons++;
+    return { cells: prepared.comparison.criteria.flatMap(criterion => prepared.comparison.options.map(option => ({ criterionId: criterion.id, optionId: option.id, explanation: 'Synthetic comparison, not evidence. 中文 🌿 ' + 'long-reference-λ'.repeat(8), basis: 'unknown', claimIds: [] }))),
+      recommendation: { optionId: 'distributed', reason: 'Synthetic hypothetical priorities favor nearby access.', changed: 'Volunteer coverage is explicitly prioritized.', unchanged: 'Actual participation remains unknown.' }, uncertainty: 'Fixture only. No model or new retrieval.' };
+  },
 } }).load();
 const modelSettings = new ResearchModelSettings({ directory }); explorer.researchModelSettings = () => modelSettings;
 const server = await startServer(explorer, {
@@ -373,6 +378,37 @@ try {
       await page.locator('#research-model-choice').selectOption(''); await page.locator('#research-model-save').click(); await page.waitForFunction(() => document.getElementById('research-model-status').textContent.startsWith('Saved.'));
       expect((await modelSettings.read()).modelId === null, `${scenario.name}: reset works during catalog failure`, {});
       modelCatalogError = false; await page.keyboard.press('Escape');
+      await page.locator('#comparison-summary').click();
+      await page.locator('#comparison-custom-label').fill('Available volunteers 日本語 🌿'); await page.locator('#comparison-add-criterion').click();
+      await page.locator('#comparison-priority-1').selectOption('high');
+      const priorComparisons = comparisons;
+      const priorCurrent = explorer.reconsideration?.current?.id ?? null;
+      expect(explorer.pending === null, `${scenario.name}: editing hypothetical priorities starts no helper`, {});
+      await page.locator('#comparison-reconsider').click(); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      expect((await page.locator('#research-review-sources').textContent()).includes('No new retrieval') && await page.locator('#research-review-content [data-setting]').count() === 0, `${scenario.name}: reconsideration review discloses zero retrieval and omits web controls`, {});
+      await page.locator('#research-review-start').click(); await page.locator('#comparison-use').waitFor();
+      expect(comparisons === priorComparisons + 1 && (explorer.reconsideration?.current?.id ?? null) === priorCurrent, `${scenario.name}: one explicit start produces a separate proposal`, {});
+      for (const id of ['comparison-use', 'comparison-keep']) {
+        await page.locator('#' + id).focus(); await page.locator('#' + id).scrollIntoViewIfNeeded();
+        const bounds = await page.locator('#' + id).evaluate(el => { const r = el.getBoundingClientRect(), d = document.getElementById('question-tools-body').getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, drawer: { left: d.left, right: d.right, top: d.top, bottom: d.bottom } }; });
+        expect(bounds.left >= bounds.drawer.left && bounds.right <= bounds.drawer.right + 1 && bounds.top >= bounds.drawer.top - 1 && bounds.bottom <= bounds.drawer.bottom + 1, `${scenario.name}: ${id} is keyboard reachable`, bounds);
+      }
+      await page.locator('#comparison-proposal h3').scrollIntoViewIfNeeded();
+      const comparisonGeometry = await page.locator('#comparison-proposal').evaluate(el => {
+        const region = el.querySelector('.comparison-scroll'), table = region.querySelector('table'), row = table.querySelector('tbody tr');
+        return { width: el.clientWidth, overflow: region.scrollWidth > region.clientWidth + 1, captionWidth: table.querySelector('caption').getBoundingClientRect().width, cellWidth: row.querySelector('td').getBoundingClientRect().width, rowDisplay: getComputedStyle(row).display, labelDisplay: getComputedStyle(row.querySelector('.comparison-option-label')).display, rows: table.querySelectorAll('tbody tr').length, cells: table.querySelectorAll('tbody td').length };
+      });
+      expect(comparisonGeometry.rows === 2 && comparisonGeometry.cells === 4, `${scenario.name}: complete criterion/option grid remains visible`, comparisonGeometry);
+      if (comparisonGeometry.width <= 620) expect(!comparisonGeometry.overflow && comparisonGeometry.rowDisplay === 'block' && comparisonGeometry.labelDisplay === 'block' && comparisonGeometry.captionWidth >= comparisonGeometry.width - 2 && comparisonGeometry.cellWidth >= comparisonGeometry.width - 2, `${scenario.name}: narrow comparisons stack with readable full-width captions and cells`, comparisonGeometry);
+      await inspectDrawer(page, `${scenario.name}/comparison`);
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-comparison.png`) });
+      if (screenshots) { await page.locator('#comparison-proposal .comparison-scroll caption').evaluate(el => { const body = document.getElementById('question-tools-body'); body.scrollTop += el.getBoundingClientRect().top - body.getBoundingClientRect().top - 8; }); await page.screenshot({ path: join(output, `${scenario.name}-comparison-grid.png`) }); }
+      await page.locator('#comparison-keep').click(); await page.locator('#comparison-use').waitFor({ state: 'detached' });
+      expect((explorer.reconsideration.current?.id ?? null) === priorCurrent, `${scenario.name}: Keep dismisses without adoption`, {});
+      await page.locator('#comparison-reconsider').click(); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled); await page.locator('#research-review-start').click(); await page.locator('#comparison-use').click();
+      await page.waitForFunction(() => !document.getElementById('comparison-current').hidden && !document.getElementById('comparison-use'));
+      expect(comparisons === priorComparisons + 2 && await editor.evaluate(el => el === document.getElementById('answer') && el.value === 'Keep this private draft') && await composer.evaluate(el => el === document.getElementById('followup-question') && el.value === 'Keep my question 日本語 🌿'), `${scenario.name}: explicit adoption keeps both editors and their text`, {});
+      expect(explorer.doc.nodes.find(n => n.id === parent.id).research.recommendationAssessment.optionId === 'cupboard', `${scenario.name}: hypothetical adoption leaves the saved recommendation unchanged`, {});
       await page.locator('#replace-option-distributed').click();
       expect(await page.locator('#research-draft-preview').isVisible(), `${scenario.name}: pending replacement is visible before a source change`, {});
       const stale = structuredClone(explorer.doc); stale.nodes.find(n => n.id === parent.id).researchStale = true; await explorer.save(stale);
@@ -386,7 +422,7 @@ try {
         limited.recommendationAssessment.optionId = null; limited.recommendation = 'Confirm local access before choosing.';
         const target = next.nodes.find(n => n.id === parent.id); target.research = limited; delete target.researchStale; await explorer.save(next);
         await page.waitForFunction(count => document.querySelectorAll('.research .option').length === count && document.querySelector('.recommendation h3').textContent === 'No recommendation yet', count);
-        expect(await page.locator('#option-comparison').count() === Number(count > 1) && await page.locator('#use-recommendation').count() === 0 && await badges.count() === 0, `${scenario.name}: limited evidence never invents a winner and keeps viable alternatives`, { count });
+        expect(await page.locator('#option-comparison').count() === Number(count > 0) && await page.locator('#use-recommendation').count() === 0 && await badges.count() === 0, `${scenario.name}: limited evidence never invents a winner and keeps viable alternatives`, { count });
         expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: sparse result keeps the same authored draft`, { count });
         await page.locator(count < 2 ? '#research-options-limit' : '.recommendation').scrollIntoViewIfNeeded(); await inspectDrawer(page, `${scenario.name}/limited-${count}`);
         if (screenshots && count === 2) await page.screenshot({ path: join(output, `${scenario.name}-no-recommendation.png`) });

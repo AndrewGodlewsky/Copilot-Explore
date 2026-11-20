@@ -780,6 +780,8 @@ const findings = { basis: 'reasoning', summary: 'Two possible ways forward.', op
   { title: 'Whole neighborhood', description: 'Invite everyone nearby.', pros: ['More tools'], cons: ['More coordination'] },
 ], recommendation: 'Try a small pilot.', uncertainty: 'No external sources consulted.', sources: [] };
 
+const comparisonFindings = { ...findings, options: findings.options.map(option => ({ ...option, details: [{ label: 'Coordination effort', value: option.cons[0] }] })) };
+
 test('dashboard keeps the same Outline editor and private drafts, preserves filter focus and matches chart tables', async t => {
   const f = await fixture(t, 280), $ = id => f.document.getElementById(id);
   f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'DASHBOARD_PRIVATE_DRAFT'); f.type('revisit-condition', 'Private reminder');
@@ -2146,7 +2148,13 @@ test('concise research sparse results explain missing alternatives without a fab
     assert.ok($('research-options-limit'), 'sparse result has a visible limitation');
     assert.ok($('research-options-limit').textContent.includes(value.optionsLimit));
     assert.equal(f.document.querySelectorAll('.research .option').length, count);
-    assert.equal($('option-comparison'), null);
+    if (count) {
+      assert.ok($('option-comparison'), 'one existing option can be reconsidered against its criteria');
+      assert.equal($('comparison-table').querySelectorAll('thead th').length, 2, 'criterion plus the single real option; no invented alternative');
+      assert.equal($('comparison-proposal').hidden, true);
+      assert.equal($('comparison-current').hidden, true);
+      assert.equal(f.actions.some(action => action.action === 'research-reconsideration'), false);
+    } else assert.equal($('option-comparison'), null);
     if (!count) { assert.equal($('use-recommendation'), null); assert.match(f.document.querySelector('.research').textContent, /No supported answer options/); }
     f.type('answer', 'I need more context'); assert.equal($('answer').value, 'I need more context');
     assert.equal(f.explorer.doc.nodes[1].answer, '');
@@ -2188,14 +2196,14 @@ test('option comparison preserves exact duplicate values, unknowns, subjective p
   const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id);
   const summary = $('comparison-summary'); assert.ok(summary); summary.focus(); summary.click(); assert.equal($('option-comparison').open, true);
   const table = $('comparison-table'); assert.equal(table.querySelectorAll('thead th[scope=col]').length, 3);
-  assert.equal(table.querySelectorAll('tbody th[scope=row]').length, 6, 'three built-ins and three exact labels');
+  assert.equal(table.querySelectorAll('tbody th[scope=row]').length, 3, 'three question-specific exact labels');
   assert.match(table.textContent, /Lower <script>🌿<\/script>/); assert.match(table.textContent, /Setup extra/); assert.equal(table.querySelector('script'), null);
   assert.match(table.textContent, /Unknown/); assert.match(table.textContent, /Model judgment/); assert.match(table.textContent, /Cell source support unknown/);
   assert.equal(table.querySelectorAll('a').length, 0, 'no invented evidence relation');
   assert.equal(table.parentElement.tabIndex, 0); assert.equal(table.parentElement.getAttribute('role'), 'region');
   const answer = $('answer'), question = $('followup-question'); f.type('answer', 'My words'); f.type('followup-question', 'Keep this question');
   $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change', { bubbles: true }));
-  const priority = $('comparison-priority-4'); priority.focus(); priority.value = 'high'; priority.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  const priority = $('comparison-priority-1'); priority.focus(); priority.value = 'high'; priority.dispatchEvent(new f.window.Event('change', { bubbles: true }));
   const arrow = new f.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }); priority.dispatchEvent(arrow); assert.equal(arrow.defaultPrevented, false, 'native select keys are not intercepted by the canvas');
   assert.match(table.querySelector('tbody th').textContent, /Speed.*High/); assert.equal(f.document.activeElement, priority);
   assert.equal($('answer'), answer); assert.equal($('followup-question'), question); assert.equal(question.value, 'Keep this question');
@@ -2205,25 +2213,123 @@ test('option comparison preserves exact duplicate values, unknowns, subjective p
   assert.equal($('answer-state').value, 'assumption'); assert.equal(f.explorer.doc.nodes[1].answer, '');
   $('undo-addition').click(); assert.equal(answer.value, 'My words');
   $('detail-0-1').click(); assert.equal($('comparison-detail-0-1').checked, true);
-  $('comparison-criterion-4').click(); assert.equal(table.querySelectorAll('tbody th').length, 5);
+  $('comparison-criterion-1').click(); assert.equal(table.querySelectorAll('tbody th').length, 2);
   priority.focus(); await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Unrelated' }); await f.poll();
-  assert.equal($('comparison-priority-4'), priority); assert.equal(f.document.activeElement, priority); assert.equal(priority.value, 'high');
-  assert.equal($('comparison-criterion-4').checked, false); assert.equal($('detail-0-1').checked, true);
-  f.open(f.explorer.doc.nodes[2].id); f.open(node.id); assert.equal($('comparison-priority-4').value, 'high'); assert.equal($('option-comparison').open, true);
-  assert.equal($('comparison-criterion-4').checked, false); assert.equal($('comparison-detail-0-1').checked, true);
+  assert.equal($('comparison-priority-1'), priority); assert.equal(f.document.activeElement, priority); assert.equal(priority.value, 'high');
+  assert.equal($('comparison-criterion-1').checked, false); assert.equal($('detail-0-1').checked, true);
+  f.open(f.explorer.doc.nodes[2].id); f.open(node.id); assert.equal($('comparison-priority-1').value, 'high'); assert.equal($('option-comparison').open, true);
+  assert.equal($('comparison-criterion-1').checked, false); assert.equal($('comparison-detail-0-1').checked, true);
   assert.equal(f.explorer.pending, null); assert.equal(f.actions.filter(a => ['research', 'research-follow-up'].includes(a.action)).length, 0);
 });
 
-test('option comparison bounds all 35 criteria, renders complete values and rejects malformed replacement', async t => {
+test('comparison priorities and custom criteria stay local, preserve editors and invalidate an unused inline reconsideration', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.command('import', { revision: e.doc.revision, document: doc });
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); $('option-comparison').open = true;
+  f.type('answer', 'My private answer'); f.type('followup-question', 'My private follow-up');
+  const answer = $('answer'), composer = $('followup-question');
+  f.type('comparison-custom-label', 'Available volunteers 🌿'); $('comparison-add-criterion').click();
+  assert.match($('comparison-controls').textContent, /Available volunteers 🌿/);
+  assert.match($('comparison-table').textContent, /Unknown/); assert.equal(f.explorer.pending, null);
+  assert.equal(f.actions.filter(action => action.action === 'research-reconsideration').length, 0);
+  $('comparison-reconsider').click(); await until(() => !$('research-review-start').disabled, 'comparison review');
+  assert.ok($('research-review-inline').contains($('research-review-panel')));
+  assert.match($('research-review-sources').textContent, /no new retrieval/i);
+  assert.match($('research-review-comparison').textContent, /Available volunteers 🌿/);
+  assert.equal($('research-review-start').textContent, 'Reconsider recommendation');
+  assert.equal($('research-review-content').querySelector('[data-setting]'), null);
+  const priority = $('comparison-priority-0'); priority.focus(); priority.value = 'high'; priority.dispatchEvent(new f.window.Event('change'));
+  assert.equal($('research-review-start').disabled, true); assert.ok($('research-review-dialog').contains($('research-review-panel')));
+  assert.equal(f.document.activeElement, priority); assert.equal($('answer'), answer); assert.equal(answer.value, 'My private answer');
+  assert.equal($('followup-question'), composer); assert.equal(composer.value, 'My private follow-up');
+  assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.equal(f.explorer.pending, null);
+});
+
+test('comparison proposal requires Use or Keep and retains prior accepted reasoning through a failed replacement', async t => {
+  const runs = [];
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.command('import', { revision: e.doc.revision, document: doc });
+  }, runReconsideration: (_, options) => new Promise((resolve, reject) => runs.push({ ...options, resolve, reject })) }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); $('option-comparison').open = true; f.type('answer', 'Keep my answer');
+  const original = structuredClone(f.explorer.doc.nodes[1].research), answer = $('answer'), composer = $('followup-question');
+  const finish = run => run.resolve({ cells: run.prepared.comparison.criteria.flatMap(criterion => run.prepared.comparison.options.map(option => ({ criterionId: criterion.id, optionId: option.id, explanation: 'Unknown locally', basis: 'unknown', claimIds: [] }))),
+    recommendation: { optionId: run.prepared.comparison.options[1].id, reason: 'Fits these hypothetical priorities', changed: 'Priorities were made explicit', unchanged: 'Participation remains uncertain' }, uncertainty: 'No new evidence retrieved' });
+  const start = async () => { const count = runs.length; $('comparison-reconsider').click(); await until(() => !$('research-review-start').disabled, 'review ready'); $('research-review-start').click(); await until(() => runs.length > count && $('research-review-dialog').contains($('research-review-panel')), 'started reconsideration'); return runs.at(-1); };
+  let run = await start(); composer.focus(); f.type('followup-question', 'Keep this question'); finish(run);
+  await until(() => $('comparison-use'), 'proposal visible');
+  assert.equal($('comparison-current').hidden, true); assert.equal(f.document.activeElement, composer);
+  assert.match($('comparison-proposal').textContent, /Priorities were made explicit/); assert.match($('comparison-proposal').textContent, /Participation remains uncertain/);
+  $('comparison-keep').click(); await until(() => !$('comparison-use'), 'proposal dismissed');
+  run = await start(); finish(run); await until(() => $('comparison-use'), 'new proposal visible');
+  $('comparison-use').click(); await until(() => !$('comparison-current').hidden && !$('comparison-use'), 'explicitly adopted comparison');
+  assert.match($('comparison-current').textContent, /Whole neighborhood/);
+  run = await start(); run.reject(Error('Fixture unavailable')); await until(() => !f.explorer.pending, 'replacement failed'); await f.poll();
+  assert.match($('comparison-current').textContent, /Fits these hypothetical priorities/);
+  assert.deepEqual(f.explorer.doc.nodes[1].research, original); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep my answer'); assert.equal($('followup-question'), composer);
+});
+
+test('comparison priority A-B-A cannot revive a proposal or bypass its disabled Use action', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.command('import', { revision: e.doc.revision, document: doc });
+  }, runReconsideration: async (_, { prepared }) => ({ cells: prepared.comparison.criteria.flatMap(criterion => prepared.comparison.options.map(option => ({ criterionId: criterion.id, optionId: option.id, explanation: 'Unknown locally', basis: 'unknown', claimIds: [] }))),
+    recommendation: { optionId: null, reason: 'Needs more context', changed: 'Priorities are explicit', unchanged: 'Both options remain available' }, uncertainty: 'No new retrieval' }) }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); $('option-comparison').open = true;
+  $('comparison-reconsider').click(); await until(() => !$('research-review-start').disabled, 'review ready'); $('research-review-start').click();
+  await until(() => $('comparison-use'), 'proposal visible');
+  const priority = $('comparison-priority-0');
+  for (const value of ['high', 'normal']) { priority.value = value; priority.dispatchEvent(new f.window.Event('change')); }
+  assert.equal($('comparison-use').disabled, true);
+  $('comparison-use').dispatchEvent(new f.window.MouseEvent('click', { bubbles: true })); await delay(25);
+  assert.equal(f.explorer.uiSnapshot().reconsideration.current, null);
+  assert.equal(f.actions.filter(action => action.action === 'comparison-accept').length, 0);
+});
+
+test('comparison with no saved details bounds custom criteria and selection without silently dropping inputs', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = findings; await e.command('import', { revision: e.doc.revision, document: doc }); } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); $('option-comparison').open = true;
+  assert.equal($('comparison-reconsider').disabled, true); assert.match($('comparison-table').textContent, /Older research without details/);
+  const add = label => { f.type('comparison-custom-label', label); $('comparison-add-criterion').click(); };
+  add('中文🌿'.repeat(40)); assert.equal($('comparison-controls').querySelectorAll('select').length, 1);
+  add('中文🌿'.repeat(40) + 'x'); assert.equal($('comparison-controls').querySelectorAll('select').length, 1, 'overlong programmatic input rejected');
+  add('  COST '); add('cost'); assert.equal($('comparison-controls').querySelectorAll('select').length, 2, 'normalized duplicate rejected');
+  for (let index = 2; index < 8; index++) add(`Local criterion ${index}`);
+  add('Ninth'); assert.equal($('comparison-controls').querySelectorAll('select').length, 8);
+  assert.equal($('comparison-reconsider').disabled, false); assert.equal(f.explorer.pending, null);
+  $('comparison-reconsider').click(); await until(() => !$('research-review-start').disabled, 'eight criteria reviewed');
+  assert.match($('research-review-comparison').textContent, /Local criterion 7/); assert.doesNotMatch($('research-review-comparison').textContent, /Ninth/);
+  assert.equal(f.actions.filter(item => item.action === 'research-reconsideration').length, 0);
+});
+
+test('priority edits during reconsideration cannot adopt the late result after A-B-A, navigation or page reload', async t => {
+  let run;
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.command('import', { revision: e.doc.revision, document: doc }); },
+    runReconsideration: (_, options) => new Promise(resolve => { run = { ...options, resolve }; }) }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); $('option-comparison').open = true; $('comparison-reconsider').click(); await until(() => !$('research-review-start').disabled, 'review ready'); $('research-review-start').click(); await until(() => run && $('research-review-dialog').contains($('research-review-panel')), 'running');
+  const priority = $('comparison-priority-0'); for (const value of ['high', 'normal']) { priority.value = value; priority.dispatchEvent(new f.window.Event('change')); }
+  f.open(f.explorer.doc.nodes[2].id);
+  run.resolve({ cells: run.prepared.comparison.criteria.flatMap(criterion => run.prepared.comparison.options.map(option => ({ criterionId: criterion.id, optionId: option.id, explanation: 'Unverified <script>🌿</script>', basis: 'unknown', claimIds: [] }))), recommendation: { optionId: null, reason: 'Need context', changed: 'Priorities included', unchanged: 'No evidence' }, uncertainty: 'No new retrieval' });
+  await until(() => !f.explorer.pending, 'late result'); await f.poll(); f.open(node.id);
+  assert.equal($('comparison-use').disabled, true); assert.equal($('comparison-proposal').querySelector('script'), null);
+  const reloaded = await fixture(t, 340, undefined, false, { explorer: f.explorer }); reloaded.open(node.id);
+  assert.equal(reloaded.document.getElementById('comparison-use').disabled, true, 'retained proposal needs a new page-local review');
+  $('comparison-keep').click(); await until(() => !f.explorer.reconsideration.proposal, 'discarded');
+  await reloaded.poll(); assert.equal(reloaded.document.getElementById('comparison-use'), null);
+});
+
+test('option comparison bounds all 32 criteria, renders complete values and rejects malformed replacement', async t => {
   const r = structuredClone(findings);
   r.options = Array.from({ length: 4 }, (_, i) => ({ ...r.options[0], title: `Option ${i}`, details: Array.from({ length: 8 }, (_, j) => ({ label: `${i}-${j}<img>中文`.padEnd(80, 'x'), value: `${i}-${j}🌿<script>`.padEnd(1000, '文') })) }));
   const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = r; await e.command('import', { revision: e.doc.revision, document: doc }); } });
   f.open(f.explorer.doc.nodes[1].id); const $ = id => f.document.getElementById(id), table = $('comparison-table');
-  assert.equal(table.querySelectorAll('thead th').length, 5); assert.equal(table.querySelectorAll('tbody tr').length, 35);
+  assert.equal(table.querySelectorAll('thead th').length, 5); assert.equal(table.querySelectorAll('tbody tr').length, 32);
   assert.equal(table.querySelectorAll('input').length, 32); assert.equal(table.querySelector('img,script'), null);
+  assert.equal($('comparison-reconsider').disabled, true); assert.match($('comparison-priority-status').textContent, /32 criteria selected/);
+  for (const control of $('option-comparison').querySelectorAll('[id]')) assert.equal(f.document.querySelectorAll(`#${control.id}`).length, 1, `${control.id} must not collide with another workspace`);
   assert.equal($('comparison-detail-3-7').nextSibling.textContent, r.options[3].details[7].value);
   for (const checkbox of f.document.querySelectorAll('.comparison-controls input')) checkbox.click();
-  assert.match(table.textContent, /Select at least one criterion/); $('comparison-criterion-34').click();
+  assert.match(table.textContent, /Select at least one criterion/); $('comparison-criterion-31').click();
   const invalid = structuredClone(f.explorer.doc); invalid.nodes[1].research.options[0].details.push({ label: 'ninth', value: 'invalid' });
   await assert.rejects(f.explorer.command('import', { revision: f.explorer.doc.revision, document: invalid }), /detail/i);
   await f.poll(); assert.equal($('comparison-table'), table); assert.equal(table.querySelectorAll('tbody th').length, 1);
@@ -2231,7 +2337,7 @@ test('option comparison bounds all 35 criteria, renders complete values and reje
 });
 
 test('option comparison resets on observed research replacement even off-node and on panel reload', async t => {
-  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = findings; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.command('import', { revision: e.doc.revision, document: doc }); } });
   const node = f.explorer.doc.nodes[1], $ = id => f.document.getElementById(id); f.open(node.id);
   const priority = $('comparison-priority-0'); assert.ok(priority); priority.value = 'high'; priority.dispatchEvent(new f.window.Event('change', { bubbles: true }));
   const original = structuredClone(f.explorer.doc); f.open(f.explorer.doc.nodes[2].id);
@@ -2242,14 +2348,14 @@ test('option comparison resets on observed research replacement even off-node an
   $('comparison-priority-0').value = 'low'; $('comparison-priority-0').dispatchEvent(new f.window.Event('change', { bubbles: true }));
   const reloaded = await fixture(t, 340, undefined, false, { explorer: f.explorer }); reloaded.open(node.id);
   assert.equal(reloaded.document.getElementById('comparison-priority-0').value, 'normal');
-  assert.equal(reloaded.document.getElementById('comparison-table').querySelectorAll('tbody tr').length, 3, 'no-details legacy research still compares judgments');
+  assert.equal(reloaded.document.getElementById('comparison-table').querySelectorAll('tbody tr').length, 1, 'question-specific details remain available');
   const css = await readFile(new URL('../com.github.copilot/extensions/explorer/web/style.css', import.meta.url), 'utf8');
   assert.match(css, /\.comparison-scroll\s*\{[^}]*overflow-x:\s*auto/);
 });
 
 test('research follow-up keeps typing and focus during polling, renders prior evidence and retains node-scoped history on navigation', async t => {
   let finish;
-  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = findings; await e.command('import', { revision: e.doc.revision, document: doc }); }, runFollowup: () => new Promise(resolve => { finish = resolve; }) });
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.command('import', { revision: e.doc.revision, document: doc }); }, runFollowup: () => new Promise(resolve => { finish = resolve; }) });
   const node = f.explorer.doc.nodes[1]; f.open(node.id);
   const question = f.document.getElementById('followup-question'); assert.ok(question);
   question.value = 'What if <script>cost</script> doubles?'; question.dispatchEvent(new f.window.Event('input', { bubbles: true }));
@@ -2307,7 +2413,7 @@ test('claim evidence disclosure shows literal support, source navigation and imp
   const summary = disclosure.querySelector('summary'); summary.focus(); assert.equal(f.document.activeElement, summary); summary.click(); assert.equal(disclosure.open, true);
   assert.match(disclosure.textContent, /Source paraphrase/); assert.match(disclosure.textContent, /Imported read metadata; not observed by this installation/); assert.match(disclosure.textContent, /2026-11-17T12:00:00.000Z/);
   const link = disclosure.querySelector('a'); assert.equal(link.href, 'https://example.com/source?q=1'); assert.equal(link.target, '_blank'); assert.equal(link.rel, 'noopener noreferrer'); assert.equal(link.querySelector('img'), null);
-  assert.equal(f.document.getElementById('comparison-table').querySelector('a'), null); assert.match(f.document.getElementById('comparison-table').textContent, /Cell source support unknown/);
+  assert.equal(f.document.getElementById('comparison-table').querySelector('a'), null); assert.match(f.document.getElementById('comparison-table').textContent, /Select at least one criterion/);
   assert.match(f.document.getElementById('claim-c2').textContent, /Model reasoning/); assert.match(f.document.getElementById('claim-c3').textContent, /Unknown support/);
   assert.match(f.document.querySelector('.research').textContent, /Selected model assertions/);
   const savedAnswer = f.explorer.doc.nodes[1].answer; f.document.getElementById('use-recommendation').click();
@@ -2536,7 +2642,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   let explorer = options.explorer ?? await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
     cleaner: options.cleaner, briefHelper: options.briefHelper, checkHelper: options.checkHelper, projectRoot: options.projectRoot,
     questionHelper: options.questionHelper,
-    researcher: { models: fixtureResearchModels, runFollowup: options.runFollowup, run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
+    researcher: { models: fixtureResearchModels, runFollowup: options.runFollowup, runReconsideration: options.runReconsideration, run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
   }).load();
   if (!options.explorer) {
   await explorer.command('start', { topic: 'A tool library' });

@@ -1,4 +1,6 @@
 import { parseFollowup } from './research-followup.mjs';
+import { parseReconsideration } from './research-comparison.mjs';
+import { toolFreeConfig, validateNoTools } from './tool-free.mjs';
 import { readFile } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -119,11 +121,22 @@ export function createResearcher(parent, options = {}) {
   };
   const helper = createOwnedHelper(parent, 'research', prepare, options);
   const followup = createOwnedHelper(parent, 'research-follow-up', prepare, options);
+  const reconsideration = createOwnedHelper(parent, 'research-reconsideration', (prepared, { fail }) => {
+    if (Buffer.byteLength(prepared.instructions) + Buffer.byteLength(prepared.prompt) > RESEARCH_CONTEXT_LIMIT) throw fail('The prepared comparison exceeds its request limit.');
+    return { instructions: prepared.instructions, prompt: prepared.prompt, config: toolFreeConfig,
+      validateTools: value => validateNoTools(value, fail), stage: 'Reconsidering the reviewed priorities',
+      parse: content => { try { return parseReconsideration(content, prepared); } catch (error) { throw fail(error.message); } },
+    };
+  }, options);
   return { async models() {
     let values;
     try { values = await deadline(Promise.all([parent.rpc.model.list({ skipCache: true }), parent.rpc.model.getCurrent().catch(() => null), parent.rpc.gitHubAuth.getStatus()]), 20000); }
     catch { throw Error('The Copilot model catalog could not be loaded. Check Copilot sign-in and refresh Research model settings.'); }
     return researchModelCatalog(...values);
+  }, runReconsideration(context, options = {}) {
+    const prepared = options.prepared;
+    if (prepared?.operation !== 'research-reconsideration' || !prepared.comparison || !prepared.modelCapture || prepared.limits?.timeLimitMs !== 180000 || prepared.limits?.toolAttemptLimit !== 0) throw Error('Review the comparison and Research model before reconsidering.');
+    return reconsideration.run(prepared, options);
   }, runFollowup(context, options = {}) {
     if (!options.prepared?.followup) throw new Error('Review the follow-up before starting.');
     return followup.run(options.prepared, options);
@@ -131,5 +144,5 @@ export function createResearcher(parent, options = {}) {
     const settings = researchSettings(options.prepared?.settings ?? options.settings);
     const prepared = Object.freeze({ ...(options.prepared ?? prepareContext(context, researchFraming(context, settings))), settings, limits: researchLimits(settings) });
     return helper.run(prepared, options);
-  }, close: () => Promise.allSettled([helper.close(), followup.close()]) };
+  }, close: () => Promise.allSettled([helper.close(), followup.close(), reconsideration.close()]) };
 }

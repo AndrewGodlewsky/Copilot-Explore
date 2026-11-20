@@ -1,6 +1,7 @@
 import { scenarioMarkdown, scenarioExportNote } from './scenario-export.mjs';
 import { handoffMarkdown, captureHandoff, handoffFreshness, acceptHandoff, validateHandoff } from './implementation-handoff.mjs';
 import { followupResult, retainExchanges, sameFollowup } from './research-followup.mjs';
+import { comparisonInput, comparisonResult } from './research-comparison.mjs';
 import { ProjectContext } from './project-context.mjs';
 import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
@@ -67,6 +68,7 @@ export class Explorer {
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
     this.researchReview = new ResearchReview();
+    this.reconsideration = null;
     this.portableReferences = new PortableReferences();
     this.scenarioPreferences = new ScenarioPreferences();
     this.changeSummaries = new ChangeSummary();
@@ -182,7 +184,7 @@ export class Explorer {
     }
     this.replaceStorage(store);
     this.file = store.context.file; this.doc = store.document; this.activeKey = store.context.key;
-    this.researchReview.clear(); this.followup = null; this.recoveryNotice = null; this.exportObservation = null;
+    this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.recoveryNotice = null; this.exportObservation = null;
     this.reconcileCleanup();
     await this.scenarioPreferences.observe(this);
   }
@@ -518,7 +520,7 @@ export class Explorer {
     // The only in-place public mutations are pending.progress and preview.stale.
     const stamp = [this.doc, this.activeKey, !!this.library, this.error, this.projectChange,
       JSON.stringify(this.pending), this.preview, this.preview?.stale,
-      this.questionSource, this.scenarioPreferences.observation, this.contextCoverage, this.recoveryNotice, this.exportObservation, this.followup];
+      this.questionSource, this.scenarioPreferences.observation, this.contextCoverage, this.recoveryNotice, this.exportObservation, this.followup, this.reconsideration];
     if (!this.pollStamp || stamp.some((value, index) => value !== this.pollStamp[index])) {
       this.pollStamp = stamp; this.pollCursor = randomUUID();
     }
@@ -536,7 +538,7 @@ export class Explorer {
     if (this.contributionView?.document !== this.doc) this.contributionView = { document: this.doc, value: contributionStatus(this.doc) };
     if (this.commentView?.document !== this.doc) this.commentView = { document: this.doc, value: commentStatuses(this.doc) };
     if (this.reviewHandoffView?.document !== this.doc) this.reviewHandoffView = { document: this.doc, value: handoffStatuses(this.doc) };
-    return { ...this.snapshot(), reviewHandoffs: structuredClone(this.reviewHandoffView.value), comments: structuredClone(this.commentView.value), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
+    return { ...this.snapshot(), reviewHandoffs: structuredClone(this.reviewHandoffView.value), comments: structuredClone(this.commentView.value), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), reconsideration: this.reconsiderationSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
   }
   async checkQuestionSource(nodeId) {
     const source = this.questionSource;
@@ -552,7 +554,7 @@ export class Explorer {
   async attach(key, expected) {
     const record = await this.library.opened(key, this.binding, expected);
     await this.changeStorage(null);
-    this.researchReview.clear(); this.followup = null;
+    this.researchReview.clear(); this.followup = null; this.reconsideration = null;
     this.file = record.file; this.doc = record.document; this.activeKey = key;
     this.recoveryNotice = null; this.exportObservation = null;
     this.reconcileCleanup();
@@ -616,6 +618,7 @@ export class Explorer {
       if (this.projectChange) throw Error(this.projectChange.message);
       try {
         const current = await this.projectStore.current();
+        this.syncReconsideration(current.working);
         if (current.baseDigest !== this.projectStore.baseDigest || current.stamp !== this.projectStore.fileStamp || current.working.revision !== this.doc.revision) throw Error('Project source changed.');
         return current.working;
       } catch { this.markProjectChanged(); throw Error(this.projectChange.message); }
@@ -624,6 +627,7 @@ export class Explorer {
     try { saved = this.library ? await this.library.resolve(this.activeKey) :
       { file: this.file, document: validateDocument(JSON.parse(await readFile(this.file, 'utf8'))) }; }
     catch { throw new Error('The saved journey could not be read. Open Recovery to retry or inspect validated saved versions. Original files are preserved.'); }
+    this.syncReconsideration(saved.document);
     if (saved.file !== this.file || saved.document.id !== this.doc.id || saved.document.rootId !== this.doc.rootId || saved.document.createdAt !== this.doc.createdAt || saved.document.revision < this.doc.revision ||
       (saved.document.revision === this.doc.revision && JSON.stringify(saved.document) !== JSON.stringify(validateDocument(this.doc)))) {
       throw new Error('This journey changed on disk. Reopen it from the library.');
@@ -768,7 +772,7 @@ export class Explorer {
     this.adrFormats.clear();
     this.projectChange = { path: this.projectStore.context.relativePath, message: 'The project file or Git checkout changed or became unavailable. Review project changes before editing. The displayed map and private drafts are preserved.' };
     this.projectReconciliation = new ProjectReconciliation(this.projectRepository, this.projectStore);
-    this.researchReview.clear(); this.followup = null; this.clearPending();
+    this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.clearPending();
     if (this.preview) this.preview.stale = true;
     for (const work of [this.cleanup, this.help, this.briefWork, this.checkWork]) if (work) { work.abort.abort(); work.status = 'stale'; work.error = 'Project inputs changed. Review the project file, then explicitly retry.'; }
     this.helpContexts.clear();
@@ -1039,10 +1043,49 @@ export class Explorer {
     const { dependencies, scenarioPolicy, ...value } = this.followup;
     return structuredClone({ ...value, scenario: scenarioPolicy?.label, historical: !this.currentFollowup() });
   }
+  reconsiderationFresh(value, doc = this.doc) {
+    const node = doc?.nodes.find(item => item.id === value?.nodeId);
+    if (!value || value.historical || !node || node.researchStale || value.journey !== (this.activeKey ?? doc.id)) return false;
+    return this.scenarioPreferences.matches(value.scenarioPolicy) && sameResearchSources(value.dependencies, doc) && sameResearchDestination(value.dependencies, doc);
+  }
+  syncReconsideration(doc = this.doc) {
+    for (const role of ['current', 'proposal']) {
+      const value = this.reconsideration?.[role];
+      if (value && !value.historical && !this.reconsiderationFresh(value, doc)) this.reconsideration = { ...this.reconsideration, [role]: { ...value, historical: true } };
+    }
+  }
+  reconsiderationSnapshot() {
+    if (!this.reconsideration) return null;
+    this.syncReconsideration();
+    return Object.fromEntries(['current', 'proposal'].map(role => {
+      const value = this.reconsideration[role];
+      if (!value) return [role, null];
+      const { dependencies, scenarioPolicy, ...visible } = value;
+      return [role, structuredClone({ ...visible, scenario: scenarioPolicy?.label })];
+    }));
+  }
+  async reconsiderationChoice(action, input) {
+    const accept = action === 'comparison-accept';
+    if (this.closed || !this.doc || !input || typeof input !== 'object' || Array.isArray(input) ||
+      Object.keys(input).some(key => !['action', 'scope', 'revision', 'id', 'journey', 'nodeId', ...(accept ? ['comparison'] : [])].includes(key))) throw Error('Invalid comparison choice.');
+    const proposal = this.reconsideration?.proposal;
+    if (!proposal || input.id !== proposal.id || input.journey !== proposal.journey || input.nodeId !== proposal.nodeId || input.journey !== (this.activeKey ?? this.doc.id)) throw Error('This comparison proposal is obsolete. Review the current question again.');
+    if (!accept) { this.reconsideration = { ...this.reconsideration, proposal: null }; return this.uiSnapshot(); }
+    if (this.pending) throw Error('Wait for the current request or cancel it before using this comparison.');
+    if (JSON.stringify(comparisonInput(input.comparison)) !== JSON.stringify({ criteria: proposal.comparison.criteria })) throw Error('Your criteria or priorities changed. Review and reconsider them again.');
+    await this.withDocumentLock(async () => {
+      await this.assertScenarioPolicy(proposal.scenarioPolicy);
+      const current = await this.readCurrent(); this.syncReconsideration(current);
+      if (this.closed || !this.reconsiderationFresh(this.reconsideration?.proposal, current)) throw Error('This comparison is stale because its saved context changed. Review current research again.');
+      this.doc = current; this.reconsideration = { current: this.reconsideration.proposal, proposal: null };
+    });
+    return this.uiSnapshot();
+  }
   reconcileResearch() {
+    this.syncReconsideration();
     if (this.followup && !this.currentFollowup()) this.followup = { ...this.followup, historical: true };
     const work = this.researchWork;
-    if (work && (!sameResearchSources(work.dependencies, this.doc) || work.followup && (!sameResearchDestination(work.dependencies, this.doc) || work.historyId && !this.currentFollowup(this.doc, work.dependencies.nodeId)))) {
+    if (work && (!sameResearchSources(work.dependencies, this.doc) || work.comparison && (!sameResearchDestination(work.dependencies, this.doc) || findNode(this.doc, work.dependencies.nodeId).researchStale) || work.followup && (!sameResearchDestination(work.dependencies, this.doc) || work.historyId && !this.currentFollowup(this.doc, work.dependencies.nodeId)))) {
       this.clearPending(); this.error = 'Research discarded because its saved source context changed. Your newer answers are saved; research again when ready.';
     }
   }
@@ -1089,22 +1132,22 @@ export class Explorer {
   }
   async request(kind, nodeId, scope, reviewed) {
     this.dashboard?.invalidate();
-    const id = reviewed?.requestId ?? randomUUID(), webResearch = kind === 'research' || kind === 'research-follow-up';
-    if (webResearch && !reviewed) throw new Error('Review research context before starting.');
+    const id = reviewed?.requestId ?? randomUUID(), ownedResearch = ['research', 'research-follow-up', 'research-reconsideration'].includes(kind);
+    if (ownedResearch && !reviewed) throw new Error('Review research context before starting.');
     const scenarioPolicy = reviewed?.scenarioPolicy ?? await this.scenarioPolicy();
     if (reviewed) await this.assertScenarioPolicy(scenarioPolicy);
     const prepared = reviewed ?? this.prepareRequest(kind, nodeId, id, scope, scenarioPolicy.label);
-    if (webResearch) this.requireResearchRelease();
+    if (ownedResearch) this.requireResearchRelease();
     this.contextCoverage = { journey: this.activeKey ?? this.doc.id, kind, nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage };
     this.pending = { id, kind, nodeId, startedAt: new Date().toISOString() };
     this.error = '';
     // Research owns its execution timer; waiting for release does not spend that allowance.
-    this.timer = webResearch ? null : setTimeout(() => void this.transact(() => {
+    this.timer = ownedResearch ? null : setTimeout(() => void this.transact(() => {
       if (this.pending?.id === id) { this.clearPending(); this.error = 'Copilot has not returned a result yet. Check the chat, then try again. Your answers are saved.'; }
     }), this.timeoutMs);
     this.timer?.unref?.();
     if (kind === 'questions') this.questionSource = { journey: this.activeKey ?? this.doc.id, nodeId, dependencies: prepared.dependencies, scenarioPolicy, ...(['question-regeneration', 'adr-questions'].includes(prepared.operation) ? { purpose: prepared.operation } : {}) };
-    if (webResearch) {
+    if (ownedResearch) {
       const controller = new AbortController(); this.researchAbort = controller;
       const work = { ...prepared, scenarioPolicy, file: this.file, key: this.activeKey, abort: controller }; this.researchWork = work;
       const active = () => !this.closed && this.pending?.id === id && this.researchWork === work && !controller.signal.aborted;
@@ -1115,7 +1158,7 @@ export class Explorer {
         await this.assertScenarioPolicy(scenarioPolicy);
         if (!active()) return;
         if (!this.researcher) throw new Error('Research requires the installed Copilot desktop SDK.');
-        return this.researcher[prepared.followup ? 'runFollowup' : 'run'](prepared.context, { prepared, signal: controller.signal, onProgress: progress => {
+        return this.researcher[prepared.comparison ? 'runReconsideration' : prepared.followup ? 'runFollowup' : 'run'](prepared.context, { prepared, signal: controller.signal, onProgress: progress => {
           if (active()) this.pending.progress = progress;
         } });
       });
@@ -1130,6 +1173,16 @@ export class Explorer {
         if (!sameResearchSources(work.dependencies, current)) throw new Error('The saved research source context changed. The result was discarded; refresh the journey and research again.');
         if (!sameResearchDestination(work.dependencies, current)) throw new Error('Saved research changed in another canvas. The conflicting result was discarded; refresh the journey.');
         if (!active()) return;
+        if (prepared.comparison) {
+          if (findNode(current, nodeId).researchStale) throw Error('Research became stale while reconsidering. Review current research again.');
+          const checked = comparisonResult(result, prepared);
+          this.syncReconsideration(current); this.doc = current;
+          this.reconsideration = { current: this.reconsideration?.current ?? null, proposal: {
+            id: randomUUID(), journey: this.activeKey ?? current.id, nodeId, comparison: prepared.comparison, result: checked,
+            dependencies: prepared.dependencies, scenarioPolicy, model: researchModelSummary(prepared.modelCapture), historical: false,
+          } };
+          this.clearPending(); this.error = ''; return;
+        }
         if (prepared.followup) {
           const previous = this.currentFollowup(current, nodeId);
           if ((previous?.id ?? null) !== prepared.historyId) throw new Error('Follow-up history changed. Review and ask again.');
@@ -1177,6 +1230,7 @@ export class Explorer {
   }
   command(action, input = {}) {
     return this.transact(async () => {
+      if (['comparison-accept', 'comparison-dismiss'].includes(action)) return this.reconsiderationChoice(action, input);
       if (action === 'open-reference') {
         const { action: ignoredAction, scope: ignoredScope, ...fields } = input;
         const result = await this.portableReferences.open(this, fields);
@@ -1250,7 +1304,7 @@ export class Explorer {
         });
         return this.uiSnapshot();
       }
-      if (action === 'research' || action === 'research-follow-up') {
+      if (['research', 'research-follow-up', 'research-reconsideration'].includes(action)) {
         if (!isQuestion(findNode(this.doc, input.nodeId))) throw new Error('Select a question to research.');
         if (this.pending) throw new Error('Wait for Copilot or cancel the current request first.');
         this.requireResearchRelease();
@@ -1267,7 +1321,7 @@ export class Explorer {
       if (action === 'library-update' && this.library) {
         await this.library.update(input.key, input.patch, input.metadataRevision); this.dashboard?.invalidate(); return this.uiSnapshot();
       }
-      if (this.pending && !(['research', 'research-follow-up'].includes(this.pending.kind) && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
+      if (this.pending && !(['research', 'research-follow-up', 'research-reconsideration'].includes(this.pending.kind) && action === 'answer' && input.expand !== true)) throw new Error('Wait for Copilot or cancel the current request first. Save answer is available during research; Save & explore deeper starts another request.');
       if (this.preview && (['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'import', 'restore', 'restore-branch', 'restart-branch', 'questions', 'add-direction'].includes(action) || action === 'answer' && input.expand === true)) throw new Error('Dismiss the unsaved question preview before switching journeys, restoring or generating again.');
       if (this.doc && input.revision !== this.doc.revision) throw new Error('The map changed. Refresh and try again; your draft is still here.');
       const next = structuredClone(this.doc);
@@ -1392,6 +1446,7 @@ export class Explorer {
             await this.attach(record.key); break;
           }
           await this.save(importedDocument(input.document), 'Imported saved map');
+          this.reconsideration = null;
           break;
         case 'open-project-entry':
           if (!this.projectLibrary || input.listing !== this.projectLibrary.listing) throw Error('Project library selection expired. Refresh the folder.');
@@ -1523,7 +1578,7 @@ export class Explorer {
     return this.transact(async () => {
       const pending = this.pending;
       if (!pending || pending.id !== input?.requestId) throw new Error('This request was cancelled, replaced, or already completed. Do not retry it.');
-      if (['research', 'research-follow-up'].includes(pending.kind)) throw new Error('Research is owned by the isolated helper, not the attached chat.');
+      if (['research', 'research-follow-up', 'research-reconsideration'].includes(pending.kind)) throw new Error('Research is owned by the isolated helper, not the attached chat.');
       if (kind === 'fail') { this.error = text(input.message, 'Error message', 2000); this.clearPending(); return { saved: false }; }
       if (pending.kind !== kind) throw new Error('The response type does not match this request.');
       try { await this.checkQuestionSource(pending.nodeId); }
@@ -1534,5 +1589,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
+  async close() { this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

@@ -5,7 +5,7 @@ export class ResearchReviewClient {
     this.context = null; this.value = null; this.loading = false; this.error = ''; this.abort = null;
     this.projectDraft = ''; this.projectDirty = false;
   }
-  open(context) { this.close(); this.context = context.purpose === 'question-regeneration' ? { ...context, excluded: [], retained: [] } : ['implementation-handoff', 'adr-scope', 'adr-questions', 'adr-draft'].includes(context.purpose) ? { ...context } : { ...context, settings: researchSettings(), excluded: [] }; void this.prepare(); }
+  open(context) { this.close(); this.context = context.purpose === 'question-regeneration' ? { ...context, excluded: [], retained: [] } : context.purpose === 'research-reconsideration' ? { ...context, excluded: [] } : ['implementation-handoff', 'adr-scope', 'adr-questions', 'adr-draft'].includes(context.purpose) ? { ...context } : { ...context, settings: researchSettings(), excluded: [] }; void this.prepare(); }
   retain(ids) { if (this.context?.purpose === 'question-regeneration') { this.context = { ...this.context, retained: [...ids] }; void this.prepare(); } }
   settings(value) {
     if (!this.context) return;
@@ -17,7 +17,7 @@ export class ResearchReviewClient {
     const sequence = ++this.sequence, input = { action: 'prepare', ...this.context, clientId: this.clientId, sequence, ...(project ? { project } : {}) };
     this.value = null; this.error = ''; this.loading = true; this.changed();
     // Research also waits for the host's 20-second model metadata lookup.
-    const timeout = setTimeout(() => abort.abort(), input.purpose ? 10000 : 30000);
+    const timeout = setTimeout(() => abort.abort(), !input.purpose || input.purpose === 'research-reconsideration' ? 30000 : 10000);
     try {
       const response = await this.fetch('api/research-review', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) });
       const value = await response.json();

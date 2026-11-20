@@ -14,6 +14,7 @@ import { ResearchReviewClient } from './research-review-client.mjs';
 import { researchSettingsText } from './research-policy.mjs';
 import { researchProfiles, profileLabel } from './research-guidance.mjs';
 import { ProjectModeClient } from './project-mode-client.mjs';
+import { ProjectBriefClient } from './project-brief-client.mjs';
 import { effectiveMode, MODES } from './modes.mjs';
 import { attachNavigation } from './navigation.mjs';
 import { attachMinimap } from './minimap.mjs';
@@ -57,7 +58,11 @@ let impactDocument = null, impactIndex = null, impactDisplay = false;
 let criticalPrior = null, criticalDocument = null, criticalResult = null;
 // Received saved snapshots are immutable. Memoize their content keys without retaining old documents.
 const impactKeys = new WeakMap();
-const projectMode = new ProjectModeClient({ $, fetch: (...args) => fetch(...args), journey: () => state.activeKey ?? state.document?.id, active: () => !closed && !suspended });
+let projectBrief;
+const projectMode = new ProjectModeClient({ $, fetch: (...args) => fetch(...args), journey: () => state.activeKey ?? state.document?.id, active: () => !closed && !suspended,
+  onChange: () => projectBrief?.scopeChanged(), briefState: () => projectBrief?.value });
+projectBrief = new ProjectBriefClient({ $, fetch: (...args) => fetch(...args), journey: () => state.activeKey ?? state.document?.id, active: () => !closed && !suspended,
+  scope: () => projectMode.value, changed: () => projectMode.render() });
 function impactKey(document) {
   if (!impactKeys.has(document)) impactKeys.set(document, decisionImpactKey(document));
   return impactKeys.get(document);
@@ -797,6 +802,7 @@ function apply(next, reset = false) {
   }
   signature = stamp; state = next;
   projectMode.observe();
+  projectBrief.observe();
   if (refreshAdrUpdate && adrFile) { adrFile.inspection = null; $('adr-file-inspection').hidden = true; adrFile.needsInspect = true; scheduleAdrInspection(); }
   comments.update();
   reviewHandoffs.update();
@@ -5071,6 +5077,7 @@ const fontsChanged = () => { fontEpoch++; scheduleLayout(); };
 document.fonts?.addEventListener('loadingdone', fontsChanged);
 window.addEventListener('pagehide', event => {
   projectMode.suspend();
+  projectBrief.suspend();
   changeSummary.close(false);
   portableReferences.close(false);
   closeContributors(false);
@@ -5113,6 +5120,7 @@ window.addEventListener('pageshow', event => {
   if (!event.persisted || closed || !suspended) return;
   suspended = false; pageEpoch++; pollFailures = 0; stateCursor = null; workspace?.refreshRevisit?.(); void (poll());
   projectMode.resume();
+  projectBrief.resume();
   minimap.update();
 });
 async function poll() {
@@ -5138,6 +5146,7 @@ async function poll() {
     stateCursor = nextCursor; pollFailures = 0; connectionStatus();
     await questionHelp.checkRetained();
     if (current()) void projectMode.checkStatus();
+    if (current()) void projectBrief.checkStatus();
     if (current() && $('brief-dialog').open) await requestBrief('poll');
     if (current() && $('check-dialog').open) await requestCheck('poll');
   } catch {

@@ -95,3 +95,20 @@ test('root, journey and source changes clear retained receipts; binary text neve
   const f = await fixture(t); await writeFile(join(f.root, 'README.md'), Buffer.from([65, 0, 66])); const approved = await f.approve();
   await assert.rejects(f.request('read', { token: approved.readToken }), /Binary/); assert.equal((await f.request('status')).receipt, undefined);
 });
+
+test('brief captures bind exact reviewed sources, policy and journey without borrowing the read cancellation handle', async t => {
+  const f = await fixture(t); assert.equal(f.mode.capture(), null);
+  const approved = await f.approve(); assert.equal(f.mode.capture(), null); await f.request('read', { token: approved.readToken });
+  const capture = f.mode.capture(), reads = f.reads(); assert.equal(capture.sources[0].excerpt, canary);
+  assert.equal(await f.mode.captureCurrent(capture), true); assert.equal(f.reads(), reads, 'metadata freshness reads no contents');
+  const forged = structuredClone(capture); forged.sources[0].name = 'docs/design.md';
+  assert.equal(await f.mode.captureCurrent(forged, { content: true }), false); assert.equal(f.reads(), reads, 'a changed capture cannot select another file');
+  const owner = new AbortController(); f.mode.pending = owner;
+  assert.equal(await f.mode.captureCurrent(capture, { content: true }), true); assert.equal(f.mode.pending, owner); assert.equal(f.reads(), reads + 1);
+  const abort = new AbortController(); abort.abort(); await assert.rejects(f.mode.captureCurrent(capture, { content: true, signal: abort.signal })); assert.equal(f.reads(), reads + 1);
+  const originalRead = f.reader.read;
+  f.reader.read = async (...args) => { const value = await originalRead(...args); await writeFile(join(f.root, '.gitignore'), 'README.md\n'); return value; };
+  assert.equal(await f.mode.captureCurrent(capture, { content: true }), false, 'policy changes during verification reject the capture');
+  assert.equal(await f.mode.captureCurrent(capture), false);
+  f.setJourney('other'); assert.equal(f.mode.capture(), null); assert.equal(await f.mode.captureCurrent(capture), false);
+});

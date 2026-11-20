@@ -33,6 +33,22 @@
     <div class="guidance-actions"><button id="project-mode-refresh" type="button">Refresh project</button><button id="project-mode-prepare" type="button">Review scope</button><button id="project-mode-approve" type="button" class="primary" disabled>Enable reviewed scope</button><button id="project-mode-disable" type="button" disabled>Turn off</button></div>
     <p><button id="project-mode-read" type="button" disabled>Read reviewed files</button></p>
     <section id="project-mode-capture" hidden aria-labelledby="project-mode-receipt-title"><h3 id="project-mode-receipt-title" tabindex="-1">Captured project excerpts</h3><p class="quiet">Inspect the excerpts below. A reviewed project brief is still required before questions can use them.</p><div id="project-mode-receipt"></div></section>
+    <section id="project-brief" aria-labelledby="project-brief-title">
+      <h3 id="project-brief-title">Project brief</h3>
+      <p id="project-brief-state" role="status" aria-live="polite"></p>
+      <p class="quiet">Generate a brief from the captured excerpts and your saved corrections. Review the exact request before sending it to the selected chat model. The helper has no tools. Copilot and the model provider may retain request content; Explorer keeps this brief only in this canvas, outside saved maps and exports.</p>
+      <div class="guidance-actions"><button id="project-brief-prepare" type="button">Review brief request</button><button id="project-brief-start" type="button" disabled>Generate brief</button><button id="project-brief-cancel" type="button" disabled>Cancel generation</button></div>
+      <details id="project-brief-review" hidden><summary>Exact request inputs</summary><p id="project-brief-size"></p><pre id="project-brief-input" tabindex="0"></pre></details>
+      <pre id="project-brief-corrections"></pre>
+      <div id="project-brief-editing" hidden>
+        <p class="quiet">File-backed claims quote captured text. A matching quote does not prove the interpretation is correct. Inferences and unknowns are labeled separately. Edited or added claims are user assertions.</p>
+        <div id="project-brief-claims"></div>
+        <label for="project-brief-add-section">Add your own assertion to</label><select id="project-brief-add-section"><option value="purpose">Purpose</option><option value="architecture">Architecture</option><option value="stack">Stack</option><option value="conventions">Conventions</option><option value="constraints">Constraints</option></select>
+        <label for="project-brief-add-text">User assertion (up to 500 characters)</label><textarea id="project-brief-add-text" rows="3" maxlength="500"></textarea>
+        <div class="guidance-actions"><button id="project-brief-save" type="button">Save changes</button><button id="project-brief-approve" class="primary" type="button">Approve brief</button><button id="project-brief-revoke" type="button">Edit brief</button><button id="project-brief-discard-changes" type="button">Discard local changes</button></div>
+      </div>
+      <p><button id="project-brief-clear" type="button" disabled>Clear brief and saved corrections</button></p>
+    </section>
   </dialog>
   <div id="scenario-preference-banner" class="notice" role="status" hidden><span id="scenario-preference-text"></span> <button id="scenario-preference-manage">Scenario preference</button></div>
   <section id="welcome" class="welcome">

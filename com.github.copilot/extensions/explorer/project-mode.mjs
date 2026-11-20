@@ -12,7 +12,24 @@ const changed = () => Error('Project scope changed or expired. Review the curren
 export class ProjectMode {
   constructor(reader, currentJourney, now = Date.now, discovery = new ProjectDiscovery(reader)) { Object.assign(this, { reader, currentJourney, now, discovery }); this.epoch = 0; this.clear(); }
   clearScope() { this.preview = this.approved = this.readConsent = this.readCapture = this.receipt = null; this.approvedPolicy = false; }
-  clear() { this.epoch++; this.pending?.abort(); this.pending = null; this.clearScope(); this.inventory = null; this.clientId = this.journey = null; this.sequence = 0; }
+  clear() { this.epoch++; this.pending?.abort(); this.pending = null; this.clearScope(); this.inventory = null; this.observedRoot = null; this.clientId = this.journey = null; this.sequence = 0; }
+  projectIdentity() { return this.journey === this.currentJourney() ? structuredClone(this.observedRoot) : null; }
+  capture() {
+    if (!this.approved || !this.readCapture || !this.receipt || this.journey !== this.currentJourney()) return null;
+    return structuredClone({ id: this.receipt.id, ...this.readCapture, paths: this.approved.paths, exclusions: this.approved.exclusions });
+  }
+  async captureCurrent(capture, { content = false, signal } = {}) {
+    signal?.throwIfAborted(); const current = () => !!capture && same(capture, this.capture());
+    if (!current()) return false;
+    try {
+      await this.discovery.assertAllowed(capture.root, capture.paths, capture.exclusions, { signal });
+      if (!current()) return false;
+      const fresh = await this.reader.fresh(capture, { content, signal }); signal?.throwIfAborted();
+      if (!fresh || !current()) return false;
+      await this.discovery.assertAllowed(capture.root, capture.paths, capture.exclusions, { signal }); signal?.throwIfAborted();
+      return current();
+    } catch { signal?.throwIfAborted(); return false; }
+  }
   async work(run) {
     const abort = new AbortController(); this.pending = abort;
     const timer = setTimeout(() => abort.abort(Error('Project context reached its time budget. Review a smaller scope and retry.')), 5000);
@@ -57,7 +74,7 @@ export class ProjectMode {
     if (this.preview && this.now() > this.preview.expires) this.preview = null;
     if (this.readConsent && this.now() > this.readConsent.expires) this.readConsent = null;
     let root;
-    try { root = await deadline(this.reader.root(), 2000); current(); }
+    try { root = await deadline(this.reader.root(), 2000); current(); this.observedRoot = structuredClone(root); }
     catch (error) {
       current(); this.clearScope(); this.inventory = null;
       if (action !== 'status' && action !== 'cancel') throw changed();

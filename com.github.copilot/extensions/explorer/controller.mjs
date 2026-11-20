@@ -6,6 +6,7 @@ import { deadline } from './owned-helper.mjs';
 import { comparisonInput, comparisonResult } from './research-comparison.mjs';
 import { ProjectContext } from './project-context.mjs';
 import { ProjectMode } from './project-mode.mjs';
+import { ProjectBriefWorkspace } from './project-brief-workspace.mjs';
 import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
@@ -67,7 +68,7 @@ export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
 export class Explorer {
-  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, briefHelper, checkHelper, projectRoot, timeoutMs = 240000 }) {
+  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, briefHelper, checkHelper, projectBriefHelper, projectRoot, timeoutMs = 240000 }) {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
@@ -86,6 +87,15 @@ export class Explorer {
     this.projectRepository = library ? new ProjectRepository({ readRoot: projectRoot, localDirectory: library.directory }) : null;
     this.researcher = researcher; this.researchTasks = new Set(); this.researchTask = Promise.resolve(); this.unconfirmedResearchRelease = null; this.researchWork = null;
     this.briefHelper = briefHelper; this.briefWork = null; this.checkHelper = checkHelper; this.checkWork = null; this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
+    this.projectBriefHelper = projectBriefHelper;
+    this.projectBrief = new ProjectBriefWorkspace({ mode: this.projectMode, journey: () => this.closed ? null : this.activeKey ?? this.doc?.id, execute: task => {
+      const run = this.toolFreeTask.then(async () => {
+        this.requireToolFreeRelease();
+        if (!this.projectBriefHelper) throw new Error('Project briefs require the installed Copilot desktop SDK.');
+        try { return await task(this.projectBriefHelper); } catch (error) { this.trackToolFreeRelease(error); throw error; }
+      });
+      this.toolFreeTask = run.catch(() => {}); return run;
+    } });
     this.library = library; this.binding = binding; this.activeKey = null;
   }
   async load() {
@@ -167,7 +177,7 @@ export class Explorer {
     this.replaceStorage(store);
   }
   replaceStorage(store) {
-    this.projectMode.clear();
+    this.projectMode.clear(); this.projectBrief.clear();
     this.changeSummaries.clear();
     this.adrFormats.clear();
     this.adrWriter.clear();
@@ -221,7 +231,7 @@ export class Explorer {
   }
   requireToolFreeRelease() {
     this.dashboard?.invalidate();
-    if (this.unconfirmedToolFreeRelease) throw new Error('An earlier helper has not confirmed shutdown. Cleanup, question help, decision briefs, answer checks and challenge reviews are blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
+    if (this.unconfirmedToolFreeRelease) throw new Error('An earlier helper has not confirmed shutdown. Cleanup, question help, decision briefs, project briefs, answer checks and challenge reviews are blocked until release is confirmed. If this persists, close Explorer and ensure the old helper has stopped before reopening.');
   }
   cleanupRequest(input) {
     return this.transact(() => {
@@ -621,7 +631,11 @@ export class Explorer {
     this.queue = work.catch(() => {});
     return work;
   }
-  projectModeRequest(input) { return this.projectMode.request(input); }
+  projectModeRequest(input) {
+    const pending = this.projectMode.request(input); this.projectBrief.observe();
+    return pending.finally(() => this.projectBrief.observe());
+  }
+  projectBriefRequest(input) { return this.projectBrief.request(input); }
   async readCurrent() {
     if (this.projectStore) {
       if (this.projectChange) throw Error(this.projectChange.message);
@@ -1517,7 +1531,7 @@ export class Explorer {
           await this.request('questions', this.doc.rootId, input.scope);
           break;
         case 'import':
-          this.projectMode.clear();
+          this.projectMode.clear(); this.projectBrief.clear();
           if (this.library) {
             const record = await this.library.import(input.document, { asCopy: input.asCopy }); this.dashboard?.invalidate();
             if (record.conflict) return { ...this.snapshot(), importConflict: { entries: record.conflict } };
@@ -1667,5 +1681,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.projectMode.clear(); this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
+  async close() { this.projectMode.clear(); this.projectBrief.clear(); this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close(), this.projectBriefHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

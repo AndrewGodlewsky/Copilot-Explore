@@ -1,6 +1,6 @@
 export class ProjectModeClient {
-  constructor({ $, fetch, journey, active, now = Date.now }) {
-    Object.assign(this, { $, fetch, journey, active, now }); this.clientId = globalThis.crypto.randomUUID(); this.sequence = 0; this.generation = 0;
+  constructor({ $, fetch, journey, active, now = Date.now, onChange = () => {}, briefState = () => null }) {
+    Object.assign(this, { $, fetch, journey, active, now, onChange, briefState }); this.clientId = globalThis.crypto.randomUUID(); this.sequence = 0; this.generation = 0;
     this.value = null; this.loading = false; this.error = ''; this.boundJourney = journey();
     this.window = this.control('dialog').ownerDocument.defaultView;
     this.control('open').addEventListener('click', () => this.open());
@@ -26,10 +26,11 @@ export class ProjectModeClient {
     this.value = value;
     if (['off', 'unavailable', 'stale'].includes(value.state) || action === 'prepare' && value.state === 'review') this.revoking = false;
     if (this.revoking) this.uncertain();
+    this.onChange();
   }
   invalidate() { this.generation++; this.abort?.abort(); this.abort = null; this.loading = false; }
   input(action, extra) { return { action, journey: this.boundJourney, clientId: this.clientId, sequence: ++this.sequence, purpose: 'project-questions', ...extra }; }
-  uncertain() { this.value = { ...this.value, state: 'uncertain', token: undefined, readToken: undefined, receipt: undefined, message: this.revoking ? 'Scope changes are not confirmed. Turn off or review the edited scope.' : 'Project scope status is uncertain. Refresh or turn it off.' }; }
+  uncertain() { this.value = { ...this.value, state: 'uncertain', token: undefined, readToken: undefined, receipt: undefined, message: this.revoking ? 'Scope changes are not confirmed. Turn off or review the edited scope.' : 'Project scope status is uncertain. Refresh or turn it off.' }; this.onChange(); }
   matches(value, input) { return value.clientId === input.clientId && value.sequence === input.sequence && value.journey === input.journey && value.purpose === input.purpose; }
   notify(action) {
     if (!this.boundJourney) return;
@@ -95,10 +96,12 @@ export class ProjectModeClient {
   }
   render() {
     const value = this.value, active = value?.state === 'active', uncertain = value?.state === 'uncertain', project = value?.project;
+    const brief = this.briefState(), approved = active && value.receipt && brief?.approved && brief.draft?.captureId === value.receipt.id;
+    const briefStatus = approved ? 'project brief approved; ordinary questions unchanged.' : 'scope ready; project brief required.';
     this.control('open').disabled = !this.active() || !this.journey();
-    this.control('settings-status').textContent = uncertain ? 'Project scope status is uncertain. Refresh or turn it off.' : active ? `${project.name}: scope ready; project brief required.` : 'Off. Ordinary questions use no project files.';
+    this.control('settings-status').textContent = uncertain ? 'Project scope status is uncertain. Refresh or turn it off.' : active ? `${project.name}: ${briefStatus}` : 'Off. Ordinary questions use no project files.';
     this.control('indicator').hidden = this.paused || !active && !uncertain;
-    this.control('indicator-text').textContent = uncertain ? 'Project scope status is uncertain. Open scope settings to refresh or turn it off.' : active ? `${project.name}: scope ready for project-aware questions; project brief required.` : '';
+    this.control('indicator-text').textContent = uncertain ? 'Project scope status is uncertain. Open scope settings to refresh or turn it off.' : active ? `${project.name}: ${briefStatus}` : '';
     this.control('project').textContent = project?.root ?? 'Refresh to check the current local project.';
     this.control('state').textContent = this.error || (this.loading ? 'Checking project scope…' : value?.message || (value?.state === 'review' ? 'Review this exact scope, then enable it.' : 'Off. Select relative files and review their scope.'));
     this.control('scope').textContent = value?.scope ? value.scope.files.map(file => `${file.name} — ${file.bytes} bytes`).join('\n') + `\nTotal: ${value.scope.bytes} bytes\nExcluded paths: ${(value.scope.exclusions ?? []).join(', ') || 'none added'}` : '';

@@ -11,6 +11,7 @@ import { Explorer } from '../com.github.copilot/extensions/explorer/controller.m
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { ResearchModelSettings } from '../com.github.copilot/extensions/explorer/research-model-settings.mjs';
 import { fixtureResearchModels } from '../test/helpers/research-model.mjs';
+import { parseProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
 import { viewerSnapshot, viewerArtifact } from '../com.github.copilot/extensions/explorer/offline-viewer.mjs';
 
 if (!process.env.EXPLORER_PLAYWRIGHT_PATH) throw Error('Set EXPLORER_PLAYWRIGHT_PATH to an installed playwright/index.mjs; this check downloads nothing.');
@@ -59,8 +60,13 @@ validateDocument(doc); await writeFile(file, JSON.stringify(doc));
 const offlineDoc = structuredClone(doc), offlineFile = join(directory, 'support.html');
 offlineDoc.nodes.find(node => node.id === parent.id).research.sources[0].title = 'X'.repeat(300);
 await writeFile(offlineFile, viewerArtifact(viewerSnapshot(validateDocument(offlineDoc), [{ nodeId: parent.id, answer: false, research: true }])).content);
-let requests = 0, comparisons = 0, effortRuns = 0, effortFixture = false, followupRuns = 0, followupFixture = false, voiceReady = false, voiceJob, modelCatalogError = false;
-const explorer = await new Explorer({ file, projectRoot: async () => directory, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
+let requests = 0, comparisons = 0, briefRuns = 0, effortRuns = 0, effortFixture = false, followupRuns = 0, followupFixture = false, voiceReady = false, voiceJob, modelCatalogError = false;
+const explorer = await new Explorer({ file, projectRoot: async () => directory, projectBriefHelper: { close: async () => {}, run: async prepared => {
+  briefRuns++;
+  const output = Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: `${section}: not established by this fixture.`, kind: 'unknown', sources: [] }]]));
+  output.purpose = [{ id: 'purpose', text: 'Synthetic <script>literal</script> 🌿 ' + 'λ'.repeat(400), kind: 'file-backed', sources: [{ id: prepared.context.sources[0].id, quote: '<script>literal</script> 🌿' }] }];
+  return parseProjectBrief(JSON.stringify(output), prepared);
+} }, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
   models: async () => { if (modelCatalogError) throw Error('Synthetic catalog failure'); return fixtureResearchModels(); },
   run: async (_, { prepared, onReport }) => {
     if (!effortFixture) { requests++; throw Error('Layout checks must not start inference'); }
@@ -460,6 +466,30 @@ try {
       const captureBounds = await excerpt.evaluate(el => { const r = el.getBoundingClientRect(), d = el.closest('dialog'); return { left: r.left, right: r.right, width: innerWidth, scroll: d.scrollWidth, client: d.clientWidth }; });
       expect(captureBounds.left >= 0 && captureBounds.right <= captureBounds.width + 1 && captureBounds.scroll <= captureBounds.client + 1, `${scenario.name}: local excerpts fit the scope dialog`, captureBounds);
       expect(explorer.pending === null && await editor.inputValue() === 'Keep this private draft', `${scenario.name}: explicit read starts no model and preserves the answer draft`, {});
+      const beforeBrief = briefRuns;
+      await page.waitForFunction(() => !document.getElementById('project-brief-prepare').disabled);
+      await page.locator('#project-brief-prepare').click(); await page.waitForFunction(() => !document.getElementById('project-brief-start').disabled);
+      expect(briefRuns === beforeBrief, `${scenario.name}: reviewing brief inputs starts no inference`, {});
+      await page.locator('#project-brief-review summary').click();
+      expect((await page.locator('#project-brief-input').textContent()).includes('<script>literal</script> 🌿'), `${scenario.name}: exact brief inputs are reviewable`, {});
+      const inputBounds = await page.locator('#project-brief-input').evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect(inputBounds.scroll <= inputBounds.client + 1, `${scenario.name}: exact brief inputs wrap within the dialog`, inputBounds);
+      await page.locator('#project-brief-start').focus(); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => !!document.querySelector('#project-brief-claims textarea'));
+      expect(briefRuns === beforeBrief + 1 && !explorer.projectBrief.approval, `${scenario.name}: generated brief needs explicit approval`, {});
+      const claim = page.locator('#project-brief-claims textarea').first(); await claim.fill('Reviewed user correction 🌿');
+      await page.locator('#project-brief-claims details summary').first().click();
+      for (const id of ['project-brief-prepare', 'project-brief-start', 'project-brief-add-section', 'project-brief-add-text', 'project-brief-save', 'project-brief-approve', 'project-brief-clear']) {
+        const control = page.locator('#' + id); await control.scrollIntoViewIfNeeded();
+        const bounds = await control.evaluate(el => { const r = el.getBoundingClientRect(), d = el.closest('dialog').getBoundingClientRect(); return { left: r.left, right: r.right, height: r.height, visible: Math.min(r.bottom, d.bottom) - Math.max(r.top, d.top), scroll: el.closest('dialog').scrollWidth, client: el.closest('dialog').clientWidth, width: innerWidth }; });
+        expect(bounds.left >= 0 && bounds.right <= bounds.width + 1 && bounds.visible >= Math.min(bounds.height, 24) - 1 && bounds.scroll <= bounds.client + 1, `${scenario.name}: brief controls and exact inputs fit and remain reachable`, bounds);
+      }
+      await page.locator('#project-brief-approve').focus(); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.getElementById('project-mode-indicator-text').textContent.includes('brief approved'));
+      expect(await claim.evaluate(el => el.readOnly) && await claim.inputValue() === 'Reviewed user correction 🌿', `${scenario.name}: approved correction is read-only`, {});
+      expect(explorer.projectBrief.draft.sections.purpose[0].kind === 'user' && await editor.inputValue() === 'Keep this private draft', `${scenario.name}: correcting the brief preserves answer text and changes provenance`, {});
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-project-brief.png`) });
+      await page.locator('#project-brief-revoke').click(); await page.waitForFunction(() => !document.querySelector('#project-brief-claims textarea').readOnly);
       await page.locator('#project-mode-disable').click(); await page.waitForFunction(() => document.getElementById('project-mode-indicator').hidden);
       await page.keyboard.press('Escape');
       expect(await page.locator('#navigation-open').evaluate(el => el === document.activeElement), `${scenario.name}: scope dialog restores keyboard focus`, {});

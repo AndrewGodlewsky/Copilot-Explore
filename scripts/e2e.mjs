@@ -178,6 +178,16 @@ try {
   assert.ok(!JSON.stringify(enabledScope).includes(projectCanary));
   const projectCapture = await scopeRequest('read', { token: enabledScope.readToken }); assert.equal(projectCapture.receipt.sources[0].excerpt, projectCanary);
   assert.ok(!JSON.stringify(requests).includes(projectCanary));
+  let briefSequence = 0;
+  const briefRequest = async (action, extra = {}) => {
+    const response = await fetch(opened.url + 'api/project-brief', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify({ action, journey: snapshot.activeKey ?? snapshot.document.id, clientId: 'fixture-brief-000000000001', sequence: ++briefSequence, purpose: 'project-brief', ...extra }) });
+    assert.equal(response.status, 200); return response.json();
+  };
+  assert.equal((await briefRequest('status')).captureAvailable, true);
+  const projectBriefReview = await briefRequest('prepare');
+  assert.ok(projectBriefReview.prepared.prompt.includes(projectCanary)); assert.equal(projectBriefReview.approved, false);
+  assert.ok(!JSON.stringify(requests).includes(projectCanary));
+  await briefRequest('cancel', { id: 'fixture-brief-run-00000001' });
   const projectReviewInput = { action: 'prepare', purpose: 'challenge-review', clientId: 'fixture-project-000000000001', sequence: 1, journey: snapshot.activeKey ?? snapshot.document.id, nodeId: snapshot.document.rootId, scope: 'decisions', excluded: [], project: { action: 'refresh', paths: ['design.md'] } };
   const projectReviewResponse = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify(projectReviewInput) });
   assert.equal(projectReviewResponse.status, 200); const projectReview = await projectReviewResponse.json();
@@ -188,6 +198,7 @@ try {
   const otherProject = join(temporary, 'other-project'); await mkdir(otherProject);
   await session.rpc.metadata.setWorkingDirectory({ workingDirectory: otherProject });
   assert.equal((await scopeRequest('status')).state, 'stale');
+  const staleBrief = await briefRequest('status'); assert.equal(staleBrief.captureAvailable, false); assert.equal(staleBrief.approved, false); assert.equal(staleBrief.prepared, undefined);
   const { project: ignoredProjectSelection, ...existingProjectReview } = projectReviewInput;
   const changedRootResponse = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify({ ...existingProjectReview, sequence: 2 }) });
   assert.equal(changedRootResponse.status, 200); const changedRootReview = await changedRootResponse.json();

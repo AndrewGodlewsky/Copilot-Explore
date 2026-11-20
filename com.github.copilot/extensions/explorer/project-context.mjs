@@ -109,15 +109,18 @@ export class ProjectContext {
       unavailable();
     }
   }
-  async fresh(capture, { content = true } = {}) {
+  async fresh(capture, { content = true, signal } = {}) {
+    signal?.throwIfAborted();
     if (!capture) return true;
     try {
       if (JSON.stringify(await this.root()) !== JSON.stringify(capture.root)) return false;
       for (const [index, source] of capture.sources.entries()) {
-        const entry = content ? await this.read(capture.root, source.name, capture.entries[index]) : await this.entry(capture.root, source.name);
+        signal?.throwIfAborted();
+        const entry = content ? await this.read(capture.root, source.name, capture.entries[index], signal) : await this.entry(capture.root, source.name);
+        signal?.throwIfAborted();
         if (entry.stamp !== capture.entries[index].stamp || entry.parents !== capture.entries[index].parents || content && hash(entry.content) !== source.fingerprint) return false;
       }
-      return JSON.stringify(await this.root()) === JSON.stringify(capture.root);
-    } catch { return false; }
+      const current = JSON.stringify(await this.root()) === JSON.stringify(capture.root); signal?.throwIfAborted(); return current;
+    } catch { signal?.throwIfAborted(); return false; }
   }
 }

@@ -13,6 +13,7 @@ const assets = new Map([
   ['dashboard.mjs', ['dashboard.mjs', 'text/javascript; charset=utf-8']],
   ['app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
   ['project-mode-client.mjs', ['project-mode-client.mjs', 'text/javascript; charset=utf-8']],
+  ['project-brief-client.mjs', ['project-brief-client.mjs', 'text/javascript; charset=utf-8']],
   ['portable-reference-client.mjs', ['portable-reference-client.mjs', 'text/javascript; charset=utf-8']],
   ['adr-sources-client.mjs', ['adr-sources-client.mjs', 'text/javascript; charset=utf-8']],
   ['change-summary-client.mjs', ['change-summary-client.mjs', 'text/javascript; charset=utf-8']],
@@ -71,6 +72,10 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       if (req.method === 'POST' && route === 'api/project-mode') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         return json(200, await explorer.projectModeRequest(await body(req, 16384)));
+      }
+      if (req.method === 'POST' && route === 'api/project-brief') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        return json(200, await explorer.projectBriefRequest(await body(req, 131072)));
       }
       if (req.method === 'POST' && route === 'api/dashboard') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });

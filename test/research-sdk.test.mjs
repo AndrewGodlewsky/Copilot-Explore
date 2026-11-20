@@ -15,6 +15,7 @@ import { supportFindings } from './helpers/research-support.mjs';
 import { limitationFindings } from './helpers/research-limitations.mjs';
 import { freshnessFindings, FRESHNESS_NOW } from './helpers/research-freshness.mjs';
 import { answerNode, addDirection } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { effortReport } from '../com.github.copilot/extensions/explorer/research-effort.mjs';
 
 test('owned research follow-up sends reviewed strings, credits prior and current sources separately and attributes retained receipts', async t => {
   const doc = createDocument('Follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Target' }]);
@@ -40,7 +41,7 @@ test('follow-up attempt and startup budgets count denied attempts and startup ti
   const prepared = prepareFollowup(doc, doc.nodes[1].id, { question: 'Why?', hypothetical: false }, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' } });
   let now = 0; const timers = []; const clock = { now: () => now, setTimeout(fn, ms) { timers.push(ms); return { unref() {} }; }, clearTimeout() {} };
   const f = await fixture(t, { clock, start: () => { now = 59000; }, send: async calls => { for (let i = 0; i < 9; i++) assert.equal((await calls.config.hooks.onPreToolUse({ toolName: 'denied' })).permissionDecision, 'deny'); } });
-  await assert.rejects(f.researcher.runFollowup(prepared.context, { prepared }), /cancelled/);
+  await assert.rejects(f.researcher.runFollowup(prepared.context, { prepared }), /tool-attempt limit/);
   assert.equal(f.calls.timeout, 1000); assert.deepEqual(timers, [60000]); assert.equal(f.calls.stops, 1);
   const [id] = await readdir(join(f.dir, 'usage', 'session-state'));
   const receipt = JSON.parse(await readFile(join(f.dir, 'usage', 'session-state', id, 'operation.json'), 'utf8'));
@@ -135,6 +136,173 @@ async function fixture(t, options = {}) {
   });
   return { researcher, calls, dir, parent };
 }
+
+test('effort stops repeated exact queries, counts denied attempts and reports only after shutdown', async t => {
+  let allowed = 0; const reports = [];
+  const f = await fixture(t, { send: async calls => {
+    for (let i = 0; i < 3; i++) if ((await calls.config.hooks.onPreToolUse({ toolName: 'web_search', toolCallId: 'repeat-' + i, toolArgs: { query: 'same synthetic question' } })).permissionDecision !== 'deny') allowed++;
+  } });
+  const outcome = await f.researcher.run(context, { onReport: value => { assert.equal(f.calls.stops, 1); reports.push(value); } }).then(() => 'completed', error => error.message);
+  t.diagnostic(JSON.stringify({ case: 'repeated-query', allowedSyntheticCalls: allowed, outcome, reports: reports.map(report => ({ reason: report.reason, toolAttempts: report.toolAttempts })) }));
+  assert.match(outcome, /repeat/i); assert.equal(allowed, 1); assert.equal(reports.length, 1);
+  assert.equal(reports[0].reason, 'repeated-request'); assert.equal(reports[0].toolAttempts, 3); assert.equal(reports[0].duplicateAttempts, 2); assert.equal(reports[0].partial, null);
+});
+
+test('effort records early model-assessed completion and leaves ordinary findings unchanged', async t => {
+  const assessment = { plan: [{ criterion: 'Local access', neededEvidence: 'Availability of shared space' }], stopReason: 'sufficient-support', explanation: 'Synthetic reasoning is sufficient for this fixture only.' };
+  const reports = [];
+  const f = await fixture(t, { result: { ...result, effortAssessment: assessment }, send: async calls => {
+    await calls.config.hooks.onPreToolUse({ toolName: 'web_search', toolCallId: 'access', toolArgs: { query: 'synthetic access' } });
+    calls.config.hooks.onPostToolUse({ toolName: 'web_search', toolCallId: 'access', toolResult: { resultType: 'success', textResultForLlm: 'Synthetic local information.' } });
+  } });
+  const value = await f.researcher.run(context, { onReport: report => reports.push(report) });
+  assert.equal(value.summary, result.summary); assert.equal(Object.hasOwn(value, 'effortAssessment'), false);
+  assert.equal(reports[0].reason, 'model-completed'); assert.equal(reports[0].toolAttempts, 1); assert.deepEqual(reports[0].assessment, assessment); assert.equal(reports[0].partial, null);
+});
+
+test('checkpoint survives a setup-inclusive deadline while malformed and unrelated events cannot replace it', async t => {
+  let elapsed = 0; const reports = [];
+  const clock = { now: () => elapsed, setTimeout: () => ({ unref() {} }), clearTimeout() {} };
+  const partial = { ...result, summary: 'Valid partial 🌿', recommendationAssessment: { ...result.recommendationAssessment, optionId: null } };
+  const event = (findings, fields = {}) => ({ type: 'assistant.message', data: { messageId: 'checkpoint-one', content: JSON.stringify({ checkpointVersion: 1, findings }) }, ...fields });
+  const f = await fixture(t, { clock, start: () => { elapsed = 59000; }, content: '{unfinished', send: async calls => {
+    calls.config.onEvent(event(partial));
+    const other = { ...partial, summary: 'Do not retain this other message' };
+    calls.config.onEvent(event(other, { agentId: 'subagent', data: { ...event(other).data, messageId: 'subagent-message' } }));
+    calls.config.onEvent(event(other, { checkpoint: true, data: { ...event(other).data, messageId: 'replay-message' } }));
+    calls.config.onEvent(event(other, { data: { ...event(other).data, messageId: 'split-message', chunkCount: 2, chunkIndex: 0 } }));
+    calls.config.onEvent({ type: 'assistant.message.delta', data: { deltaContent: JSON.stringify({ checkpointVersion: 1, findings: other }) } });
+    calls.config.onEvent(event({ ...other, unknownField: true }, { data: { ...event({ ...other, unknownField: true }).data, messageId: 'malformed-message' } }));
+    elapsed = 61000;
+    calls.config.onEvent(event(other, { data: { ...event(other).data, messageId: 'late-message' } }));
+  } });
+  await assert.rejects(f.researcher.run(context, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' }, onReport: report => reports.push(report) }), /timed out|deadline/i);
+  assert.equal(f.calls.timeout, 1000); assert.equal(f.calls.stops, 1); assert.equal(reports.length, 1);
+  assert.equal(reports[0].reason, 'deadline'); assert.equal(reports[0].elapsedMs, 61000);
+  assert.equal(reports[0].partial.summary, partial.summary); assert.equal(reports[0].partial.recommendationAssessment.optionId, null);
+});
+
+test('checkpoint never retains an unread citation, recommendation winner, oversized body or malformed fragment', async t => {
+  let elapsed = 0; const reports = [];
+  const clock = { now: () => elapsed, setTimeout: () => ({ unref() {} }), clearTimeout() {} };
+  const partial = { ...result, recommendationAssessment: { ...result.recommendationAssessment, optionId: null } };
+  const f = await fixture(t, { clock, send: async calls => {
+    const bodies = [result, { ...partial, basis: 'sources', sources: [{ id: 's1', title: 'Unread', url: 'https://example.com/unread' }] }, { ...partial, summary: 'x'.repeat(90000) }];
+    for (const [index, findings] of bodies.entries()) calls.config.onEvent({ type: 'assistant.message', data: { messageId: `invalid-${index}`, content: JSON.stringify({ checkpointVersion: 1, findings }) } });
+    calls.config.onEvent({ type: 'assistant.message', data: { messageId: 'fragment', content: '{"checkpointVersion":1,"findings":' } });
+    elapsed = 180001;
+  } });
+  await assert.rejects(f.researcher.run(context, { onReport: report => reports.push(report) }), /timed out|deadline/i);
+  assert.equal(reports.length, 1); assert.equal(reports[0].partial, null);
+});
+
+test('effort bounds delivered page text and cannot cite a date outside the delivered prefix', async t => {
+  const findings = freshnessFindings(); findings.sources[0].dateObservations = [{ kind: 'updated', text: 'Updated: 2026-11-20' }];
+  let delivered;
+  const f = await fixture(t, { result: findings, now: () => FRESHNESS_NOW, resolve: async () => [{ address: '93.184.216.34' }], send: async calls => {
+    await calls.config.hooks.onPreToolUse({ toolName: 'web_fetch', toolCallId: 'bounded-read', toolArgs: { url: findings.sources[0].url } });
+    delivered = calls.config.hooks.onPostToolUse({ toolName: 'web_fetch', toolCallId: 'bounded-read', toolResult: { resultType: 'success', textResultForLlm: 'x'.repeat(32768) + 'Updated: 2026-11-20', binaryResultsForLlm: [{ data: 'not retained' }] } });
+  } });
+  const outcome = await f.researcher.run(context).then(() => 'accepted', error => error.message);
+  assert.match(outcome, /invalid comparison/); assert.equal(delivered.modifiedResult.textResultForLlm.length, 32768);
+  assert.equal(Object.hasOwn(delivered.modifiedResult, 'binaryResultsForLlm'), false); assert.match(delivered.additionalContext, /truncat|prefix/i);
+});
+
+test('effort stops failed fetch retries without crediting the failed page', async t => {
+  const reports = []; let retry;
+  const f = await fixture(t, { resolve: async () => [{ address: '93.184.216.34' }], send: async calls => {
+    await calls.config.hooks.onPreToolUse({ toolName: 'web_fetch', toolCallId: 'failed-read', toolArgs: { url: 'https://example.com/page' } });
+    calls.config.hooks.onPostToolUseFailure({ toolName: 'web_fetch', toolCallId: 'failed-read', error: 'synthetic failure' });
+    retry = await calls.config.hooks.onPreToolUse({ toolName: 'web_fetch', toolCallId: 'retry-read', toolArgs: { url: 'https://example.com/page' } });
+  } });
+  await assert.rejects(f.researcher.run(context, { onReport: report => reports.push(report) }), /source failed/i);
+  assert.equal(retry.permissionDecision, 'deny'); assert.equal(reports[0].reason, 'tool-failure'); assert.equal(reports[0].partial, null); assert.equal(f.calls.sends, 1);
+});
+
+test('checkpoint reports are withheld after user cancellation or failed cleanup', async t => {
+  for (const cleanup of [false, true]) {
+    const reports = [], abort = new AbortController();
+    const partial = { ...result, recommendationAssessment: { ...result.recommendationAssessment, optionId: null } };
+    const f = await fixture(t, { ...(cleanup ? { stop: async () => { throw Error('synthetic stop failure'); } } : {}), send: async calls => {
+      calls.config.onEvent({ type: 'assistant.message', data: { messageId: 'one', content: JSON.stringify({ checkpointVersion: 1, findings: partial }) } });
+      if (!cleanup) abort.abort();
+    } });
+    await assert.rejects(f.researcher.run(context, { signal: abort.signal, onReport: report => reports.push(report) }), cleanup ? /cleanup or usage accounting failed/ : /cancelled/);
+    assert.equal(reports.length, 0);
+  }
+});
+
+test('follow-up checkpoints retain only validated answers to the captured hypothetical question', async t => {
+  const doc = createDocument('Follow-up checkpoint'); addQuestions(doc, doc.rootId, [{ question: 'Which pilot?', category: 'Scope' }]); doc.nodes[1].research = result;
+  const prepared = prepareFollowup(doc, doc.nodes[1].id, { question: 'What if capacity doubles? 🌿', hypothetical: true });
+  const partial = { answer: 'Capacity might justify a wider pilot, but access is still unknown.', uncertainty: 'Incomplete hypothetical judgment.', sources: [], claims: [{ id: 'capacity', text: 'A wider pilot may fit.', basis: 'reasoning', evidence: [], limitations: 'Not externally verified.' }] };
+  let elapsed = 0; const reports = [];
+  const f = await fixture(t, { clock: { now: () => elapsed, setTimeout: () => ({ unref() {} }), clearTimeout() {} }, send: async calls => {
+    assert.ok(calls.prompt.includes('What if capacity doubles? 🌿'));
+    calls.config.onEvent({ type: 'assistant.message', data: { messageId: 'followup-checkpoint', content: JSON.stringify({ checkpointVersion: 1, findings: partial }) } });
+    elapsed = 180001;
+  } });
+  await assert.rejects(f.researcher.runFollowup(prepared.context, { prepared, onReport: value => reports.push(value) }), /timed out|deadline/i);
+  assert.deepEqual(reports[0].partial, partial); assert.equal(reports[0].reason, 'deadline'); assert.equal(f.calls.sends, 1);
+});
+
+test('checkpoint attempt ceiling preserves the last valid bounded message and ignores absent IDs', async t => {
+  let elapsed = 0; const reports = [], partial = { ...result, recommendationAssessment: { ...result.recommendationAssessment, optionId: null } };
+  const f = await fixture(t, { clock: { now: () => elapsed, setTimeout: () => ({ unref() {} }), clearTimeout() {} }, send: async calls => {
+    const send = (messageId, findings) => calls.config.onEvent({ type: 'assistant.message', data: { messageId, content: JSON.stringify({ checkpointVersion: 1, findings }) } });
+    send('first', { ...partial, summary: 'Keep this checkpoint' });
+    for (let i = 0; i < 3; i++) send('invalid-' + i, { ...partial, unsupported: true });
+    send('fifth', { ...partial, summary: 'Too many checkpoints' }); send(undefined, { ...partial, summary: 'No ID' });
+    elapsed = 180001;
+  } });
+  await assert.rejects(f.researcher.run(context, { onReport: value => reports.push(value) }), /timed out|deadline/i);
+  assert.equal(reports[0].partial.summary, 'Keep this checkpoint');
+});
+
+test('completed comparison and follow-up never inherit an earlier checkpoint assessment', async t => {
+  for (const followup of [false, true]) {
+    const final = followup ? { answer: 'Complete answer.', uncertainty: 'Fixture judgment.', sources: [], claims: result.claims } : result;
+    const partial = { ...final, ...(!followup ? { recommendationAssessment: { ...result.recommendationAssessment, optionId: null } } : {}),
+      effortAssessment: { plan: [{ criterion: 'Access', neededEvidence: 'Opening hours' }], stopReason: 'in-progress', explanation: 'Still investigating.' } };
+    const reports = [], f = await fixture(t, { result: final, send: async calls => {
+      calls.config.onEvent({ type: 'assistant.message', data: { messageId: 'in-progress', content: JSON.stringify({ checkpointVersion: 1, findings: partial }) } });
+    } });
+    let prepared;
+    if (followup) { const doc = createDocument('Scope'); addQuestions(doc, doc.rootId, [{ question: 'Which pilot?', category: 'Scope' }]); doc.nodes[1].research = result; prepared = prepareFollowup(doc, doc.nodes[1].id, { question: 'What if?', hypothetical: true }); }
+    const value = await f.researcher[followup ? 'runFollowup' : 'run'](prepared?.context ?? context, { ...(prepared ? { prepared } : {}), onReport: report => reports.push(effortReport(report, () => assert.fail('Complete report has no partial'))) });
+    assert.equal(value.summary ?? value.answer, final.summary ?? final.answer); assert.equal(reports[0].assessment, null);
+  }
+});
+
+test('tool result accounting consumes each matching accepted callback once and suppresses unmatched payloads', async t => {
+  for (const toolName of ['web_search', 'web_fetch']) {
+    const reports = [], f = await fixture(t, { resolve: async () => [{ address: '93.184.216.34' }], send: async calls => {
+      const input = { toolName, toolCallId: 'one-call', toolArgs: toolName === 'web_fetch' ? { url: 'https://example.com/page' } : { query: 'one query' } };
+      const post = data => calls.config.hooks.onPostToolUse({ ...input, toolResult: { resultType: 'success', textResultForLlm: 'x'.repeat(40000), binaryResultsForLlm: [{ data: 'omit' }] }, ...data });
+      assert.deepEqual(await calls.config.hooks.onPreToolUse(input), {});
+      for (const data of [{ toolCallId: 'unknown' }, { toolName: toolName === 'web_fetch' ? 'web_search' : 'web_fetch' }]) assert.equal(post(data).modifiedResult.textResultForLlm, '');
+      assert.equal(post().modifiedResult.textResultForLlm.length, toolName === 'web_fetch' ? 32768 : 8192);
+      for (let i = 0; i < 25; i++) { const duplicate = post(); assert.equal(duplicate.modifiedResult.textResultForLlm, ''); assert.equal(Object.hasOwn(duplicate.modifiedResult, 'binaryResultsForLlm'), false); }
+      calls.config.hooks.onPostToolUseFailure({ ...input, error: 'Stale duplicate failure' });
+    } });
+    await f.researcher.run(context, { onReport: report => reports.push(effortReport(report, () => assert.fail('No checkpoint'))) });
+    assert.equal(reports[0].toolAttempts, 1); assert.equal(reports[0].truncatedResults, 1); assert.equal(reports[0].deliveredTextUnits, toolName === 'web_fetch' ? 32768 : 8192);
+  }
+});
+
+test('malformed accepted results and missing or oversized search tracking IDs fail closed', async t => {
+  for (const kind of ['binary-only', 'missing-id', 'oversized-id']) {
+    const f = await fixture(t, { send: async calls => {
+      const input = { toolName: 'web_search', toolArgs: { query: 'query' }, ...(kind === 'missing-id' ? {} : { toolCallId: kind === 'oversized-id' ? 'x'.repeat(257) : 'accepted' }) };
+      await calls.config.hooks.onPreToolUse(input);
+      if (kind === 'binary-only') {
+        const output = calls.config.hooks.onPostToolUse({ ...input, toolResult: { resultType: 'success', binaryResultsForLlm: [{ data: 'not model input' }] } });
+        assert.deepEqual(output.modifiedResult, { resultType: 'success', textResultForLlm: '' });
+      }
+    } });
+    await assert.rejects(f.researcher.run(context), /tracking|invalid.*result/i);
+  }
+});
 
 test('Research model discovery does not start a helper and reviewed dedicated/default models are pinned with receipts', async t => {
   for (const modelId of [null, 'dedicated-model']) {
@@ -292,7 +460,7 @@ test('unobserved, later-read and over-budget date labels cannot become supported
       await read('date-page', source.url, mode === 'request-limit' ? source.dateObservations[0].text : mode === 'page-limit' ? 'x'.repeat(65536) + source.dateObservations[0].text : 'No publication date is available.');
       if (mode === 'later-read') await read('later', source.url, source.dateObservations[0].text);
     } });
-    await assert.rejects(f.researcher.run(context), /date|invalid comparison/, mode);
+    await assert.rejects(f.researcher.run(context), mode === 'request-limit' ? /delivered evidence-text limit/ : /date|invalid comparison/, mode);
   }
 });
 
@@ -380,13 +548,13 @@ test('search, blank, failed, mismatched and duplicate fetch IDs cannot fabricate
   const source = { id: 's1', title: 'Source', url: 'https://8.8.8.8/a' };
   for (const mode of ['search', 'blank', 'failed', 'mismatched', 'duplicate']) {
     const f = await fixture(t, { result: { ...result, basis: 'sources', sources: [source] }, send: async ({ config }) => {
-      const input = { toolName: mode === 'search' ? 'web_search' : 'web_fetch', toolArgs: { url: source.url }, toolCallId: 'read' };
+      const input = { toolName: mode === 'search' ? 'web_search' : 'web_fetch', toolArgs: mode === 'search' ? { query: 'source' } : { url: source.url }, toolCallId: 'read' };
       await config.hooks.onPreToolUse(input);
       if (mode === 'duplicate') await config.hooks.onPreToolUse({ ...input, toolArgs: { url: 'https://8.8.8.8/b' } });
       if (mode === 'failed') config.hooks.onPostToolUseFailure({ ...input, error: 'Fetch failed' });
       config.hooks.onPostToolUse({ ...input, toolCallId: mode === 'mismatched' ? 'other' : 'read', toolResult: { resultType: 'success', textResultForLlm: mode === 'blank' ? '  ' : 'Page' } });
     } });
-    await assert.rejects(f.researcher.run(context), /sources.*read|tracking/, mode);
+    await assert.rejects(f.researcher.run(context), mode === 'failed' ? /source failed/ : /sources.*read|tracking/, mode);
   }
 });
 
@@ -475,9 +643,9 @@ test('failed page reads cannot validate sources and arbitrary SDK errors stay ou
   const { researcher } = await fixture(t, { result: sourced, send: async ({ config }) => {
     const input = { toolName: 'web_fetch', toolArgs: { url: sourced.sources[0].url }, toolCallId: 'failed-read' };
     await config.hooks.onPreToolUse(input);
-    config.hooks.onPostToolUse({ ...input, toolResult: { resultType: 'failure', textResultForLlm: 'Unable to retrieve' } });
+    config.hooks.onPostToolUseFailure({ ...input, error: 'Unable to retrieve' });
   } });
-  await assert.rejects(researcher.run(context), /sources/);
+  await assert.rejects(researcher.run(context), /source failed/);
   const unsafe = await fixture(t, { send: () => { throw new Error('SECRET prompt endpoint token'); } });
   await assert.rejects(unsafe.researcher.run(context), error => !error.message.includes('SECRET') && /could not finish/.test(error.message));
 });
@@ -522,14 +690,14 @@ for (const depth of ['quick', 'standard', 'deeper']) {
       const f = await fixture(t, { send: async ({ config }) => {
         const hook = config.hooks.onPreToolUse;
         for (let i = 1; i <= limits.toolAttemptLimit; i++) {
-          const response = await hook({ toolName: denied && i === 1 ? 'shell' : 'web_search' });
+          const response = await hook({ toolName: denied && i === 1 ? 'shell' : 'web_search', toolCallId: 'budget-' + i, toolArgs: { query: `distinct-${i}` } });
           assert.equal(response.permissionDecision, denied && i === 1 ? 'deny' : undefined);
         }
-        assert.equal((await hook({ toolName: 'web_search' })).permissionDecision, 'deny');
+        assert.equal((await hook({ toolName: 'web_search', toolCallId: 'excess', toolArgs: { query: 'excess' } })).permissionDecision, 'deny');
       } });
-      await assert.rejects(f.researcher.run(context, { settings }), /cancelled/); assert.equal(f.calls.sends, 1); assert.equal(f.calls.stops, 1);
+      await assert.rejects(f.researcher.run(context, { settings }), /tool-attempt limit/); assert.equal(f.calls.sends, 1); assert.equal(f.calls.stops, 1);
     }
-    const atLimit = await fixture(t, { send: async ({ config }) => { for (let i = 0; i < limits.toolAttemptLimit; i++) assert.deepEqual(await config.hooks.onPreToolUse({ toolName: 'web_search' }), {}); } });
+    const atLimit = await fixture(t, { send: async ({ config }) => { for (let i = 0; i < limits.toolAttemptLimit; i++) assert.deepEqual(await config.hooks.onPreToolUse({ toolName: 'web_search', toolCallId: 'budget-' + i, toolArgs: { query: `distinct-${i}` } }), {}); } });
     await atLimit.researcher.run(context, { settings });
   });
 }
@@ -546,7 +714,7 @@ test('held DNS callbacks cannot approve after deadline, explicit cancellation or
       releases.forEach(release => release());
       assert.equal((await fetch).permissionDecision, 'deny'); assert.equal((await permission).kind, 'denied-by-rules');
     } });
-    await assert.rejects(f.researcher.run(context, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' }, signal: controller.signal }), /cancelled/);
+    await assert.rejects(f.researcher.run(context, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' }, signal: controller.signal }), reason === 'attempts' ? /tool-attempt limit/ : /cancelled/);
     assert.equal(f.calls.sends, 1); assert.equal(f.calls.stops, 1);
   }
 });

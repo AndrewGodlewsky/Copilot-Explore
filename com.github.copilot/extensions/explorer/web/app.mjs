@@ -2444,8 +2444,10 @@ function renderWorkspace() {
     section.addEventListener('toggle', () => { if (current()) { ui.impactOpen = section.open; updateImpact(); } });
   }
   toolPanels.research.append(el('div', { id: 'research-review-inline', hidden: true }));
+  region('researchAttempt', toolPanels.research);
   region('research', toolPanels.research);
   region('followup', toolPanels.research);
+  regions.get('researchAttempt').area.id = 'research-attempt-region';
   regions.get('research').area.id = 'research-results-region';
   regions.get('followup').area.id = 'research-conversation-region';
   toolPanels.research.prepend(el('h3', { id: 'research-workspace-question', tabindex: '-1' }, node.question));
@@ -2585,6 +2587,9 @@ function renderWorkspace() {
       if (retry?.purpose === 'adr-questions') openAdrQuestions();
       else await api('questions', { nodeId: retry?.nodeId ?? node.id });
     }, { id: 'refresh-question-context' }) : null);
+    const attempt = state.researchAttempt?.nodeId === node.id ? state.researchAttempt : null;
+    update('researchAttempt', attempt?.id ?? null, () => { ui.effortSync = null; return attempt ? renderResearchAttempt(node, attempt) : null; });
+    ui.effortSync?.();
     update('research', node.research ?? null, () => {
       if (root || !isQuestion(node)) return;
       const research = el('section', { class: 'research-workspace', 'aria-labelledby': 'research-summary' },
@@ -2605,7 +2610,7 @@ function renderWorkspace() {
     update('followup', !!node.research, () => node.research ? renderFollowup(node) : null);
     updateFollowupHistory(node);
     ui.comparisonSync?.();
-    for (const id of ['research-request', 'followup-review', 'save-deeper', 'regenerate-followups']) if ($(id)) $(id).disabled = pending;
+    for (const id of ['research-request', 'followup-review', 'research-deeper-review', 'save-deeper', 'regenerate-followups']) if ($(id)) $(id).disabled = pending;
     if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending?.kind);
     if ($('save-answer')) $('save-answer').disabled = pending && !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind);
     for (const id of ['generate-questions', 'add-direction', 'restart-branch', 'fork-scenario']) if ($(id)) $(id).disabled = pending || !!state.preview;
@@ -2722,7 +2727,7 @@ function renderQuestionPreview() {
   }
   return section;
 }
-function openResearchReview(nodeId, followup, purpose, comparison) {
+function openResearchReview(nodeId, followup, purpose, comparison, settings) {
   const inline = !purpose || purpose === 'research-reconsideration';
   if (inline && (!expanded || libraryView || nodeId !== selected || !$('research-review-inline'))) return;
   const returnTarget = document.activeElement;
@@ -2738,7 +2743,87 @@ function openResearchReview(nodeId, followup, purpose, comparison) {
     revealQuestionTool($('research-review-panel'));
   }
   $(inline ? 'research-review-title' : 'research-review-close').focus({ preventScroll: true });
-  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: purpose === 'challenge-review' ? 'decisions' : $('context-scope').value, ...(purpose ? { purpose } : {}), ...(followup ? { followup } : {}), ...(comparison ? { comparison } : {}) });
+  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: purpose === 'challenge-review' ? 'decisions' : $('context-scope').value, ...(purpose ? { purpose } : {}), ...(followup ? { followup } : {}), ...(comparison ? { comparison } : {}), ...(settings ? { settings } : {}) });
+}
+
+function renderResearchAttempt(node, attempt) {
+  const ui = uiFor(node.id), report = attempt.report, partial = report.partial;
+  if (ui.effortId !== attempt.id) { ui.effortId = attempt.id; ui.effortDisclosures = {}; }
+  const detail = (id, title) => {
+    const value = el('details', { id }, el('summary', { id: `${id}-summary` }, title)); value.open = ui.effortDisclosures[id] === true;
+    value.addEventListener('toggle', () => { if (value.isConnected) { ui.effortDisclosures[id] = value.open; scheduleLayout(); } });
+    return value;
+  };
+  const reasons = { 'model-completed': 'Research returned a complete result.', deadline: 'Research reached its time limit.', 'attempt-limit': 'Research reached its tool-attempt limit.',
+    'repeated-request': 'Research stopped after repeating an already denied duplicate request.', 'result-text-limit': 'Research reached its evidence-text limit.', 'tool-failure': 'A source lookup failed. A retry requires another review.', 'helper-failure': 'Research stopped before completion.' };
+  const section = el('section', { id: 'research-attempt', class: 'research-attempt', 'aria-labelledby': 'research-attempt-title' }, el('h3', { id: 'research-attempt-title' }, 'Last retained research attempt'),
+    el('p', {}, reasons[report.reason]), el('p', { class: 'quiet' }, `${report.toolAttempts} tool attempts, including denied attempts; ${report.duplicateAttempts} exact duplicates denied. ${report.elapsedMs === null ? 'Elapsed effort unavailable.' : `${(report.elapsedMs / 1000).toFixed(1)} seconds observed before shutdown, including setup.`} ${report.truncatedResults ? `${report.truncatedResults} successful results had omitted text.` : ''}`),
+    el('p', { class: 'quiet' }, 'Token and credit receipts are retained separately. No total cost is estimated here. Attempt details stay in this canvas only; switching journeys or closing Explorer clears them.'));
+  const historical = el('p', { id: 'research-attempt-historical', class: 'review-warning', hidden: !attempt.historical }, 'Historical attempt: its saved context or reviewed evidence changed. Inspect it as earlier work, not current support.');
+  section.append(historical);
+  if (attempt.followup) section.append(el('p', {}, el('strong', {}, attempt.followup.hypothetical ? 'Hypothetical follow-up: ' : 'Follow-up: '), attempt.followup.question));
+  if (report.assessment) {
+    const assessed = detail('research-effort-plan', 'Model-assessed plan and stopping reason');
+    const labels = { 'sufficient-support': 'The model assessed that it had enough support.', 'evidence-unavailable': 'The model assessed that the remaining evidence was unavailable.', 'selected-budget': 'The model chose to conclude within the selected effort.', 'in-progress': 'This checklist was still in progress.' };
+    assessed.append(el('p', {}, labels[report.assessment.stopReason]), el('p', {}, report.assessment.explanation), el('p', { class: 'quiet' }, 'This is the model’s assessment, not independently verified sufficiency.'),
+      el('ul', {}, report.assessment.plan.map(item => el('li', {}, el('strong', {}, item.criterion), ': ', item.neededEvidence)))); section.append(assessed);
+  } else section.append(el('p', { class: 'quiet' }, 'Evidence checklist and model-assessed stop reason were not reported.'));
+  if (partial) {
+    const findings = detail('research-partial', 'Partial findings · incomplete and not saved');
+    findings.append(el('p', { class: 'review-warning' }, 'These findings did not finish the research request. They do not replace your completed research or answer and are not used by later research automatically.'), el('p', {}, partial.summary ?? partial.answer));
+    for (const [index, option] of (partial.options ?? []).entries()) {
+      const choice = detail(`research-partial-option-${index}`, option.title);
+      choice.append(el('p', {}, option.description), el('p', {}, option.fit), el('p', {}, 'Pros'), el('ul', {}, option.pros.map(value => el('li', {}, value))),
+        el('p', {}, 'Cons'), el('ul', {}, option.cons.map(value => el('li', {}, value))),
+        ...(option.details ?? []).map(value => el('p', {}, el('strong', {}, `${value.label}: `), value.value)), el('p', {}, el('strong', {}, 'Unfinished suggested draft: '), option.proposedAnswer));
+      findings.append(choice);
+    }
+    if (partial.optionsLimit) findings.append(el('p', {}, partial.optionsLimit));
+    if (partial.recommendation) findings.append(el('p', {}, el('strong', {}, 'Unfinished recommendation: '), partial.recommendation));
+    if (partial.recommendationAssessment) findings.append(el('p', {}, `Tradeoff: ${partial.recommendationAssessment.mainTradeoff}`), el('p', {}, `Reconsider if: ${partial.recommendationAssessment.reconsiderIf}`),
+      ...partial.recommendationAssessment.decisionRefs.map(ref => el('p', {}, `Captured decision reference ${ref.nodeId} · ${ref.answerState}${ref.review ? ', needs review' : ''}: ${ref.reason}`)));
+    findings.append(el('p', {}, el('strong', {}, 'Uncertainty: '), partial.uncertainty));
+    const sources = new Map(partial.sources.map(source => [source.id, source]));
+    for (const [index, claim] of partial.claims.entries()) {
+      const evidence = detail(`research-partial-claim-${index}`, claim.text);
+      evidence.append(el('p', {}, `Model basis: ${claim.basis}. ${claim.limitations}`), el('p', { class: 'quiet', 'data-partial-freshness': claim.id }));
+      for (const link of claim.evidence) {
+        const source = sources.get(link.sourceId);
+        evidence.append(el('p', {}, link.paraphrase), el('p', {}, el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, source.title),
+          ` · ${source.evidenceOrigin && source.evidenceOrigin.origin !== 'current' ? 'Earlier evidence, not a new read. ' : ''}${source.retrievedAt ? `Read: ${source.retrievedAt}; ${source.provenance}. ` : 'Read time unknown. '}${sourceDateText(source)}`));
+      }
+      findings.append(evidence);
+    }
+    for (const [index, limitation] of (partial.limitations ?? []).entries()) {
+      const gap = detail(`research-partial-limitation-${index}`, `${limitation.kind.replace(/-/g, ' ')} · ${limitation.blocksRecommendation ? 'recommendation withheld' : 'qualified finding'}`);
+      gap.append(el('p', {}, limitation.summary), el('p', {}, `Next step: ${limitation.nextStep}`),
+        el('p', { class: 'quiet' }, `Applies to ${[...limitation.optionIds.map(id => partial.options.find(option => option.id === id).title), ...limitation.claimIds.map(id => partial.claims.find(claim => claim.id === id).text), ...limitation.decisionIds.map(id => `captured decision ${id}`)].join('; ') || 'the whole question'}.`)); findings.append(gap);
+    }
+    if (partial.support?.length) {
+      const support = detail('research-partial-support', 'Inspect statement support');
+      for (const item of partial.support) support.append(el('p', {}, `${item.optionId ? partial.options.find(option => option.id === item.optionId).title : 'Recommendation'} · ${item.field}: ${item.text}`), el('p', { class: 'quiet' }, [...item.claimIds.map(id => partial.claims.find(claim => claim.id === id).text), ...item.decisionIds.map(id => `Captured decision ${id}`)].join('; ') || 'Support unknown.'));
+      findings.append(support);
+    }
+    if (partial.sources.length) {
+      const bibliography = detail('research-partial-sources', 'All partial source records');
+      for (const source of partial.sources) bibliography.append(el('p', {}, el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, source.title),
+        ` · ${source.evidenceOrigin && source.evidenceOrigin.origin !== 'current' ? 'Earlier evidence, not a new read. ' : ''}${source.retrievedAt ? `Read: ${source.retrievedAt}; ${source.provenance}. ` : 'Read time unknown. '}${sourceDateText(source)}`));
+      findings.append(bibliography);
+    }
+    section.append(findings);
+  } else if (report.reason !== 'model-completed') section.append(el('p', {}, 'No validated partial findings were retained. Your prior completed research and answer are unchanged.'));
+  ui.effortSync = () => {
+    if (state.researchAttempt?.id !== attempt.id) return;
+    historical.hidden = !state.researchAttempt.historical;
+    if (partial) { const age = researchFreshness(partial); for (const item of section.querySelectorAll('[data-partial-freshness]')) item.textContent = claimFreshnessText(partial.claims.find(claim => claim.id === item.dataset.partialFreshness), age); }
+  };
+  ui.effortSync();
+  section.append(el('div', { class: 'actions' }, button(report.settings.depth === 'deeper' ? 'Review another pass' : 'Review deeper research', () => {
+    if (state.researchAttempt?.id !== attempt.id || selected !== node.id || state.pending) return;
+    const depth = report.settings.depth === 'quick' ? 'standard' : 'deeper';
+    openResearchReview(node.id, attempt.followup, undefined, undefined, { ...report.settings, depth });
+  }, { id: 'research-deeper-review', disabled: !!state.pending }), button('Clear attempt details', () => api('research-attempt-clear', { id: attempt.id, journey: attempt.journey, nodeId: node.id }), { id: 'research-attempt-clear' })));
+  return section;
 }
 function closeResearchReview(restoreFocus = true) {
   const wasOpen = !!inlineResearchReview || $('research-review-dialog').open;
@@ -5005,7 +5090,7 @@ async function poll() {
     if (!current()) return;
     if (next) apply(next);
     const node = state.document?.nodes.find(item => item.id === selected);
-    if (node) { uiFor(node.id).researchDraftSync?.(); updateFollowupHistory(node); }
+    if (node) { uiFor(node.id).researchDraftSync?.(); uiFor(node.id).effortSync?.(); updateFollowupHistory(node); }
     stateCursor = nextCursor; pollFailures = 0; connectionStatus();
     await questionHelp.checkRetained();
     if (current() && $('brief-dialog').open) await requestBrief('poll');

@@ -1,4 +1,4 @@
-import { parseFollowup } from './research-followup.mjs';
+import { parseFollowup, FOLLOWUP_OUTPUT_BYTES, FOLLOWUP_OUTPUT_CHARS } from './research-followup.mjs';
 import { parseReconsideration } from './research-comparison.mjs';
 import { toolFreeConfig, validateNoTools } from './tool-free.mjs';
 import { readFile } from 'node:fs/promises';
@@ -13,6 +13,7 @@ import { createOwnedHelper, deadline } from './owned-helper.mjs';
 import { researchModelCatalog } from './research-model.mjs';
 import { researchSettings, researchLimits, researchSettingsText } from './web/research-policy.mjs';
 import { checkedSourceDateObservations, researchFreshness } from './web/research-freshness.mjs';
+import { createEffortTracker, effortAssessment } from './research-effort.mjs';
 export { hostRuntime, runtimeEnvironment } from './owned-helper.mjs';
 const researchInstructions = await readFile(new URL('./research/skills/explorer-research/SKILL.md', import.meta.url), 'utf8');
 export function researchFraming(context, settings = researchSettings(), now = Date.now()) {
@@ -40,14 +41,44 @@ export async function publicUrl(value, resolve = host => lookup(host, { all: tru
   } catch { return false; }
 }
 const sourceKey = value => { const url = new URL(value); url.hash = ''; return url.href; };
+const toolKind = name => name === 'web_fetch' ? 'fetch' : ['web_search', 'github-mcp-server-web_search', 'github-mcp-server/web_search'].includes(name) ? 'search' : null;
+const validCallId = id => typeof id === 'string' && !!id.trim() && id.length <= 256;
 
 export function createResearcher(parent, options = {}) {
   const now = options.now ?? Date.now;
   const validateFreshness = (prepared, fail) => { if (!sameReviewedResearchFreshness(prepared, now())) throw fail('Reviewed evidence freshness changed. Refresh the evidence review before starting.'); };
-  const prepare = async (prepared, { controller, progress, stopWith, fail, eligible }) => {
+  const prepare = async (prepared, { progress, stopWith, fail, eligible, remaining }) => {
     validateFreshness(prepared, fail);
     if (Buffer.byteLength(prepared.instructions) + Buffer.byteLength(prepared.prompt) > RESEARCH_CONTEXT_LIMIT) throw fail('The prepared research request exceeds its limit.');
-    const pages = new Map(), reads = new Map(), readIds = new Set(), dateEvidence = new Map(); let toolCalls = 0, dateTextUnits = 0;
+    const pages = new Map(), pendingCalls = new Map(), callIds = new Set(), dateEvidence = new Map(), effort = createEffortTracker(prepared.limits);
+    const checkpointIds = new Set(); let checkpoint = null, assessment = null;
+    const chars = prepared.followup ? FOLLOWUP_OUTPUT_CHARS : 80000, bytes = prepared.followup ? FOLLOWUP_OUTPUT_BYTES : MAX_RESEARCH_BYTES;
+    const parse = (content, partial = false) => {
+      let result, assessed;
+      try {
+        if (typeof content !== 'string' || content.length > chars || Buffer.byteLength(content) > bytes) throw new Error();
+        const { effortAssessment: proposedAssessment, ...raw } = JSON.parse(content.trim().replace(/^```(?:json)?\s*\n([\s\S]*)\n```$/, '$1'));
+        assessed = effortAssessment(proposedAssessment, { partial });
+        if (prepared.followup) return { result: parseFollowup(JSON.stringify(raw), prepared, pages, dateEvidence, now()), assessment: assessed };
+        if (raw.optionsVersion !== 1 || !Object.hasOwn(raw, 'claims') || !Array.isArray(raw.sources) || raw.sources.length > 15) throw new Error();
+        if (!raw.recommendationAssessment || !Array.isArray(raw.recommendationAssessment.decisionRefs) || raw.recommendationAssessment.decisionRefs.length > 8 || partial && raw.recommendationAssessment.optionId !== null) throw new Error();
+        const decisions = new Map([...prepared.context.path, ...prepared.context.decisionsElsewhere].filter(node => node.parentId != null && isQuestion(node) && typeof node.answer === 'string' && node.answer.trim() && effectiveAnswerState(node) !== 'unanswered').map(node => [node.id, node]));
+        const decisionRefs = raw.recommendationAssessment.decisionRefs.map(ref => {
+          if (!ref || Object.keys(ref).sort().join(',') !== 'nodeId,reason') throw new Error();
+          const source = decisions.get(ref.nodeId); if (!source) throw new Error();
+          return { ...ref, answerState: effectiveAnswerState(source), review: source.review === true };
+        });
+        result = research({ ...raw, recommendationAssessment: { ...raw.recommendationAssessment, decisionRefs }, settings: prepared.settings, sources: raw.sources.map(source => {
+          const url = sourceKey(source.url), retrievedAt = pages.get(url);
+          return { ...source, retrievedAt: retrievedAt ?? null, provenance: retrievedAt ? 'recorded-read' : 'imported',
+            ...(Object.hasOwn(source, 'dateObservations') ? { dateObservations: checkedSourceDateObservations(source.dateObservations, dateEvidence.get(url)) } : {}) };
+        }) });
+      } catch (error) { throw fail(prepared.followup ? error.message : 'The researcher returned an invalid comparison. Your answers are saved; try research again.'); }
+      if (result.sources.some(s => !pages.has(sourceKey(s.url))) || (result.basis === 'reasoning' && result.sources.length)) throw fail('Research included sources it did not successfully read. The result was not saved. Try again.');
+      if (result.recommendationAssessment.optionId !== null && researchFreshness(result, now()).recommendation.needsReview) throw fail('Research proposed a current recommendation using a time-sensitive premise whose freshness needs review. The previous findings were kept; obtain current evidence or an explicitly qualified result without a winner.');
+      return { result, assessment: assessed };
+    };
+    const guidance = truncated => `Explorer effort: ${Math.max(0, Math.floor(remaining()))}ms remaining; ${Math.max(0, prepared.limits.toolAttemptLimit - effort.snapshot().toolAttempts)} attempts remain. ${truncated ? 'Only a bounded text prefix was delivered; do not infer omitted content. ' : ''}Avoid repeated requests. If the material criteria are supported, evidence is unavailable, or remaining effort is low, return the bounded final result now. Sufficiency is your assessment, not a host verification.`;
     return {
       instructions: prepared.instructions,
       config: {
@@ -65,33 +96,48 @@ export function createResearcher(parent, options = {}) {
         },
         hooks: {
           onPreToolUse: async input => {
-            if (++toolCalls > prepared.limits.toolAttemptLimit) controller.abort();
-            const fetch = input.toolName === 'web_fetch', search = ['web_search', 'github-mcp-server-web_search', 'github-mcp-server/web_search'].includes(input.toolName);
-            if (fetch && (typeof input.toolCallId !== 'string' || !input.toolCallId)) stopWith('This Copilot SDK does not provide source tracking IDs. Update Copilot before researching.');
-            if (!eligible() || (!fetch && !search) || (fetch && !await publicUrl(input.toolArgs?.url, options.resolve)) || !eligible()) return { permissionDecision: 'deny', permissionDecisionReason: 'Only public web research within the request limits is allowed.' };
-            if (fetch) {
-              if (readIds.has(input.toolCallId)) { stopWith('Research source tracking IDs were reused. The result was not saved.'); return { permissionDecision: 'deny' }; }
-              readIds.add(input.toolCallId); reads.set(input.toolCallId, sourceKey(input.toolArgs.url)); progress('Reading sources');
+            if (!eligible()) return { permissionDecision: 'deny', permissionDecisionReason: 'This research operation has stopped.' };
+            const attempt = effort.attempt(input);
+            const kind = toolKind(input.toolName), fetch = kind === 'fetch', search = kind === 'search';
+            if (kind && !validCallId(input.toolCallId)) stopWith('This Copilot SDK does not provide valid research tracking IDs. Update Copilot before researching.');
+            if (kind && callIds.has(input.toolCallId)) stopWith('Research source tracking IDs were reused. The result was not saved.');
+            if (!attempt.allowed) {
+              const messages = { 'attempt-limit': 'Research stopped at the selected tool-attempt limit.', 'repeated-request': 'Research stopped because the same request was repeated after a duplicate was denied.', 'result-text-limit': 'Research stopped at its delivered evidence-text limit.' };
+              if (attempt.stop) stopWith(messages[attempt.reason], attempt.reason);
+              return { permissionDecision: 'deny', permissionDecisionReason: attempt.reason === 'duplicate-request' ? 'This exact request was already attempted. Do not retry it. Use existing evidence or conclude with the remaining gap.' : messages[attempt.reason] ?? 'Invalid or oversized research tool arguments.' };
             }
-            else progress('Searching the web');
+            if (!eligible() || (!fetch && !search) || (fetch && !await publicUrl(input.toolArgs?.url, options.resolve)) || !eligible()) return { permissionDecision: 'deny', permissionDecisionReason: 'Only public web research within the request limits is allowed.' };
+            if (callIds.has(input.toolCallId)) { stopWith('Research source tracking IDs were reused. The result was not saved.'); return { permissionDecision: 'deny' }; }
+            callIds.add(input.toolCallId); pendingCalls.set(input.toolCallId, { kind, url: fetch ? sourceKey(input.toolArgs.url) : null });
+            progress(fetch ? 'Reading sources' : 'Searching the web');
             return {};
           },
           onPostToolUse: input => {
-            if (input.toolName === 'web_fetch' && (typeof input.toolCallId !== 'string' || !input.toolCallId)) stopWith('This Copilot SDK does not provide source tracking IDs. Update Copilot before researching.');
+            const omitted = { modifiedResult: { resultType: 'success', textResultForLlm: '' }, additionalContext: 'No eligible tool text was delivered by this callback.' };
+            if (!eligible()) return omitted;
+            if (!validCallId(input.toolCallId)) { stopWith('This Copilot SDK does not provide valid research tracking IDs. Update Copilot before researching.'); return omitted; }
+            const pending = pendingCalls.get(input.toolCallId);
+            if (!pending || pending.kind !== toolKind(input.toolName)) return omitted;
+            pendingCalls.delete(input.toolCallId);
+            if (input.toolResult?.resultType !== 'success' || typeof input.toolResult.textResultForLlm !== 'string') { stopWith('Research received an invalid tool result. Previous findings were kept.'); return omitted; }
+            const delivered = effort.deliver(input.toolName, input.toolResult.textResultForLlm);
             // This observes the requested URL and completion time, not redirect identity or publication date.
-            if (eligible() && input.toolName === 'web_fetch' && reads.has(input.toolCallId) && input.toolResult?.resultType === 'success' && typeof input.toolResult.textResultForLlm === 'string' && input.toolResult.textResultForLlm.trim()) {
-              const url = reads.get(input.toolCallId);
+            if (pending.kind === 'fetch' && delivered.text.trim()) {
+              const url = pending.url;
               if (!pages.has(url)) {
                 pages.set(url, new Date(now()).toISOString());
                 // Keep the first receipt and text paired; this bounded transient prefix is never persisted.
-                const excerpt = input.toolResult.textResultForLlm.slice(0, Math.min(65536, 1048576 - dateTextUnits));
-                if (excerpt) dateEvidence.set(url, excerpt);
-                dateTextUnits += excerpt.length;
+                dateEvidence.set(url, delivered.text);
               }
             }
-            reads.delete(input.toolCallId); progress('Comparing options');
+            progress('Comparing options');
+            return { modifiedResult: { resultType: 'success', textResultForLlm: delivered.text }, additionalContext: guidance(delivered.truncated) };
           },
-          onPostToolUseFailure: input => { reads.delete(input.toolCallId); },
+          onPostToolUseFailure: input => {
+            if (!eligible()) return;
+            const pending = pendingCalls.get(input.toolCallId);
+            if (pending && pending.kind === toolKind(input.toolName)) { pendingCalls.delete(input.toolCallId); stopWith('Research source failed. Previous complete findings were kept; review before trying again.', 'tool-failure'); }
+          },
         },
         // GitHub MCP needs discovery inside the empty owned configuration/workspace.
         enableConfigDiscovery: true,
@@ -104,31 +150,23 @@ export function createResearcher(parent, options = {}) {
       stage: 'Researching this question',
       validateBeforeSend: () => validateFreshness(prepared, fail),
       prompt: prepared.prompt,
-      parse(content) {
-        if (prepared.followup) {
-          try { return parseFollowup(content, prepared, pages, dateEvidence, now()); } catch (error) { throw fail(error.message); }
-        }
-        let result;
+      parse(content) { const parsed = parse(content); assessment = parsed.assessment; return parsed.result; },
+      onEvent(event) {
+        const data = event?.data;
+        if (event?.type !== 'assistant.message' || event.agentId || event.checkpoint || event.ephemeral || data?.parentToolCallId ||
+          typeof data?.messageId !== 'string' || !data.messageId || data.messageId.length > 256 || checkpointIds.has(data.messageId) || checkpointIds.size >= 4 ||
+          (data.chunkCount !== undefined || data.chunkIndex !== undefined) && (data.chunkCount !== 1 || data.chunkIndex !== 0) ||
+          typeof data.content !== 'string' || data.content.length > chars + 128 || Buffer.byteLength(data.content) > bytes + 128) return;
         try {
-          if (typeof content !== 'string' || content.length > 80000 || Buffer.byteLength(content) > MAX_RESEARCH_BYTES) throw new Error();
-          const raw = JSON.parse(content.trim().replace(/^```(?:json)?\s*\n([\s\S]*)\n```$/, '$1'));
-          if (raw.optionsVersion !== 1 || !Object.hasOwn(raw, 'claims') || !Array.isArray(raw.sources) || raw.sources.length > 15) throw new Error();
-          if (!raw.recommendationAssessment || !Array.isArray(raw.recommendationAssessment.decisionRefs) || raw.recommendationAssessment.decisionRefs.length > 8) throw new Error();
-          const decisions = new Map([...prepared.context.path, ...prepared.context.decisionsElsewhere].filter(node => node.parentId != null && isQuestion(node) && typeof node.answer === 'string' && node.answer.trim() && effectiveAnswerState(node) !== 'unanswered').map(node => [node.id, node]));
-          const decisionRefs = raw.recommendationAssessment.decisionRefs.map(ref => {
-            if (!ref || Object.keys(ref).sort().join(',') !== 'nodeId,reason') throw new Error();
-            const source = decisions.get(ref.nodeId); if (!source) throw new Error();
-            return { ...ref, answerState: effectiveAnswerState(source), review: source.review === true };
-          });
-          result = research({ ...raw, recommendationAssessment: { ...raw.recommendationAssessment, decisionRefs }, settings: prepared.settings, sources: raw.sources.map(source => {
-            const url = sourceKey(source.url), retrievedAt = pages.get(url);
-            return { ...source, retrievedAt: retrievedAt ?? null, provenance: retrievedAt ? 'recorded-read' : 'imported',
-              ...(Object.hasOwn(source, 'dateObservations') ? { dateObservations: checkedSourceDateObservations(source.dateObservations, dateEvidence.get(url)) } : {}) };
-          }) });
-        } catch { throw fail('The researcher returned an invalid comparison. Your answers are saved; try research again.'); }
-        if (result.sources.some(s => !pages.has(sourceKey(s.url))) || (result.basis === 'reasoning' && result.sources.length)) throw fail('Research included sources it did not successfully read. The result was not saved. Try again.');
-        if (result.recommendationAssessment.optionId !== null && researchFreshness(result, now()).recommendation.needsReview) throw fail('Research proposed a current recommendation using a time-sensitive premise whose freshness needs review. The previous findings were kept; obtain current evidence or an explicitly qualified result without a winner.');
-        return result;
+          const envelope = JSON.parse(data.content);
+          if (!envelope || Object.keys(envelope).sort().join(',') !== 'checkpointVersion,findings' || envelope.checkpointVersion !== 1) return;
+          checkpointIds.add(data.messageId);
+          checkpoint = parse(JSON.stringify(envelope.findings), true);
+        } catch { /* Incomplete or invalid messages never replace a validated checkpoint. */ }
+      },
+      report({ reason, elapsedMs }) {
+        const partial = ['deadline', 'attempt-limit', 'repeated-request', 'result-text-limit', 'tool-failure'].includes(reason) && sameReviewedResearchFreshness(prepared, now()) ? checkpoint?.result ?? null : null;
+        return { settings: prepared.settings, reason, elapsedMs, ...effort.snapshot(), assessment: reason === 'model-completed' ? assessment : partial ? checkpoint.assessment : null, partial };
       },
     };
   };

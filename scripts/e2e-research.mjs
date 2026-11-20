@@ -25,6 +25,7 @@ const findings = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic lo
   { id: 'c2', text: 'Local cost is unknown.', basis: 'unknown', evidence: [], limitations: 'Search snippets do not establish fetched evidence.' },
 ] };
 let hold = false, onHeld, falseCitation = false, followupMode = false, limitedCount = null;
+let checkpointMode = false, onCheckpointHeld, checkpointTextBounded = false;
 let reconsideration = null;
 const comparisonOutput = prepared => ({ cells: prepared.comparison.criteria.flatMap(criterion => prepared.comparison.options.map(option => ({ criterionId: criterion.id, optionId: option.id, explanation: 'Historical model judgment only.', basis: 'prior-claim', claimIds: ['c1'] }))),
   recommendation: { optionId: 'pilot', reason: 'Fits the hypothetical priorities.', changed: 'Coordination is prioritized.', unchanged: 'Participation remains unknown.' }, uncertainty: 'No new retrieval or verification.' });
@@ -46,7 +47,7 @@ const fixture = createServer(async (req, res) => {
         input.method === 'tools/list' ? { tools: [
           { name: 'web_search', description: 'Search fixture', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }, annotations: { readOnlyHint: true } },
           { name: 'unwanted_tool', description: 'Must be excluded', inputSchema: { type: 'object', properties: {} } },
-        ] } : input.method === 'tools/call' ? { content: [{ type: 'text', text: 'Synthetic search result. No real sources are available in this fixture.' }] } : {};
+        ] } : input.method === 'tools/call' ? { content: [{ type: 'text', text: checkpointMode ? 'BOUNDED_SEARCH_PREFIX ' + 'x'.repeat(9000) + 'OMITTED_TOOL_SUFFIX_CANARY' : 'Synthetic search result. No real sources are available in this fixture.' }] } : {};
       if (input.method === 'tools/call') toolCalls.push(input.params);
       res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: input.id, result })); return;
     }
@@ -58,10 +59,14 @@ const fixture = createServer(async (req, res) => {
       res.end(JSON.stringify({ id: 'comparison-fixture', object: 'chat.completion', choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(comparisonOutput(reconsideration)) }, finish_reason: 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 } })); return;
     }
     const searched = input.messages.some(m => m.role === 'tool');
+    if (checkpointMode && searched) {
+      checkpointTextBounded = JSON.stringify(input.messages).includes('BOUNDED_SEARCH_PREFIX') && !JSON.stringify(input.messages).includes('OMITTED_TOOL_SUFFIX_CANARY');
+      onCheckpointHeld(); return;
+    }
     const searchName = input.tools.find(t => t.function.name.includes('web_search')).function.name;
     const output = followupMode ? { answer: 'A prior source can inform the hypothetical.', uncertainty: 'Prior imported metadata; no new read.', claims: [{ id: 'c1', text: 'Prior support only', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Previously recorded support' }], limitations: 'Historical evidence, not a new fetch' }], sources: falseCitation ? [{ id: 's1', title: 'Unread new source', url: 'https://example.com/unread' }] : [{ id: 's1', prior: { origin: 'original', sourceId: 's1' } }] } : falseCitation ? { ...findings, basis: 'sources', sources: [{ id: 's1', title: 'Unread search result', url: 'https://example.com/unread', retrievedAt: '1900-01-01T00:00:00.000Z', provenance: 'recorded-read' }], claims: [{ id: 'c1', text: 'Unsupported claim', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Invented support' }], limitations: 'Fixture' }, ...findings.claims.slice(1)] } : findings;
     const message = searched ? { role: 'assistant', content: JSON.stringify(limitedCount === null ? output : limitedFindings(limitedCount)) } : {
-      role: 'assistant', content: null, tool_calls: [{ id: 'search-fixture', type: 'function', function: { name: searchName, arguments: JSON.stringify({ query: 'synthetic pilot options' }) } }],
+      role: 'assistant', content: checkpointMode ? JSON.stringify({ checkpointVersion: 1, findings: limitedFindings(1) }) : null, tool_calls: [{ id: 'search-fixture', type: 'function', function: { name: searchName, arguments: JSON.stringify({ query: 'synthetic pilot options' }) } }],
     };
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ id: 'fixture-completion', object: 'chat.completion', choices: [{ index: 0, message, finish_reason: searched ? 'stop' : 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 } }));
@@ -240,6 +245,20 @@ try {
   }
   assert.deepEqual(comparisonReceipts.map(item => item.status).sort(), ['cancelled', 'completed', 'completed']);
   assert.deepEqual(comparisonReceipts.filter(item => item.status === 'completed').map(item => item.model).sort(), [model.id, dedicated.id].sort());
+  hold = false; reconsideration = null; limitedCount = null; checkpointMode = true;
+  let elapsed = 0, expire; const reports = [];
+  const checkpointResearcher = createResearcher(parent, { runtime, usageDirectory: join(temporary, 'usage'), clock: {
+    now: () => elapsed, setTimeout(callback, ms) { expire = callback; const timer = setTimeout(callback, ms); timer.unref(); return timer; }, clearTimeout,
+  } });
+  onCheckpointHeld = () => { elapsed = 60000; expire(); };
+  try {
+    await assert.rejects(checkpointResearcher.run(prepared.context, { prepared, onReport: report => reports.push(report) }), /timed out/);
+    assert.equal(reports.length, 1); assert.equal(reports[0].reason, 'deadline'); assert.equal(reports[0].elapsedMs, 60000);
+    assert.equal(reports[0].toolAttempts, 1); assert.equal(reports[0].truncatedResults, 1); assert.equal(reports[0].deliveredTextUnits, 8192);
+    assert.equal(reports[0].partial.options.length, 1); assert.equal(reports[0].partial.recommendationAssessment.optionId, null);
+    assert.equal(reports[0].partial.summary, findings.summary); assert.ok(checkpointTextBounded, 'Installed runtime delivers the bounded search text without its omitted suffix.');
+  } finally { await checkpointResearcher.close(); }
+  console.log('PASS effort: actual installed complete-message checkpoint retained separately after a simulated setup-inclusive deadline and confirmed cleanup; successful search text capped before the next model input, omitted suffix absent, observed tool count/time retained. Local deterministic transport only, no live quality or cost claim.');
   console.log('PASS reconsideration: exact reviewed Unicode criteria/options/prior research, selected and dedicated models, zero initialized tools/MCP/retrieval, completed and cancelled attributed receipts; anonymous installed runtime only.');
   console.log('PASS Research model discovery starts no inference; captured selected-chat model and dedicated follow-up model survive later chat changes; actual installed helper models and retained operation receipts match both captures.');
   console.log('PASS isolated research and scoped follow-up: linked recommendation with captured prior-context state, honest null recommendations and zero/one-option results; historical imported evidence unchanged, unread new source rejected, separate completed/failed/cancelled operation receipts, real installed MCP search, reasoning/unknown claims, rejection of search-only fabricated source/time, exact reviewed inputs, retained completed/failed receipts and cancellation/release. Successful builtin web_fetch is NOT exercised; deterministic hook tests separately cover successful read provenance. No paid provider or user session.');

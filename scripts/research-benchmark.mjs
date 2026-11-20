@@ -73,11 +73,11 @@ export async function runCase(item, { guidance = '' } = {}) {
         assert.equal(input.prompt, expected.prompt); assert.equal(config.systemMessage.content, expected.instructions);
         assert.equal(Buffer.byteLength(input.prompt) + Buffer.byteLength(config.systemMessage.content), expected.bytes);
         inputs.push({ prompt: input.prompt, instructions: config.systemMessage.content });
-        if (mode !== 'followup') {
+        if (mode !== 'followup' && mode !== 'unread') {
           const call = { toolName: 'web_fetch', toolCallId: 'fixture-read', toolArgs: { url: unread.sources[0].url } };
           fixtureFetchAttempts++;
           assert.deepEqual(await config.hooks.onPreToolUse(call), {});
-          if (mode === 'unread') await config.hooks.onPostToolUseFailure({ ...call, error: 'Synthetic retrieval failure' });
+          if (mode === 'retrieval-failure') await config.hooks.onPostToolUseFailure({ ...call, error: 'Synthetic retrieval failure' });
           else {
             await config.hooks.onPostToolUse({ ...call, toolResult: { resultType: 'success', textResultForLlm: evidenceText(item) } });
             fixtureReadCallbacks++;
@@ -96,6 +96,8 @@ export async function runCase(item, { guidance = '' } = {}) {
     if (output.sources.length) assert.equal(result.sources[0].provenance, 'recorded-read');
     mode = 'unread';
     await assert.rejects(researcher.run(prepared.context, { prepared }), /sources.*read/);
+    mode = 'retrieval-failure';
+    await assert.rejects(researcher.run(prepared.context, { prepared }), /Research source failed/);
     mode = 'cancel';
     await assert.rejects(researcher.run(prepared.context, { prepared, signal: abort.signal }), /cancelled/);
     mode = 'followup';
@@ -109,10 +111,10 @@ export async function runCase(item, { guidance = '' } = {}) {
     assert.equal(expected.followup.hypothetical, item.followup.hypothetical);
     const answer = await researcher.runFollowup(expected.context, { prepared: expected });
     assert.deepEqual(answer, followupOutput); assert.equal(JSON.stringify(followupDoc), followupBefore);
-    assert.equal(JSON.stringify(doc), before); assert.deepEqual(statuses, ['completed', 'failed', 'cancelled', 'completed']);
+    assert.equal(JSON.stringify(doc), before); assert.deepEqual(statuses, ['completed', 'failed', 'failed', 'cancelled', 'completed']);
     for (const workspace of workspaces) await assert.rejects(stat(workspace), { code: 'ENOENT' });
     return { id: item.id, family: item.family, condition: item.condition, split: item.split,
-      checks: { completed: true, unreadCitationRejected: true, cancelled: true, followup: true, savedMapUnchanged: true, exactInput: true },
+      checks: { completed: true, unreadCitationRejected: true, retrievalFailureStopped: true, cancelled: true, followup: true, savedMapUnchanged: true, exactInput: true },
       fixtureModelCalls, fixtureReadCallbacks, fixtureFetchAttempts, helperStops, statuses, evidenceHash: hash(evidenceText(item)),
       inputBytes: prepared.bytes, followupBytes: expected.bytes, inputHash: hash(JSON.stringify(inputs)), responseHash: hash(JSON.stringify({ output, followupOutput })),
       inProcessMs: performance.now() - started, providerTokens: null, providerCost: null, liveQuality: null };

@@ -58,6 +58,64 @@ import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, 
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
 
+test('research attempt partials stay separate and deeper review preserves drafts, disclosures and focus', async t => {
+  let run; let sends = 0;
+  const f = await fixture(t, 340, undefined, false, { runResearch: (_, options) => { sends++; return new Promise((resolve, reject) => { run = { ...options, resolve, reject }; }); } });
+  const $ = id => f.document.getElementById(id), nodeId = f.explorer.doc.nodes[1].id;
+  const saved = structuredClone(f.explorer.doc); saved.nodes[1].research = recommendationFindings(); await f.explorer.save(saved); f.window.__updates.apply(f.explorer.uiSnapshot()); f.open(nodeId);
+  f.type('answer', 'Keep my answer 🌿'); f.type('followup-question', 'Keep the next question');
+  const editor = $('answer'), composer = $('followup-question'), originalResearch = JSON.stringify(f.explorer.doc.nodes[1].research);
+  $('research-request').click(); await until(() => !$('research-review-start').disabled, 'review ready'); $('research-review-start').click(); await until(() => run, 'research running');
+  const partial = recommendationFindings(); partial.recommendationAssessment.optionId = null; partial.summary = 'Incomplete <img src=x onerror=alert(1)> 🌿';
+  run.onReport({ settings: run.prepared.settings, reason: 'deadline', elapsedMs: 180001, toolAttempts: 3, duplicateAttempts: 0, deliveredTextUnits: 180, truncatedResults: 1,
+    assessment: { plan: [{ criterion: 'Access', neededEvidence: 'Confirmed opening hours' }], stopReason: 'in-progress', explanation: 'Hours are still missing.' }, partial });
+  run.reject(Error('Research stopped at the deadline.')); await until(() => !f.explorer.pending, 'research released'); f.window.__updates.apply(f.explorer.uiSnapshot());
+  assert.match($('research-attempt').textContent, /time limit/i); assert.match($('research-attempt').textContent, /3 tool attempts/);
+  assert.match($('research-attempt').textContent, /model.assessed/i); assert.match($('research-attempt').textContent, /not saved/i);
+  assert.match($('research-partial').textContent, /Incomplete <img/); assert.equal($('research-attempt').querySelector('img'), null);
+  $('research-partial').open = true; $('research-partial-summary').focus(); const disclosure = $('research-partial');
+  f.window.__updates.apply(f.explorer.uiSnapshot()); assert.equal($('research-partial'), disclosure); assert.equal(disclosure.open, true); assert.equal(f.document.activeElement.id, 'research-partial-summary');
+  const changed = structuredClone(f.explorer.doc); changed.objective = 'A new saved objective'; await f.explorer.save(changed); f.window.__updates.apply(f.explorer.uiSnapshot());
+  assert.equal($('research-partial'), disclosure); assert.equal(disclosure.open, true); assert.equal(f.document.activeElement.id, 'research-partial-summary'); assert.equal($('research-attempt-historical').hidden, false);
+  $('research-deeper-review').click(); await until(() => !$('research-review-start').disabled, 'deeper review ready');
+  assert.equal($('research-depth').value, 'deeper'); assert.equal(sends, 1); assert.match($('research-review-effort').textContent, /300/);
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep my answer 🌿'); assert.equal($('followup-question'), composer); assert.equal(composer.value, 'Keep the next question');
+  $('research-review-close').click(); $('research-attempt-clear').click(); await until(() => !f.explorer.uiSnapshot().researchAttempt, 'attempt cleared'); f.window.__updates.apply(f.explorer.uiSnapshot());
+  assert.equal($('research-attempt'), null); assert.equal(JSON.stringify(f.explorer.doc.nodes[1].research), originalResearch); assert.equal(sends, 1);
+});
+
+test('research attempt without a checkpoint says none were retained and can review another maximum-depth pass', async t => {
+  let run;
+  const f = await fixture(t, 340, undefined, false, { runResearch: (_, options) => new Promise((resolve, reject) => { run = { ...options, resolve, reject }; }) }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); $('research-request').click(); await until(() => !$('research-review-start').disabled, 'initial review');
+  $('research-depth').value = 'deeper'; $('research-depth').dispatchEvent(new f.window.Event('change')); await until(() => !$('research-review-start').disabled, 'depth reviewed');
+  $('research-review-start').click(); await until(() => run, 'run starts');
+  run.onReport({ settings: run.prepared.settings, reason: 'attempt-limit', elapsedMs: 9200, toolAttempts: 41, duplicateAttempts: 0, deliveredTextUnits: 80, truncatedResults: 0, assessment: null, partial: null });
+  run.reject(Error('Research stopped at the tool-attempt limit.')); await until(() => !f.explorer.pending, 'run released'); f.window.__updates.apply(f.explorer.uiSnapshot());
+  assert.match($('research-attempt').textContent, /No validated partial findings/); assert.match($('research-attempt').textContent, /not reported/i); assert.equal($('research-partial'), null);
+  assert.match($('research-deeper-review').textContent, /another pass/i); $('research-deeper-review').click(); await until(() => !$('research-review-start').disabled, 'retry review');
+  assert.equal($('research-depth').value, 'deeper'); assert.equal(f.explorer.pending, null);
+});
+
+test('research attempt follow-up partial keeps its captured hypothetical question after composer changes and rerender', async t => {
+  let run;
+  const f = await fixture(t, 340, undefined, false, { runFollowup: (_, options) => new Promise((resolve, reject) => { run = { ...options, resolve, reject }; }) }), $ = id => f.document.getElementById(id);
+  const saved = structuredClone(f.explorer.doc); saved.nodes[1].research = recommendationFindings(); await f.explorer.save(saved); f.window.__updates.apply(f.explorer.uiSnapshot()); f.open(saved.nodes[1].id);
+  const question = 'What if <img src=x> the budget doubles? 🌿'; f.type('followup-question', question);
+  $('followup-hypothetical').checked = true; $('followup-hypothetical').dispatchEvent(new f.window.Event('change'));
+  $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'follow-up review'); $('research-review-start').click(); await until(() => run, 'follow-up starts');
+  f.type('followup-question', 'A different question');
+  run.onReport({ settings: run.prepared.settings, reason: 'deadline', elapsedMs: 180001, toolAttempts: 0, duplicateAttempts: 0, deliveredTextUnits: 0, truncatedResults: 0, assessment: null,
+    partial: { answer: 'A broader pilot may fit.', uncertainty: 'Incomplete judgment.', sources: [], claims: [{ id: 'c1', text: 'A broader pilot may fit.', basis: 'reasoning', evidence: [], limitations: 'Hypothetical only.' }] } });
+  run.reject(Error('Deadline')); await until(() => !f.explorer.pending, 'follow-up released'); f.window.__updates.apply(f.explorer.uiSnapshot());
+  for (let view = 0; view < 2; view++) {
+    assert.ok($('research-attempt').textContent.includes(question)); assert.match($('research-attempt').textContent, /Hypothetical follow-up/); assert.equal($('research-attempt').querySelector('img'), null);
+    if (!view) { f.open(saved.rootId); f.open(saved.nodes[1].id); }
+  }
+  assert.equal($('followup-question').value, 'A different question');
+  $('research-deeper-review').click(); await until(() => !$('research-review-start').disabled, 'captured follow-up reviewed'); assert.ok($('research-review-followup').textContent.includes(question));
+});
+
 test('change summary app UI serves the client, compares saved versions, copies/downloads edits and invalidates without replacing private drafts', async t => {
   const f = await fixture(t, 340), $ = id => f.document.getElementById(id);
   assert.equal((await f.window.fetch('change-summary-client.mjs')).status, 200);
@@ -2677,7 +2735,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   let explorer = options.explorer ?? await new Explorer({ file: join(dir, 'map.explore.json'), ...(useLibrary ? { library: new Library(dir), binding: 'dom' } : {}), send: async () => {}, target: { instanceId: 'dom-test' },
     cleaner: options.cleaner, briefHelper: options.briefHelper, checkHelper: options.checkHelper, projectRoot: options.projectRoot,
     questionHelper: options.questionHelper,
-    researcher: { models: fixtureResearchModels, runFollowup: options.runFollowup, runReconsideration: options.runReconsideration, run: (_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); }) },
+    researcher: { models: fixtureResearchModels, runFollowup: options.runFollowup, runReconsideration: options.runReconsideration, run: options.runResearch ?? ((_, { signal }) => new Promise((resolve, reject) => { resolveResearch = resolve; signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true }); })) },
   }).load();
   if (!options.explorer) {
   await explorer.command('start', { topic: 'A tool library' });

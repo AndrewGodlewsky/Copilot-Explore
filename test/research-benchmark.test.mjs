@@ -18,18 +18,18 @@ test('versioned benchmark spans distinct topics, difficult evidence and a public
   }
 });
 
-test('every case exercises actual helper completion, unread-source rejection, cancellation and follow-up without live metrics', async () => {
+test('every case exercises actual helper completion, unread-source rejection, retrieval failure, cancellation and follow-up without live metrics', async () => {
   for (const item of corpus.cases) {
     const result = await runCase(item);
-    assert.deepEqual(result.checks, { completed: true, unreadCitationRejected: true, cancelled: true, followup: true, savedMapUnchanged: true, exactInput: true }, item.id);
-    assert.equal(result.fixtureModelCalls, 4); assert.equal(result.helperStops, 4);
+    assert.deepEqual(result.checks, { completed: true, unreadCitationRejected: true, retrievalFailureStopped: true, cancelled: true, followup: true, savedMapUnchanged: true, exactInput: true }, item.id);
+    assert.equal(result.fixtureModelCalls, 5); assert.equal(result.helperStops, 5);
     assert.equal(result.providerTokens, null); assert.equal(result.providerCost, null); assert.equal(result.liveQuality, null);
     assert.ok(result.inputBytes > 0 && result.inputBytes <= 131072);
     assert.ok(result.followupBytes > result.inputBytes && result.followupBytes <= 131072);
     assert.ok(result.inProcessMs >= 0); assert.ok(result.inputHash && result.responseHash);
     assert.equal(result.fixtureReadCallbacks, 2);
     assert.equal(result.fixtureFetchAttempts, 3);
-    assert.deepEqual(result.statuses, ['completed', 'failed', 'cancelled', 'completed']);
+    assert.deepEqual(result.statuses, ['completed', 'failed', 'failed', 'cancelled', 'completed']);
   }
 });
 

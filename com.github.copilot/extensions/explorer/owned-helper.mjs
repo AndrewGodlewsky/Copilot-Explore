@@ -35,26 +35,27 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
   const fail = message => new HelperError(message.replaceAll('Research', label).replaceAll('research', label.toLowerCase()));
   const cancelled = () => fail('Research was cancelled or timed out. Your answers are saved.');
   const active = new Map();
-  function run(context, { signal, onProgress = () => {} } = {}) {
+  function run(context, { signal, onProgress = () => {}, onReport = () => {} } = {}) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     if (signal?.aborted) controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
     const receiptDirectory = typeof usageDirectory === 'function' ? usageDirectory() : usageDirectory;
-    const task = execute(context, controller, onProgress, receiptDirectory).finally(() => { signal?.removeEventListener('abort', abort); active.delete(controller); });
+    const task = execute(context, controller, onProgress, receiptDirectory, onReport).finally(() => { signal?.removeEventListener('abort', abort); active.delete(controller); });
     active.set(controller, task);
     return task;
   }
-  async function execute(context, controller, progress, usageDirectory) {
+  async function execute(context, controller, progress, usageDirectory, report) {
     const timeLimitMs = reviewedResearch ? context.limits.timeLimitMs : 180000;
     const started = clock.now();
     const remaining = () => Math.max(0, timeLimitMs - (clock.now() - started));
-    let ended = false;
-    const operationEligible = () => { if (reviewedResearch && remaining() <= 0) controller.abort(); return !ended && !controller.signal.aborted; };
+    let ended = false, terminalReason, work, inferenceStarted = false;
+    const expire = () => { if (!controller.signal.aborted) { terminalReason ??= 'deadline'; controller.abort(); } };
+    const operationEligible = () => { if (reviewedResearch && remaining() <= 0) expire(); return !ended && !controller.signal.aborted; };
     let client, directory, usage, stop, stopAttempt, phase = 'preparing the SDK', outcome = 'failed';
     const sessionId = randomUUID();
     let terminalFailure;
-    const stopWith = message => { terminalFailure ??= fail(message); controller.abort(); };
+    const stopWith = (message, reason = 'helper-failure') => { terminalFailure ??= fail(message); terminalReason ??= reason; controller.abort(); };
     const check = () => { if (terminalFailure) throw terminalFailure; if (!operationEligible()) throw cancelled(); };
     const stopClient = () => {
       if (client && !stop) {
@@ -64,7 +65,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       return stop;
     };
     controller.signal.addEventListener('abort', () => void stopClient(), { once: true });
-    const timer = clock.setTimeout(() => controller.abort(), timeLimitMs); timer.unref?.();
+    const timer = clock.setTimeout(expire, timeLimitMs); timer.unref?.();
     const stage = value => { phase = value; progress(value); check(); };
     try {
       check(); stage('Checking Copilot access');
@@ -79,7 +80,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       if (captured && !sameAccount(captured.account, auth)) throw fail('The Copilot account changed after review. Refresh the Research review before starting.');
       if (captured && !model) throw fail('The reviewed Research model is unavailable for this account or policy. Review Research model settings; no replacement was selected.');
       if (!model) throw fail('Research needs an enabled Copilot model. Select one in the main chat and try again.');
-      const work = await prepare(context, { controller, progress, stopWith, fail, eligible: operationEligible });
+      work = await prepare(context, { controller, progress, stopWith, fail, eligible: operationEligible, remaining });
       directory = await mkdtemp(join(tmpdir(), `explorer-${operation}-`));
       const workspace = join(directory, 'workspace'), home = join(directory, 'home');
       await mkdir(workspace); check();
@@ -90,7 +91,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       usage = await usageRecorder(sessionId, usageDirectory, operation); check();
       stage('Starting isolated helper');
       const session = await deadline(client.createSession({
-        sessionId, onEvent: event => usage.record(event), workingDirectory: workspace, configDirectory: home, model: model.id,
+        sessionId, onEvent: event => { usage.record(event); if (inferenceStarted && operationEligible()) work.onEvent?.(event); }, workingDirectory: workspace, configDirectory: home, model: model.id,
         systemMessage: { mode: 'replace', content: work.instructions },
         requestExtensions: false, requestCanvasRenderer: false, pluginDirectories: [], mcpServers: {},
         enableConfigDiscovery: false, skipCustomInstructions: true, enableSkills: false, enableFileHooks: false,
@@ -117,17 +118,19 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       await usage.captureModel?.(current.modelId); check();
       stage(work.stage);
       work.validateBeforeSend?.();
+      inferenceStarted = true;
       const response = await session.sendAndWait({ prompt: work.prompt }, reviewedResearch ? remaining() : 180000);
       check(); stage('Checking result');
       const result = work.parse(response?.data?.content); outcome = 'completed'; return result;
     } catch (error) {
-      if (terminalFailure) throw terminalFailure;
+      if (terminalFailure) { if (['attempt-limit', 'repeated-request', 'result-text-limit'].includes(terminalReason)) outcome = 'cancelled'; throw terminalFailure; }
       if (controller.signal.aborted) { outcome = 'cancelled'; throw cancelled(); }
       if (error instanceof HelperError) throw fail(error.message);
       // SDK errors may contain prompts or credentials; only our stage labels reach the UI.
       throw fail(`Research could not finish: ${phase}. Your answers are saved; try again after checking Copilot.`);
     } finally {
       ended = true;
+      const elapsed = Math.floor(clock.now() - started);
       clock.clearTimeout(timer);
       const stopped = await stopClient();
       try {
@@ -151,6 +154,10 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
         const inside = relative(tmpdir(), directory);
         if (!inside || isAbsolute(inside) || inside.startsWith('..') || !basename(directory).startsWith(`explorer-${operation}-`)) throw fail('Research cleanup path could not be verified.');
         await rm(directory, { recursive: true, force: true, maxRetries: 3 }).catch(() => { throw fail('Research finished but temporary files could not be removed.'); });
+      }
+      if (work?.report && (outcome === 'completed' || terminalReason)) {
+        try { report(work.report({ reason: outcome === 'completed' ? 'model-completed' : terminalReason, elapsedMs: Number.isSafeInteger(elapsed) && elapsed >= 0 && elapsed <= 3600000 ? elapsed : null })); }
+        catch { throw fail('Research could not retain its effort summary. Previous findings were kept.'); }
       }
     }
   }

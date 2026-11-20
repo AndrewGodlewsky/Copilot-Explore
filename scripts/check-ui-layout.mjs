@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
-import { createDocument, addQuestions, answerNode, validateDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { createDocument, addQuestions, answerNode, validateDocument, research } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { ResearchModelSettings } from '../com.github.copilot/extensions/explorer/research-model-settings.mjs';
@@ -55,16 +55,26 @@ validateDocument(doc); await writeFile(file, JSON.stringify(doc));
 const offlineDoc = structuredClone(doc), offlineFile = join(directory, 'support.html');
 offlineDoc.nodes.find(node => node.id === parent.id).research.sources[0].title = 'X'.repeat(300);
 await writeFile(offlineFile, viewerArtifact(viewerSnapshot(validateDocument(offlineDoc), [{ nodeId: parent.id, answer: false, research: true }])).content);
-let requests = 0, comparisons = 0, voiceReady = false, voiceJob, modelCatalogError = false;
+let requests = 0, comparisons = 0, effortRuns = 0, effortFixture = false, voiceReady = false, voiceJob, modelCatalogError = false;
 const explorer = await new Explorer({ file, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
   models: async () => { if (modelCatalogError) throw Error('Synthetic catalog failure'); return fixtureResearchModels(); },
-  run: async () => { requests++; throw Error('Layout checks must not start inference'); },
+  run: async (_, { prepared, onReport }) => {
+    if (!effortFixture) { requests++; throw Error('Layout checks must not start inference'); }
+    effortRuns++;
+    const partial = structuredClone(parent.research); partial.recommendationAssessment.optionId = null;
+    partial.limitations[0].blocksRecommendation = true;
+    partial.summary = 'Incomplete <img src=x onerror=bad()> 中文 🌿 ' + 'long-reference-λ'.repeat(16);
+    onReport({ settings: prepared.settings, reason: 'deadline', elapsedMs: 180001, toolAttempts: 3, duplicateAttempts: 0, deliveredTextUnits: 8192, truncatedResults: 1,
+      assessment: { plan: [{ criterion: 'Local access', neededEvidence: 'Confirmed opening hours 中文 🌿' }], stopReason: 'in-progress', explanation: 'The current access schedule remains unconfirmed.' }, partial: prepared.followup ? { answer: partial.summary, uncertainty: 'Incomplete hypothetical judgment.', sources: [], claims: [parent.research.claims.find(claim => claim.id === 'judgment')] } : research(partial) });
+    throw Error('Synthetic deadline; previous research was kept.');
+  },
   runReconsideration: async (_, { prepared }) => {
     comparisons++;
     return { cells: prepared.comparison.criteria.flatMap(criterion => prepared.comparison.options.map(option => ({ criterionId: criterion.id, optionId: option.id, explanation: 'Synthetic comparison, not evidence. 中文 🌿 ' + 'long-reference-λ'.repeat(8), basis: 'unknown', claimIds: [] }))),
       recommendation: { optionId: 'distributed', reason: 'Synthetic hypothetical priorities favor nearby access.', changed: 'Volunteer coverage is explicitly prioritized.', unchanged: 'Actual participation remains unknown.' }, uncertainty: 'Fixture only. No model or new retrieval.' };
   },
 } }).load();
+explorer.researcher.runFollowup = explorer.researcher.run;
 const modelSettings = new ResearchModelSettings({ directory }); explorer.researchModelSettings = () => modelSettings;
 const server = await startServer(explorer, {
   status: async () => ({ ready: voiceReady, error: voiceReady ? '' : 'Dictation is disabled in this layout fixture.', shortcut: { code: 'Space', ctrl: true, alt: false, shift: false, meta: false }, label: 'Ctrl + Space', mode: 'push_to_talk' }),
@@ -501,6 +511,30 @@ try {
       await ageSummary.scrollIntoViewIfNeeded(); await inspectDrawer(page, scenario.name + '/freshness');
       if (screenshots) await page.screenshot({ path: join(output, scenario.name + '-freshness.png') });
       expect(requests === callsBeforeSupport && await editor.inputValue() === 'Keep this private draft', scenario.name + ': freshness inspection preserves draft and starts no retrieval', {});
+      const savedBeforeEffort = JSON.stringify(explorer.doc), effortBefore = effortRuns;
+      const followupEffort = ['wide', 'minimum'].includes(scenario.name);
+      effortFixture = true;
+      if (followupEffort) await page.locator('#followup-hypothetical').check();
+      await page.locator(followupEffort ? '#followup-review' : '#research-request').click(); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      await page.locator('#research-review-start').click(); await page.locator('#research-attempt').waitFor(); effortFixture = false;
+      expect(effortRuns === effortBefore + 1 && JSON.stringify(explorer.doc) === savedBeforeEffort, scenario.name + ': a synthetic stopped pass preserves the complete map', {});
+      expect(!await page.locator('#research-partial').evaluate(el => el.open) && await page.locator('#research-attempt img').count() === 0, scenario.name + ': partial findings start collapsed and render literal text', {});
+      await page.locator('#research-effort-plan-summary').focus(); await page.keyboard.press('Space');
+      await page.locator('#research-partial-summary').focus(); await page.keyboard.press('Space');
+      if (followupEffort) expect((await page.locator('#research-attempt').innerText()).includes('Hypothetical follow-up: Keep my question 日本語 🌿'), scenario.name + ': partial retains the captured hypothetical question', {});
+      else { await page.locator('#research-partial-option-0-summary').focus(); await page.keyboard.press('Space'); }
+      const partialBounds = await page.locator('#research-attempt').evaluate(el => ({ client: el.clientWidth, scroll: el.scrollWidth, available: document.getElementById('question-tools-research').clientWidth }));
+      expect(partialBounds.scroll <= partialBounds.client + 1, scenario.name + ': expanded partial evidence stays within the drawer width', partialBounds);
+      expect(partialBounds.client >= partialBounds.available - 1, scenario.name + ': partial attempt spans both comparison columns', partialBounds);
+      await page.locator('#research-partial-summary').scrollIntoViewIfNeeded(); await inspectDrawer(page, scenario.name + '/partial');
+      if (screenshots) await page.screenshot({ path: join(output, scenario.name + '-partial.png') });
+      await page.locator('#research-deeper-review').focus(); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      expect(await page.locator('#research-depth').inputValue() === 'deeper' && effortRuns === effortBefore + 1, scenario.name + ': deeper research requires a new explicit review', {});
+      await page.keyboard.press('Escape');
+      expect(await editor.evaluate(el => el === document.getElementById('answer') && el.value === 'Keep this private draft') && await composer.evaluate(el => el === document.getElementById('followup-question') && el.value === 'Keep my question 日本語 🌿') && await page.locator('#research-partial').evaluate(el => el.open), scenario.name + ': effort review preserves editors and open partials', {});
+      await page.locator('#research-attempt-clear').focus(); await page.keyboard.press('Enter'); await page.locator('#research-attempt').waitFor({ state: 'detached' });
+      expect(JSON.stringify(explorer.doc) === savedBeforeEffort && effortRuns === effortBefore + 1, scenario.name + ': clearing attempt details changes no saved research and starts no helper', {});
       const legacy = structuredClone(explorer.doc), legacyResult = structuredClone(parent.research); delete legacyResult.recommendationAssessment; delete legacyResult.support; delete legacyResult.limitations;
       legacy.nodes.find(n => n.id === parent.id).research = legacyResult; await explorer.save(legacy);
       await page.locator('#recommendation-compatibility').waitFor();
@@ -587,6 +621,7 @@ try {
     } finally { await context.close(); }
   }
   assert.equal(requests, 1, 'only the explicit Explore deeper check reaches the local send fixture; no provider is called');
+  assert.equal(effortRuns, 5, 'one explicit synthetic effort pass per viewport; no automatic deeper pass');
   await writeFile(join(output, 'layout-results.json'), JSON.stringify({ samples, failures }, null, 2));
   console.log(`${samples.length} card samples; ${failures.length} layout failures. Evidence: ${output}`);
   for (const failure of failures.slice(0, 16)) console.log(failure.message);

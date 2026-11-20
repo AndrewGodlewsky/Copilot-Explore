@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.121",
+    "summary": "Research stops repeated requests and failed lookups within your selected effort. Inspect its plan, observed stopping reason and any validated partial findings without replacing completed research or your answer. Review a deeper pass explicitly; incomplete findings stay in the current canvas and out of saved maps and later prompts."
+  },
+  {
     "version": "0.1.120",
     "summary": "See when research evidence needs review, with separate read and source dates and topic-specific freshness guidance. Keep historical findings readable, review an explicit refresh, and preserve your answer. Follow-ups and comparisons cannot silently renew expired evidence. Shared views retain date labels and explain when freshness was evaluated."
   },

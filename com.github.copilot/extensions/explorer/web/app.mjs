@@ -3083,6 +3083,22 @@ function renderResearch(node) {
     detail.addEventListener('toggle', () => { if (detail.isConnected) { (ui.researchDisclosures ??= {})[id] = detail.open; scheduleLayout(); } });
     return detail;
   };
+  let limitationIndex = 0;
+  const appendLimitations = (container, predicate) => {
+    for (const entry of (r.limitations ?? []).filter(predicate)) {
+      const detail = disclosure(`research-limitation-${limitationIndex++}`, `${entry.kind.replace(/-/g, ' ')} · ${entry.blocksRecommendation ? 'recommendation withheld' : 'qualified conclusion'}`);
+      detail.className = 'statement-support research-limitation'; detail.dataset.researchLimitation = entry.id;
+      detail.append(el('p', {}, entry.summary), el('p', { class: 'quiet' }, 'Model-identified limitation, not an independently verified finding. Your answer remains independent.'),
+        el('p', {}, el('strong', {}, 'Next step: '), entry.nextStep),
+        el('p', { class: 'quiet' }, `Affected options: ${entry.optionIds.map(id => r.options.find(o => o.id === id).title).join('; ') || 'None specified'}. Claims: ${entry.claimIds.join(', ') || 'None specified'}.`));
+      for (const id of entry.decisionIds) {
+        const ref = assessment.decisionRefs.find(ref => ref.nodeId === id);
+        detail.append(el('p', {}, `Historical user intent (${ANSWER_STATES[ref.answerState]}${ref.review ? '; needed review' : ''} at research time): ${ref.reason}`));
+      }
+      if (!entry.optionIds.length && !entry.claimIds.length && !entry.decisionIds.length) detail.append(el('p', { class: 'quiet' }, 'Scope: the whole question.'));
+      container.append(detail);
+    }
+  };
   let proposal = null;
   const liveNode = () => {
     const live = state.document?.nodes.find(n => n.id === node.id);
@@ -3150,6 +3166,7 @@ function renderResearch(node) {
         const source = r.sources.find(item => item.id === evidence.sourceId);
         block.append(el('p', {}, `Model paraphrase: ${evidence.paraphrase}`), sourceLink(source), el('p', { class: 'quiet' }, retrieval(source)));
       }
+      appendLimitations(block, entry => entry.claimIds.includes(claim.id));
       detail.append(block);
     }
     for (const ref of decisions) detail.append(el('p', {}, `Historical user context (${ANSWER_STATES[ref.answerState]}${ref.review ? '; needed review' : ''} at research time): ${ref.reason}`), el('p', { class: 'quiet' }, 'User intent, not verified facts or current state.'));
@@ -3164,7 +3181,7 @@ function renderResearch(node) {
         const source = r.sources.find(s => s.id === item.sourceId);
         disclosure.append(el('p', {}, item.paraphrase), sourceLink(source), el('p', { class: 'quiet' }, retrieval(source)));
       }
-      block.append(disclosure); findings.append(block);
+      block.append(disclosure); appendLimitations(block, entry => entry.claimIds.includes(claim.id)); findings.append(block);
     }
   } else findings.append(el('p', { class: 'quiet' }, 'Claim-level support and historical retrieval times unknown for this legacy result.'));
   const details = r.options.flatMap((option, index) => (option.details ?? []).map((detail, i) => ({ id: `detail-${index}-${i}`, ...detail })));
@@ -3186,6 +3203,7 @@ function renderResearch(node) {
     option.append(el('p', {}, o.description));
     if (r.optionsVersion === 1) option.append(el('p', { class: 'option-fit' }, el('strong', {}, 'Fits when: '), o.fit));
     option.append(el('p', { class: 'quiet' }, 'Explanation and fit: model judgment, not verified facts.'));
+    appendLimitations(option, entry => entry.optionIds.includes(o.id));
     const empty = r.optionsVersion === 1 ? 'None established.' : 'None recorded.';
     const tradeoffs = field => el('ul', {}, o[field].map((value, i) => el('li', {}, el('span', {}, value), statementSupport(`support-${identity}-${field}-${i}`, o.id, field, value))));
     option.append(el('strong', { class: 'pro' }, 'Pros'), o.pros.length ? tradeoffs('pros') : el('p', { class: 'quiet' }, empty),
@@ -3203,6 +3221,7 @@ function renderResearch(node) {
     section.append(option);
   }
   const recommendation = el('div', { class: 'recommendation' }, el('h3', {}, assessment ? chosen ? 'Why this recommendation' : 'No recommendation yet' : r.options.length ? 'Recommendation' : 'Further context needed'), el('p', {}, r.recommendation));
+  if (assessment?.optionId === null) for (const entry of (r.limitations ?? []).filter(item => item.blocksRecommendation)) recommendation.append(el('p', { 'data-recommendation-next-step': entry.id }, el('strong', {}, 'Next step: '), entry.nextStep));
   recommendation.append(statementSupport('support-recommendation', null, 'recommendation', r.recommendation));
   if (assessment) {
     recommendation.append(el('p', { class: 'quiet' }, 'Contextual judgment from the model, not verified project facts or a decision you have made.'),
@@ -3233,6 +3252,11 @@ function renderResearch(node) {
     button('Replace with selected details…', replaceSelected, { id: 'replace-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' })));
   section.append(preview, button('Undo draft change', () => { if (section.isConnected) undoResearchDraft(node.id); }, { id: 'research-draft-undo', 'data-research-undo': 'true' }));
   section.append(el('h3', {}, 'What is still uncertain'), el('p', {}, r.uncertainty));
+  if (r.limitations?.length) {
+    const limitations = disclosure('research-limitations', `Evidence gaps and conflicts (${r.limitations.length})`);
+    limitations.append(el('p', { class: 'quiet' }, 'Model-identified limitations, not an exhaustive or independently verified evidence review.'));
+    appendLimitations(limitations, () => true); section.append(limitations);
+  } else section.append(el('p', { class: 'quiet' }, r.limitations ? 'No structured limitations were identified. This is not proof that evidence is complete.' : 'Structured limitation coverage unknown for this older result.'));
   if (r.sources.length) findings.append(el('div', { class: 'sources' }, el('h3', {}, 'Consulted sources'), el('p', { class: 'quiet' }, 'Reading a page does not establish claim support.'), r.sources.map((s, index) => el('div', { id: `source-${index}` }, sourceLink(s), el('p', { class: 'quiet' }, retrieval(s))))));
   section.append(findings);
   return section;

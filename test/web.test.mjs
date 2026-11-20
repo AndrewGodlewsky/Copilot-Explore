@@ -3,6 +3,7 @@ import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/d
 import { optionFindings } from './helpers/research-options.mjs';
 import { recommendationFindings } from './helpers/research-recommendation.mjs';
 import { supportFindings } from './helpers/research-support.mjs';
+import { limitationFindings } from './helpers/research-limitations.mjs';
 import { attachMinimap, projectOverview, overviewPaths } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import test from 'node:test';
@@ -7740,4 +7741,71 @@ test('legacy statement support remains visibly unknown without fuzzy matching st
   const summaries = [...f.document.querySelectorAll('.research [data-statement-support] > summary')];
   assert.equal(summaries.length, 8); assert.ok(summaries.every(summary => summary.textContent === 'Support unknown'));
   assert.equal(f.explorer.doc.nodes[1].research.support, undefined);
+});
+
+test('research limitations stay beside affected options claims and abstention without supplying a user answer', async t => {
+  const value = limitationFindings('constraints'); value.limitations[0].summary = '<img src=x onerror=bad()> 中文 🌿';
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  assert.equal($('research-option-cupboard').querySelectorAll('[data-research-limitation]').length, 1);
+  assert.equal($('research-option-distributed').querySelectorAll('[data-research-limitation]').length, 0);
+  assert.equal($('claim-access').querySelectorAll('[data-research-limitation]').length, 1);
+  assert.match($('research-limitations').textContent, /Model-identified/);
+  const limitation = $('research-option-cupboard').querySelector('[data-research-limitation="access-gap"]');
+  assert.match(limitation.textContent, /<img src=x onerror=bad\(\)> 中文 🌿/);
+  assert.match(limitation.textContent, /historical user intent/i);
+  assert.match(f.document.querySelector('[data-recommendation-next-step]').textContent, /Clarify/);
+  assert.equal($('use-recommendation'), null); assert.equal($('add-option-cupboard').disabled, false);
+  f.type('answer', 'My own judgment'); assert.equal($('answer').value, 'My own judgment'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  assert.equal(f.document.querySelector('.research').querySelector('img,script'), null);
+  assert.equal(f.actions.some(a => ['research', 'research-follow-up', 'research-reconsideration'].includes(a.action)), false);
+});
+
+test('limitation disclosures preserve answer composer and focus through polling and reset for replacement research', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = limitationFindings(); await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  f.type('answer', 'My private answer'); f.type('followup-question', 'Which date applies?');
+  const answer = $('answer'), composer = $('followup-question'), detail = $('research-option-cupboard').querySelector('[data-research-limitation="access-gap"]'), summary = detail.querySelector('summary');
+  summary.focus(); summary.click(); await f.poll();
+  assert.equal(detail.open, true); assert.equal(f.document.activeElement, summary); assert.equal($('answer'), answer); assert.equal($('followup-question'), composer);
+  assert.equal(answer.value, 'My private answer'); assert.equal(composer.value, 'Which date applies?');
+  const next = structuredClone(f.explorer.doc); next.nodes[1].research.limitations[0].summary += ' Replacement evidence.';
+  await f.explorer.save(next); await f.poll(); assert.equal($('research-option-cupboard').querySelector('[data-research-limitation="access-gap"]').open, false);
+  $('add-option-distributed').click(); assert.match(answer.value, /My private answer\n\nI will keep tools/);
+  assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.equal(composer.value, 'Which date applies?');
+});
+
+test('research limitation coverage distinguishes legacy empty and zero-option reasoning without a false all-clear', async t => {
+  for (const kind of ['legacy', 'empty', 'unavailable']) {
+    const value = kind === 'unavailable' ? limitationFindings(kind) : supportFindings();
+    if (kind === 'empty') value.limitations = [];
+    const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+    f.open(f.explorer.doc.nodes[1].id); const section = f.document.querySelector('.research');
+    if (kind === 'legacy') assert.match(section.textContent, /Structured limitation coverage unknown/);
+    if (kind === 'empty') assert.match(section.textContent, /not proof that evidence is complete/);
+    if (kind === 'unavailable') {
+      assert.equal(section.querySelectorAll('.option').length, 0); assert.match(section.textContent, /not externally verified/);
+      assert.match(section.querySelector('[data-recommendation-next-step]').textContent, /Supply the host access schedule/);
+    }
+  }
+});
+
+test('hyphenated limitation identities keep independent disclosure state and focus', async t => {
+  const value = limitationFindings(); value.options[0].id = 'a-b'; value.options[1].id = 'a';
+  value.limitations = [
+    { ...value.limitations[0], id: 'c', claimIds: [], optionIds: ['a-b'] },
+    { ...value.limitations[0], id: 'b-c', claimIds: [], optionIds: ['a'] },
+  ];
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  f.open(f.explorer.doc.nodes[1].id);
+  const details = () => [...f.document.querySelectorAll('.option > [data-research-limitation]')];
+  const [first, second] = details();
+  assert.notEqual(first.id, second.id); assert.notEqual(first.querySelector('summary').id, second.querySelector('summary').id);
+  first.querySelector('summary').click(); second.querySelector('summary').focus();
+  await f.poll();
+  const [nextFirst, nextSecond] = details();
+  assert.equal(nextFirst.open, true); assert.equal(nextSecond.open, false);
+  assert.equal(f.document.activeElement, nextSecond.querySelector('summary'));
+  const ids = [...f.document.querySelectorAll('.research [id]')].map(element => element.id);
+  assert.equal(ids.length, new Set(ids).size);
 });

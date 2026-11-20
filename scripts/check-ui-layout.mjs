@@ -50,6 +50,7 @@ parent.research.support = [
   { optionId: null, field: 'recommendation', text: parent.research.recommendation, claimIds: ['judgment'], decisionIds: [answered.id] },
   { optionId: null, field: 'mainTradeoff', text: parent.research.recommendationAssessment.mainTradeoff, claimIds: [], decisionIds: [answered.id] },
 ];
+parent.research.limitations = [{ id: 'access-gap', kind: 'conflict', summary: '<img src=x onerror=bad()> 中文 🌿 ' + 'λ'.repeat(480), claimIds: ['contrary'], optionIds: ['cupboard'], decisionIds: [answered.id], blocksRecommendation: false, nextStep: 'Ask the host which access schedule applies; the pilot remains a provisional comparison.' }];
 validateDocument(doc); await writeFile(file, JSON.stringify(doc));
 const offlineDoc = structuredClone(doc), offlineFile = join(directory, 'support.html');
 offlineDoc.nodes.find(node => node.id === parent.id).research.sources[0].title = 'X'.repeat(300);
@@ -174,6 +175,12 @@ try {
       if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-offline-support.png`) });
       await page.keyboard.press('Space');
       expect(await offlineSupport.evaluate(el => !el.open && document.activeElement === el.querySelector('summary')), `${scenario.name}: closing offline support preserves keyboard focus`, {});
+      const offlineLimitation = page.locator('[data-research-limitation]').first(), offlineLimitationSummary = offlineLimitation.locator('summary');
+      await offlineLimitationSummary.focus(); await page.keyboard.press('Space');
+      expect(await offlineLimitation.evaluate(el => el.open && document.documentElement.scrollWidth <= innerWidth + 1 && el.scrollWidth <= el.clientWidth + 1), `${scenario.name}: offline limitation expands without overflow`, {});
+      expect((await offlineLimitation.innerText()).includes('Next step:') && await page.locator('#detail img').count() === 0, `${scenario.name}: offline limitation stays literal and actionable`, {});
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-offline-limitations.png`) });
+      await page.keyboard.press('Space');
       await page.goto(server.url); await page.locator('#nodes .node.root').waitFor(); await settle(page);
       const topbar = await page.evaluate(() => {
         const brand = document.querySelector('.brand').getBoundingClientRect(), nav = document.querySelector('.topbar nav').getBoundingClientRect();
@@ -270,7 +277,7 @@ try {
         return { ids: options.map(o => o.dataset.optionId), first: !!(options.at(-1).compareDocumentPosition(findings) & Node.DOCUMENT_POSITION_FOLLOWING), deepOpen: findings.open, text: options[0].textContent };
       });
       expect(optionOrder.ids.join(',') === 'cupboard,distributed' && optionOrder.first && !optionOrder.deepOpen && optionOrder.text.includes('Fits when'), `${scenario.name}: concise identified options precede closed deeper findings`, optionOrder);
-      const support = page.locator('#support-cupboard-pros-0'), supportSummary = support.locator('summary'), callsBeforeSupport = requests;
+      const support = page.locator('#support-cupboard-pros-0'), supportSummary = support.locator(':scope > summary'), callsBeforeSupport = requests;
       await supportSummary.focus(); await page.keyboard.press('Enter'); await settle(page);
       expect(await support.evaluate(el => el.open) && (await support.innerText()).includes('Contradictory fixture'), `${scenario.name}: keyboard opens contrary evidence beside the tradeoff`, {});
       expect((await supportSummary.innerText()).includes('not verified') && (await support.innerText()).includes('Imported read metadata'), `${scenario.name}: receipt does not imply verified support`, {});
@@ -283,6 +290,14 @@ try {
       await supportSummary.focus(); await page.keyboard.press('Enter');
       expect(await support.evaluate(el => !el.open && el.querySelector('summary') === document.activeElement) && requests === callsBeforeSupport, `${scenario.name}: closing support retains focus and starts no inference`, {});
       expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: inspecting evidence retains the answer editor and text`, {});
+      const limitation = page.locator('#research-option-cupboard > [data-research-limitation="access-gap"]'), limitationSummary = limitation.locator('summary');
+      await limitationSummary.focus(); await page.keyboard.press('Space'); await settle(page);
+      expect(await limitation.evaluate(el => el.open && el.scrollWidth <= el.clientWidth + 1) && await page.locator('#research-option-distributed [data-research-limitation]').count() === 0, `${scenario.name}: scoped limitation expands beside only its affected option`, {});
+      expect((await limitation.innerText()).includes('Next step:') && await page.locator('.research img').count() === 0, `${scenario.name}: limitation text is literal and actionable`, {});
+      await limitationSummary.scrollIntoViewIfNeeded(); await inspectDrawer(page, `${scenario.name}/limitations`);
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-limitations.png`) });
+      await limitationSummary.focus(); await page.keyboard.press('Space');
+      expect(await limitation.evaluate(el => !el.open && el.querySelector('summary') === document.activeElement) && requests === callsBeforeSupport, `${scenario.name}: limitation inspection preserves focus and starts no inference`, {});
       const badges = page.locator('[data-recommendation-badge]');
       expect(await badges.count() === 1 && await badges.evaluate(el => el.closest('.option').dataset.optionId) === 'cupboard', `${scenario.name}: exactly one passive recommended option is identified`, {});
       const recommendation = page.locator('.recommendation');
@@ -461,15 +476,18 @@ try {
         limited.options.length = count; if (count < 2) limited.optionsLimit = 'Local access is unconfirmed; additional choices would be speculative.';
         limited.recommendationAssessment.optionId = null; limited.recommendation = 'Confirm local access before choosing.';
         limited.support = limited.support.filter(entry => entry.optionId !== null && limited.options.some(option => option.id === entry.optionId));
+        limited.limitations[0].blocksRecommendation = true; limited.limitations[0].optionIds = limited.options.map(option => option.id);
+        limited.limitations[0].nextStep = 'Ask the host for the current access schedule before comparing viable arrangements.';
         const target = next.nodes.find(n => n.id === parent.id); target.research = limited; delete target.researchStale; await explorer.save(next);
         await page.waitForFunction(count => document.querySelectorAll('.research .option').length === count && document.querySelector('.recommendation h3').textContent === 'No recommendation yet', count);
         expect(await page.locator('#option-comparison').count() === Number(count > 0) && await page.locator('#use-recommendation').count() === 0 && await badges.count() === 0, `${scenario.name}: limited evidence never invents a winner and keeps viable alternatives`, { count });
         expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: sparse result keeps the same authored draft`, { count });
+        expect((await page.locator('[data-recommendation-next-step]').innerText()).includes('Ask the host'), `${scenario.name}: abstention identifies the missing next evidence`, { count });
         await page.locator(count < 2 ? '#research-options-limit' : '.recommendation').scrollIntoViewIfNeeded(); await inspectDrawer(page, `${scenario.name}/limited-${count}`);
         if (screenshots && count === 2) await page.screenshot({ path: join(output, `${scenario.name}-no-recommendation.png`) });
         if (screenshots && !count) await page.screenshot({ path: join(output, `${scenario.name}-limited-options.png`) });
       }
-      const legacy = structuredClone(explorer.doc), legacyResult = structuredClone(parent.research); delete legacyResult.recommendationAssessment; delete legacyResult.support;
+      const legacy = structuredClone(explorer.doc), legacyResult = structuredClone(parent.research); delete legacyResult.recommendationAssessment; delete legacyResult.support; delete legacyResult.limitations;
       legacy.nodes.find(n => n.id === parent.id).research = legacyResult; await explorer.save(legacy);
       await page.locator('#recommendation-compatibility').waitFor();
       expect(await badges.count() === 0 && (await page.locator('#recommendation-compatibility').innerText()).includes('no linked option'), `${scenario.name}: older results retain text without a guessed winner`, {});

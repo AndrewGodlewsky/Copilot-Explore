@@ -2,7 +2,7 @@ import { savedDigest } from './review-causes.mjs';
 import { framing, record } from './research-context.mjs';
 import { selectedInputs } from './implementation-handoff.mjs';
 import { ADR_SECTIONS, validateAdrDraft, adrDraftFreshness } from './adr-draft.mjs';
-import { researchEvidence, pinnedConstraints } from './model.mjs';
+import { selectedResearchEvidence, pinnedConstraints } from './model.mjs';
 import { validMode } from './web/modes.mjs';
 import { answerStateError } from './web/answer-state.mjs';
 import { adrFilePath, adrFileMarker } from './adr-file.mjs';
@@ -37,8 +37,8 @@ function evidenceList(value, nodes, included) {
   if (!array(value, 100) || !included && value.length || included && value.length !== nodes.length) invalid();
   const seen = new Set();
   return value.map(item => {
-    if (!keys(item, Object.hasOwn(item ?? {}, 'claims') ? 'nodeId,basis,sources,claims' : 'nodeId,basis,sources') || !nodes.some(n => n.record.id === item.nodeId) || seen.has(item.nodeId)) invalid();
-    seen.add(item.nodeId); const result = { nodeId: item.nodeId, basis: item.basis, ...researchEvidence(item) };
+    if (!keys(item, 'nodeId,basis,sources' + (Object.hasOwn(item ?? {}, 'claims') ? ',claims' : '') + (Object.hasOwn(item ?? {}, 'qualifications') ? ',qualifications' : '')) || !nodes.some(n => n.record.id === item.nodeId) || seen.has(item.nodeId)) invalid();
+    seen.add(item.nodeId); const result = { nodeId: item.nodeId, basis: item.basis, ...selectedResearchEvidence(item) };
     if (!equal(item, result)) invalid();
     return result;
   });
@@ -140,6 +140,7 @@ export function adrSourcesMarkdown(value, managedId) {
         for (const support of claim.evidence) lines.push(`Recorded support ${md(support.sourceId)}: ${md(support.paraphrase)}`, '');
       }
       if (!evidence.claims && evidence.sources.length) lines.push('Legacy source list has no structured claim support or recorded limitations. Consultation does not establish support.', '');
+      for (const q of evidence.qualifications ?? []) lines.push(`Recorded qualification (${md(q.kind)}; ${q.claimIds.length ? `claims ${q.claimIds.map(md).join(', ')}` : 'whole question'}; ${q.blocksRecommendation ? 'recommendation blocker' : 'qualified conclusion'}): ${md(q.summary)}`, '', `Next step: ${md(q.nextStep)}`, '');
     }
     const ref = c.references.find(ref => ref.nodeId === r.id); if (ref) lines.push(formatPortableReference(ref), '');
   }

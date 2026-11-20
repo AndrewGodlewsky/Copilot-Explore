@@ -11,6 +11,7 @@ import { prepareFollowup } from '../com.github.copilot/extensions/explorer/resea
 import { operationEvidence } from '../com.github.copilot/extensions/explorer/operation-recovery.mjs';
 import { recommendationFindings } from './helpers/research-recommendation.mjs';
 import { supportFindings } from './helpers/research-support.mjs';
+import { limitationFindings } from './helpers/research-limitations.mjs';
 import { answerNode, addDirection } from '../com.github.copilot/extensions/explorer/model.mjs';
 
 test('owned research follow-up sends reviewed strings, credits prior and current sources separately and attributes retained receipts', async t => {
@@ -149,6 +150,33 @@ test('Research model discovery does not start a helper and reviewed dedicated/de
     const [id] = await readdir(join(f.dir, 'usage', 'session-state'));
     const receipt = JSON.parse(await readFile(join(f.dir, 'usage', 'session-state', id, 'operation.json'), 'utf8'));
     assert.equal(receipt.model, modelId ?? model.id); assert.equal(receipt.status, 'completed');
+  }
+});
+
+test('research helper preserves scoped conflicts and gaps with real hook attribution and captured constraint state', async t => {
+  const doc = createDocument('Limitations fixture'), [target, prior] = addQuestions(doc, doc.rootId, [{ question: 'Where?', category: 'Storage' }, { question: 'Access?', category: 'Access' }]);
+  answerNode(doc, prior.id, 'Appointment only and at any time.', 'assumption'); prior.review = true;
+  const prepared = prepareResearch(doc, target.id, researchFraming(doc));
+  assert.match(prepared.instructions, /"limitations": \[/); assert.match(prepared.instructions, /counting|vote/i);
+  for (const kind of ['conflict', 'dependent-sources', 'sparse', 'unavailable', 'constraints', 'invalid-winner']) {
+    const raw = limitationFindings(kind === 'invalid-winner' ? 'conflict' : kind, prior.id);
+    raw.sources = raw.sources.map(({ id, title, url }) => ({ id, title, url }));
+    raw.recommendationAssessment.decisionRefs = raw.recommendationAssessment.decisionRefs.map(({ nodeId, reason }) => ({ nodeId, reason }));
+    if (kind === 'invalid-winner') raw.recommendationAssessment.optionId = 'cupboard';
+    const f = await fixture(t, { result: raw, resolve: async () => [{ address: '93.184.216.34' }], send: async calls => {
+      for (const source of raw.sources) {
+        assert.deepEqual(await calls.config.hooks.onPreToolUse({ toolName: 'web_fetch', toolCallId: source.id, toolArgs: { url: source.url } }), {});
+        calls.config.hooks.onPostToolUse({ toolName: 'web_fetch', toolCallId: source.id, toolResult: { resultType: 'success', textResultForLlm: 'Synthetic conflicting or dependent schedule, not independent verification.' } });
+      }
+    } });
+    if (kind === 'invalid-winner') await assert.rejects(f.researcher.run(prepared.context, { prepared }), /invalid comparison/);
+    else {
+      const output = await f.researcher.run(prepared.context, { prepared });
+      assert.deepEqual(output.limitations, raw.limitations); assert.equal(output.recommendationAssessment.optionId, null);
+      assert.ok(output.sources.every(source => source.provenance === 'recorded-read'));
+      if (kind === 'constraints') assert.deepEqual(output.recommendationAssessment.decisionRefs[0], { ...raw.recommendationAssessment.decisionRefs[0], answerState: 'assumption', review: true });
+      assert.equal(f.calls.prompt, prepared.prompt); assert.equal(f.calls.config.systemMessage.content, prepared.instructions);
+    }
   }
 });
 

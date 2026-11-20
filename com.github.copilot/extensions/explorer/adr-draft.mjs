@@ -4,7 +4,7 @@ import { prepareAdrScope, validateAdrScope, adrScopeFreshness } from './adr-scop
 import { defaultAdrFormat, validateAdrFormat } from './adr-format.mjs';
 import { selectedInputs, HANDOFF_OMISSIONS } from './implementation-handoff.mjs';
 import { BRIEF_SECTIONS, BRIEF_OUTPUT_LIMIT, BRIEF_ARTIFACT_LIMIT, briefSections, briefText, captureBrief, briefFreshness, validateBriefCapture } from './decision-brief.mjs';
-import { researchEvidence, guidanceText, pinnedConstraints } from './model.mjs';
+import { selectedResearchEvidence, guidanceText, pinnedConstraints } from './model.mjs';
 import { validMode } from './web/modes.mjs';
 import { RESEARCH_CONTEXT_LIMIT, SCENARIO_CONTEXT_GUIDANCE } from './research-context.mjs';
 import { savedDigest } from './review-causes.mjs';
@@ -55,8 +55,8 @@ function validateCapture(value) {
   const capture = validateBriefCapture(value.dependencies, value.coverage, 'selected-records');
   if (!equal(scope.dependencies, capture.dependencies) || typeof value.includeEvidence !== 'boolean' || value.includeEvidence !== scope.selection.includeEvidence || !Array.isArray(value.evidence) || value.evidence.length > 100 || !value.includeEvidence && value.evidence.length) invalid();
   const evidence = value.evidence.map(item => {
-    if (!keys(item, Object.hasOwn(item ?? {}, 'claims') ? 'nodeId,basis,sources,claims' : 'nodeId,basis,sources') || !capture.dependencies.records.some(source => source.id === item.nodeId)) invalid();
-    return { nodeId: item.nodeId, basis: item.basis, ...researchEvidence(item) };
+    if (!keys(item, 'nodeId,basis,sources' + (Object.hasOwn(item ?? {}, 'claims') ? ',claims' : '') + (Object.hasOwn(item ?? {}, 'qualifications') ? ',qualifications' : '')) || !capture.dependencies.records.some(source => source.id === item.nodeId)) invalid();
+    return { nodeId: item.nodeId, basis: item.basis, ...selectedResearchEvidence(item) };
   });
   if (new Set(evidence.map(item => item.nodeId)).size !== evidence.length || value.includeEvidence && (evidence.length !== capture.dependencies.records.length || capture.dependencies.records.some(source => !evidence.some(item => item.nodeId === source.id)))) invalid();
   const guidance = value.guidance;

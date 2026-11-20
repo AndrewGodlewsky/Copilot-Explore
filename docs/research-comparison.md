@@ -14,6 +14,8 @@ Tables stack with explicit option labels in narrow panes, retaining table roles 
 
 ## Implementation and checks
 
+Recorded [recommendation blockers](research-limitations.md) remain binding during tool-free reconsideration: the result may compare choices but must keep a null recommendation. Hypothetical priorities cannot establish missing evidence or resolve actual contradictory constraints. The user's own answer remains independent.
+
 `research-comparison.mjs` validates exact criterion IDs/labels/priorities, packs complete mandatory options and prior evidence with the existing 131072-byte context limit, and rejects mandatory overflow. A result must contain the complete grid (at most 32 cells), known option/criterion/claim IDs, bounded explanations and a strict 65536-byte JSON payload. Legacy options receive request-local IDs bound to that full research snapshot. Structural checks cannot prove that a model explanation is true.
 
 The existing single-use ten-minute Research review binds purpose, source/destination/scenario and model capture. An owned isolated helper verifies the account, eligible captured model and zero initialized tools before inference; ambient instructions/skills, plugins and MCP are disabled and permission requests denied. Cancellation stops only that helper, with normal release and usage reconciliation. `operation.json` records the verified model under `research-reconsideration`; usage is labeled **Explorer Research Reconsideration**. Adoption rechecks saved source/destination/scenario under the document lock without writing the document. Current research is required; a stale research record must be researched again first.

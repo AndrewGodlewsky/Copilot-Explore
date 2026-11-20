@@ -143,6 +143,7 @@ export function acceptQuestions(doc, parentId, batch, selected) {
   return { document: next, ids: nodes.map(n => n.id) };
 }
 export const MAX_RESEARCH_BYTES = 160000;
+const LIMITATION_KINDS = ['conflict', 'missing-evidence', 'assumption', 'unanswered-question', 'dependent-sources'];
 function evidenceId(value, seen, name) {
   if (typeof value !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(value) || seen.has(value)) throw new Error(`Invalid or duplicate ${name} ID.`);
   seen.add(value); return value;
@@ -189,6 +190,32 @@ export function researchEvidence(value) {
   }
   return { sources, ...(hasClaims ? { claims } : {}) };
 }
+// Selected artifacts retain qualifications on included claims without option or prior-decision identities.
+export function selectedResearchEvidence(value) {
+  const evidence = researchEvidence(value);
+  if (!Object.hasOwn(value, 'qualifications')) return evidence;
+  if (!evidence.claims) throw Error('Selected qualifications require structured claims.');
+  const ids = new Set(), known = new Set(evidence.claims.map(claim => claim.id));
+  const qualifications = list(value.qualifications, 'selected research qualifications', 12, entry => {
+    evidenceKeys(entry, ['id', 'kind', 'summary', 'claimIds', 'blocksRecommendation', 'nextStep']);
+    if (!LIMITATION_KINDS.includes(entry.kind) || typeof entry.blocksRecommendation !== 'boolean') throw Error('Invalid selected research qualification.');
+    const refs = new Set();
+    return { id: evidenceId(entry.id, ids, 'qualification'), kind: entry.kind, summary: text(entry.summary, 'Qualification summary', 600),
+      claimIds: list(entry.claimIds, 'qualified claims', 3, id => {
+        if (!known.has(id) || refs.has(id)) throw Error('Unknown or duplicate qualified claim.');
+        refs.add(id); return id;
+      }), blocksRecommendation: entry.blocksRecommendation, nextStep: text(entry.nextStep, 'Qualification next step', 600) };
+  });
+  return { ...evidence, qualifications };
+}
+export function projectResearchEvidence(value) {
+  const evidence = researchEvidence(value);
+  if (!Object.hasOwn(value, 'limitations')) return evidence;
+  const qualifications = research(value).limitations
+    .filter(entry => entry.claimIds.length || !entry.optionIds.length && !entry.decisionIds.length)
+    .map(({ id, kind, summary, claimIds, blocksRecommendation, nextStep }) => ({ id, kind, summary, claimIds, blocksRecommendation, nextStep }));
+  return selectedResearchEvidence({ basis: value.basis, ...evidence, qualifications });
+}
 function researchRecommendation(value, optionIds) {
   evidenceKeys(value, ['optionId', 'mainTradeoff', 'reconsiderIf', 'decisionRefs']);
   if (value.optionId !== null && !optionIds.has(value.optionId)) throw Error('A recommendation must identify one current option or explicitly choose none.');
@@ -227,11 +254,31 @@ function researchSupport(value, result) {
     return { optionId: entry.optionId, field: entry.field, text: statement, claimIds: references(entry.claimIds, claims, 3), decisionIds: references(entry.decisionIds, decisions, 8) };
   });
 }
+function researchLimitations(value, result) {
+  if (!result.recommendationAssessment) throw Error('Research limitations require a recommendation assessment.');
+  const ids = new Set(), claims = new Set(result.claims.map(c => c.id)), options = new Set(result.options.map(o => o.id)), decisions = new Set(result.recommendationAssessment.decisionRefs.map(d => d.nodeId));
+  const references = (values, known, max) => {
+    const seen = new Set();
+    return list(values, 'limitation references', max, id => {
+      if (!known.has(id) || seen.has(id)) throw Error('Unknown or duplicate limitation reference.');
+      seen.add(id); return id;
+    });
+  };
+  const entries = list(value, 'research limitations', 12, entry => {
+    evidenceKeys(entry, ['id', 'kind', 'summary', 'claimIds', 'optionIds', 'decisionIds', 'blocksRecommendation', 'nextStep']);
+    if (!LIMITATION_KINDS.includes(entry.kind) || typeof entry.blocksRecommendation !== 'boolean') throw Error('Invalid research limitation kind or recommendation blocker.');
+    return { id: evidenceId(entry.id, ids, 'limitation'), kind: entry.kind, summary: text(entry.summary, 'Limitation summary', 600),
+      claimIds: references(entry.claimIds, claims, 3), optionIds: references(entry.optionIds, options, 4), decisionIds: references(entry.decisionIds, decisions, 8),
+      blocksRecommendation: entry.blocksRecommendation, nextStep: text(entry.nextStep, 'Limitation next step', 600) };
+  });
+  if (entries.some(entry => entry.blocksRecommendation) !== (result.recommendationAssessment.optionId === null)) throw Error('Recommendation abstention must match its structured limitations and next step.');
+  return entries;
+}
 export function research(value) {
   const hasClaims = Object.hasOwn(value ?? {}, 'claims'), versioned = Object.hasOwn(value ?? {}, 'optionsVersion'), assessed = Object.hasOwn(value ?? {}, 'recommendationAssessment');
   if (versioned && (value.optionsVersion !== 1 || !hasClaims)) throw new Error('Unsupported research options version or missing claims.');
-  if (!versioned && (assessed || Object.hasOwn(value ?? {}, 'optionsLimit') || Object.hasOwn(value ?? {}, 'support') || Array.isArray(value?.options) && value.options.some(o => Object.hasOwn(o ?? {}, 'id') || Object.hasOwn(o ?? {}, 'fit')))) throw new Error('New option fields require an options version.');
-  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims', ...(versioned ? ['optionsVersion', 'optionsLimit', 'recommendationAssessment', 'support'] : [])]);
+  if (!versioned && (assessed || Object.hasOwn(value ?? {}, 'optionsLimit') || Object.hasOwn(value ?? {}, 'support') || Object.hasOwn(value ?? {}, 'limitations') || Array.isArray(value?.options) && value.options.some(o => Object.hasOwn(o ?? {}, 'id') || Object.hasOwn(o ?? {}, 'fit')))) throw new Error('New option fields require an options version.');
+  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims', ...(versioned ? ['optionsVersion', 'optionsLimit', 'recommendationAssessment', 'support', 'limitations'] : [])]);
   const { sources, claims } = researchEvidence(value);
   const ids = new Set(), titles = new Set(), answers = new Set();
   const distinct = (value, seen) => {
@@ -271,6 +318,7 @@ export function research(value) {
     ...(value.proposedAnswer !== undefined ? { proposedAnswer: text(value.proposedAnswer, 'Proposed answer', 5000) } : {}),
     uncertainty: text(value.uncertainty, 'Uncertainty', 3000), sources };
   if (Object.hasOwn(value, 'support')) result.support = researchSupport(value.support, result);
+  if (Object.hasOwn(value, 'limitations')) result.limitations = researchLimitations(value.limitations, result);
   if (hasClaims && Buffer.byteLength(JSON.stringify(result)) > MAX_RESEARCH_BYTES) throw new Error('Research evidence exceeds its serialized limit.');
   return result;
 }
@@ -588,6 +636,10 @@ export function toMarkdown(doc) {
     }
     if (n.research) {
       const r = n.research;
+      const limitationRefs = predicate => {
+        const entries = (r.limitations ?? []).filter(predicate);
+        return entries.length ? [`Model-identified limitations: ${entries.map(entry => md(entry.id)).join(', ')} (see below).`, ''] : [];
+      };
       const statementSupport = (optionId, field, value) => {
         const support = r.support?.find(item => item.optionId === optionId && item.field === field && item.text === value);
         if (!support || !support.claimIds.length && !support.decisionIds.length) return 'Support unknown: no claim or prior-context reference recorded for this statement.';
@@ -598,6 +650,7 @@ export function toMarkdown(doc) {
       for (const o of r.options) {
         lines.push(`#### ${md(o.title)}`, '', md(o.description), '', '**Pros**', '', ...o.pros.map(p => `- ${md(p)}\n  ${statementSupport(o.id, 'pros', p)}`), '', '**Cons**', '', ...o.cons.map(p => `- ${md(p)}\n  ${statementSupport(o.id, 'cons', p)}`), '');
         if (r.optionsVersion === 1) lines.push(`Option reference: ${o.id}`, '', '**Fits when:** ' + md(o.fit), '');
+        lines.push(...limitationRefs(entry => entry.optionIds.includes(o.id)));
         if (o.proposedAnswer) lines.push('Suggested draft: ' + md(o.proposedAnswer), '');
         for (const detail of o.details ?? []) lines.push(`- ${md(detail.label)}: ${md(detail.value)}`);
       }
@@ -610,11 +663,20 @@ export function toMarkdown(doc) {
         for (const ref of assessment.decisionRefs) lines.push(`Prior context ${md(ref.nodeId)} (${ANSWER_STATES[ref.answerState]}${ref.review ? '; needed review' : ''} at research time): ${md(ref.reason)}`, '');
       }
       lines.push('**Uncertainty:** ' + md(r.uncertainty), '');
+      lines.push('#### Model-identified limitations', '', 'Historical model interpretations, not verified findings or a restriction on your answer.', '');
+      if (!r.limitations?.length) lines.push(r.limitations ? 'No structured limitations were identified. This is not proof that evidence is complete.' : 'Structured limitation coverage unknown for this older result.', '');
+      for (const entry of r.limitations ?? []) {
+        lines.push(`**${md(entry.id)}: ${entry.kind.replace(/-/g, ' ')}**`, '', md(entry.summary), '',
+          `Affected claims: ${entry.claimIds.map(md).join(', ') || 'None specified'}. Options: ${entry.optionIds.map(md).join(', ') || 'None specified'}. Historical context: ${entry.decisionIds.map(md).join(', ') || 'None specified'}.`, '',
+          entry.claimIds.length || entry.optionIds.length || entry.decisionIds.length ? 'References describe recorded scope; context is historical user intent, not verified facts.' : 'Scope: the whole question.', '',
+          entry.blocksRecommendation ? 'Blocks the recorded recommendation; your answer remains independent.' : 'Does not block the recorded recommendation; the qualification still applies.', '', `Next step: ${md(entry.nextStep)}`, '');
+      }
       if (r.proposedAnswer) lines.push('Suggested draft: ' + md(r.proposedAnswer), '');
       if (r.claims) {
         lines.push('#### Claims and evidence', '', 'Model interpretation of support; a recorded page read does not verify a claim.', '');
         for (const claim of r.claims) {
           lines.push(`**${claim.id}: ${md(claim.text)}**`, '', `${claim.basis === 'sources' ? 'Source-linked model interpretation' : claim.basis === 'reasoning' ? 'Model reasoning' : 'Unknown support'}.`, '', `Limitations: ${md(claim.limitations)}`, '');
+          lines.push(...limitationRefs(entry => entry.claimIds.includes(claim.id)));
           for (const item of claim.evidence) {
             const source = r.sources.find(s => s.id === item.sourceId);
             lines.push(`- ${item.sourceId}: ${md(item.paraphrase)}`, `  [${md(source.title)}](<${source.url.replace(/>/g, '%3E').replace(/</g, '%3C')}>) — ${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation' : 'Recorded successful read of requested URL'}; ${source.retrievedAt ?? 'Retrieval time unknown'}.`);

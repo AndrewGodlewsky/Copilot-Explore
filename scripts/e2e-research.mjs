@@ -31,6 +31,7 @@ const comparisonOutput = prepared => ({ cells: prepared.comparison.criteria.flat
 function limitedFindings(count) {
   const value = { ...findings, recommendation: 'Gather the missing context before choosing.', recommendationAssessment: { ...findings.recommendationAssessment, optionId: null }, options: findings.options.slice(0, count), optionsLimit: 'The fixture supplies insufficient evidence for further choices.' };
   value.support = findings.support.filter(entry => value.options.some(option => option.id === entry.optionId));
+  value.limitations = [{ ...findings.limitations[0], optionIds: [], blocksRecommendation: true, nextStep: 'Confirm the local cost and access requirements before choosing.' }];
   return value;
 }
 const fixture = createServer(async (req, res) => {
@@ -58,7 +59,7 @@ const fixture = createServer(async (req, res) => {
     }
     const searched = input.messages.some(m => m.role === 'tool');
     const searchName = input.tools.find(t => t.function.name.includes('web_search')).function.name;
-    const output = followupMode ? { answer: 'A prior source can inform the hypothetical.', uncertainty: 'Prior imported metadata; no new read.', claims: [{ id: 'c1', text: 'Prior support only', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Previously recorded support' }], limitations: 'Historical evidence, not a new fetch' }], sources: falseCitation ? [{ id: 's1', title: 'Unread new source', url: 'https://example.com/unread' }] : [{ id: 's1', prior: { origin: 'original', sourceId: 's1' } }] } : falseCitation ? { ...findings, basis: 'sources', sources: [{ id: 's1', title: 'Unread search result', url: 'https://example.com/unread', retrievedAt: '1900-01-01T00:00:00.000Z', provenance: 'recorded-read' }], claims: [{ id: 'c1', text: 'Unsupported claim', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Invented support' }], limitations: 'Fixture' }] } : findings;
+    const output = followupMode ? { answer: 'A prior source can inform the hypothetical.', uncertainty: 'Prior imported metadata; no new read.', claims: [{ id: 'c1', text: 'Prior support only', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Previously recorded support' }], limitations: 'Historical evidence, not a new fetch' }], sources: falseCitation ? [{ id: 's1', title: 'Unread new source', url: 'https://example.com/unread' }] : [{ id: 's1', prior: { origin: 'original', sourceId: 's1' } }] } : falseCitation ? { ...findings, basis: 'sources', sources: [{ id: 's1', title: 'Unread search result', url: 'https://example.com/unread', retrievedAt: '1900-01-01T00:00:00.000Z', provenance: 'recorded-read' }], claims: [{ id: 'c1', text: 'Unsupported claim', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Invented support' }], limitations: 'Fixture' }, ...findings.claims.slice(1)] } : findings;
     const message = searched ? { role: 'assistant', content: JSON.stringify(limitedCount === null ? output : limitedFindings(limitedCount)) } : {
       role: 'assistant', content: null, tool_calls: [{ id: 'search-fixture', type: 'function', function: { name: searchName, arguments: JSON.stringify({ query: 'synthetic pilot options' }) } }],
     };
@@ -127,12 +128,14 @@ try {
     { optionId: 'pilot', field: 'pros', text: findings.options[0].pros[0], claimIds: ['c1'], decisionIds: [] },
     { optionId: null, field: 'recommendation', text: findings.recommendation, claimIds: ['c1'], decisionIds: [prerequisite.id] },
   ];
+  findings.limitations = [{ id: 'local-cost', kind: 'missing-evidence', summary: 'The pilot budget is unknown; its scope can still be compared provisionally.', claimIds: ['c2'], optionIds: ['pilot'], decisionIds: [prerequisite.id], blocksRecommendation: false, nextStep: 'Ask for the available pilot budget before committing funds.' }];
   const expected = value => ({ ...value, recommendationAssessment: { ...value.recommendationAssessment, decisionRefs: value.recommendationAssessment.decisionRefs.map(ref => ({ ...ref, answerState: 'assumption', review: false })) }, settings });
   assert.ok(prepared.context.decisionsElsewhere.find(node => node.id === prerequisite.id).selection.includes('Explicit prerequisite'));
   const completed = await researcher.run(prepared.context, { prepared, onProgress: value => progress.push(value) });
   assert.deepEqual(completed, expected(findings));
   assert.match(prepared.instructions, /"support"/);
   assert.deepEqual(completed.support[1].decisionIds, [prerequisite.id]);
+  assert.deepEqual(completed.limitations, findings.limitations);
   assert.equal(completed.recommendationAssessment.decisionRefs[0].answerState, 'assumption');
   assert.match(prepared.instructions, /Quick: 60 seconds.*8 tool attempts/);
   assert.match(prepared.instructions, /Prefer recently published/);

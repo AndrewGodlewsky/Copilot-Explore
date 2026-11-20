@@ -28,6 +28,8 @@ function researchProjection(r, nodeIds) {
   const claims = r.claims === undefined ? null : bounded(r.claims, 12, (c, i) => ({ id: `c${i}`, text: text(c.text, 1000), basis: c.basis, limitations: text(c.limitations, 1000),
     evidence: bounded(c.evidence, 3, e => { const sourceId = sourceIds.get(e.sourceId); if (!sourceId) throw Error('Unknown research source.'); return { sourceId, paraphrase: text(e.paraphrase, 1000) }; }) }));
   return { basis: r.basis, summary: text(r.summary, 5000),
+    ...(r.limitations !== undefined ? { limitations: bounded(r.limitations, 12, (entry, i) => ({ id: `l${i}`, kind: text(entry.kind, 24), summary: text(entry.summary, 600), nextStep: text(entry.nextStep, 600), blocksRecommendation: entry.blocksRecommendation,
+      claimIds: bounded(entry.claimIds, 3, id => reference(claimIds, id)), optionIds: bounded(entry.optionIds, 4, id => reference(optionIds, id)), decisionIds: bounded(entry.decisionIds, 8, id => reference(decisionIds, id)) })) } : {}),
     ...(r.support !== undefined ? { support: bounded(r.support, 35, entry => ({ optionId: entry.optionId === null ? null : reference(optionIds, entry.optionId), field: text(entry.field, 20), text: text(entry.text, 800),
       claimIds: bounded(entry.claimIds, 3, id => reference(claimIds, id)), decisionIds: bounded(entry.decisionIds, 8, id => reference(decisionIds, id)) })) } : {}),
     ...(r.optionsVersion === 1 ? { optionsVersion: 1, ...(r.optionsLimit ? { optionsLimit: text(r.optionsLimit, 600) } : {}) } : {}),

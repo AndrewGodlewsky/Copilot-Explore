@@ -11,6 +11,7 @@ import { prepareAdrDraft } from '../com.github.copilot/extensions/explorer/adr-d
 import { prepareAdrScope, captureAdrScope } from '../com.github.copilot/extensions/explorer/adr-scope.mjs';
 import { defaultAdrFormat, parseAdrTemplate } from '../com.github.copilot/extensions/explorer/adr-format.mjs';
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { limitationFindings } from '../test/helpers/research-limitations.mjs';
 
 const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_PATH;
 assert.ok(sdkDirectory && cli, 'Set COPILOT_SDK_DIR and COPILOT_CLI_PATH to the installed desktop pair.');
@@ -25,7 +26,10 @@ const handoff = process.argv.includes('--handoff'), adr = process.argv.includes(
 if (handoff || adr) {
   const [privateNode] = addQuestions(document, document.rootId, [{ question: 'UNSELECTED_CANARY', category: 'Private' }]);
   privateNode.answer = 'UNSELECTED_ANSWER_CANARY';
-  selected.research = { basis: 'sources', sources: [{ id: 's1', title: 'Recorded source', url: 'https://example.com/source', retrievedAt: '2026-11-17T00:00:00.000Z', provenance: 'imported' }], claims: [{ id: 'c1', text: 'Recorded AI interpretation', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Recorded support' }], limitations: 'Not verified' }], summary: 'SUMMARY_CANARY' };
+  selected.research = limitationFindings(); selected.research.summary = 'SUMMARY_CANARY';
+  selected.research.claims[0].evidence[0].paraphrase = 'Recorded support';
+  selected.research.recommendationAssessment.decisionRefs = [{ nodeId: privateNode.id, reason: 'PRIVATE_CONTEXT_CANARY', answerState: 'assumption', review: true }];
+  selected.research.limitations[0].decisionIds = [privateNode.id];
   document.brief = { text: 'BRIEF_CANARY' }; document.projectCapture = { excerpt: 'PROJECT_CANARY' };
 }
 if (adr) {
@@ -79,6 +83,7 @@ const helper = createBriefHelper(parent, { runtime, usageDirectory: join(tempora
 const timer = setTimeout(() => { for (const client of owned) void client.forceStop(); }, 55000);
 try {
   const result = await helper.run(prepared); assert.equal(result.sections[adr ? 'outcome' : 'unresolved'][0].text, unresolved[0].text);
+  if (handoff || adr) assert.deepEqual(result.evidence[0].qualifications, prepared.context.evidence[0].qualifications);
   if (adr) { assert.equal(result.status, 'proposed'); assert.equal(result.titleEdited, false); assert.equal(result.sections.outcome[0].edited, false); }
   assert.equal(initialized, 1); assert.equal(prompts.length, 1);
   for (const prompt of prompts) {
@@ -86,7 +91,11 @@ try {
     assert.ok(prompt.messages.some(m => m.role === 'user' && m.content.includes(selected.question)));
     assert.ok(!JSON.stringify(prompt).includes('unsaved answer'));
     assert.ok(!JSON.stringify(prompt).includes('CANARY'));
-    if (handoff || adr) assert.ok(JSON.stringify(prompt).includes('Recorded support'));
+    if (handoff || adr) {
+      const text = JSON.stringify(prompt);
+      assert.ok(text.includes('Recorded support')); assert.ok(text.includes(selected.research.limitations[0].summary));
+      assert.ok(text.includes(selected.research.limitations[0].nextStep)); assert.ok(!text.includes(document.nodes[2].id));
+    }
     assert.ok(prompt.messages.some(m => m.role === 'user' && m.content.includes('Use familiar vocabulary')));
   }
   const ids = await readdir(join(temporary, 'usage', 'session-state'));

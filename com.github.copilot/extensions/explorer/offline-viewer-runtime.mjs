@@ -14,6 +14,20 @@ export function renderOfflineViewer(snapshot) {
   }
   function research(parent, r) {
     const section = el('section'); section.append(el('h2', 'Recorded AI suggestions — not user decisions'));
+    const limitations = (container, predicate) => {
+      for (const entry of (r.limitations ?? []).filter(predicate)) {
+        const detail = el('details'); detail.setAttribute('data-research-limitation', entry.id);
+        detail.append(el('summary', `${entry.kind.replace(/-/g, ' ')} · ${entry.blocksRecommendation ? 'recommendation withheld' : 'qualified conclusion'}`),
+          el('p', entry.summary), el('p', 'Model-identified limitation, not an independently verified finding. Your answer remains independent.'), el('p', `Next step: ${entry.nextStep}`));
+        detail.append(el('p', `Affected options: ${entry.optionIds.map(id => r.options.find(o => o.id === id).title).join('; ') || 'None specified'}. Claims: ${entry.claimIds.join(', ') || 'None specified'}.`));
+        for (const id of entry.decisionIds) {
+          const ref = r.recommendationAssessment.decisionRefs.find(ref => ref.id === id);
+          detail.append(el('p', `Historical user intent (${ref.answerState}${ref.review ? '; needed review' : ''} at research time): ${ref.reason}`));
+        }
+        if (!entry.optionIds.length && !entry.claimIds.length && !entry.decisionIds.length) detail.append(el('p', 'Scope: the whole question.'));
+        container.append(detail);
+      }
+    };
     const statementSupport = (container, optionId, field, text) => {
       const support = r.support?.find(item => item.optionId === optionId && item.field === field && item.text === text);
       const claims = (support?.claimIds ?? []).map(id => r.claims.find(claim => claim.id === id));
@@ -43,6 +57,7 @@ export function renderOfflineViewer(snapshot) {
       const article = el('section'); article.append(el('h3', option.title), el('p', option.description));
       if (r.recommendationAssessment && r.recommendationAssessment.optionId === option.id) article.append(el('p', 'Recommended option — historical model judgment, not a user decision.'));
       if (r.optionsVersion === 1) paragraph(article, 'Fits when', option.fit);
+      limitations(article, entry => entry.optionIds.includes(option.id));
       for (const [field, label] of [['pros', 'Model-stated pros'], ['cons', 'Model-stated cons']]) {
         article.append(el('h3', label));
         if (!option[field].length) article.append(el('p', 'None recorded'));
@@ -56,7 +71,12 @@ export function renderOfflineViewer(snapshot) {
     statementSupport(section, null, 'recommendation', r.recommendation);
     if (r.recommendationAssessment) {
       const assessment = r.recommendationAssessment;
-      if (assessment.optionId === null) section.append(el('p', 'No recommendation is justified by the recorded context.'));
+      if (assessment.optionId === null) {
+        section.append(el('p', 'No recommendation is justified by the recorded context.'));
+        for (const entry of (r.limitations ?? []).filter(item => item.blocksRecommendation)) {
+          const next = el('p', `Next step: ${entry.nextStep}`); next.setAttribute('data-recommendation-next-step', entry.id); section.append(next);
+        }
+      }
       section.append(el('p', 'Contextual model judgment. Referenced states describe user intent at research time, not verified facts or current state.'));
       paragraph(section, 'Main tradeoff', assessment.mainTradeoff); statementSupport(section, null, 'mainTradeoff', assessment.mainTradeoff);
       paragraph(section, 'Reconsider if', assessment.reconsiderIf); statementSupport(section, null, 'reconsiderIf', assessment.reconsiderIf);
@@ -68,11 +88,15 @@ export function renderOfflineViewer(snapshot) {
     } else section.append(el('p', 'Legacy recommendation: no linked option was recorded.'));
     if (r.proposedAnswer !== null) paragraph(section, 'AI suggested answer', r.proposedAnswer);
     paragraph(section, 'Uncertainty', r.uncertainty);
+    section.append(el('h3', 'Model-identified limitations'));
+    if (!r.limitations?.length) section.append(el('p', r.limitations ? 'No structured limitations were identified. This is not proof that evidence is complete.' : 'Structured limitation coverage unknown for this older result.'));
+    limitations(section, () => true);
     section.append(el('h3', 'Recorded claims and model interpretation'));
     if (r.claims === null) section.append(el('p', 'Legacy research: claim support unknown.'));
     for (const claim of r.claims ?? []) {
       section.append(el('h4', `${claim.id}: ${claim.text}`), el('p', claim.basis === 'sources' ? 'Source-linked model interpretation; not independently verified.' : claim.basis === 'reasoning' ? 'Model reasoning.' : 'Unknown support.'));
       paragraph(section, 'Limitations', claim.limitations);
+      limitations(section, entry => entry.claimIds.includes(claim.id));
       for (const evidence of claim.evidence) paragraph(section, `Model paraphrase of ${evidence.sourceId}`, evidence.paraphrase);
     }
     section.append(el('h3', 'Sources — opening a link leaves the offline viewer'));

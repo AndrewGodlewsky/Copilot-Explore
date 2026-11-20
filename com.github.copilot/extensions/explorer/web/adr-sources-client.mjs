@@ -43,6 +43,7 @@ export class AdrSourcesClient {
         for (const source of evidence.sources) lines.push(`${source.id ?? 'Legacy source'}: ${source.title}\n${source.url}\nCaptured provenance: ${source.provenance ?? 'unknown'}; recorded retrieval: ${source.retrievedAt ?? 'unknown'}`);
         for (const claim of evidence.claims ?? []) lines.push(`${claim.id} (${claim.basis}): ${claim.text}\nLimitations: ${claim.limitations || 'None recorded; reliability is not established'}\n${claim.evidence.map(e => `${e.sourceId}: ${e.paraphrase}`).join('\n')}`);
         if (!evidence.claims && evidence.sources.length) lines.push('Legacy sources have no structured claim support or recorded limitations.');
+        for (const q of evidence.qualifications ?? []) lines.push(`Recorded qualification (${q.kind}; ${q.claimIds.length ? `claims ${q.claimIds.join(', ')}` : 'whole question'}; ${q.blocksRecommendation ? 'recommendation blocker' : 'qualified conclusion'}): ${q.summary}\nNext step: ${q.nextStep}`);
       }
     }
     this.control('evidence').textContent = lines.join('\n\n'); this.update();

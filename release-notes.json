@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.119",
+    "summary": "Inspect research conflicts and evidence gaps beside affected choices and claims. When no recommendation is justified, see a practical next question or evidence to obtain. Keep your answer independent, preserve limitations in saved maps and exports, and retain unresolved blockers when reconsidering hypothetical priorities."
+  },
+  {
     "version": "0.1.118",
     "summary": "Inspect support beside research pros, cons and recommendation premises. Expand source paraphrases, limitations and historical user context; missing support stays visible. Exact statement links survive saved maps and exports, while changed wording rejects stale references. A recorded source read remains retrieval, not fact verification."
   },

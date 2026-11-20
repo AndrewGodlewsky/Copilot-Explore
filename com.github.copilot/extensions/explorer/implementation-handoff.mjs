@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { validateArtifactAcceptance } from './contributors.mjs';
 import { identity, framing, record, RESEARCH_CONTEXT_LIMIT, SCENARIO_CONTEXT_GUIDANCE } from './research-context.mjs';
 import { briefInstructions, briefSections, captureBrief, briefFreshness, validateBrief, briefText, BRIEF_OUTPUT_LIMIT, BRIEF_ARTIFACT_LIMIT } from './decision-brief.mjs';
-import { researchEvidence, guidanceText, pinnedConstraints } from './model.mjs';
+import { projectResearchEvidence, selectedResearchEvidence, guidanceText, pinnedConstraints } from './model.mjs';
 import { isQuestion } from './web/answer-state.mjs';
 import { validMode } from './web/modes.mjs';
 
@@ -14,11 +14,11 @@ const formatInstructions = {
   prompt: 'Write a copyable implementation prompt: goal addresses a future implementer; decisions and constraints describe their authorized context; nextSteps gives suggested instructions conditional on resolving unknowns. The prompt grants no execution or tool permissions.',
   tasks: 'Write a task list: nextSteps is an ordered list of concrete proposed tasks grounded in selected decisions. Keep unapproved work explicitly suggested; unknown ownership, estimates, prerequisites and acceptance criteria remain unresolved.',
 };
-export const HANDOFF_OMISSIONS = 'Excluded: unselected nodes and implicit ancestors/root records; answer drafts; private visual references; project excerpts, file references and snapshots; prior briefs, handoffs and checks; research summaries, recommendations, proposed answers and follow-up prose. Only explicitly included recorded research sources and structured claims are an exception.';
+export const HANDOFF_OMISSIONS = 'Excluded: unselected nodes and implicit ancestors/root records; answer drafts; private visual references; project excerpts, file references and snapshots; prior briefs, handoffs and checks; research summaries, recommendations, proposed answers and follow-up prose. Only explicitly included recorded research sources, structured claims and their claim-scoped or whole-question qualifications are an exception. Empty qualification claimIds apply to the whole question. Preserve their uncertainty and next steps; a recorded recommendation blocker is historical model judgment, never a user decision.';
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const keys = (value, names) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === names.split(',').sort().join(',');
 const invalid = () => { throw Error('Invalid implementation handoff. Check format, selected sources, evidence and bounded statements.'); };
-const evidenceFor = node => ({ nodeId: node.id, ...(node.research ? { basis: node.research.basis, ...researchEvidence(node.research) } : { basis: 'reasoning', sources: [] }) });
+const evidenceFor = node => ({ nodeId: node.id, ...(node.research ? { basis: node.research.basis, ...projectResearchEvidence(node.research) } : { basis: 'reasoning', sources: [] }) });
 
 export function selectedInputs(doc, nodeIds, includeEvidence, { scenario } = {}) {
   if (typeof includeEvidence !== 'boolean' || !Array.isArray(nodeIds) || !nodeIds.length || nodeIds.length > 100 || new Set(nodeIds).size !== nodeIds.length || nodeIds.some(id => typeof id !== 'string' || !id.length || id.length > 100)) invalid();
@@ -62,8 +62,8 @@ export function validateHandoff(value) {
   if (!keys(value, 'version,acceptedAt,format,formatFingerprint,sections,dependencies,coverage,guidance,includeEvidence,evidence' + (Object.hasOwn(value ?? {}, 'acceptance') ? ',acceptance' : '')) || !HANDOFF_FORMATS.includes(value.format) || value.formatFingerprint !== hash(value.format) || typeof value.includeEvidence !== 'boolean' ||
     !Array.isArray(value.evidence) || value.evidence.length > 100 || (!value.includeEvidence && value.evidence.length) || value.dependencies?.records?.length < 1 || value.dependencies?.records?.length > 100 || value.coverage?.scope !== 'selected-records') invalid();
   const evidence = value.evidence.map(item => {
-    if (!keys(item, Object.hasOwn(item ?? {}, 'claims') ? 'nodeId,basis,sources,claims' : 'nodeId,basis,sources') || !value.dependencies.records.some(source => source.id === item.nodeId)) invalid();
-    return { nodeId: item.nodeId, basis: item.basis, ...researchEvidence(item) };
+    if (!keys(item, 'nodeId,basis,sources' + (Object.hasOwn(item ?? {}, 'claims') ? ',claims' : '') + (Object.hasOwn(item ?? {}, 'qualifications') ? ',qualifications' : '')) || !value.dependencies.records.some(source => source.id === item.nodeId)) invalid();
+    return { nodeId: item.nodeId, basis: item.basis, ...selectedResearchEvidence(item) };
   });
   if (new Set(evidence.map(item => item.nodeId)).size !== evidence.length || value.includeEvidence && (evidence.length !== value.dependencies.records.length || value.dependencies.records.some(source => !evidence.some(item => item.nodeId === source.id)))) invalid();
   const guidance = value.guidance;
@@ -119,6 +119,7 @@ export function handoffMarkdown(value, doc) {
       lines.push(`Claim ${md(claim.id)} (${claim.basis}; recorded AI interpretation): ${md(claim.text)}`, '', `Limitations: ${md(claim.limitations)}`, '');
       for (const support of claim.evidence) lines.push(`- Recorded relation to source ${md(support.sourceId)}: ${md(support.paraphrase)}`, '');
     }
+    for (const q of item.qualifications ?? []) lines.push(`Recorded qualification (${md(q.kind)}; ${q.claimIds.length ? `claims ${q.claimIds.map(md).join(', ')}` : 'whole question'}; ${q.blocksRecommendation ? 'recommendation blocker' : 'qualified conclusion'}): ${md(q.summary)}`, '', `Next step: ${md(q.nextStep)}`, '');
   }
   return lines.join('\n') + '\n';
 }

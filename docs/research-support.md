@@ -1,5 +1,7 @@
 # Inspect support for research statements
 
+[Structured limitations](research-limitations.md) attach conflicts, gaps and practical next steps to affected options and claims, including when no recommendation is justified.
+
 Each pro, con and recommendation premise has an expandable support label beside its text. Open only the statements you want to check; the option and answer editor stay in place. Opening a disclosure makes no model call and does not open a source. A source link opens a separate page only when selected.
 
 The labels distinguish source-linked model interpretation, historical user context, model reasoning without external support, and unknown support. Inside are the recorded claim, bounded model paraphrase, source link, retrieval metadata and limitations. Historical user references retain their captured answer state and review qualification; they are user intent, not current project facts. Explanations and fit summaries remain contextual model judgments, and comparison detail cells retain their separate unknown-support qualification.

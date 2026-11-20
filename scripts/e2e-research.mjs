@@ -21,7 +21,7 @@ const findings = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic lo
   { id: 'pilot', title: 'Pilot', description: 'Small first step.', fit: 'When learning with a small group matters.', pros: ['Learn'], cons: ['Limited'] , proposedAnswer: 'I will run a pilot.', details: [{ label: 'Size', value: 'Ten people' }] },
   { id: 'launch', title: 'Launch', description: 'Broad first step.', fit: 'When broad reach matters more than setup cost.', pros: ['Reach'], cons: ['Cost'], proposedAnswer: 'I will launch broadly.', details: [] },
 ], recommendation: 'Pilot first while shared space remains an unconfirmed assumption.', recommendationAssessment: { optionId: 'pilot', mainTradeoff: 'The pilot reaches fewer neighbors.', reconsiderIf: 'If shared space and demand are confirmed, consider a broader launch.', decisionRefs: [] }, uncertainty: 'Local fixture: no real sources read.', sources: [], claims: [
-  { id: 'c1', text: 'A pilot could help learning.', basis: 'reasoning', evidence: [], limitations: 'Model judgment; no page fetched.' },
+  { id: 'c1', text: 'A pilot could help learning.', basis: 'reasoning', evidence: [], limitations: 'Model judgment; no page fetched.', freshness: { type: 'durable-concept', reason: 'A conceptual learning strategy, not current availability.', version: null } },
   { id: 'c2', text: 'Local cost is unknown.', basis: 'unknown', evidence: [], limitations: 'Search snippets do not establish fetched evidence.' },
 ] };
 let hold = false, onHeld, falseCitation = false, followupMode = false, limitedCount = null;
@@ -182,13 +182,15 @@ try {
   falseCitation = false;
   followupMode = true;
   const doc = createDocument('Scoped follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why pilot?', category: 'Target' }]);
-  doc.nodes[1].research = { ...completed, basis: 'sources', sources: [{ id: 's1', title: 'Earlier imported source', url: 'https://example.com/prior', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported' }] };
+  doc.nodes[1].research = { ...completed, basis: 'sources', sources: [{ id: 's1', title: 'Earlier imported source', url: 'https://example.com/prior', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported', dateObservations: [{ kind: 'published', text: 'Published: 2019-12-01' }] }] };
   const followup = { ...prepareFollowup(doc, doc.nodes[1].id, { question: 'What if the budget doubles? ??', hypothetical: true }, { settings }), modelCapture: captureResearchModel(await researcher.models(), { revision: 1, modelId: dedicated.id }) };
   selectedId = model.id;
   const startIndex = captured.length;
   const followupResult = await researcher.runFollowup(followup.context, { prepared: followup });
   assert.deepEqual(captured[startIndex], { instructions: followup.instructions, prompt: followup.prompt });
   assert.ok(sendTimeouts[startIndex] > 0 && sendTimeouts[startIndex] < 60000);
+  assert.deepEqual(followupResult.sources[0].dateObservations, doc.nodes[1].research.sources[0].dateObservations);
+  assert.ok(followup.followup.original.find(item => item.kind === 'evidence').freshness.evaluatedAt);
   assert.equal(followupResult.sources[0].retrievedAt, '2020-01-01T00:00:00.000Z'); assert.equal(followupResult.sources[0].provenance, 'imported'); assert.equal(followupResult.sources[0].evidenceOrigin.origin, 'original');
   falseCitation = true;
   await assert.rejects(researcher.runFollowup(followup.context, { prepared: followup }), /new source.*successfully read/);

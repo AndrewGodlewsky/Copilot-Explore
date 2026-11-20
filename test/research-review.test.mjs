@@ -14,6 +14,7 @@ import { startServer } from '../com.github.copilot/extensions/explorer/server.mj
 import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/web/research-review-client.mjs';
 import { ResearchReview, REVIEW_TTL } from '../com.github.copilot/extensions/explorer/research-review.mjs';
 import { createResearcher } from '../com.github.copilot/extensions/explorer/research.mjs';
+import { freshnessFindings, FRESHNESS_NOW } from './helpers/research-freshness.mjs';
 
 function document() {
   const doc = createDocument('Review \ud83c\udf3f');
@@ -32,6 +33,31 @@ async function fixture(t) {
   const start = value => e.command('research', { journey: doc.id, nodeId: doc.nodes[1].id, token: value.token });
   return { e, file, doc, runs, input, review, start };
 }
+test('evidence age crossing a boundary after review, while queued or during inference preserves saved research', async t => {
+  for (const phase of ['review', 'queue', 'result']) {
+    const f = await fixture(t), next = structuredClone(f.e.doc); next.nodes[1].research = freshnessFindings(); next.nodes[1].answer = 'My independent answer'; await f.e.save(next);
+    const before = structuredClone(f.e.doc.nodes[1]); let now = FRESHNESS_NOW + 86400000 - 1, release, finish;
+    const clock = t.mock.method(Date, 'now', () => now);
+    try {
+      f.e.researcher.runFollowup = (context, options) => { f.runs.push({ context, ...options }); return new Promise(resolve => { finish = resolve; }); };
+      const review = await f.review({ followup: { question: 'Why?', hypothetical: false } });
+      const start = () => f.e.command('research-follow-up', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, token: review.token });
+      if (phase === 'review') { now++; await assert.rejects(start(), /freshness.*changed/i); assert.equal(f.runs.length, 0); }
+      else {
+        if (phase === 'queue') f.e.researchTask = new Promise(resolve => { release = resolve; });
+        await start();
+        if (phase === 'result') await waitFor(() => finish, 'owned followup started');
+        now++;
+        if (phase === 'queue') release();
+        else finish({ answer: 'Current access is unknown.', uncertainty: 'Old evidence only.', claims: [{ id: 'unknown', text: 'Unknown', basis: 'unknown', evidence: [], limitations: 'Needs current evidence.' }], sources: [] });
+        await waitFor(() => !f.e.pending, 'age change resolved without replacing research');
+        assert.match(f.e.error, /freshness.*changed/i); assert.equal(f.runs.length, phase === 'queue' ? 0 : 1);
+      }
+      assert.deepEqual(f.e.doc.nodes[1], before); assert.equal(f.e.currentFollowup(), null);
+    } finally { release?.(); finish?.({}); clock.mock.restore(); }
+  }
+});
+
 test('optional exclusions remove exact text and dependencies, never mandatory context', () => {
   const doc = document(), optional = doc.nodes[2], target = doc.nodes[1];
   const prepared = prepareResearch(doc, target.id, { excluded: [optional.id, doc.rootId] });

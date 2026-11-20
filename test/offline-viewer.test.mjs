@@ -81,7 +81,14 @@ test('standalone viewer uses exact hash CSP, preserves hostile text and navigate
     assert.ok(csp.includes(`style-src 'sha256-${hash(d.querySelector('style').textContent)}'`));
     const scripts = [...d.querySelectorAll('script')]; assert.equal(scripts.length, 2);
     assert.ok(csp.includes(`script-src 'sha256-${hash(scripts[1].textContent)}'`));
-    assert.deepEqual(JSON.parse($('viewer-data').textContent), data);
+    const exported = JSON.parse($('viewer-data').textContent);
+    for (const node of exported.nodes) if (node.research) {
+      assert.match(node.research.freshnessNotice, /static export does not update/);
+      delete node.research.freshnessNotice;
+      for (const claim of node.research.claims ?? []) delete claim.freshnessText;
+      for (const source of node.research.sources) delete source.dateText;
+    }
+    assert.deepEqual(exported, data);
     assert.equal($('node-title').textContent, hostile); assert.equal(dom.window.pwned, undefined);
     assert.equal(d.querySelector('img,iframe,link,form,[src],[onclick],[onerror]'), null);
     assert.match($('detail').textContent, /AI suggestions/); assert.match($('detail').textContent, /Imported/); assert.match($('detail').textContent, /Claim limits/);

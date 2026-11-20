@@ -1,3 +1,4 @@
+import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './web/research-freshness.mjs';
 import { createHash } from 'node:crypto';
 import { validateArtifactAcceptance } from './contributors.mjs';
 import { identity, framing, record, RESEARCH_CONTEXT_LIMIT, SCENARIO_CONTEXT_GUIDANCE } from './research-context.mjs';
@@ -114,8 +115,10 @@ export function handoffMarkdown(value, doc) {
   lines.push('## Recorded research appendix', '', h.includeEvidence ? 'Captured sources and structured claims follow. No new reads were performed; source support and wording were not reverified.' : 'Research evidence was not included.', '');
   for (const item of h.evidence) {
     lines.push(`### Node ${md(item.nodeId)}`, '', `Research basis: ${item.basis}.`, '');
-    for (const source of item.sources) lines.push(`- ${md(source.id ?? 'Legacy source, no recorded ID')}: [${md(source.title)}](<${source.url.replaceAll('<', '%3C').replaceAll('>', '%3E')}>) — ${source.provenance ?? 'legacy; provenance unknown'}; retrieved ${md(source.retrievedAt ?? 'unknown')}.`, '');
+    lines.push(md(freshnessNotice(researchFreshness(item))), '');
+      for (const source of item.sources) lines.push(md(sourceDateText(source)), '', `- ${md(source.id ?? 'Legacy source, no recorded ID')}: [${md(source.title)}](<${source.url.replaceAll('<', '%3C').replaceAll('>', '%3E')}>) — ${source.provenance ?? 'legacy; provenance unknown'}; retrieved ${md(source.retrievedAt ?? 'unknown')}.`, '');
     for (const claim of item.claims ?? []) {
+      lines.push(md(claimFreshnessText(claim, researchFreshness(item))), '');
       lines.push(`Claim ${md(claim.id)} (${claim.basis}; recorded AI interpretation): ${md(claim.text)}`, '', `Limitations: ${md(claim.limitations)}`, '');
       for (const support of claim.evidence) lines.push(`- Recorded relation to source ${md(support.sourceId)}: ${md(support.paraphrase)}`, '');
     }

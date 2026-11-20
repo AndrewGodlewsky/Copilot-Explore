@@ -14,6 +14,7 @@ export function renderOfflineViewer(snapshot) {
   }
   function research(parent, r) {
     const section = el('section'); section.append(el('h2', 'Recorded AI suggestions — not user decisions'));
+    section.append(el('p', r.freshnessNotice ?? 'Evidence age has not been evaluated in this artifact.'));
     const limitations = (container, predicate) => {
       for (const entry of (r.limitations ?? []).filter(predicate)) {
         const detail = el('details'); detail.setAttribute('data-research-limitation', entry.id);
@@ -37,6 +38,7 @@ export function renderOfflineViewer(snapshot) {
       detail.append(el('p', 'These recorded associations are model interpretations. A page read confirms retrieval, not relevance, entailment or truth.'));
       if (!claims.length && !decisions.length) detail.append(el('p', 'No claim or prior-context reference was recorded for this statement. Factual support is unknown.'));
       for (const claim of claims) {
+        detail.append(el('p', claim.freshnessText ?? 'Currentness unknown.'));
         detail.append(el('p', `${claim.id}: ${claim.text}`), el('p', claim.basis === 'sources' ? 'Source-linked model interpretation; not independently verified.' : claim.basis === 'reasoning' ? 'Model reasoning; factual support not established.' : 'Unknown support.'), el('p', `Limitations: ${claim.limitations}`));
         for (const evidence of claim.evidence) {
           const source = r.sources.find(item => item.id === evidence.sourceId);
@@ -44,7 +46,7 @@ export function renderOfflineViewer(snapshot) {
           const link = el('a', `${source.id}: ${source.title}`);
           try { const url = new URL(source.url); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw Error(); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.referrerPolicy = 'no-referrer'; const row = el('p'); row.append(link); detail.append(row); }
           catch { detail.append(el('p', 'Source URL unavailable.')); }
-          detail.append(el('p', `${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation.' : source.provenance === 'recorded-read' ? 'Recorded successful read of requested URL; not claim verification.' : 'Read provenance unknown.'} Retrieval time: ${source.retrievedAt ?? 'Unknown'}.`));
+          detail.append(el('p', `${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation.' : source.provenance === 'recorded-read' ? 'Recorded successful read of requested URL; not claim verification.' : 'Read provenance unknown.'} Retrieval time: ${source.retrievedAt ?? 'Unknown'}.\n${source.dateText ?? 'Publication and update dates unknown.'}`));
         }
       }
       for (const ref of decisions) detail.append(el('p', `Historical user context (${ref.answerState}${ref.review ? '; needed review' : ''} at research time): ${ref.reason}`), el('p', 'User intent, not verified facts or current state.'));
@@ -94,6 +96,7 @@ export function renderOfflineViewer(snapshot) {
     section.append(el('h3', 'Recorded claims and model interpretation'));
     if (r.claims === null) section.append(el('p', 'Legacy research: claim support unknown.'));
     for (const claim of r.claims ?? []) {
+      section.append(el('p', claim.freshnessText ?? 'Currentness unknown.'));
       section.append(el('h4', `${claim.id}: ${claim.text}`), el('p', claim.basis === 'sources' ? 'Source-linked model interpretation; not independently verified.' : claim.basis === 'reasoning' ? 'Model reasoning.' : 'Unknown support.'));
       paragraph(section, 'Limitations', claim.limitations);
       limitations(section, entry => entry.claimIds.includes(claim.id));
@@ -105,7 +108,7 @@ export function renderOfflineViewer(snapshot) {
       // Defense in depth for a modified data block. Never activate non-web URLs.
       try { const url = new URL(source.url); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw Error(); link.href = url.href; } catch { row.append(el('span', `${source.id}: ${source.title} (unavailable URL)`)); section.append(row); continue; }
       link.target = '_blank'; link.rel = 'noopener noreferrer'; link.referrerPolicy = 'no-referrer'; row.append(link);
-      row.append(el('span', `\n${source.url}\n${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation.' : source.provenance === 'recorded-read' ? 'Recorded successful read of requested URL; redirect destination and publication date unknown.' : 'Legacy source; read provenance unknown.'}\nRetrieval time: ${source.retrievedAt ?? 'Unknown'}`)); section.append(row);
+      row.append(el('span', `\n${source.url}\n${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation.' : source.provenance === 'recorded-read' ? 'Recorded successful read of requested URL; redirect destination unknown.' : 'Legacy source; read provenance unknown.'}\nRetrieval time: ${source.retrievedAt ?? 'Unknown'}\n${source.dateText ?? 'Publication and update dates unknown.'}`)); section.append(row);
     }
     parent.append(section);
   }

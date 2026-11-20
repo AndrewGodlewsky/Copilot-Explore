@@ -15,9 +15,9 @@ export const evidence = {
     { title: 'Pilot', description: 'Learn first', pros: [], cons: [] },
     { title: 'Launch', description: 'Reach more', pros: [], cons: [] },
   ], recommendation: 'Consider a pilot', uncertainty: 'Applicability varies',
-  sources: [{ id: 's1', title: '<script>Source</script>', url: 'https://example.com/a?q=one', retrievedAt: '2026-11-17T12:00:00.000Z', provenance: 'recorded-read' }],
+  sources: [{ id: 's1', title: '<script>Source</script>', url: 'https://example.com/a?q=one', retrievedAt: '2026-11-17T12:00:00.000Z', provenance: 'recorded-read', dateObservations: [{ kind: 'published', text: 'Published: 2026-11-01' }] }],
   claims: [
-    { id: 'c1', text: '<script>Claim</script>', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'The source describes a limited pilot.' }], limitations: 'This is model interpretation.' },
+    { id: 'c1', text: '<script>Claim</script>', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'The source describes a limited pilot.' }], limitations: 'This is model interpretation.', freshness: { type: 'durable-concept', reason: 'Conceptual pilot design, not a current product fact.', version: null } },
     { id: 'c2', text: 'A pilot may fit', basis: 'reasoning', evidence: [], limitations: 'Personal judgment.' },
     { id: 'c3', text: 'Local cost', basis: 'unknown', evidence: [], limitations: 'No local evidence.' },
   ],
@@ -136,6 +136,7 @@ test('invalid evidence, overflow, cancellation and current-disk changes preserve
     }
     finish(value); await Promise.all([...e.researchTasks]);
     const saved = JSON.parse(await readFile(file, 'utf8'));
+    assert.deepEqual(saved.nodes[1].research.sources, evidence.sources); assert.deepEqual(saved.nodes[1].research.claims, evidence.claims);
     assert.equal(saved.nodes[1].research.summary, mode === 'disk-destination' ? 'Current disk research' : evidence.summary);
     assert.equal(saved.nodes[1].answer, mode === 'disk-source' || mode === 'disk-destination' ? 'Current disk answer' : node.answer);
     await e.load();

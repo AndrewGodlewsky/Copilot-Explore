@@ -1,3 +1,4 @@
+import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './research-freshness.mjs';
 import { attachDashboard } from './dashboard.mjs';
 import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
@@ -2594,7 +2595,7 @@ function renderWorkspace() {
       return research;
     });
     if ($('research-stale-warning')) $('research-stale-warning').hidden = !node.researchStale;
-    for (const badge of $('question-drawer').querySelectorAll('[data-recommendation-badge]')) badge.textContent = node.researchStale ? 'Recommended option · needs review' : 'Recommended option';
+    for (const badge of $('question-drawer').querySelectorAll('[data-recommendation-badge]')) badge.textContent = node.researchStale || researchFreshness(node.research).recommendation.needsReview ? 'Recommended option · needs review' : 'Recommended option';
     if ($('research-assistance-copy')) $('research-assistance-copy').hidden = !!node.research;
     for (const control of $('question-drawer').querySelectorAll('[data-draft-suggestion]')) control.disabled = node.researchStale === true || control.dataset.selectionRequired === 'true' && !ui.selectedDetails?.size;
     update('children', doc.nodes.filter(n => n.parentId === node.id).map(n => [n.id, n.question]), () => {
@@ -2911,7 +2912,18 @@ function renderFollowup(node) {
 function updateFollowupHistory(node) {
   const area = $('followup-history'); if (!area) return;
   const value = state.followup?.nodeId === node.id && state.followup.journey === (state.activeKey ?? state.document.id) ? state.followup : null;
-  const signature = JSON.stringify(value); if (area.dataset.value === signature) return; area.dataset.value = signature;
+  const signature = JSON.stringify(value);
+  if (area.dataset.value === signature) {
+    for (const exchange of value?.exchanges ?? []) {
+      const age = researchFreshness(exchange.result);
+      for (const item of area.querySelectorAll('[data-followup-exchange]')) if (item.dataset.followupExchange === exchange.id) {
+        const text = claimFreshnessText(exchange.result.claims.find(claim => claim.id === item.dataset.followupClaim), age);
+        if (item.textContent !== text) item.textContent = text;
+      }
+    }
+    return;
+  }
+  area.dataset.value = signature;
   const rows = [];
   if (value) {
     rows.push(el('p', { class: 'quiet' }, value.historical ? 'Historical follow-ups: saved source context or original research changed. A new request starts a fresh history.' : 'Follow-ups to this original research; saved answers are unchanged.'));
@@ -2919,14 +2931,14 @@ function updateFollowupHistory(node) {
     for (const exchange of value.exchanges) {
       const result = exchange.result, block = el('section', { class: 'research-claim' }, el('h4', {}, exchange.hypothetical ? 'Hypothetical follow-up' : 'Follow-up question'), el('p', {}, exchange.question), el('p', {}, result.answer), el('p', {}, `Uncertainty: ${result.uncertainty}`));
       for (const claim of result.claims) {
-        const detail = el('details', {}, el('summary', {}, `${claim.text} (${claim.basis === 'sources' ? 'source-linked model interpretation' : claim.basis})`), el('p', {}, `Limitations: ${claim.limitations}`));
+        const detail = el('details', {}, el('summary', {}, `${claim.text} (${claim.basis === 'sources' ? 'source-linked model interpretation' : claim.basis})`), el('p', { class: 'quiet', 'data-followup-exchange': exchange.id, 'data-followup-claim': claim.id }, claimFreshnessText(claim, researchFreshness(result))), el('p', {}, `Limitations: ${claim.limitations}`));
         for (const reference of claim.evidence) {
           const source = result.sources.find(item => item.id === reference.sourceId);
-          detail.append(el('p', {}, reference.paraphrase), el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, source.title), el('p', { class: 'quiet' }, `${source.evidenceOrigin.origin === 'current' ? 'Newly consulted in this exchange' : 'Prior evidence from ' + source.evidenceOrigin.origin + '/' + source.evidenceOrigin.sourceId}. ${source.provenance === 'imported' ? 'Imported metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt ?? 'Retrieval time unknown'}. Redirect destination and publication date unknown.`));
+          detail.append(el('p', {}, reference.paraphrase), el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, source.title), el('p', { class: 'quiet' }, `${source.evidenceOrigin.origin === 'current' ? 'Newly consulted in this exchange' : 'Prior evidence from ' + source.evidenceOrigin.origin + '/' + source.evidenceOrigin.sourceId}. ${source.provenance === 'imported' ? 'Imported metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt ?? 'Retrieval time unknown'}. Redirect destination unknown. ${sourceDateText(source)}`));
         }
         block.append(detail);
       }
-      if (result.sources.length) block.append(el('details', {}, el('summary', {}, 'All response sources'), ...result.sources.map(source => el('div', {}, el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `${source.id}: ${source.title}`), el('p', { class: 'quiet' }, `${source.evidenceOrigin.origin === 'current' ? 'Newly consulted in this exchange' : 'Prior evidence from ' + source.evidenceOrigin.origin + '/' + source.evidenceOrigin.sourceId}; ${source.provenance}; ${source.retrievedAt ?? 'Retrieval time unknown'}.`)))));
+      if (result.sources.length) block.append(el('details', {}, el('summary', {}, 'All response sources'), ...result.sources.map(source => el('div', {}, el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `${source.id}: ${source.title}`), el('p', { class: 'quiet' }, `${source.evidenceOrigin.origin === 'current' ? 'Newly consulted in this exchange' : 'Prior evidence from ' + source.evidenceOrigin.origin + '/' + source.evidenceOrigin.sourceId}; ${source.provenance}; ${source.retrievedAt ?? 'Retrieval time unknown'}. ${sourceDateText(source)}`)))));
       rows.push(block);
     }
   }
@@ -3064,8 +3076,8 @@ function renderComparisonResult(entry, role) {
         el('p', { class: 'basis' }, value.basis === 'unknown' ? 'Unknown support' : value.basis === 'reasoning' ? 'Model reasoning' : 'Prior claim reference · not newly verified'));
       if (value.claimIds.length) cell.append(el('details', {}, el('summary', {}, 'Inspect prior claims'), value.claimIds.map(id => {
         const claim = prior.claims.find(item => item.id === id);
-        return el('div', {}, el('p', {}, `${id}: ${claim.text}`), el('p', { class: 'quiet' }, `Prior basis: ${claim.basis}. Limitations: ${claim.limitations}`),
-          claim.evidence.map(evidence => { const source = prior.sources.find(item => item.id === evidence.sourceId); return el('p', {}, `${evidence.paraphrase} — Prior source: ${source.title}; ${source.url}. ${source.retrievedAt ? `Recorded retrieval: ${source.retrievedAt}; ${source.provenance}.` : 'Retrieval time unknown.'}`); }));
+        return el('div', {}, el('p', {}, `${id}: ${claim.text}`), el('p', { class: 'quiet' }, claimFreshnessText(claim, researchFreshness(prior))), el('p', { class: 'quiet' }, `Prior basis: ${claim.basis}. Limitations: ${claim.limitations}`),
+          claim.evidence.map(evidence => { const source = prior.sources.find(item => item.id === evidence.sourceId); return el('p', {}, `${evidence.paraphrase} — Prior source: ${source.title}; ${source.url}. ${source.retrievedAt ? `Recorded retrieval: ${source.retrievedAt}; ${source.provenance}.` : 'Retrieval time unknown.'} ${sourceDateText(source)}`); }));
       })));
       return cell;
     })))));
@@ -3075,6 +3087,8 @@ function renderComparisonResult(entry, role) {
 
 function renderResearch(node) {
   const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r), journey = referenceJourney();
+  let age = researchFreshness(r);
+  const ageText = claim => el('p', { class: 'quiet', 'data-freshness-claim': claim.id }, claimFreshnessText(claim, age));
   const assessment = r.recommendationAssessment, chosen = assessment ? r.options.find(option => option.id === assessment.optionId) : null;
   if (ui.researchKey !== key) { ui.researchKey = key; ui.selectedDetails = new Set(); ui.comparison = null; ui.researchDisclosures = {}; }
   const disclosure = (id, label) => {
@@ -3141,7 +3155,17 @@ function renderResearch(node) {
     el('h3', { id: 'research-draft-preview-title', tabindex: '-1' }, 'Replace the current draft?'), el('p', {}, 'Only your private draft will change. Review the replacement below; your saved answer stays unchanged. Undo is available until further editing or saving.'), previewText,
     el('div', { class: 'actions' }, previewConfirm, button('Keep my draft', () => { if (preview.isConnected) dismiss(null, true); }, { id: 'research-draft-cancel' })));
   const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'));
+  section.append(el('p', { id: 'research-freshness', class: age.recommendation.needsReview ? 'review-warning' : 'quiet' }, freshnessNotice(age)));
   ui.researchDraftSync = () => {
+    if (section.isConnected) {
+      const nextAge = researchFreshness(r);
+      if (JSON.stringify(nextAge.claims) !== JSON.stringify(age.claims)) {
+        age = nextAge;
+        const notice = section.querySelector('#research-freshness'); notice.textContent = freshnessNotice(age); notice.className = age.recommendation.needsReview ? 'review-warning' : 'quiet';
+        for (const item of section.querySelectorAll('[data-freshness-claim]')) item.textContent = claimFreshnessText(r.claims.find(c => c.id === item.dataset.freshnessClaim), age);
+        for (const item of section.querySelectorAll('[data-recommendation-badge]')) item.textContent = age.recommendation.needsReview || liveNode()?.researchStale ? 'Recommended option · needs review' : 'Recommended option';
+      }
+    }
     if (!proposal || !section.isConnected) return;
     const live = liveNode(), reason = unavailable(live);
     if (reason || proposal.stamp !== stamp(live)) dismiss(reason || 'Your draft changed. Review the replacement again; your text is retained.');
@@ -3150,7 +3174,7 @@ function renderResearch(node) {
   if (r.optionsVersion !== 1) section.append(el('p', { class: 'quiet' }, 'These older results do not include separate fit conditions.'));
   const findings = disclosure('research-findings', 'Findings and evidence');
   findings.append(el('p', {}, r.summary), el('p', { class: 'quiet' }, researchSettingsText(r.settings)));
-  const retrieval = source => !source.retrievedAt ? 'Retrieval time unknown.' : `${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt}. Redirect destination and publication date unknown.`;
+  const retrieval = source => `${!source.retrievedAt ? 'Retrieval time unknown.' : `${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt}. Redirect destination unknown.`}\n${sourceDateText(source)}`;
   const sourceLink = source => el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `${source.id ? source.id + ': ' : ''}${source.title}`);
   const statementSupport = (id, optionId, field, text) => {
     const support = r.support?.find(item => item.optionId === optionId && item.field === field && item.text === text);
@@ -3161,7 +3185,7 @@ function renderResearch(node) {
     detail.append(el('p', { class: 'quiet' }, 'Recorded associations are model interpretations. A page read confirms retrieval, not relevance, entailment or truth.'));
     if (!claims.length && !decisions.length) detail.append(el('p', {}, 'No claim or prior-context reference was recorded for this statement. Factual support is unknown.'));
     for (const claim of claims) {
-      const block = el('section', {}, el('h4', {}, `${claim.id}: ${claim.text}`), el('p', { class: 'quiet' }, claim.basis === 'sources' ? 'Source-linked model interpretation; not independently verified.' : claim.basis === 'reasoning' ? 'Model reasoning; factual support not established.' : 'Unknown support.'), el('p', {}, `Limitations: ${claim.limitations}`));
+      const block = el('section', {}, ageText(claim), el('h4', {}, `${claim.id}: ${claim.text}`), el('p', { class: 'quiet' }, claim.basis === 'sources' ? 'Source-linked model interpretation; not independently verified.' : claim.basis === 'reasoning' ? 'Model reasoning; factual support not established.' : 'Unknown support.'), el('p', {}, `Limitations: ${claim.limitations}`));
       for (const evidence of claim.evidence) {
         const source = r.sources.find(item => item.id === evidence.sourceId);
         block.append(el('p', {}, `Model paraphrase: ${evidence.paraphrase}`), sourceLink(source), el('p', { class: 'quiet' }, retrieval(source)));
@@ -3175,7 +3199,7 @@ function renderResearch(node) {
   if (r.claims) {
     findings.append(el('h3', {}, 'Claims and evidence'), el('p', { class: 'quiet' }, 'Selected model assertions, not an exhaustive check of this comparison. A page read does not verify a claim; supporting paraphrases are model interpretations.'));
     for (const claim of r.claims) {
-      const block = el('section', { class: 'research-claim', id: `claim-${claim.id}` }, el('h4', {}, `${claim.id}: ${claim.text}`), el('p', { class: 'basis' }, claim.basis === 'sources' ? 'Source-linked model interpretation' : claim.basis === 'reasoning' ? 'Model reasoning' : 'Unknown support'));
+      const block = el('section', { class: 'research-claim', id: `claim-${claim.id}` }, ageText(claim), el('h4', {}, `${claim.id}: ${claim.text}`), el('p', { class: 'basis' }, claim.basis === 'sources' ? 'Source-linked model interpretation' : claim.basis === 'reasoning' ? 'Model reasoning' : 'Unknown support'));
       const disclosure = el('details', {}, el('summary', {}, claim.evidence.length ? 'Inspect supporting evidence and limitations' : 'Inspect limitations'), el('p', {}, `Limitations: ${claim.limitations}`));
       for (const item of claim.evidence) {
         const source = r.sources.find(s => s.id === item.sourceId);
@@ -3199,7 +3223,7 @@ function renderResearch(node) {
   for (const [index, o] of r.options.entries()) {
     const identity = o.id ?? String(index);
     const option = el('section', { id: `research-option-${identity}`, class: 'option', ...(o.id ? { 'data-option-id': o.id } : {}) }, el('h3', {}, o.title));
-    if (chosen === o) option.append(el('span', { class: 'basis recommendation-badge', 'data-recommendation-badge': 'true' }, node.researchStale ? 'Recommended option · needs review' : 'Recommended option'));
+    if (chosen === o) option.append(el('span', { class: 'basis recommendation-badge', 'data-recommendation-badge': 'true' }, node.researchStale || age.recommendation.needsReview ? 'Recommended option · needs review' : 'Recommended option'));
     option.append(el('p', {}, o.description));
     if (r.optionsVersion === 1) option.append(el('p', { class: 'option-fit' }, el('strong', {}, 'Fits when: '), o.fit));
     option.append(el('p', { class: 'quiet' }, 'Explanation and fit: model judgment, not verified facts.'));
@@ -4980,6 +5004,8 @@ async function poll() {
     const next = response.status === 204 ? null : await response.json();
     if (!current()) return;
     if (next) apply(next);
+    const node = state.document?.nodes.find(item => item.id === selected);
+    if (node) { uiFor(node.id).researchDraftSync?.(); updateFollowupHistory(node); }
     stateCursor = nextCursor; pollFailures = 0; connectionStatus();
     await questionHelp.checkRetained();
     if (current() && $('brief-dialog').open) await requestBrief('poll');

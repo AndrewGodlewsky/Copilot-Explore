@@ -10,6 +10,7 @@ import { createDocument, addQuestions } from '../com.github.copilot/extensions/e
 import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { confirmAnswer } from './helpers/answer-change.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
+import { freshnessFindings, FRESHNESS_NOW } from './helpers/research-freshness.mjs';
 
 const comparison = { criteria: [{ id: 'effort', label: 'Coordination effort', priority: 'high' }] };
 const result = prepared => ({
@@ -36,6 +37,18 @@ async function fixture(t) {
   const accept = proposal => e.command('comparison-accept', { ...target, id: proposal.id, comparison: { criteria: proposal.comparison.criteria } });
   return { e, doc, dir, file, runs, target, review, start, settle, complete, accept };
 }
+
+test('an evidence age boundary makes a waiting comparison historical and prevents adoption', async t => {
+  const f = await fixture(t), next = structuredClone(f.e.doc); next.nodes[1].research = freshnessFindings(); await f.e.save(next);
+  let now = FRESHNESS_NOW; const clock = t.mock.method(Date, 'now', () => now);
+  try {
+    const proposal = await f.complete(), before = await readFile(f.file, 'utf8');
+    now += 86400000;
+    assert.equal(f.e.uiSnapshot().reconsideration.proposal.historical, true);
+    await assert.rejects(f.accept(proposal), /historical|changed|review|current/i);
+    assert.equal(await readFile(f.file, 'utf8'), before);
+  } finally { clock.mock.restore(); }
+});
 
 test('reconsideration reviews exact inputs and requires explicit transient adoption without changing saved research', async t => {
   const f = await fixture(t), before = await readFile(f.file, 'utf8'), reviewed = await f.review();

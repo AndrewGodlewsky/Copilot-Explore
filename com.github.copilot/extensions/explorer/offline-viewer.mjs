@@ -1,3 +1,4 @@
+import { claimFreshness, sourceDateObservations, researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './web/research-freshness.mjs';
 import { createHash } from 'node:crypto';
 import { effectiveKind, nodeStatus } from './web/answer-state.mjs';
 import { renderOfflineViewer } from './offline-viewer-runtime.mjs';
@@ -23,9 +24,9 @@ function researchProjection(r, nodeIds) {
     try { url = new URL(text(s.url, 2000)); } catch { throw Error('Invalid research source URL.'); }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw Error('Invalid research source URL.');
     const id = `s${i}`; if (s.id !== undefined) sourceIds.set(s.id, id);
-    return { id, title: text(s.title, 300), url: url.href, retrievedAt: s.retrievedAt === undefined || s.retrievedAt === null ? null : text(s.retrievedAt, 24), provenance: ['recorded-read', 'imported'].includes(s.provenance) ? s.provenance : 'unknown' };
+    return { ...(s.dateObservations !== undefined ? { dateObservations: sourceDateObservations(s.dateObservations) } : {}), id, title: text(s.title, 300), url: url.href, retrievedAt: s.retrievedAt === undefined || s.retrievedAt === null ? null : text(s.retrievedAt, 24), provenance: ['recorded-read', 'imported'].includes(s.provenance) ? s.provenance : 'unknown' };
   });
-  const claims = r.claims === undefined ? null : bounded(r.claims, 12, (c, i) => ({ id: `c${i}`, text: text(c.text, 1000), basis: c.basis, limitations: text(c.limitations, 1000),
+  const claims = r.claims === undefined ? null : bounded(r.claims, 12, (c, i) => ({ ...(c.freshness ? { freshness: claimFreshness(c.freshness) } : {}), id: `c${i}`, text: text(c.text, 1000), basis: c.basis, limitations: text(c.limitations, 1000),
     evidence: bounded(c.evidence, 3, e => { const sourceId = sourceIds.get(e.sourceId); if (!sourceId) throw Error('Unknown research source.'); return { sourceId, paraphrase: text(e.paraphrase, 1000) }; }) }));
   return { basis: r.basis, summary: text(r.summary, 5000),
     ...(r.limitations !== undefined ? { limitations: bounded(r.limitations, 12, (entry, i) => ({ id: `l${i}`, kind: text(entry.kind, 24), summary: text(entry.summary, 600), nextStep: text(entry.nextStep, 600), blocksRecommendation: entry.blocksRecommendation,
@@ -81,8 +82,16 @@ const style = `:root{font:16px/1.5 system-ui,sans-serif;color:#263238;background
 // HTML parsers normalize CRLF; hash the same LF bytes even from a Windows checkout.
 const script = `(${renderOfflineViewer.toString()})(JSON.parse(document.getElementById('viewer-data').textContent));`.replace(/\r\n?/g, '\n');
 const digest = value => createHash('sha256').update(value).digest('base64');
-export function viewerArtifact(snapshot) {
-  const data = JSON.stringify(snapshot).replace(/[<>&\u2028\u2029]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+export function viewerArtifact(snapshot, now = Date.now()) {
+  // Presentation is captured only after selection validation; time never changes preview digests.
+  const presentation = structuredClone(snapshot);
+  for (const node of presentation.nodes) if (node.research) {
+    const r = node.research, age = researchFreshness(r, now);
+    r.freshnessNotice = freshnessNotice(age) + ' This static export does not update or refresh evidence.';
+    for (const claim of r.claims ?? []) claim.freshnessText = claimFreshnessText(claim, age);
+    for (const source of r.sources) source.dateText = sourceDateText(source);
+  }
+  const data = JSON.stringify(presentation).replace(/[<>&\u2028\u2029]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
   const csp = `default-src 'none'; script-src 'sha256-${digest(script)}'; style-src 'sha256-${digest(style)}'; connect-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
   const content = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Explorer offline viewer</title><style>${style}</style></head><body><header><h1>Explorer — offline, read-only journey</h1><p>This file contains only the previewed selection. It cannot edit a journey, run AI or refresh research. No Copilot account or plugin is needed. Search and navigation stay local. Source links open the web only when you choose them.</p><p>Answer states describe user intent, not verification: Assumption is unverified, Tentative is provisional, Decided is a user decision. Needs review means recheck the answer. Importance, when recorded, is a historical model assessment of impact, not confidence or certainty. Unranked means no assessment was recorded.</p><p>Downstream impact unavailable in this export. This selection omits the complete relationship graph; historical importance is separate from the live map's computed impact.</p></header><main><div class="layout"><aside aria-label="Selected nodes"><label for="search">Search included content</label><input id="search" type="search" maxlength="1000"><p id="results" role="status" aria-live="polite"></p><ol id="node-list"></ol></aside><div><nav class="paging" aria-label="Read selected nodes"><button id="previous" type="button">Previous</button><button id="next" type="button">Next</button></nav><article id="detail" aria-label="Selected node"></article></div></div><noscript>Enable JavaScript to navigate this self-contained viewer. No network connection is required.</noscript></main><script id="viewer-data" type="application/json">${data}</script><script>${script}</script></body></html>`;
   if (Buffer.byteLength(content) > VIEWER_LIMITS.outputBytes) throw Error(limitMessage);

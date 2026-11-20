@@ -10,7 +10,7 @@ import { findNode } from './model.mjs';
 import { researchFraming } from './research.mjs';
 import { sameResearchModel, researchModelSummary } from './research-model.mjs';
 import { researchSettings, researchLimits } from './web/research-policy.mjs';
-import { prepareResearch, sameResearchSources, sameResearchDestination } from './research-context.mjs';
+import { prepareResearch, sameResearchSources, sameResearchDestination, sameReviewedResearchFreshness } from './research-context.mjs';
 
 export const REVIEW_RESPONSE_LIMIT = 1024 * 1024;
 export const REVIEW_TTL = 10 * 60 * 1000;
@@ -99,6 +99,7 @@ export class ResearchReview {
     if (review.prepared.projectCapture && (!review.prepared.projectFresh || !await explorer.projectContext.fresh(review.prepared.projectCapture))) throw new Error('Reviewed project files or working root changed or are unavailable. Explicitly refresh files and review before starting.');
     explorer.currentFollowup(current);
     if (explorer.closed || !sameResearchSources(review.prepared.dependencies, current) || ((regeneration || adrQuestions) && !sameResearchSources(review.prepared.dependencies, explorer.doc)) || (!challenge && !handoff && !adrScope && !regeneration && !adrQuestions && !adrDraft && !sameResearchDestination(review.prepared.dependencies, current))) throw new Error('Reviewed sources or saved research changed. Refresh and review context before starting.');
+    if (!sameReviewedResearchFreshness(review.prepared)) throw Error('Reviewed evidence freshness changed. Refresh the review before starting.');
     if (adrDraft) {
       const captured = captureAdrDraft(review.prepared), scenario = review.prepared.context.scenario;
       if (adrDraftFreshness(captured, current, scenario) !== 'current' || adrDraftFreshness(captured, explorer.doc, scenario) !== 'current') throw Error('Reviewed ADR draft inputs changed. Refresh and review again.');

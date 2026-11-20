@@ -487,6 +487,20 @@ try {
         if (screenshots && count === 2) await page.screenshot({ path: join(output, `${scenario.name}-no-recommendation.png`) });
         if (screenshots && !count) await page.screenshot({ path: join(output, `${scenario.name}-limited-options.png`) });
       }
+      const dated = structuredClone(explorer.doc), datedResearch = structuredClone(parent.research);
+      datedResearch.sources[0].retrievedAt = '2020-01-02T00:00:00.000Z';
+      datedResearch.sources[0].dateObservations = [{ kind: 'published', text: 'Published: 2020-01-01' }, { kind: 'ambiguous', text: '<img src=x onerror=bad()> 中文 🌿 ' + 'λ'.repeat(100) }];
+      datedResearch.claims.find(c => c.id === 'contrary').freshness = { type: 'price-availability', reason: 'Access schedules can change.', version: null };
+      datedResearch.support.find(s => s.field === 'recommendation').claimIds = ['contrary'];
+      dated.nodes.find(n => n.id === parent.id).research = datedResearch; await explorer.save(dated);
+      await page.waitForFunction(() => document.getElementById('research-freshness')?.textContent.includes('Recommendation needs evidence review'));
+      expect((await badges.innerText()).includes('needs review'), scenario.name + ': expired material evidence qualifies the old recommendation', {});
+      const ageSupport = page.locator('#support-recommendation'), ageSummary = page.locator('#support-recommendation-summary');
+      await ageSummary.focus(); await page.keyboard.press('Space'); await settle(page);
+      expect((await ageSupport.innerText()).includes('Review needed') && (await ageSupport.innerText()).includes('Published: unknown; updated: unknown') && await page.locator('.research img').count() === 0, scenario.name + ': date ambiguity and old receipt remain distinct and literal', {});
+      await ageSummary.scrollIntoViewIfNeeded(); await inspectDrawer(page, scenario.name + '/freshness');
+      if (screenshots) await page.screenshot({ path: join(output, scenario.name + '-freshness.png') });
+      expect(requests === callsBeforeSupport && await editor.inputValue() === 'Keep this private draft', scenario.name + ': freshness inspection preserves draft and starts no retrieval', {});
       const legacy = structuredClone(explorer.doc), legacyResult = structuredClone(parent.research); delete legacyResult.recommendationAssessment; delete legacyResult.support; delete legacyResult.limitations;
       legacy.nodes.find(n => n.id === parent.id).research = legacyResult; await explorer.save(legacy);
       await page.locator('#recommendation-compatibility').waitFor();

@@ -51,7 +51,7 @@ function evidenceText(item) {
 export async function runCase(item, { guidance = '' } = {}) {
   if (typeof guidance !== 'string' || Buffer.byteLength(guidance) > maxGuidance) throw new Error('Candidate guidance must be at most 32 KiB of UTF-8.');
   const started = performance.now(), doc = fixtureMap(item), target = doc.nodes[2], before = JSON.stringify(doc);
-  const framing = researchFraming(doc), addition = guidance ? `\nOFFLINE CANDIDATE GUIDANCE\n${guidance}` : '';
+  const framing = researchFraming(doc, undefined, Date.parse(asOf)), addition = guidance ? `\nOFFLINE CANDIDATE GUIDANCE\n${guidance}` : '';
   const prepared = prepareResearch(doc, target.id, { ...framing, instructions: framing.instructions + addition });
   const output = scriptedAnswer(item, item.condition !== 'missing'), unread = scriptedAnswer(item, true);
   const followupOutput = { answer: `Synthetic expectation: ${item.followup.expectation}`, uncertainty: 'Scripted reasoning, not evaluated model quality.',
@@ -88,7 +88,7 @@ export async function runCase(item, { guidance = '' } = {}) {
       } };
     }
   } } });
-  const researcher = createResearcher(parent, { runtime, resolve: async () => [{ address: '93.184.216.34' }],
+  const researcher = createResearcher(parent, { runtime, now: () => Date.parse(asOf), resolve: async () => [{ address: '93.184.216.34' }],
     usageRecorder: async () => ({ record() {}, async flush() {}, async finish(status) { statuses.push(status); } }) });
   try {
     const result = await researcher.run(prepared.context, { prepared });
@@ -103,7 +103,7 @@ export async function runCase(item, { guidance = '' } = {}) {
     const followupDoc = structuredClone(doc);
     followupDoc.nodes[2].research = { ...result, sources: result.sources.map(source => ({ ...source, retrievedAt: asOf })) };
     const followupBefore = JSON.stringify(followupDoc);
-    const followup = prepareFollowup(followupDoc, target.id, { question: item.followup.question, hypothetical: item.followup.hypothetical });
+    const followup = prepareFollowup(followupDoc, target.id, { question: item.followup.question, hypothetical: item.followup.hypothetical }, { now: Date.parse(asOf) });
     expected = { ...followup, instructions: followup.instructions + addition, bytes: followup.bytes + Buffer.byteLength(addition) };
     assert.ok(expected.bytes <= expected.limit, 'Candidate follow-up exceeds its input budget');
     assert.equal(expected.followup.hypothetical, item.followup.hypothetical);

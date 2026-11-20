@@ -116,6 +116,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       if (current.modelId !== model.id || !sameAccount(auth, parentAuth) || !sameAccount(auth, currentHelperAuth)) throw fail('The Copilot account or model changed while research was starting. Try again.');
       await usage.captureModel?.(current.modelId); check();
       stage(work.stage);
+      work.validateBeforeSend?.();
       const response = await session.sendAndWait({ prompt: work.prompt }, reviewedResearch ? remaining() : 180000);
       check(); stage('Checking result');
       const result = work.parse(response?.data?.content); outcome = 'completed'; return result;

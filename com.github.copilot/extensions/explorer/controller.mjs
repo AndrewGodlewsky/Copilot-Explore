@@ -55,7 +55,7 @@ import { HELP_OPERATIONS, helpContext, helpText, sameHelpContext } from './quest
 import { ANSWER_CONTEXT_GUIDANCE, effectiveAnswerState, isQuestion } from './web/answer-state.mjs';
 import { effectiveMode, validMode, modePolicy } from './web/modes.mjs';
 import { researchFraming } from './research.mjs';
-import { contextScope, prepareResearch, prepareRegeneration, sameResearchSources, sameResearchDestination } from './research-context.mjs';
+import { contextScope, prepareResearch, prepareRegeneration, sameResearchSources, sameResearchDestination, sameReviewedResearchFreshness } from './research-context.mjs';
 import { ResearchReview } from './research-review.mjs';
 import { visualExport } from './visual-export.mjs';
 import { viewerSnapshot, viewerDigest, viewerArtifact } from './offline-viewer.mjs';
@@ -1046,7 +1046,7 @@ export class Explorer {
   reconsiderationFresh(value, doc = this.doc) {
     const node = doc?.nodes.find(item => item.id === value?.nodeId);
     if (!value || value.historical || !node || node.researchStale || value.journey !== (this.activeKey ?? doc.id)) return false;
-    return this.scenarioPreferences.matches(value.scenarioPolicy) && sameResearchSources(value.dependencies, doc) && sameResearchDestination(value.dependencies, doc);
+    return this.scenarioPreferences.matches(value.scenarioPolicy) && sameResearchSources(value.dependencies, doc) && sameResearchDestination(value.dependencies, doc) && sameReviewedResearchFreshness(value);
   }
   syncReconsideration(doc = this.doc) {
     for (const role of ['current', 'proposal']) {
@@ -1158,6 +1158,7 @@ export class Explorer {
         await this.assertScenarioPolicy(scenarioPolicy);
         if (!active()) return;
         if (!this.researcher) throw new Error('Research requires the installed Copilot desktop SDK.');
+        if (!sameReviewedResearchFreshness(prepared)) throw Error('Reviewed evidence freshness changed while queued. Refresh the review before starting.');
         return this.researcher[prepared.comparison ? 'runReconsideration' : prepared.followup ? 'runFollowup' : 'run'](prepared.context, { prepared, signal: controller.signal, onProgress: progress => {
           if (active()) this.pending.progress = progress;
         } });
@@ -1172,6 +1173,7 @@ export class Explorer {
         this.currentFollowup(current);
         if (!sameResearchSources(work.dependencies, current)) throw new Error('The saved research source context changed. The result was discarded; refresh the journey and research again.');
         if (!sameResearchDestination(work.dependencies, current)) throw new Error('Saved research changed in another canvas. The conflicting result was discarded; refresh the journey.');
+        if (!sameReviewedResearchFreshness(prepared)) throw Error('Evidence freshness changed during research. Prior findings were kept; review current evidence again.');
         if (!active()) return;
         if (prepared.comparison) {
           if (findNode(current, nodeId).researchStale) throw Error('Research became stale while reconsidering. Review current research again.');

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.120",
+    "summary": "See when research evidence needs review, with separate read and source dates and topic-specific freshness guidance. Keep historical findings readable, review an explicit refresh, and preserve your answer. Follow-ups and comparisons cannot silently renew expired evidence. Shared views retain date labels and explain when freshness was evaluated."
+  },
+  {
     "version": "0.1.119",
     "summary": "Inspect research conflicts and evidence gaps beside affected choices and claims. When no recommendation is justified, see a practical next question or evidence to obtain. Keep your answer independent, preserve limitations in saved maps and exports, and retain unresolved blockers when reconsidering hypothetical priorities."
   },

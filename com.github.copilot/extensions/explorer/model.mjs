@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { DecisionImpact } from './web/decision-impact.mjs';
 import { savedDigest, reviewCauses, addReviewCause, reviewCauseKey } from './review-causes.mjs';
 import { researchSettings, researchSettingsText } from './web/research-policy.mjs';
+import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice, claimFreshness, sourceDateObservations } from './web/research-freshness.mjs';
 import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, effectiveKind, nodeStatus } from './web/answer-state.mjs';
 import { effectiveMode, validMode, MODES } from './web/modes.mjs';
 import { validateRevisit } from './web/revisit.mjs';
@@ -158,8 +159,11 @@ export function researchEvidence(value) {
   const sources = list(value.sources, 'sources', 15, source => {
     const url = new URL(text(source?.url, 'Source URL', 2000));
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Sources must be public HTTP(S) URLs.');
-    if (!hasClaims) return { title: text(source.title, 'Source title', 300), url: url.href };
-    evidenceKeys(source, ['id', 'title', 'url', 'retrievedAt', 'provenance']);
+    if (!hasClaims) {
+      if (Object.hasOwn(source, 'dateObservations')) throw Error('Source date observations require structured claims.');
+      return { title: text(source.title, 'Source title', 300), url: url.href };
+    }
+    evidenceKeys(source, ['id', 'title', 'url', 'retrievedAt', 'provenance', 'dateObservations']);
     url.hash = '';
     text(url.href, 'Canonical source URL', 2000);
     if (sourceUrls.has(url.href)) throw new Error('Duplicate research source URL.');
@@ -167,14 +171,15 @@ export function researchEvidence(value) {
     const id = evidenceId(source.id, sourceIds, 'source');
     if (source.retrievedAt !== null && (typeof source.retrievedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(source.retrievedAt) || !Number.isFinite(Date.parse(source.retrievedAt)) || new Date(source.retrievedAt).toISOString() !== source.retrievedAt)) throw new Error('Invalid source retrieval time.');
     if (!['recorded-read', 'imported'].includes(source.provenance) || source.provenance === 'recorded-read' && !source.retrievedAt) throw new Error('Invalid source provenance.');
-    return { id, title: text(source.title, 'Source title', 300), url: url.href, retrievedAt: source.retrievedAt, provenance: source.provenance };
+    return { id, title: text(source.title, 'Source title', 300), url: url.href, retrievedAt: source.retrievedAt, provenance: source.provenance,
+      ...(Object.hasOwn(source, 'dateObservations') ? { dateObservations: sourceDateObservations(source.dateObservations) } : {}) };
   });
   if (value.basis === 'sources' && !sources.length) throw new Error('Sourced research needs at least one consulted source.');
   let claims;
   if (hasClaims) {
     if (value.basis === 'reasoning' && sources.length) throw new Error('Reasoning research cannot contain sources.');
     claims = list(value.claims, 'claims', 12, claim => {
-      evidenceKeys(claim, ['id', 'text', 'basis', 'evidence', 'limitations']);
+      evidenceKeys(claim, ['id', 'text', 'basis', 'evidence', 'limitations', 'freshness']);
       const id = evidenceId(claim.id, claimIds, 'claim'), refs = new Set();
       if (!['sources', 'reasoning', 'unknown'].includes(claim.basis)) throw new Error('Invalid claim basis.');
       const evidence = list(claim.evidence, 'claim evidence', 3, item => {
@@ -184,7 +189,8 @@ export function researchEvidence(value) {
         return { sourceId: item.sourceId, paraphrase: text(item.paraphrase, 'Supporting paraphrase', 1000) };
       });
       if ((claim.basis === 'sources') !== (evidence.length > 0)) throw new Error('Claim basis does not match its evidence.');
-      return { id, text: text(claim.text, 'Claim', 1000), basis: claim.basis, evidence, limitations: text(claim.limitations, 'Claim limitations', 1000) };
+      return { id, text: text(claim.text, 'Claim', 1000), basis: claim.basis, evidence, limitations: text(claim.limitations, 'Claim limitations', 1000),
+        ...(Object.hasOwn(claim, 'freshness') ? { freshness: claimFreshness(claim.freshness) } : {}) };
     });
     if (!claims.length) throw new Error('Research needs at least one claim.');
   }
@@ -675,7 +681,7 @@ export function toMarkdown(doc) {
       if (r.claims) {
         lines.push('#### Claims and evidence', '', 'Model interpretation of support; a recorded page read does not verify a claim.', '');
         for (const claim of r.claims) {
-          lines.push(`**${claim.id}: ${md(claim.text)}**`, '', `${claim.basis === 'sources' ? 'Source-linked model interpretation' : claim.basis === 'reasoning' ? 'Model reasoning' : 'Unknown support'}.`, '', `Limitations: ${md(claim.limitations)}`, '');
+          lines.push(md(claimFreshnessText(claim, researchFreshness(r))), '', `**${claim.id}: ${md(claim.text)}**`, '', `${claim.basis === 'sources' ? 'Source-linked model interpretation' : claim.basis === 'reasoning' ? 'Model reasoning' : 'Unknown support'}.`, '', `Limitations: ${md(claim.limitations)}`, '');
           lines.push(...limitationRefs(entry => entry.claimIds.includes(claim.id)));
           for (const item of claim.evidence) {
             const source = r.sources.find(s => s.id === item.sourceId);
@@ -684,7 +690,8 @@ export function toMarkdown(doc) {
         }
       } else lines.push('Claim-level support and historical retrieval times unknown for this legacy result.', '');
       lines.push('Consulted sources (a read does not establish claim support):', '');
-      for (const source of r.sources) lines.push(`- ${source.id ? source.id + ': ' : ''}[${md(source.title)}](<${source.url.replace(/>/g, '%3E').replace(/</g, '%3C')}>) — ${source.retrievedAt ? `${source.provenance === 'imported' ? 'Imported metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt}` : 'Retrieval time unknown'}.`);
+      lines.push(md(freshnessNotice(researchFreshness(r))), '');
+      for (const source of r.sources) lines.push(md(sourceDateText(source)), '', `- ${source.id ? source.id + ': ' : ''}[${md(source.title)}](<${source.url.replace(/>/g, '%3E').replace(/</g, '%3C')}>) — ${source.retrievedAt ? `${source.provenance === 'imported' ? 'Imported metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt}` : 'Retrieval time unknown'}.`);
     }
   }
   // Only a fixed heading may precede the appendix, including when the topic is multiline.

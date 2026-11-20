@@ -18,6 +18,7 @@ const assets = new Map([
   ['layout.mjs', ['layout.mjs', 'text/javascript; charset=utf-8']],
   ['minimap.mjs', ['minimap.mjs', 'text/javascript; charset=utf-8']],
   ['voice.mjs', ['voice.mjs', 'text/javascript; charset=utf-8']],
+  ['research-freshness.mjs', ['research-freshness.mjs', 'text/javascript; charset=utf-8']],
   ['answer-state.mjs', ['answer-state.mjs', 'text/javascript; charset=utf-8']],
   ['revisit.mjs', ['revisit.mjs', 'text/javascript; charset=utf-8']],
   ['search.mjs', ['search.mjs', 'text/javascript; charset=utf-8']],

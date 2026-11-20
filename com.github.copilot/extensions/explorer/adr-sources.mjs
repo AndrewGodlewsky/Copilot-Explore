@@ -1,3 +1,4 @@
+import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './web/research-freshness.mjs';
 import { savedDigest } from './review-causes.mjs';
 import { framing, record } from './research-context.mjs';
 import { selectedInputs } from './implementation-handoff.mjs';
@@ -134,8 +135,10 @@ export function adrSourcesMarkdown(value, managedId) {
     const evidence = c.evidence.find(e => e.nodeId === r.id);
     if (evidence) {
       lines.push(`Recorded research basis: ${md(evidence.basis)}.`, '');
-      for (const source of evidence.sources) lines.push(`- ${md(source.id ?? 'Legacy source')}: ${md(source.title)} — ${md(source.url)}. Captured provenance: ${md(source.provenance ?? 'unknown')}; recorded retrieval: ${md(source.retrievedAt ?? 'unknown')}.`, '');
+      lines.push(md(freshnessNotice(researchFreshness(evidence))), '');
+      for (const source of evidence.sources) lines.push(md(sourceDateText(source)), '', `- ${md(source.id ?? 'Legacy source')}: ${md(source.title)} — ${md(source.url)}. Captured provenance: ${md(source.provenance ?? 'unknown')}; recorded retrieval: ${md(source.retrievedAt ?? 'unknown')}.`, '');
       for (const claim of evidence.claims ?? []) {
+      lines.push(md(claimFreshnessText(claim, researchFreshness(evidence))), '');
         lines.push(`Claim ${md(claim.id)} (${md(claim.basis)}): ${md(claim.text)}`, '', `Limitations: ${md(claim.limitations || 'None recorded; this does not establish reliability.')}`, '');
         for (const support of claim.evidence) lines.push(`Recorded support ${md(support.sourceId)}: ${md(support.paraphrase)}`, '');
       }

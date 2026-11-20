@@ -9,9 +9,11 @@ import { createDocument, addQuestions } from '../com.github.copilot/extensions/e
 import { researchSettings, researchLimits } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { prepareFollowup } from '../com.github.copilot/extensions/explorer/research-followup.mjs';
 import { operationEvidence } from '../com.github.copilot/extensions/explorer/operation-recovery.mjs';
+import { createUsageRecorder } from '../com.github.copilot/extensions/explorer/research-usage.mjs';
 import { recommendationFindings } from './helpers/research-recommendation.mjs';
 import { supportFindings } from './helpers/research-support.mjs';
 import { limitationFindings } from './helpers/research-limitations.mjs';
+import { freshnessFindings, FRESHNESS_NOW } from './helpers/research-freshness.mjs';
 import { answerNode, addDirection } from '../com.github.copilot/extensions/explorer/model.mjs';
 
 test('owned research follow-up sends reviewed strings, credits prior and current sources separately and attributes retained receipts', async t => {
@@ -125,7 +127,7 @@ async function fixture(t, options = {}) {
       }, sendAndWait: async (input, timeout) => { calls.sends++; calls.prompt = input.prompt; calls.timeout = timeout; await options.send?.(calls); return { data: { content: options.content ?? JSON.stringify(options.result ?? result) } }; } };
     }
   } } });
-  const researcher = createResearcher(parent, { usageDirectory: join(dir, 'usage'), runtime, ...(options.usageRecorder ? { usageRecorder: options.usageRecorder } : {}), ...(options.clock ? { clock: options.clock } : {}), ...(options.resolve ? { resolve: options.resolve } : {}), ...(options.stopTimeoutMs ? { stopTimeoutMs: options.stopTimeoutMs } : {}) });
+  const researcher = createResearcher(parent, { usageDirectory: join(dir, 'usage'), runtime, ...(options.usageRecorder ? { usageRecorder: options.usageRecorder } : {}), ...(options.clock ? { clock: options.clock } : {}), ...(options.now ? { now: options.now } : {}), ...(options.resolve ? { resolve: options.resolve } : {}), ...(options.stopTimeoutMs ? { stopTimeoutMs: options.stopTimeoutMs } : {}) });
   t.after(async () => {
     await researcher.close();
     if (calls.client) { const owned = dirname(calls.client.workingDirectory); assert.equal(dirname(resolve(owned)), resolve(tmpdir())); assert.match(owned, /explorer-research-/); await rm(owned, { recursive: true, force: true }); }
@@ -251,6 +253,83 @@ test('cancelling during startup never sends and stops the owned client', async t
   const { researcher, calls } = await fixture(t, { start: () => controller.abort() });
   await assert.rejects(researcher.run(context, { signal: controller.signal }), /cancelled/);
   assert.equal(calls.sends, 0); assert.equal(calls.stops, 1);
+});
+
+test('evidence age changing during startup or awaited model accounting stops before any inference', async t => {
+  for (const phase of ['startup', 'accounting']) {
+    const doc = createDocument('Age boundary'), [node] = addQuestions(doc, doc.rootId, [{ question: 'Current access?', category: 'Access' }]); node.research = freshnessFindings();
+    let now = FRESHNESS_NOW + 86400000 - 1;
+    const prepared = prepareFollowup(doc, node.id, { question: 'Why?', hypothetical: false }, { now });
+    const f = await fixture(t, { now: () => now, start: () => { if (phase === 'startup') now++; },
+      usageRecorder: async (...args) => { const recorder = await createUsageRecorder(...args); return { ...recorder, async captureModel(id) { await recorder.captureModel(id); if (phase === 'accounting') now++; } }; } });
+    await assert.rejects(f.researcher.runFollowup(prepared.context, { prepared }), /freshness.*changed/i);
+    assert.equal(f.calls.sends, 0); assert.equal(f.calls.stops, 1);
+  }
+});
+
+test('source date labels bind to the first correlated successful read without retaining full page text', async t => {
+  const raw = freshnessFindings('durable-concept'), source = raw.sources[0]; let now = FRESHNESS_NOW;
+  const f = await fixture(t, { result: raw, now: () => now, resolve: async () => [{ address: '93.184.216.34' }], send: async ({ config }) => {
+    const first = { toolName: 'web_fetch', toolCallId: 'first-date', toolArgs: { url: source.url } };
+    await config.hooks.onPreToolUse(first);
+    config.hooks.onPostToolUse({ ...first, toolResult: { resultType: 'success', textResultForLlm: 'PRIVATE_PAGE_BODY\nUpdated: 2026-11-20\nOnly the short label is retained.' } });
+    now += 1000;
+    const second = { ...first, toolCallId: 'second-date' }; await config.hooks.onPreToolUse(second);
+    config.hooks.onPostToolUse({ ...second, toolResult: { resultType: 'success', textResultForLlm: 'Updated: 2026-11-21' } });
+  } });
+  const output = await f.researcher.run(context);
+  assert.equal(output.sources[0].retrievedAt, new Date(FRESHNESS_NOW).toISOString());
+  assert.deepEqual(output.sources[0].dateObservations, source.dateObservations);
+  assert.doesNotMatch(JSON.stringify(output), /PRIVATE_PAGE_BODY|Only the short label/);
+});
+
+test('unobserved, later-read and over-budget date labels cannot become supported source dates', async t => {
+  for (const mode of ['unobserved', 'later-read', 'page-limit', 'request-limit']) {
+    const raw = freshnessFindings('durable-concept'), source = raw.sources[0];
+    const f = await fixture(t, { result: raw, now: () => FRESHNESS_NOW, resolve: async () => [{ address: '93.184.216.34' }], send: async ({ config }) => {
+      const read = async (id, url, text) => { const input = { toolName: 'web_fetch', toolCallId: id, toolArgs: { url } }; await config.hooks.onPreToolUse(input); config.hooks.onPostToolUse({ ...input, toolResult: { resultType: 'success', textResultForLlm: text } }); };
+      if (mode === 'request-limit') for (let i = 0; i < 16; i++) await read(`filler-${i}`, `https://example.com/filler-${i}`, 'x'.repeat(65536));
+      await read('date-page', source.url, mode === 'request-limit' ? source.dateObservations[0].text : mode === 'page-limit' ? 'x'.repeat(65536) + source.dateObservations[0].text : 'No publication date is available.');
+      if (mode === 'later-read') await read('later', source.url, source.dateObservations[0].text);
+    } });
+    await assert.rejects(f.researcher.run(context), /date|invalid comparison/, mode);
+  }
+});
+
+test('research rejects a current winner grounded in an expired volatile premise but retains honest abstention', async t => {
+  for (const abstain of [false, true]) {
+    const raw = freshnessFindings(); raw.sources[0].dateObservations[0].text = 'Updated: 2020-01-01';
+    if (abstain) {
+      raw.recommendationAssessment.optionId = null; raw.recommendation = 'Obtain the current schedule before choosing.';
+      raw.support[0].text = raw.recommendation;
+      raw.limitations = [{ id: 'expired', kind: 'missing-evidence', summary: 'The schedule is historical.', claimIds: ['access'], optionIds: [], decisionIds: [], blocksRecommendation: true, nextStep: 'Obtain the current schedule.' }];
+    }
+    const f = await fixture(t, { result: raw, now: () => FRESHNESS_NOW, resolve: async () => [{ address: '93.184.216.34' }], send: async ({ config }) => {
+      const input = { toolName: 'web_fetch', toolCallId: 'old-page', toolArgs: { url: raw.sources[0].url } }; await config.hooks.onPreToolUse(input);
+      config.hooks.onPostToolUse({ ...input, toolResult: { resultType: 'success', textResultForLlm: raw.sources[0].dateObservations[0].text } });
+    } });
+    if (!abstain) await assert.rejects(f.researcher.run(context), /freshness|current|outdated/i);
+    else { const output = await f.researcher.run(context); assert.equal(output.recommendationAssessment.optionId, null); assert.equal(output.claims.length, 1); assert.deepEqual(output.limitations, raw.limitations); }
+  }
+});
+
+test('follow-up preserves prior date labels and validates only actually read new date observations', async t => {
+  for (const observed of [true, false]) {
+    const doc = createDocument('Date followup'); const [node] = addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Access' }]); node.research = freshnessFindings('durable-concept');
+    const prepared = prepareFollowup(doc, node.id, { question: 'Explain the historical schedule.', hypothetical: false }, { now: FRESHNESS_NOW });
+    const raw = { answer: 'Historical schedules remain conditional.', uncertainty: 'Not current verification.', claims: [{ ...node.research.claims[0], evidence: [{ sourceId: 'old', paraphrase: 'Prior schedule' }, { sourceId: 'new', paraphrase: 'Another schedule' }] }],
+      sources: [{ id: 'old', prior: { origin: 'original', sourceId: 'host' } }, { id: 'new', title: 'New read', url: 'https://example.com/new', dateObservations: [{ kind: 'published', text: 'Published: 2026-11-19' }] }] };
+    const f = await fixture(t, { result: raw, now: () => FRESHNESS_NOW, resolve: async () => [{ address: '93.184.216.34' }], send: async ({ config }) => {
+      const input = { toolName: 'web_fetch', toolCallId: 'new-date', toolArgs: { url: raw.sources[1].url } }; await config.hooks.onPreToolUse(input);
+      config.hooks.onPostToolUse({ ...input, toolResult: { resultType: 'success', textResultForLlm: observed ? raw.sources[1].dateObservations[0].text : 'Undated response' } });
+    } });
+    if (!observed) await assert.rejects(f.researcher.runFollowup(prepared.context, { prepared }), /date|source/i);
+    else {
+      const output = await f.researcher.runFollowup(prepared.context, { prepared });
+      assert.deepEqual(output.sources[0].dateObservations, node.research.sources[0].dateObservations); assert.equal(output.sources[0].evidenceOrigin.origin, 'original');
+      assert.deepEqual(output.sources[1].dateObservations, raw.sources[1].dateObservations); assert.equal(output.sources[1].retrievedAt, new Date(FRESHNESS_NOW).toISOString());
+    }
+  }
 });
 
 test('unread citations are rejected; successful page reads are required for sourced findings', async t => {

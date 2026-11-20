@@ -30,6 +30,7 @@ import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, 
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 
 import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/web/research-review-client.mjs';
+import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from '../com.github.copilot/extensions/explorer/web/research-freshness.mjs';
 import { researchSettingsText } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from '../com.github.copilot/extensions/explorer/web/revisit.mjs';
 import { NextQuestion } from '../com.github.copilot/extensions/explorer/web/next-question.mjs';
@@ -62,6 +63,7 @@ export async function measure(phases, name, operation, work, { count = samples, 
 }
 
 const imports = [
+  "import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './research-freshness.mjs';",
   "import { reviewQueue, reviewContext } from './review-queue.mjs';",
   "import { attachDashboard } from './dashboard.mjs';",
   "import { attachMinimap } from './minimap.mjs';",
@@ -109,7 +111,7 @@ export async function domFixture(document) {
       url === 'api/voice' ? { ready: false, error: 'Disabled in synthetic benchmark.' } : {};
     return new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
   };
-  Object.assign(window, { DecisionImpact, impactPath, decisionImpactKey, criticalPaths, searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, attachDashboard, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
+  Object.assign(window, { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice, DecisionImpact, impactPath, decisionImpactKey, criticalPaths, searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, attachDashboard, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
     ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   Object.assign(window, { reviewQueue, reviewContext, CommentsClient, ReviewHandoffsClient, PortableReferenceClient, AdrSourcesClient, ChangeSummaryClient });
   const source = imports.reduce((text, statement) => text.replace(statement, ''), appScript)

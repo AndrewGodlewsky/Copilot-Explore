@@ -29,10 +29,10 @@ for (const node of [parent, answered]) addQuestions(doc, node.id, [
 answerNode(doc, answered.id, 'Use the community center cupboard. Keep a spare key with two nearby neighbors and review this arrangement after the first month.', 'needs-evidence');
 answered.review = true;
 answered.revisit = { date: '2020-01-01', condition: 'After the first month', acknowledgedAt: null };
-parent.research = { basis: 'reasoning', summary: 'Synthetic saved options for layout checks.', options: [
-  { title: 'A small shared cupboard', description: '日本語 🌿 A long explanation with an unbroken reference: ' + 'abcdefghλ'.repeat(32), pros: ['Simple handovers'], cons: ['Limited availability'] },
-  { title: 'Several storage locations', description: 'Compare another approach while keeping a private answer draft.', pros: ['Nearby access'], cons: ['More coordination'] },
-], recommendation: 'Consider a small pilot first.', uncertainty: 'Synthetic fixture; no external verification.', sources: [] };
+parent.research = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic saved options for layout checks.', options: [
+  { id: 'cupboard', title: 'A small shared cupboard', description: '日本語 🌿 A long explanation with an unbroken reference: ' + 'abcdefghλ'.repeat(32), fit: 'When one location can serve the neighborhood.', proposedAnswer: 'I will try a shared cupboard.', pros: ['Simple handovers'], cons: ['Limited availability'], details: [{ label: 'Review', value: 'Review access after one month.' }] },
+  { id: 'distributed', title: 'Several storage locations', description: 'Compare another approach while keeping a private answer draft.', fit: 'When nearby access matters more than simple coordination.', proposedAnswer: 'I will arrange several nearby storage locations.', pros: ['Nearby access'], cons: ['More coordination'] },
+], recommendation: 'Consider a small pilot first.', uncertainty: 'Synthetic fixture; no external verification.', sources: [], claims: [{ id: 'access', text: 'Local access is unconfirmed.', basis: 'unknown', evidence: [], limitations: 'Synthetic fixture; no real evidence.' }] };
 validateDocument(doc); await writeFile(file, JSON.stringify(doc));
 let requests = 0, voiceReady = false, voiceJob;
 const explorer = await new Explorer({ file, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; } }).load();
@@ -227,6 +227,18 @@ try {
       expect(researchGeometry.scrollWidth <= researchGeometry.clientWidth + 1 && researchGeometry.pageWidth <= researchGeometry.viewport + 1, `${scenario.name}: long Unicode research stays within the drawer and page`, researchGeometry);
       expect(scenario.width >= 760 ? researchGeometry.conversation.left >= researchGeometry.results.right && Math.abs(researchGeometry.conversation.top - researchGeometry.results.top) < 1 : researchGeometry.conversation.top >= researchGeometry.results.bottom, `${scenario.name}: conversation uses the approved responsive placement`, researchGeometry);
       await page.locator('#question-drawer-size').click(); await settle(page); await inspectDrawer(page, `${scenario.name}/research-expanded`);
+      const optionOrder = await page.evaluate(() => {
+        const options = [...document.querySelectorAll('.research .option')], findings = document.getElementById('research-findings');
+        return { ids: options.map(o => o.dataset.optionId), first: !!(options.at(-1).compareDocumentPosition(findings) & Node.DOCUMENT_POSITION_FOLLOWING), deepOpen: findings.open, text: options[0].textContent };
+      });
+      expect(optionOrder.ids.join(',') === 'cupboard,distributed' && optionOrder.first && !optionOrder.deepOpen && optionOrder.text.includes('Fits when'), `${scenario.name}: concise identified options precede closed deeper findings`, optionOrder);
+      await page.locator('#option-details-cupboard-summary').focus(); await page.keyboard.press('Enter');
+      expect(await page.locator('#option-details-cupboard').evaluate(el => el.open), `${scenario.name}: option details open by keyboard`, {});
+      await page.keyboard.press('Enter');
+      await page.locator('#question-tools-body').evaluate(el => { el.scrollTop = 0; }); await settle(page);
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-answer-options.png`) });
+      await page.locator('#research-option-cupboard').scrollIntoViewIfNeeded(); await settle(page);
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-option-content.png`) });
       const composer = await page.locator('#followup-question').elementHandle();
       await page.locator('#followup-question').fill('Keep my question 日本語 🌿');
       await page.locator('#followup-question').press('Home'); await page.locator('#followup-question').press('Shift+ArrowRight');
@@ -274,6 +286,19 @@ try {
       expect(await page.locator('#research-review-dialog').evaluate(el => !el.open) && await page.locator('#research-request').evaluate(el => el === document.activeElement), `${scenario.name}: cancelling review restores its trigger focus`, {});
       expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: research review preserves the same draft editor`, {});
       expect(explorer.pending === null, `${scenario.name}: context review starts no model operation`, {});
+      for (const count of [0, 1]) {
+        const next = structuredClone(explorer.doc), limited = structuredClone(parent.research);
+        limited.options.length = count; limited.optionsLimit = 'Local access is unconfirmed; additional choices would be speculative.';
+        if (!count) limited.recommendation = 'Confirm local access before choosing.';
+        next.nodes.find(n => n.id === parent.id).research = limited; await explorer.save(next);
+        await page.waitForFunction(count => document.querySelectorAll('.research .option').length === count && !!document.getElementById('research-options-limit'), count);
+        expect(await page.locator('#option-comparison').count() === 0 && (count || await page.locator('#use-recommendation').count() === 0), `${scenario.name}: sparse research has no invented comparison or empty-result draft winner`, { count });
+        expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: sparse result keeps the same authored draft`, { count });
+        await page.locator('#research-options-limit').scrollIntoViewIfNeeded(); await inspectDrawer(page, `${scenario.name}/limited-${count}`);
+        if (screenshots && !count) await page.screenshot({ path: join(output, `${scenario.name}-limited-options.png`) });
+      }
+      const restored = structuredClone(explorer.doc); restored.nodes.find(n => n.id === parent.id).research = structuredClone(parent.research); await explorer.save(restored);
+      await page.waitForFunction(() => document.querySelectorAll('.research .option').length === 2);
       await page.locator('[data-tool-tab="details"]').click();
       await page.locator('#revisit-editor > summary').click(); await page.locator('#revisit-condition').fill('After our pilot');
       await page.locator('#revisit-condition').press('Escape'); await page.locator('#navigation-open').click(); await page.locator('#navigation-cancel').click();

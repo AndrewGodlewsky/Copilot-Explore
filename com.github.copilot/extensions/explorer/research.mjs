@@ -98,7 +98,7 @@ export function createResearcher(parent, options = {}) {
         try {
           if (typeof content !== 'string' || content.length > 80000 || Buffer.byteLength(content) > MAX_RESEARCH_BYTES) throw new Error();
           const raw = JSON.parse(content.trim().replace(/^```(?:json)?\s*\n([\s\S]*)\n```$/, '$1'));
-          if (!Object.hasOwn(raw, 'claims') || !Array.isArray(raw.sources) || raw.sources.length > 15) throw new Error();
+          if (raw.optionsVersion !== 1 || !Object.hasOwn(raw, 'claims') || !Array.isArray(raw.sources) || raw.sources.length > 15) throw new Error();
           result = research({ ...raw, settings: prepared.settings, sources: raw.sources.map(source => {
             const retrievedAt = pages.get(sourceKey(source.url));
             return { ...source, retrievedAt: retrievedAt ?? null, provenance: retrievedAt ? 'recorded-read' : 'imported' };

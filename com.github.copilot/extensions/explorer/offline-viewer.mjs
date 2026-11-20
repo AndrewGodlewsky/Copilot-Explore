@@ -24,7 +24,8 @@ function researchProjection(r) {
   const claims = r.claims === undefined ? null : bounded(r.claims, 12, (c, i) => ({ id: `c${i}`, text: text(c.text, 1000), basis: c.basis, limitations: text(c.limitations, 1000),
     evidence: bounded(c.evidence, 3, e => { const sourceId = sourceIds.get(e.sourceId); if (!sourceId) throw Error('Unknown research source.'); return { sourceId, paraphrase: text(e.paraphrase, 1000) }; }) }));
   return { basis: r.basis, summary: text(r.summary, 5000),
-    options: bounded(r.options, 4, o => ({ title: text(o.title, 150), description: text(o.description, 3000), pros: bounded(o.pros, 6, p => text(p, 1000)), cons: bounded(o.cons, 6, c => text(c, 1000)),
+    ...(r.optionsVersion === 1 ? { optionsVersion: 1, ...(r.optionsLimit ? { optionsLimit: text(r.optionsLimit, 600) } : {}) } : {}),
+    options: bounded(r.options, 4, (o, i) => ({ ...(r.optionsVersion === 1 ? { id: `o${i}`, fit: text(o.fit, 400) } : {}), title: text(o.title, 150), description: text(o.description, 3000), pros: bounded(o.pros, 6, p => text(p, 1000)), cons: bounded(o.cons, 6, c => text(c, 1000)),
       details: bounded(o.details ?? [], 8, d => ({ label: text(d.label, 80), value: text(d.value, 1000) })), proposedAnswer: o.proposedAnswer === undefined ? null : text(o.proposedAnswer, 5000) })),
     recommendation: text(r.recommendation, 5000), proposedAnswer: r.proposedAnswer === undefined ? null : text(r.proposedAnswer, 5000), uncertainty: text(r.uncertainty, 3000), sources, claims };
 }

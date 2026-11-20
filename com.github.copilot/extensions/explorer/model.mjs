@@ -190,19 +190,41 @@ export function researchEvidence(value) {
   return { sources, ...(hasClaims ? { claims } : {}) };
 }
 export function research(value) {
-  const hasClaims = Object.hasOwn(value ?? {}, 'claims');
-  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims']);
+  const hasClaims = Object.hasOwn(value ?? {}, 'claims'), versioned = Object.hasOwn(value ?? {}, 'optionsVersion');
+  if (versioned && (value.optionsVersion !== 1 || !hasClaims)) throw new Error('Unsupported research options version or missing claims.');
+  if (!versioned && (Object.hasOwn(value ?? {}, 'optionsLimit') || Array.isArray(value?.options) && value.options.some(o => Object.hasOwn(o ?? {}, 'id') || Object.hasOwn(o ?? {}, 'fit')))) throw new Error('New option fields require an options version.');
+  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims', ...(versioned ? ['optionsVersion', 'optionsLimit'] : [])]);
   const { sources, claims } = researchEvidence(value);
-  const options = list(value.options, 'options', 4, option => ({
-    title: text(option?.title, 'Option title', 150),
-    description: text(option.description, 'Option description', 3000),
-    pros: list(option.pros, 'pros', 6, v => text(v, 'Pro', 1000)),
-    cons: list(option.cons, 'cons', 6, v => text(v, 'Con', 1000)),
-    ...(option.proposedAnswer !== undefined ? { proposedAnswer: text(option.proposedAnswer, 'Proposed answer', 5000) } : {}),
-    ...(option.details !== undefined ? { details: list(option.details, 'details', 8, d => ({ label: text(d?.label, 'Detail label', 80), value: text(d.value, 'Detail value', 1000) })) } : {}),
-  }));
-  if (options.length < 2) throw new Error('Compare at least two options.');
-  const result = { basis: value.basis, summary: text(value.summary, 'Research summary', 5000), options,
+  const ids = new Set(), titles = new Set(), answers = new Set();
+  const distinct = (value, seen) => {
+    const normalized = value.normalize('NFKC').toLowerCase().replace(/\s+/gu, ' ');
+    if (seen.has(normalized)) throw new Error('Duplicate research option choice.');
+    seen.add(normalized); return value;
+  };
+  const options = list(value.options, 'options', 4, option => {
+    if (versioned) evidenceKeys(option, ['id', 'title', 'description', 'fit', 'pros', 'cons', 'proposedAnswer', 'details']);
+    const title = text(option?.title, 'Option title', 150);
+    return {
+      ...(versioned ? { id: evidenceId(option.id, ids, 'option') } : {}),
+      title: versioned ? distinct(title, titles) : title,
+      description: text(option.description, 'Option description', versioned ? 600 : 3000),
+      ...(versioned ? { fit: text(option.fit, 'Option fit', 400) } : {}),
+      pros: list(option.pros, 'pros', versioned ? 4 : 6, v => text(v, 'Pro', versioned ? 240 : 1000)),
+      cons: list(option.cons, 'cons', versioned ? 4 : 6, v => text(v, 'Con', versioned ? 240 : 1000)),
+      ...(versioned ? { proposedAnswer: distinct(text(option.proposedAnswer, 'Proposed answer', 1000), answers) } : option.proposedAnswer !== undefined ? { proposedAnswer: text(option.proposedAnswer, 'Proposed answer', 5000) } : {}),
+      ...(option.details !== undefined ? { details: list(option.details, 'details', 8, d => {
+        if (versioned) evidenceKeys(d, ['label', 'value']);
+        return { label: text(d?.label, 'Detail label', 80), value: text(d.value, 'Detail value', 1000) };
+      }) } : {}),
+    };
+  });
+  let optionsLimit;
+  if (!versioned && options.length < 2) throw new Error('Compare at least two options.');
+  if (versioned && options.length < 2) optionsLimit = text(value.optionsLimit, 'Options limitation', 600);
+  if (versioned && options.length >= 2 && Object.hasOwn(value, 'optionsLimit')) throw new Error('An options limitation requires fewer than two options.');
+  if (versioned && !options.length && Object.hasOwn(value, 'proposedAnswer')) throw new Error('Research without options cannot propose an answer.');
+  const result = { ...(versioned ? { optionsVersion: 1 } : {}), basis: value.basis, summary: text(value.summary, 'Research summary', 5000), options,
+    ...(optionsLimit !== undefined ? { optionsLimit } : {}),
     ...(hasClaims ? { claims } : {}),
     ...(Object.hasOwn(value, 'settings') ? { settings: researchSettings(value.settings) } : {}),
     recommendation: text(value.recommendation, 'Recommendation', 5000),
@@ -526,8 +548,10 @@ export function toMarkdown(doc) {
     if (n.research) {
       const r = n.research;
       lines.push('### AI research', '', `Basis: ${r.basis === 'sources' ? 'Consulted sources' : 'Model reasoning; not externally verified'}.`, '', researchSettingsText(r.settings), '', md(r.summary), '');
+      if (r.optionsLimit) lines.push('**Limited options:** ' + md(r.optionsLimit), '');
       for (const o of r.options) {
         lines.push(`#### ${md(o.title)}`, '', md(o.description), '', '**Pros**', '', ...o.pros.map(p => `- ${md(p)}`), '', '**Cons**', '', ...o.cons.map(p => `- ${md(p)}`), '');
+        if (r.optionsVersion === 1) lines.push(`Option reference: ${o.id}`, '', '**Fits when:** ' + md(o.fit), '');
         if (o.proposedAnswer) lines.push('Suggested draft: ' + md(o.proposedAnswer), '');
         for (const detail of o.details ?? []) lines.push(`- ${md(detail.label)}: ${md(detail.value)}`);
       }

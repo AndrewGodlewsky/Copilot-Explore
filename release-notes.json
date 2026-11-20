@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.112",
+    "summary": "Read concise research options first, with fit conditions and expandable findings and details. New results keep stable option identities and explain when evidence supports fewer choices. Older research remains readable. Suggestions only edit your private draft, and stale results cannot apply them. No additional internet access."
+  },
+  {
     "version": "0.1.111",
     "summary": "Record the approved research direction: existing-context help first, a separate Research action and one approval per bounded request. Clarify which features still need implementation, retain the SDK privacy and transport gates, and document the separately approved evaluation pilot as not yet run. No runtime behavior changes."
   },

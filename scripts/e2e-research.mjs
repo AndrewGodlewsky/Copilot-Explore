@@ -15,14 +15,19 @@ assert.ok(sdkDirectory && cli, 'Set COPILOT_SDK_DIR and COPILOT_CLI_PATH to the 
 const sdk = await import(pathToFileURL(join(sdkDirectory, 'index.js')).href);
 const temporary = await mkdtemp(join(tmpdir(), 'explorer-research-fixture-'));
 const calls = [], toolCalls = [], prompts = [], captured = [], sendTimeouts = [];
-const findings = { basis: 'reasoning', summary: 'Synthetic local comparison.', options: [
-  { title: 'Pilot', description: 'Small first step.', pros: ['Learn'], cons: ['Limited'] , proposedAnswer: 'I will run a pilot.', details: [{ label: 'Size', value: 'Ten people' }] },
-  { title: 'Launch', description: 'Broad first step.', pros: ['Reach'], cons: ['Cost'], proposedAnswer: 'I will launch broadly.', details: [] },
+const findings = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic local comparison.', options: [
+  { id: 'pilot', title: 'Pilot', description: 'Small first step.', fit: 'When learning with a small group matters.', pros: ['Learn'], cons: ['Limited'] , proposedAnswer: 'I will run a pilot.', details: [{ label: 'Size', value: 'Ten people' }] },
+  { id: 'launch', title: 'Launch', description: 'Broad first step.', fit: 'When broad reach matters more than setup cost.', pros: ['Reach'], cons: ['Cost'], proposedAnswer: 'I will launch broadly.', details: [] },
 ], recommendation: 'Pilot first.', proposedAnswer: 'I will run a pilot.', uncertainty: 'Local fixture: no real sources read.', sources: [], claims: [
   { id: 'c1', text: 'A pilot could help learning.', basis: 'reasoning', evidence: [], limitations: 'Model judgment; no page fetched.' },
   { id: 'c2', text: 'Local cost is unknown.', basis: 'unknown', evidence: [], limitations: 'Search snippets do not establish fetched evidence.' },
 ] };
-let hold = false, onHeld, falseCitation = false, followupMode = false;
+let hold = false, onHeld, falseCitation = false, followupMode = false, limitedCount = null;
+function limitedFindings(count) {
+  const value = { ...findings, options: findings.options.slice(0, count), optionsLimit: 'The fixture supplies insufficient evidence for further choices.' };
+  if (!count) { delete value.proposedAnswer; value.recommendation = 'Gather the missing context before choosing.'; }
+  return value;
+}
 const fixture = createServer(async (req, res) => {
   try {
     let body = ''; for await (const chunk of req) body += chunk;
@@ -44,7 +49,7 @@ const fixture = createServer(async (req, res) => {
     const searched = input.messages.some(m => m.role === 'tool');
     const searchName = input.tools.find(t => t.function.name.includes('web_search')).function.name;
     const output = followupMode ? { answer: 'A prior source can inform the hypothetical.', uncertainty: 'Prior imported metadata; no new read.', claims: [{ id: 'c1', text: 'Prior support only', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Previously recorded support' }], limitations: 'Historical evidence, not a new fetch' }], sources: falseCitation ? [{ id: 's1', title: 'Unread new source', url: 'https://example.com/unread' }] : [{ id: 's1', prior: { origin: 'original', sourceId: 's1' } }] } : falseCitation ? { ...findings, basis: 'sources', sources: [{ id: 's1', title: 'Unread search result', url: 'https://example.com/unread', retrievedAt: '1900-01-01T00:00:00.000Z', provenance: 'recorded-read' }], claims: [{ id: 'c1', text: 'Unsupported claim', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Invented support' }], limitations: 'Fixture' }] } : findings;
-    const message = searched ? { role: 'assistant', content: JSON.stringify(output) } : {
+    const message = searched ? { role: 'assistant', content: JSON.stringify(limitedCount === null ? output : limitedFindings(limitedCount)) } : {
       role: 'assistant', content: null, tool_calls: [{ id: 'search-fixture', type: 'function', function: { name: searchName, arguments: JSON.stringify({ query: 'synthetic pilot options' }) } }],
     };
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -163,7 +168,13 @@ try {
   const rejected = assert.rejects(cancelled, /cancelled/);
   await held; controller.abort(); await rejected;
   assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 5);
-  console.log('PASS isolated research and scoped follow-up: historical imported evidence unchanged, unread new source rejected, separate completed/failed/cancelled operation receipts, real installed MCP search, reasoning/unknown claims, rejection of search-only fabricated source/time, exact reviewed inputs, retained completed/failed receipts and cancellation/release. Successful builtin web_fetch is NOT exercised; deterministic hook tests separately cover successful read provenance. No paid provider or user session.');
+  hold = false; followupMode = false;
+  for (const count of [0, 1]) {
+    limitedCount = count;
+    assert.deepEqual(await researcher.run(prepared.context, { prepared }), { ...limitedFindings(count), settings });
+  }
+  assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 7);
+  console.log('PASS isolated research and scoped follow-up: concise stable options and honest zero/one-option results; historical imported evidence unchanged, unread new source rejected, separate completed/failed/cancelled operation receipts, real installed MCP search, reasoning/unknown claims, rejection of search-only fabricated source/time, exact reviewed inputs, retained completed/failed receipts and cancellation/release. Successful builtin web_fetch is NOT exercised; deterministic hook tests separately cover successful read provenance. No paid provider or user session.');
 } finally {
   clearTimeout(deadline); await researcher.close();
   await Promise.allSettled([...owned].map(client => client.forceStop()));

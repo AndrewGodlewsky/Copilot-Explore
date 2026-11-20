@@ -1,4 +1,5 @@
 import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/dashboard.mjs';
+import { optionFindings } from './helpers/research-options.mjs';
 import { attachMinimap, projectOverview, overviewPaths } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import test from 'node:test';
@@ -2048,6 +2049,68 @@ test('offline viewer UI requires a fresh exact preview, defaults private fields 
   assert.equal($('viewer-download').disabled, true);
 });
 
+test('concise research options precede deeper findings and add only to the retained private draft', async t => {
+  const value = optionFindings();
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  const options = [...f.document.querySelectorAll('.research .option')];
+  assert.deepEqual(options.map(o => o.dataset.optionId), ['cupboard', 'distributed']);
+  assert.ok(options[1].compareDocumentPosition($('research-findings')) & f.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(options[1].compareDocumentPosition(f.document.querySelector('.recommendation')) & f.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal($('research-findings').open, false);
+  assert.equal($('research-assistance-copy').hidden, true, 'saved findings do not repeat introductory assistance copy');
+  assert.equal($('research-explain-question').hidden, false);
+  assert.ok(options[0].textContent.includes(value.options[0].fit));
+  f.type('answer', 'My own start'); const answer = $('answer'), revision = f.explorer.doc.revision;
+  $('add-option-cupboard').click();
+  assert.equal($('answer'), answer); assert.equal(answer.value, `My own start\n\n${value.options[0].proposedAnswer}`);
+  assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.equal(f.explorer.doc.revision, revision);
+  $('undo-addition').click(); assert.equal(answer.value, 'My own start');
+  assert.equal(f.actions.filter(a => a.action === 'answer').length, 0);
+});
+
+test('concise research sparse results explain missing alternatives without a fabricated draft winner', async t => {
+  for (const count of [0, 1]) {
+    const value = optionFindings(); value.options.length = count; value.optionsLimit = 'Access is unconfirmed; no further feasible choice is established.';
+    const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+    const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+    assert.ok($('research-options-limit'), 'sparse result has a visible limitation');
+    assert.ok($('research-options-limit').textContent.includes(value.optionsLimit));
+    assert.equal(f.document.querySelectorAll('.research .option').length, count);
+    assert.equal($('option-comparison'), null);
+    if (!count) { assert.equal($('use-recommendation'), null); assert.match(f.document.querySelector('.research').textContent, /No supported answer options/); }
+    f.type('answer', 'I need more context'); assert.equal($('answer').value, 'I need more context');
+    assert.equal(f.explorer.doc.nodes[1].answer, '');
+  }
+});
+
+test('concise research disclosures preserve literal Unicode, focus, draft selection and detail choices through polling', async t => {
+  const value = optionFindings(); value.options[0].fit = '<img src=x onerror=bad()> 中文 🌿'.padEnd(400, '界');
+  value.options[0].description = '<script>literal</script> '.padEnd(600, '文');
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  const option = $('research-option-cupboard'), details = $('option-details-cupboard'), deep = $('research-findings');
+  assert.ok(option && details && deep, 'stable option and disclosure controls exist');
+  assert.ok(option.textContent.includes(value.options[0].fit)); assert.ok(option.textContent.includes(value.options[0].description));
+  assert.equal(option.querySelector('img,script'), null); assert.equal(details.open, false);
+  details.querySelector('summary').click(); $('detail-0-0').click(); deep.querySelector('summary').click();
+  f.type('answer', 'My draft 🌿'); const answer = $('answer'); answer.focus(); answer.setSelectionRange(2, 5, 'backward');
+  await f.poll(); assert.equal($('answer'), answer); assert.equal(answer.selectionStart, 2); assert.equal(answer.selectionEnd, 5); assert.equal(answer.selectionDirection, 'backward');
+  assert.equal($('option-details-cupboard'), details); assert.equal(details.open, true); assert.equal(deep.open, true); assert.equal($('detail-0-0').checked, true);
+  const summary = deep.querySelector('summary'); summary.focus(); await f.poll(); assert.equal(f.document.activeElement, summary);
+});
+
+test('research draft actions reject a newly stale result without replacing the result or editor', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = optionFindings(); await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep this draft');
+  const button = $('add-option-cupboard'), answer = $('answer'), result = f.document.querySelector('.research');
+  assert.ok(button, 'stable option draft action exists');
+  const next = structuredClone(f.explorer.doc); next.nodes[1].researchStale = true; await f.explorer.save(next); await f.poll();
+  assert.equal(f.document.querySelector('.research'), result); assert.equal($('answer'), answer); assert.equal(button.disabled, true); assert.equal($('use-recommendation').disabled, true);
+  button.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true }));
+  assert.equal(answer.value, 'Keep this draft'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
+
 test('option comparison preserves exact duplicate values, unknowns, subjective priorities and draft-only actions', async t => {
   const r = structuredClone(findings);
   r.options[0].details = [{ label: 'Cost', value: 'Lower <script>🌿</script>' }, { label: 'Cost', value: 'Setup extra' }, { label: 'Speed', value: 'Slower' }];
@@ -2165,6 +2228,7 @@ test('claim evidence disclosure shows literal support, source navigation and imp
   } });
   f.open(f.explorer.doc.nodes[1].id);
   const claim = f.document.getElementById('claim-c1'); assert.ok(claim);
+  f.document.getElementById('research-findings-summary').click();
   assert.match(claim.textContent, /<script>Claim<\/script>/); assert.equal(claim.querySelector('script'), null);
   const disclosure = claim.querySelector('details'); assert.ok(disclosure); assert.equal(disclosure.open, false);
   const summary = disclosure.querySelector('summary'); summary.focus(); assert.equal(f.document.activeElement, summary); summary.click(); assert.equal(disclosure.open, true);
@@ -4050,10 +4114,6 @@ test('recommendations and selected details append to editable drafts with safe u
   assert.equal(f.explorer.doc.nodes[1].answer, '');
   f.click('Undo addition'); assert.equal(f.document.getElementById('answer').value, 'My own words');
   const check = f.document.getElementById('detail-0-0'); check.click(); check.focus();
-  // A map refresh retains both the checkbox selection and its focus.
-  await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Shared fund' });
-  await until(() => f.document.getElementById('progress').textContent.startsWith('1 answered'), 'background refresh');
-  assert.equal(f.document.getElementById('detail-0-0').checked, true); assert.equal(f.document.activeElement.id, 'detail-0-0');
   f.click('Add selected details');
   assert.equal(f.document.getElementById('answer').value, 'My own words\n\nPilot size: Ten neighbors');
   f.type('answer', f.document.getElementById('answer').value + '\nNew typing');
@@ -4062,6 +4122,14 @@ test('recommendations and selected details append to editable drafts with safe u
   assert.match(f.document.getElementById('answer').value, /New typing$/);
   f.type('answer', 'x'.repeat(19999)); f.click('Use recommendation');
   assert.equal(f.document.getElementById('answer').value.length, 19999); assert.match(f.document.getElementById('notice').textContent, /too long/);
+  // A saved answer change retains selection/focus but makes the old suggestions stale.
+  check.focus();
+  await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.nodes[2].id, answer: 'Shared fund' });
+  await until(() => f.document.getElementById('progress').textContent.startsWith('1 answered'), 'background refresh');
+  assert.equal(f.document.getElementById('detail-0-0').checked, true); assert.equal(f.document.activeElement.id, 'detail-0-0');
+  assert.equal(f.explorer.doc.nodes[1].researchStale, true);
+  for (const id of ['add-details', 'use-recommendation', 'add-option-0']) assert.equal(f.document.getElementById(id).disabled, true);
+  f.click('Add selected details'); assert.equal(f.document.getElementById('answer').value, 'x'.repeat(19999));
   await delay(50); // Let the voice-status refresh from the background render settle before closing jsdom.
 });
 

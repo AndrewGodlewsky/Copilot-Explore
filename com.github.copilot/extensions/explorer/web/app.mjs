@@ -2394,7 +2394,7 @@ function renderWorkspace() {
   regions.get('followup').area.id = 'research-conversation-region';
   toolPanels.research.prepend(el('h3', { id: 'research-workspace-question', tabindex: '-1' }, node.question));
   if (!root && isQuestion(node)) $('research-workspace-question').after(el('section', { id: 'research-assistance' },
-    el('p', { class: 'quiet' }, 'Need help with the wording or terms? Ask for an explanation without web research. For answer options and evidence, choose Research and review the request first.'),
+    el('p', { id: 'research-assistance-copy', class: 'quiet' }, 'Need help with the wording or terms? Ask for an explanation without web research. For answer options and evidence, choose Research and review the request first.'),
     button('Explain this question', () => {
       if (!current()) return;
       const summary = $('question-help-summary'); revealQuestionTool(summary); summary.focus({ preventScroll: true });
@@ -2531,13 +2531,16 @@ function renderWorkspace() {
     }, { id: 'refresh-question-context' }) : null);
     update('research', node.research ?? null, () => {
       if (root || !isQuestion(node)) return;
-      const research = el('section', { class: 'research-workspace', 'aria-labelledby': 'research-summary' }, el('h3', { id: 'research-summary' }, 'Answer options'));
-      research.append(el('p', { class: 'quiet' }, 'Compare possibilities using your saved answers and states. Review the context before starting. Suggestions stay separate from your answer; normal Copilot usage applies.'), button('Research', () => openResearchReview(node.id), { id: 'research-request', disabled: pending }));
+      const research = el('section', { class: 'research-workspace', 'aria-labelledby': 'research-summary' },
+        el('div', { class: 'research-options-heading' }, el('h3', { id: 'research-summary' }, 'Answer options'), button('Research', () => openResearchReview(node.id), { id: 'research-request', disabled: pending })));
+      if (!node.research) research.append(el('p', { class: 'quiet' }, 'Compare possibilities using your saved answers and states. Review the context before starting. Suggestions stay separate from your answer; normal Copilot usage applies.'));
       research.append(el('p', { id: 'research-stale-warning', class: 'review-warning', hidden: !node.researchStale }, 'Retained research needs reconsideration after saved reasoning changed. It has not been refreshed.'));
       if (node.research) research.append(renderResearch(node));
       return research;
     });
     if ($('research-stale-warning')) $('research-stale-warning').hidden = !node.researchStale;
+    if ($('research-assistance-copy')) $('research-assistance-copy').hidden = !!node.research;
+    for (const control of $('question-drawer').querySelectorAll('[data-draft-suggestion]')) control.disabled = node.researchStale === true || control.dataset.selectionRequired === 'true' && !ui.selectedDetails?.size;
     update('children', doc.nodes.filter(n => n.parentId === node.id).map(n => [n.id, n.question]), () => {
       const children = doc.nodes.filter(n => n.parentId === node.id);
       if (children.length) return el('div', { class: 'followups' }, el('h3', {}, root ? 'Explore a direction' : 'Explore this branch'), el('p', { class: 'quiet' }, 'Connected below this node.'), children.map(child => button(child.question, () => select(child.id), { id: `followup-${child.id}`, class: 'followup' })));
@@ -2858,16 +2861,23 @@ function renderComparison(r, ui, selectDetail, addSelected) {
     controls.append(el('div', {}, el('label', { class: 'research-detail', for: id }, checkbox, `${criterion.label}${criterion.field ? ' (model judgment)' : ' (detail)'}`), el('label', { for: priorityId }, `Your priority: ${criterion.label}`), priority));
   });
   comparison.append(controls, el('div', { class: 'comparison-scroll', role: 'region', tabindex: '0', 'aria-label': 'Option comparison, scroll horizontally to read all options' }, table));
-  if (labels.size) comparison.append(button('Add selected details to draft', addSelected, { id: 'comparison-add-details', disabled: !ui.selectedDetails.size }));
+  if (labels.size) comparison.append(button('Add selected details to draft', addSelected, { id: 'comparison-add-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' }));
   renderRows(); return comparison;
 }
 
 function renderResearch(node) {
   const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r);
-  if (ui.researchKey !== key) { ui.researchKey = key; ui.selectedDetails = new Set(); ui.comparison = null; }
+  if (ui.researchKey !== key) { ui.researchKey = key; ui.selectedDetails = new Set(); ui.comparison = null; ui.researchDisclosures = {}; }
+  const disclosure = (id, label) => {
+    const detail = el('details', { id }, el('summary', { id: `${id}-summary` }, label));
+    detail.open = ui.researchDisclosures?.[id] === true;
+    detail.addEventListener('toggle', () => { if (detail.isConnected) { (ui.researchDisclosures ??= {})[id] = detail.open; scheduleLayout(); } });
+    return detail;
+  };
   const add = suggestion => {
     const live = state.document?.nodes.find(n => n.id === node.id);
     if (!live || selected !== node.id || !expanded || libraryView || JSON.stringify(live.research) !== key) return;
+    if (live.researchStale) return notice('This research needs reconsideration. Review and research again before using its suggestions.');
     node = live;
     const previous = drafts.get(node.id) ?? node.answer, value = previous ? `${previous}\n\n${suggestion}` : suggestion;
     if (value.length > 20000) return notice('Your answer is too long to add this suggestion. Shorten it first.');
@@ -2881,11 +2891,15 @@ function renderResearch(node) {
     // Scroll only the editor, never an ancestor of the transformed map.
     content.scrollTop += answer.getBoundingClientRect().top - content.getBoundingClientRect().top - 40;
   };
-  const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'), el('p', { class: 'quiet' }, researchSettingsText(r.settings)), el('p', {}, r.summary));
+  const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'));
+  if (r.optionsLimit) section.append(el('p', { id: 'research-options-limit', class: 'review-warning' }, `${r.options.length ? 'Limited answer options' : 'No supported answer options'}: ${r.optionsLimit}`));
+  if (r.optionsVersion !== 1) section.append(el('p', { class: 'quiet' }, 'These older results do not include separate fit conditions.'));
+  const findings = disclosure('research-findings', 'Findings and evidence');
+  findings.append(el('p', {}, r.summary), el('p', { class: 'quiet' }, researchSettingsText(r.settings)));
   const retrieval = source => !source.retrievedAt ? 'Retrieval time unknown.' : `${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt}. Redirect destination and publication date unknown.`;
   const sourceLink = source => el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `${source.id ? source.id + ': ' : ''}${source.title}`);
   if (r.claims) {
-    section.append(el('h3', {}, 'Claims and evidence'), el('p', { class: 'quiet' }, 'Selected model assertions, not an exhaustive check of this comparison. A page read does not verify a claim; supporting paraphrases are model interpretations.'));
+    findings.append(el('h3', {}, 'Claims and evidence'), el('p', { class: 'quiet' }, 'Selected model assertions, not an exhaustive check of this comparison. A page read does not verify a claim; supporting paraphrases are model interpretations.'));
     for (const claim of r.claims) {
       const block = el('section', { class: 'research-claim', id: `claim-${claim.id}` }, el('h4', {}, `${claim.id}: ${claim.text}`), el('p', { class: 'basis' }, claim.basis === 'sources' ? 'Source-linked model interpretation' : claim.basis === 'reasoning' ? 'Model reasoning' : 'Unknown support'));
       const disclosure = el('details', {}, el('summary', {}, claim.evidence.length ? 'Inspect supporting evidence and limitations' : 'Inspect limitations'), el('p', {}, `Limitations: ${claim.limitations}`));
@@ -2893,34 +2907,44 @@ function renderResearch(node) {
         const source = r.sources.find(s => s.id === item.sourceId);
         disclosure.append(el('p', {}, item.paraphrase), sourceLink(source), el('p', { class: 'quiet' }, retrieval(source)));
       }
-      block.append(disclosure); section.append(block);
+      block.append(disclosure); findings.append(block);
     }
-  } else section.append(el('p', { class: 'quiet' }, 'Claim-level support and historical retrieval times unknown for this legacy result.'));
-  section.append(el('div', { class: 'recommendation' }, el('h3', {}, 'Recommendation'), el('p', {}, r.recommendation), button('Use recommendation', () => add(r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation' })));
+  } else findings.append(el('p', { class: 'quiet' }, 'Claim-level support and historical retrieval times unknown for this legacy result.'));
   const details = r.options.flatMap((option, index) => (option.details ?? []).map((detail, i) => ({ id: `detail-${index}-${i}`, ...detail })));
   const selectDetail = (id, checked) => {
     checked ? ui.selectedDetails.add(id) : ui.selectedDetails.delete(id);
     for (const control of [$(id), $(`comparison-${id}`)]) if (control) control.checked = checked;
-    for (const control of [$('add-details'), $('comparison-add-details')]) if (control) control.disabled = !ui.selectedDetails.size;
+    for (const control of [$('add-details'), $('comparison-add-details')]) if (control) control.disabled = !ui.selectedDetails.size || state.document?.nodes.find(n => n.id === node.id)?.researchStale === true;
   };
   const addSelected = () => {
     const selected = details.filter(detail => ui.selectedDetails.has(detail.id));
     if (selected.length) add(selected.map(detail => `${detail.label}: ${detail.value}`).join('\n'));
   };
-  section.append(renderComparison(r, ui, selectDetail, addSelected));
   for (const [index, o] of r.options.entries()) {
-    const option = el('section', { class: 'option' }, el('h3', {}, o.title), el('p', {}, o.description), el('strong', { class: 'pro' }, 'Pros'), el('ul', {}, o.pros.map(v => el('li', {}, v))), el('strong', { class: 'con' }, 'Cons'), el('ul', {}, o.cons.map(v => el('li', {}, v))), button('Use this option', () => add(o.proposedAnswer ?? `${o.title}: ${o.description}`), { id: `add-option-${index}` }));
+    const identity = o.id ?? String(index);
+    const option = el('section', { id: `research-option-${identity}`, class: 'option', ...(o.id ? { 'data-option-id': o.id } : {}) }, el('h3', {}, o.title), el('p', {}, o.description));
+    if (r.optionsVersion === 1) option.append(el('p', { class: 'option-fit' }, el('strong', {}, 'Fits when: '), o.fit));
+    const empty = r.optionsVersion === 1 ? 'None established.' : 'None recorded.';
+    option.append(el('strong', { class: 'pro' }, 'Pros'), o.pros.length ? el('ul', {}, o.pros.map(v => el('li', {}, v))) : el('p', { class: 'quiet' }, empty),
+      el('strong', { class: 'con' }, 'Cons'), o.cons.length ? el('ul', {}, o.cons.map(v => el('li', {}, v))) : el('p', { class: 'quiet' }, empty),
+      button('Use this option', () => add(o.proposedAnswer ?? `${o.title}: ${o.description}`), { id: `add-option-${identity}`, 'data-draft-suggestion': 'true' }));
+    const extra = disclosure(`option-details-${identity}`, 'Concrete details');
     for (const [i, detail] of (o.details ?? []).entries()) {
       const id = `detail-${index}-${i}`, checkbox = el('input', { type: 'checkbox', id });
       checkbox.checked = ui.selectedDetails.has(id);
       checkbox.addEventListener('change', () => { if (checkbox.isConnected) selectDetail(id, checkbox.checked); });
-      option.append(el('label', { class: 'research-detail', for: id }, checkbox, el('span', {}, el('strong', {}, detail.label), ': ', detail.value)));
+      extra.append(el('label', { class: 'research-detail', for: id }, checkbox, el('span', {}, el('strong', {}, detail.label), ': ', detail.value)));
     }
+    if (o.details?.length) option.append(extra);
     section.append(option);
   }
-  if (details.length) section.append(button('Add selected details', addSelected, { id: 'add-details', disabled: !ui.selectedDetails.size }));
+  section.append(el('div', { class: 'recommendation' }, el('h3', {}, r.options.length ? 'Recommendation' : 'Further context needed'), el('p', {}, r.recommendation),
+    ...(r.options.length ? [button('Use recommendation', () => add(r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation', 'data-draft-suggestion': 'true' })] : [])));
+  if (r.options.length > 1) section.append(renderComparison(r, ui, selectDetail, addSelected));
+  if (details.length) section.append(button('Add selected details', addSelected, { id: 'add-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' }));
   section.append(el('h3', {}, 'What is still uncertain'), el('p', {}, r.uncertainty));
-  if (r.sources.length) section.append(el('div', { class: 'sources' }, el('h3', {}, 'Consulted sources'), el('p', { class: 'quiet' }, 'Reading a page does not establish claim support.'), r.sources.map((s, index) => el('div', { id: `source-${index}` }, sourceLink(s), el('p', { class: 'quiet' }, retrieval(s))))));
+  if (r.sources.length) findings.append(el('div', { class: 'sources' }, el('h3', {}, 'Consulted sources'), el('p', { class: 'quiet' }, 'Reading a page does not establish claim support.'), r.sources.map((s, index) => el('div', { id: `source-${index}` }, sourceLink(s), el('p', { class: 'quiet' }, retrieval(s))))));
+  section.append(findings);
   return section;
 }
 function setOutlineMode(value) {

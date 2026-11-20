@@ -68,9 +68,9 @@ test('bounded research context retains committed guidance inside its total budge
   assert.equal(large.truncated, true);
 });
 
-const result = { basis: 'reasoning', summary: 'Comparison', options: [
-  { title: 'Small', description: 'Pilot', pros: ['Simple'], cons: ['Limited'] },
-  { title: 'Large', description: 'Launch', pros: ['Reach'], cons: ['Cost'] },
+const result = { optionsVersion: 1, basis: 'reasoning', summary: 'Comparison', options: [
+  { id: 'pilot', title: 'Small', description: 'Pilot', fit: 'When learning comes first.', proposedAnswer: 'I will start small.', pros: ['Simple'], cons: ['Limited'] },
+  { id: 'launch', title: 'Large', description: 'Launch', fit: 'When broad reach matters.', proposedAnswer: 'I will launch broadly.', pros: ['Reach'], cons: ['Cost'] },
 ], recommendation: 'Pilot first.', uncertainty: 'No pages read.', sources: [], claims: [{ id: 'c1', text: 'Pilot first', basis: 'reasoning', evidence: [], limitations: 'No externally supported claim.' }] };
 const auth = { isAuthenticated: true, login: 'fixture', host: 'github.com' };
 const model = { id: 'fixture-model', provider: { kind: 'copilot' }, policy: { state: 'enabled' } };
@@ -222,8 +222,20 @@ test('new helper results require claim records and enforce raw UTF-8 output enve
   const h = await fixture(t, { result: huge }); await assert.rejects(h.researcher.run(context), /invalid comparison/);
 });
 
+test('new helper comparisons require concise option identity while accepting honest sparse results', async t => {
+  const legacy = structuredClone(result); delete legacy.optionsVersion;
+  for (const option of legacy.options) { delete option.id; delete option.fit; }
+  const old = await fixture(t, { result: legacy }); await assert.rejects(old.researcher.run(context), /invalid comparison/);
+  for (const count of [0, 1]) {
+    const limited = structuredClone(result); limited.options.length = count; limited.optionsLimit = 'More evidence is needed to compare alternatives.';
+    const current = await fixture(t, { result: limited });
+    assert.deepEqual(await current.researcher.run(context), { ...limited, settings: researchSettings() });
+  }
+});
+
 test('raw Unicode bytes and SDK character envelope accept their exact boundaries and reject one over', async t => {
-  const value = { ...result, summary: '界'.repeat(5000), recommendation: '界'.repeat(5000), proposedAnswer: '界'.repeat(5000), options: Array.from({ length: 4 }, () => ({ title: 'Option', description: '界'.repeat(3000), pros: Array(6).fill('界'.repeat(1000)), cons: [] })) };
+  const value = { ...result, summary: '界'.repeat(5000), recommendation: '界'.repeat(5000), proposedAnswer: '界'.repeat(5000), uncertainty: '界'.repeat(3000),
+    claims: Array.from({ length: 12 }, (_, i) => ({ id: `c${i}`, text: '界'.repeat(1000), basis: 'reasoning', evidence: [], limitations: '界'.repeat(1000) })) };
   const json = JSON.stringify(value), raw = json + ' '.repeat(160000 - Buffer.byteLength(json));
   assert.ok(raw.length < 80000); assert.equal(Buffer.byteLength(raw), 160000);
   const exact = await fixture(t, { content: raw }); assert.deepEqual(await exact.researcher.run(context), { ...value, settings: researchSettings() });

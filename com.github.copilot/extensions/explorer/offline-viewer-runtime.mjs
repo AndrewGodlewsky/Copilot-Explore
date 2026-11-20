@@ -16,8 +16,10 @@ export function renderOfflineViewer(snapshot) {
     const section = el('section'); section.append(el('h2', 'Recorded AI suggestions — not user decisions'));
     section.append(el('p', r.basis === 'sources' ? 'Consulted sources. A recorded read does not establish claim support or truth.' : 'Model reasoning; not externally verified.'));
     paragraph(section, 'Summary', r.summary);
+    if (r.optionsLimit) paragraph(section, 'Limited options', r.optionsLimit);
     for (const option of r.options) {
       const article = el('section'); article.append(el('h3', option.title), el('p', option.description));
+      if (r.optionsVersion === 1) paragraph(article, 'Fits when', option.fit);
       paragraph(article, 'Model-stated pros', option.pros.join('\n') || 'None recorded');
       paragraph(article, 'Model-stated cons', option.cons.join('\n') || 'None recorded');
       for (const detail of option.details) paragraph(article, detail.label, detail.value);

@@ -369,6 +369,9 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 #question-tools-research { overflow-wrap: anywhere; }
 #question-tools-research > .workspace-region { min-width: 0; }
 #research-workspace-question { margin: 0 0 16px; font-size: 14px; font-weight: 500; }
+#research-assistance { margin-bottom: 16px; }
+#research-assistance p { margin-top: 0; }
+#research-assistance button { min-height: 32px; font-size: 12px; }
 .research-workspace > h3 { margin-top: 0; }
 #research-conversation-region { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 20px; }
 #research-conversation-region .research-followup { margin: 0; padding: 0; border: 0; }

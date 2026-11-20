@@ -1960,6 +1960,7 @@ function setQuestionToolTab(name) {
   body.dataset.activeTab = name;
   ui.toolsTab = name;
   $('question-drawer').dataset.tab = name;
+  $('question-help-open')?.setAttribute('aria-expanded', String(name === 'research' && !$('question-drawer').hidden));
   $('question-drawer-title').textContent = name === 'research' ? 'Research' : 'Question tools';
   if ($('research-answer-draft')) $('research-answer-draft').hidden = name !== 'research' || !$('answer');
   if ($('research-workspace-status')) $('research-workspace-status').hidden = name !== 'research';
@@ -1979,15 +1980,35 @@ function revealQuestionStage(target = $('node-workspace')) {
   if (rect.top < bounds.top || rect.height > stage.clientHeight) stage.scrollTop += rect.top - bounds.top;
   else if (rect.bottom > bounds.bottom) stage.scrollTop += rect.bottom - bounds.bottom;
 }
-function setQuestionTools(open) {
+function focusQuestionToolsReturn() {
+  let target = $(uiFor(selected).toolsReturnId ?? 'question-tools-toggle');
+  if (!target || target.closest('[hidden]')) target = $('question-tools-toggle');
+  if (!target) return;
+  target.focus({ preventScroll: true });
+  requestAnimationFrame(() => {
+    if (!target.isConnected) return;
+    const panel = $('node-workspace');
+    if (!outlineMode && panel.classList.contains('scroll-pane')) {
+      const rect = target.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+      if (rect.top < bounds.top) panel.scrollTop += rect.top - bounds.top;
+      else if (rect.bottom > bounds.bottom) panel.scrollTop += rect.bottom - bounds.bottom;
+    }
+    revealQuestionStage(target);
+  });
+}
+function setQuestionTools(open, returnId) {
   const drawer = $('question-drawer'), body = $('question-tools-body'), toggle = $('question-tools-toggle');
   if (!body || !toggle) return;
+  const ui = uiFor(selected);
+  if (open && returnId) ui.toolsReturnId = returnId;
   const opening = open && drawer.hidden;
-  if (!open && !drawer.hidden && drawer.contains(document.activeElement)) toggle.focus({ preventScroll: true });
+  const restoreFocus = !open && !drawer.hidden && drawer.contains(document.activeElement);
   drawer.hidden = !open; body.hidden = !open; $('question-drawer-handle').hidden = open || !expanded;
   toggle.setAttribute('aria-expanded', String(open));
-  uiFor(selected).toolsOpen = open;
+  $('question-help-open')?.setAttribute('aria-expanded', String(open && ui.toolsTab === 'research'));
+  ui.toolsOpen = open;
   scheduleLayout();
+  if (restoreFocus) focusQuestionToolsReturn();
   if (opening) requestAnimationFrame(() => { if (!closed && !drawer.hidden) revealQuestionStage(); });
 }
 function revealQuestionTool(target) {
@@ -2027,7 +2048,7 @@ function renderWorkspace() {
   panel.append(headingArea, workspaceImpact, workspaceCritical, content);
   const drawer = $('question-drawer'); drawer.replaceChildren(); drawer.dataset.expanded = String(!!ui.toolsExpanded);
   const toolsBody = el('div', { id: 'question-tools-body', class: 'question-tools-body' });
-  const toolsToggle = button('More options', () => setQuestionTools(drawer.hidden), { id: 'question-tools-toggle', 'aria-expanded': String(!!ui.toolsOpen), 'aria-controls': 'question-drawer' });
+  const toolsToggle = button('More options', () => setQuestionTools(drawer.hidden, 'question-tools-toggle'), { id: 'question-tools-toggle', 'aria-expanded': String(!!ui.toolsOpen), 'aria-controls': 'question-drawer' });
   toolsToggle.addEventListener('pointerdown', event => { if (event.button === 0 && content.contains(document.activeElement)) event.preventDefault(); });
   const size = button(ui.toolsExpanded ? 'Reduce' : 'Expand', () => {
     ui.toolsExpanded = !ui.toolsExpanded; drawer.dataset.expanded = String(ui.toolsExpanded);
@@ -2106,6 +2127,11 @@ function renderWorkspace() {
     content.append(el('p', { class: 'quiet' }, 'Your original direction guides the next questions. It is not an answer or a decision.'), button('Explore this direction', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
   } else {
     const form = el('form', { id: 'answer-form', class: 'answer-form' }), answer = el('textarea', { id: 'answer', rows: '4', maxlength: '20000', placeholder: 'A decision, a hunch, or what you know so far…' });
+    const helpOpen = button('Help me answer', () => {
+      if (!current()) return;
+      setQuestionTools(true, 'question-help-open');
+      const heading = $('research-workspace-question'); revealQuestionTool(heading); heading.focus({ preventScroll: true });
+    }, { id: 'question-help-open', 'aria-expanded': 'false', 'aria-controls': 'question-tools-research' });
     answer.value = drafts.get(node.id) ?? node.answer;
     const answerState = el('select', { id: 'answer-state', 'aria-describedby': 'answer-state-help' }, Object.entries(ANSWER_STATES).map(([value, label]) => el('option', { value }, label)));
     answerState.value = draftClient.state(node.id);
@@ -2170,7 +2196,7 @@ function renderWorkspace() {
       el('p', { id: 'answer-state-help', class: 'quiet' }, 'Text and state stay a draft until you save. Decided, Tentative and Assumption need text; other states can have no note.'),
       button('Clean My Answer', () => { voice.cancel(); void cleanup.start(); }, { id: 'clean-answer', disabled: !answer.value.trim() }),
       el('div', { id: 'cleanup-review', 'aria-live': 'polite' }));
-    const savebar = el('div', { class: 'workspace-savebar' }, toolsToggle,
+    const savebar = el('div', { class: 'workspace-savebar' }, helpOpen, toolsToggle,
       button('Save & continue', () => { voice.cancel(); void save(false); }, { id: 'save-answer', class: 'primary', 'aria-label': 'Save & continue', title: 'Save and open an existing useful question; Ctrl/Command + Enter', disabled: pending && !['research', 'research-follow-up'].includes(state.pending.kind) }));
     toolPanels.explore.append(el('p', { class: 'quiet' }, 'Save this answer and ask Copilot for follow-up questions to review.'), button('Explore deeper', () => { voice.cancel(); void save(true); }, { id: 'save-deeper', title: 'Save this answer and ask Copilot for follow-up questions', 'aria-label': 'Save answer and explore deeper', disabled: pending }));
     toolPanels.explore.append(button('Regenerate follow-ups', () => {
@@ -2366,7 +2392,13 @@ function renderWorkspace() {
   region('followup', toolPanels.research);
   regions.get('research').area.id = 'research-results-region';
   regions.get('followup').area.id = 'research-conversation-region';
-  toolPanels.research.prepend(el('h3', { id: 'research-workspace-question' }, node.question));
+  toolPanels.research.prepend(el('h3', { id: 'research-workspace-question', tabindex: '-1' }, node.question));
+  if (!root && isQuestion(node)) $('research-workspace-question').after(el('section', { id: 'research-assistance' },
+    el('p', { class: 'quiet' }, 'Need help with the wording or terms? Ask for an explanation without web research. For answer options and evidence, choose Research and review the request first.'),
+    button('Explain this question', () => {
+      if (!current()) return;
+      const summary = $('question-help-summary'); revealQuestionTool(summary); summary.focus({ preventScroll: true });
+    }, { id: 'research-explain-question' })));
   region('children', toolPanels.context);
   if (root || !isQuestion(node)) {
     panel.append(el('div', { class: 'workspace-savebar' }, toolsToggle));
@@ -4452,7 +4484,7 @@ $('question-drawer-handle').addEventListener('click', () => { setQuestionTools(t
 $('workspace').addEventListener('keydown', event => {
   if (event.key !== 'Escape' || event.isComposing || $('question-drawer').hidden) return;
   if ($('answer-revisit') && !$('answer-revisit').closest('[hidden]')) { event.preventDefault(); event.stopPropagation(); $('revisit-cancel').click(); return; }
-  event.preventDefault(); event.stopPropagation(); setQuestionTools(false); $('question-tools-toggle').focus({ preventScroll: true });
+  event.preventDefault(); event.stopPropagation(); setQuestionTools(false); focusQuestionToolsReturn();
 }, true);
 $('fit').addEventListener('click', () => { collapseNode(false); fit(); }); $('center-question').addEventListener('click', centerSelected);
 $('show-whole-map').addEventListener('click', showWholeMap);

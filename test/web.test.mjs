@@ -365,6 +365,70 @@ test('question drawer keeps secondary tools out of answering and preserves mount
   assert.equal($('answer'), answer); assert.equal(body.hidden, true); assert.equal($('revisit-condition').value, 'Next month');
 });
 
+for (const mode of ['empty', 'researched', 'unavailable', 'in-progress']) test(`Help me answer opens Research locally for ${mode} questions`, async t => {
+  const f = await fixture(t, 280, undefined, false, { before: async e => {
+    if (mode === 'researched') { const doc = structuredClone(e.doc); doc.nodes[1].research = findings; await e.save(doc); }
+    if (mode === 'unavailable') e.researcher = null;
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id);
+  if (mode === 'in-progress') {
+    $('question-tools-toggle').click(); $('question-tab-research').click(); $('research-request').click(); await startReviewedResearch(f);
+    await until(() => f.explorer.pending?.kind === 'research', 'research running'); await f.poll(); $('question-drawer-close').click();
+  }
+  const saved = JSON.stringify(f.explorer.doc), editor = $('answer'), calls = [], fetch = f.window.fetch;
+  f.window.fetch = (path, input) => { if (/^api\/(action|question-help|research-review)$/.test(path)) calls.push(path); return fetch(path, input); };
+  assert.ok($('question-help-open'), 'the unanswered question exposes help');
+  assert.equal($('question-help-open').disabled, false); assert.equal(editor.value, '');
+  $('question-help-open').focus(); $('question-help-open').click(); await delay(20);
+  assert.equal($('question-drawer').hidden, false); assert.equal($('question-tab-research').getAttribute('aria-selected'), 'true');
+  assert.equal($('question-help-open').getAttribute('aria-expanded'), 'true');
+  assert.equal(f.document.activeElement, $('research-workspace-question'));
+  assert.equal($('research-review-dialog').open, false); assert.deepEqual(calls, []);
+  assert.equal($('answer'), editor); assert.equal(JSON.stringify(f.explorer.doc), saved);
+  assert.match($('research-assistance').textContent, /wording|terms/); assert.ok($('research-explain-question'));
+  if (mode === 'researched') assert.match($('research-results-region').textContent, /Two possible ways forward/);
+  if (mode === 'in-progress') { assert.match($('research-workspace-status').textContent, /in progress/); assert.equal($('research-request').disabled, true); }
+  $('question-drawer-close').focus(); $('question-drawer-close').click();
+  assert.equal(f.document.activeElement, $('question-help-open')); assert.equal($('question-help-open').getAttribute('aria-expanded'), 'false');
+  if (mode === 'unavailable') {
+    $('question-help-open').click(); $('research-request').click(); await startReviewedResearch(f);
+    await until(() => /requires the installed Copilot desktop SDK/.test($('notice').textContent), 'unavailable research explained');
+    assert.equal($('question-help-open').disabled, false); assert.equal($('answer'), editor);
+  }
+});
+
+test('Help me answer retains the draft and composition and restores each entry focus across navigation', async t => {
+  const f = await fixture(t, 360), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Private answer 日本語 🌿'); chooseState(f, 'assumption');
+  const editor = $('answer'); editor.setSelectionRange(3, 9, 'backward');
+  editor.dispatchEvent(new f.window.Event('compositionstart', { bubbles: true }));
+  $('question-help-open').click(); $('question-drawer-size').click(); $('question-tab-details').click(); await f.poll();
+  assert.equal($('question-help-open').getAttribute('aria-expanded'), 'false', 'help reports its own Research panel visibility');
+  $('question-help-open').click(); f.resize(280, 480); await f.poll();
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Private answer 日本語 🌿'); assert.equal($('answer-state').value, 'assumption');
+  assert.equal(editor.selectionStart, 3); assert.equal(editor.selectionEnd, 9); assert.equal(editor.selectionDirection, 'backward');
+  $('research-workspace-question').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true }));
+  assert.equal($('question-drawer').hidden, false);
+  editor.dispatchEvent(new f.window.Event('compositionend', { bubbles: true }));
+  $('research-workspace-question').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal($('question-drawer').hidden, true); assert.equal(f.document.activeElement, $('question-help-open'));
+  $('question-tools-toggle').click(); await f.poll(); $('question-drawer-close').focus(); $('question-drawer-close').click();
+  assert.equal(f.document.activeElement, $('question-tools-toggle'), 'More options replaces the help return target');
+  assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.equal(editor.value, 'Private answer 日本語 🌿');
+});
+
+test('Help me answer separates explanation navigation from explicit model help', async t => {
+  const runs = [], helper = { run: async operation => { runs.push(operation); return 'A plain explanation.'; }, close() {} };
+  const f = await fixture(t, 360, undefined, false, { questionHelper: helper }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep my draft'); const editor = $('answer');
+  $('question-help-open').click(); $('research-explain-question').click();
+  assert.equal($('question-tab-context').getAttribute('aria-selected'), 'true'); assert.equal($('question-help').open, true);
+  assert.equal(f.document.activeElement, $('question-help-summary')); assert.deepEqual(runs, []);
+  $('help-terms').click(); await until(() => $('question-help-results').textContent.includes('A plain explanation.'), 'explicit term explanation');
+  assert.deepEqual(runs, ['terms']); assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep my draft');
+  $('question-drawer-close').focus(); $('question-drawer-close').click(); assert.equal(f.document.activeElement, $('question-help-open'));
+});
+
 test('Research workspace exposes results directly and returns to the retained answer draft', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {
     const doc = structuredClone(e.doc); doc.nodes[1].research = findings; await e.save(doc);

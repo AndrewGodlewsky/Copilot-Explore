@@ -81,7 +81,7 @@ async function inspectDrawer(page, label) {
 async function inspectWorkspace(page, label, { scroll = false, answer = false } = {}) {
   const panel = await page.locator('#node-workspace').evaluate(el => ({ height: el.clientHeight, contentHeight: el.scrollHeight, overflow: getComputedStyle(el).overflowY, scrollPane: el.classList.contains('scroll-pane'), children: [...el.children].map(child => ({ class: child.className, height: child.getBoundingClientRect().height, scrollHeight: child.scrollHeight, overflow: getComputedStyle(child).overflowY })) }));
   expect(panel.contentHeight <= panel.height + 1 || ['auto', 'scroll'].includes(panel.overflow), `${label}: overflowing workspace is manually scrollable`, panel);
-  const selectors = ['#save-answer', '#question-tools-toggle', ...(answer ? ['#answer'] : [])];
+  const selectors = ['#save-answer', '#question-tools-toggle', '#question-help-open', ...(answer ? ['#answer'] : [])];
   for (const selector of selectors) {
     if (scroll || panel.scrollPane) await page.locator(selector).scrollIntoViewIfNeeded();
     const bounds = await page.locator(selector).evaluate(el => {
@@ -194,7 +194,27 @@ try {
         await inspectWorkspace(page, `${scenario.name}/${phase}`);
       }
       await page.locator('#voice-cancel').click();
-      await page.locator('#question-tools-toggle').click(); await settle(page);
+      const assistanceCalls = [], observeAssistance = request => {
+        if (request.method() === 'POST' && /\/api\/(action|question-help|research-review)$/.test(new URL(request.url()).pathname)) assistanceCalls.push(request.url());
+      };
+      page.on('request', observeAssistance);
+      await page.locator('#question-help-open').focus(); await page.keyboard.press('Enter'); await settle(page);
+      expect(await page.locator('#research-workspace-question').evaluate(el => el === document.activeElement), `${scenario.name}: keyboard help entry focuses the Research question`, {});
+      expect(await page.locator('#question-tab-research').getAttribute('aria-selected') === 'true', `${scenario.name}: one help action opens Research`, {});
+      await page.keyboard.press('Escape'); await settle(page);
+      const helpReturn = await page.locator('#question-help-open').evaluate(el => {
+        const rect = el.getBoundingClientRect(); let top = 0, bottom = innerHeight;
+        for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+          if (['auto', 'scroll', 'hidden', 'clip'].includes(getComputedStyle(parent).overflowY)) {
+            const bounds = parent.getBoundingClientRect(); top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom);
+          }
+        }
+        return { focused: document.activeElement === el, top: rect.top, bottom: rect.bottom, clipTop: top, clipBottom: bottom };
+      });
+      expect(helpReturn.focused && helpReturn.top >= helpReturn.clipTop - 1 && helpReturn.bottom <= helpReturn.clipBottom + 1, `${scenario.name}: Escape visibly returns focus to Help me answer without test scrolling`, helpReturn);
+      await page.keyboard.press('Enter'); await settle(page);
+      expect(assistanceCalls.length === 0, `${scenario.name}: help entry and return start no operation or request review`, assistanceCalls);
+      page.off('request', observeAssistance);
       await inspectDrawer(page, `${scenario.name}/drawer`);
       await inspectWorkspace(page, `${scenario.name}/drawer-card`, { scroll: true });
       await page.locator('[data-tool-tab="research"]').click();

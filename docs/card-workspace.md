@@ -4,6 +4,14 @@ Explorer helps people follow branching questions and record their own answers. T
 
 ## What changed
 
+### Help me answer entry, v0.1.110
+
+**Help me answer** is available beside the answer actions, including when the answer is empty or research cannot run. It opens Research in one action, shows saved findings when present, and focuses the question heading. Opening or closing help starts no model, retrieval or request-review operation. **Explain this question** opens the existing wording/term help in Context; only choosing an explanation action starts model help. **Research** retains its explicit request review and unavailable-state explanations.
+
+Close and Escape return to the originating Help me answer or More options button. Polling, tab changes and resizing retain that return path, the same editor, private text, caret and answer state. Help remains navigable while research is running. Its expanded state reflects whether Research is visible; changing tabs does not discard the original return target.
+
+DOM tests cover empty, researched, unavailable and in-progress cases, navigation without inference, explicit explanation, draft/selection/composition retention and both return paths. The Brave fixture checks keyboard entry and immediately visible Escape return, narrow/short writing space and overflow. Native Copilot, physical IME/dictation and screen-reader checks remain separate; release evidence is recorded in #92.
+
 ### Research drawer shell, v0.1.109
 
 The Research tab opens directly onto existing findings, with no second disclosure to open. The full question is available above the results; the header retains question identity and a research/source-state summary. Existing follow-ups sit beside findings at wide widths and below them in narrow panes. The same drawer scroll container, expansion controls and keyboard tabs remain in use.

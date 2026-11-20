@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.110",
+    "summary": "Open Research in one step with Help me answer beside the answer actions, even before typing or while research is running. Find existing results or navigate to wording and term explanations without starting AI work. Close or Escape returns to the originating button while retaining your answer draft, caret and state."
+  },
+  {
     "version": "0.1.109",
     "summary": "Open Research directly in the bottom drawer, with findings and follow-ups beside each other in wide panes and stacked in narrow panes. Return to your existing answer editor with Answer draft while retaining drafts, selection and discussion. Keep question identity and research status visible, and record the approved workspace design."
   },

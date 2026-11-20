@@ -23,7 +23,7 @@ import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';
 
 const $ = id => document.getElementById(id);
 attachDashboard({ document, fetch: (...args) => fetch(...args), available: () => !closed && !suspended });
-let researchReviewReturn = null, reviewStarting = false;
+let researchReviewReturn = null, reviewStarting = false, inlineResearchReview = null;
 let followupDraft = null;
 const researchReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: () => renderResearchReview() });
 const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'];
@@ -769,7 +769,7 @@ function apply(next, reset = false) {
     minimap.reset();
     if (state.document?.id !== next.document?.id || state.activeKey !== next.activeKey) nextQuestion = new NextQuestion();
     nextQuestionOpen = false; nextQuestionStamp = ''; $('next-question').hidden = true;
-    closeResearchReview();
+    closeResearchReview(false);
     closeBrief();
     closeAdrScope();
     closeAdrFormat();
@@ -820,7 +820,7 @@ function apply(next, reset = false) {
   const doc = state.document;
   if (doc) {
     const ids = new Set(doc.nodes.map(node => node.id));
-    if (!ids.has(selected)) { voice.cancel(); composing = null; workspace = null; $('node-workspace').replaceChildren(); $('question-drawer').replaceChildren(); selected = doc.rootId; expanded = false; focusId = null; wholeView = null; }
+    if (!ids.has(selected)) { closeResearchReview(false); voice.cancel(); composing = null; workspace = null; $('node-workspace').replaceChildren(); $('question-drawer').replaceChildren(); selected = doc.rootId; expanded = false; focusId = null; wholeView = null; }
     else if (focusId && !ids.has(focusId)) { focusId = null; wholeView = null; }
     collapsed = new Set([...collapsed].filter(id => ids.has(id)));
     branches = currentBranches(doc);
@@ -1007,6 +1007,7 @@ function showView() {
   cleanup.sync();
   questionHelp.sync();
   const home = !state.document || libraryView;
+  if (home && inlineResearchReview) closeResearchReview(false);
   $('storage-home').hidden = !home;
   $('welcome').hidden = !home; $('workspace').hidden = home;
   $('library-toggle').hidden = !state.library;
@@ -2008,6 +2009,7 @@ function renderDraftSummary() {
 }
 function setQuestionToolTab(name) {
   const body = $('question-tools-body'); if (!body) return;
+  if (name !== 'research' && inlineResearchReview) closeResearchReview(false);
   const ui = uiFor(selected), previousFocus = document.activeElement;
   ui.toolScrolls ??= {};
   if (body.dataset.activeTab) ui.toolScrolls[body.dataset.activeTab] = body.scrollTop;
@@ -2057,6 +2059,7 @@ function setQuestionTools(open, returnId) {
   if (open && returnId) ui.toolsReturnId = returnId;
   const opening = open && drawer.hidden;
   const restoreFocus = !open && !drawer.hidden && drawer.contains(document.activeElement);
+  if (!open && inlineResearchReview) closeResearchReview(false);
   drawer.hidden = !open; body.hidden = !open; $('question-drawer-handle').hidden = open || !expanded;
   toggle.setAttribute('aria-expanded', String(open));
   $('question-help-open')?.setAttribute('aria-expanded', String(open && ui.toolsTab === 'research'));
@@ -2083,6 +2086,7 @@ function revealQuestionWork() {
 function renderWorkspace() {
   cleanup.sync();
   questionHelp.sync();
+  if (inlineResearchReview && (!expanded || libraryView || inlineResearchReview.nodeId !== selected || inlineResearchReview.journey !== (state.activeKey ?? state.document?.id))) closeResearchReview(false);
   const panel = $('node-workspace'); captureWorkspace(); panel.hidden = !expanded;
   if (!expanded) { $('question-drawer').hidden = true; $('question-drawer-handle').hidden = true; return; }
   const next = state.document.nodes.find(n => n.id === selected);
@@ -2100,6 +2104,7 @@ function renderWorkspace() {
   const workspaceImpact = el('p', { id: 'workspace-impact', class: 'quiet', hidden: true });
   const workspaceCritical = el('p', { id: 'workspace-critical', class: 'quiet', hidden: true });
   panel.append(headingArea, workspaceImpact, workspaceCritical, content);
+  if (inlineResearchReview) closeResearchReview(false);
   const drawer = $('question-drawer'); drawer.replaceChildren(); drawer.dataset.expanded = String(!!ui.toolsExpanded);
   const toolsBody = el('div', { id: 'question-tools-body', class: 'question-tools-body' });
   const toolsToggle = button('More options', () => setQuestionTools(drawer.hidden, 'question-tools-toggle'), { id: 'question-tools-toggle', 'aria-expanded': String(!!ui.toolsOpen), 'aria-controls': 'question-drawer' });
@@ -2437,6 +2442,7 @@ function renderWorkspace() {
     };
     section.addEventListener('toggle', () => { if (current()) { ui.impactOpen = section.open; updateImpact(); } });
   }
+  toolPanels.research.append(el('div', { id: 'research-review-inline', hidden: true }));
   region('research', toolPanels.research);
   region('followup', toolPanels.research);
   regions.get('research').area.id = 'research-results-region';
@@ -2715,27 +2721,65 @@ function renderQuestionPreview() {
   return section;
 }
 function openResearchReview(nodeId, followup, purpose) {
-  voice.cancel(); researchReviewReturn = document.activeElement;
+  if (!purpose && (!expanded || libraryView || nodeId !== selected || !$('research-review-inline'))) return;
+  const returnTarget = document.activeElement;
+  closeResearchReview(false);
+  voice.cancel(); researchReviewReturn = returnTarget;
   $('research-review-content').replaceChildren();
-  $('research-review-dialog').showModal(); $('research-review-close').focus();
+  if (purpose) $('research-review-dialog').showModal();
+  else {
+    setQuestionTools(true); setQuestionToolTab('research');
+    if (!uiFor(selected).toolsExpanded) $('question-drawer-size').click();
+    inlineResearchReview = { journey: state.activeKey ?? state.document.id, nodeId };
+    const host = $('research-review-inline'); host.hidden = false; host.append($('research-review-panel'));
+    revealQuestionTool($('research-review-panel'));
+  }
+  $(purpose ? 'research-review-close' : 'research-review-title').focus({ preventScroll: true });
   researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: purpose === 'challenge-review' ? 'decisions' : $('context-scope').value, ...(purpose ? { purpose } : {}), ...(followup ? { followup } : {}) });
 }
-function closeResearchReview() {
+function closeResearchReview(restoreFocus = true) {
+  const wasOpen = !!inlineResearchReview || $('research-review-dialog').open;
   researchReview.close();
-  if ($('research-review-dialog').open) { $('research-review-dialog').close(); if (researchReviewReturn?.isConnected) researchReviewReturn.focus({ preventScroll: true }); }
+  inlineResearchReview = null;
+  $('research-review-start').disabled = true;
+  $('research-review-dialog').append($('research-review-panel'));
+  if ($('research-review-inline')) $('research-review-inline').hidden = true;
+  if ($('research-review-dialog').open) $('research-review-dialog').close();
+  if (restoreFocus && wasOpen && researchReviewReturn?.isConnected && !researchReviewReturn.closest('[hidden]')) researchReviewReturn.focus({ preventScroll: true });
+}
+function researchReviewSummary(prepared) {
+  const { context, coverage, settings, limits, followup, model } = prepared;
+  const target = context.path.at(-1), prior = [...context.path.slice(0, -1), ...context.decisionsElsewhere];
+  const concise = text => [...text].length > 220 ? `${[...text].slice(0, 220).join('')}… (full text in Exact inputs)` : text;
+  const summary = el('section', { id: 'research-review-summary' }, el('h3', { id: 'research-review-question' }, target.question));
+  if (followup) summary.append(el('p', { id: 'research-review-followup' }, `Follow-up${followup.hypothetical ? ' (hypothetical)' : ''}: ${followup.question}`));
+  summary.append(el('p', {}, `Saved answer: ${ANSWER_STATES[target.answerState] ?? 'No answer'}${target.review ? ' · needs review' : ''}. Unsaved answer draft is excluded. Mode: ${MODES[context.mode].label}.`));
+  if (context.objective) summary.append(el('p', {}, `Objective: ${concise(context.objective)}`));
+  summary.append(el('p', {}, `${prior.length} earlier records included · ${context.pins.length} pinned constraints · ${coverage.omitted.path + coverage.omitted.decisionsElsewhere} records omitted. ${context.scope === 'path' ? 'Ancestor path only.' : 'Ancestor path and relevant answers elsewhere.'} Exact inputs explains the selection and omissions.`));
+  if (prior.length) summary.append(el('ul', { class: 'review-prior' }, ...prior.slice(-3).map(record => el('li', {}, `${concise(record.question)} — ${ANSWER_STATES[record.answerState] ?? 'Journey guidance'}${record.review ? ' · needs review' : ''}`))));
+  if (model) summary.append(el('p', { id: 'research-review-model' }, modelDescription(model)));
+  summary.append(el('p', { id: 'research-review-effort' }, `${settings.depth[0].toUpperCase() + settings.depth.slice(1)}: up to ${limits.timeLimitMs / 1000} seconds including setup, and ${limits.toolAttemptLimit} tool attempts. This is an effort limit, not a completion or price estimate.`),
+    el('p', { id: 'research-review-sources' }, 'Model provider: receives the reviewed inputs. External sources: search and page retrieval may send queries and page requests to external services, subject to host permissions. Help without new retrieval is not yet available in Research.'));
+  return summary;
 }
 function renderResearchReview() {
   const area = $('research-review-content'), value = researchReview.value;
+  const openDetails = new Set([...area.querySelectorAll('details[open][id]')].map(detail => detail.id));
   const focusedId = area.contains(document.activeElement) ? document.activeElement.dataset.nodeId : null;
   const focusedSetting = area.contains(document.activeElement) ? document.activeElement.dataset.setting : null;
+  const focusedDisclosure = area.contains(document.activeElement) && document.activeElement.tagName === 'SUMMARY' ? document.activeElement.parentElement.id : null;
   const challenge = researchReview.context?.purpose === 'challenge-review';
   const regeneration = researchReview.context?.purpose === 'question-regeneration';
+  const ordinary = !challenge && !regeneration;
+  $('research-review-privacy').hidden = ordinary;
+  $('research-review-close').textContent = ordinary ? 'Back' : 'Cancel';
   $('research-review-title').textContent = regeneration ? 'Regenerate follow-ups: review saved context' : challenge ? 'Challenge decisions: review selected inputs' : 'Review research context';
-  $('research-review-description').textContent = regeneration ? 'Review the exact Explorer input for new questions from the corrected saved answer. Nothing runs until you choose Generate reviewed follow-ups. The attached chat retains its own history and can read the committed map; this preview shows only Explorer-supplied input.' : challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Review the Explorer-supplied input for the isolated research helper. Choices apply only to this request. Viewing or excluding context starts no inference.';
+  $('research-review-description').textContent = regeneration ? 'Review the exact Explorer input for new questions from the corrected saved answer. Nothing runs until you choose Generate reviewed follow-ups. The attached chat retains its own history and can read the committed map; this preview shows only Explorer-supplied input.' : challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Check the saved context and effort, then choose Research. Your answer stays yours.';
   $('research-review-start').textContent = regeneration ? 'Generate reviewed follow-ups' : challenge ? 'Start reviewed challenge' : 'Research';
   $('research-review-start').disabled = !value || researchReview.loading || reviewStarting || researchReview.projectDirty || (challenge && !value.prepared.canStart);
   $('research-review-refresh').disabled = researchReview.loading || reviewStarting;
-  $('research-review-status').textContent = researchReview.loading ? 'Preparing context locally. No inference has started.' : researchReview.error || '';
+  $('research-review-status').textContent = (researchReview.loading ? 'Preparing context. No inference has started.' : researchReview.error || '') + (ordinary && !value && area.children.length ? ' Previous inputs are shown below and cannot be started; refresh and review again.' : '');
+  area.setAttribute('aria-busy', String(researchReview.loading));
   const projectControls = el('section', { class: 'review-record' }, el('h3', {}, 'Optional project files for this challenge only'));
   if (challenge) {
     const input = el('textarea', { id: 'project-paths', rows: '3', maxlength: '1204', 'aria-label': 'Project file paths, one relative path per line' }); input.value = researchReview.projectDraft; input.disabled = researchReview.loading || reviewStarting;
@@ -2754,7 +2798,7 @@ function renderResearchReview() {
       el('p', { class: 'quiet' }, `${children.length} current child questions available. Select none or several using your platform's multiple-selection keys. Selected and unselected questions both remain saved. Questions needing review cannot be reused. Removed questions stay in History; they are excluded from this request.`));
   };
   if (!value) {
-    if (!researchReview.loading || !area.children.length) area.replaceChildren(...(challenge ? [projectControls] : regeneration ? [retainedControls()] : []));
+    if (!ordinary && (!researchReview.loading || !area.children.length)) area.replaceChildren(...(challenge ? [projectControls] : regeneration ? [retainedControls()] : []));
     if (researchReview.loading) for (const id of ['project-paths', 'project-read', 'project-clear', 'regeneration-retained']) { const control = $(id); if (control) control.disabled = true; }
     return;
   }
@@ -2769,7 +2813,7 @@ function renderResearchReview() {
   ])) {
     const select = el('select', { 'data-setting': key, id: `research-${key}` }, ...choices.map(([id, title]) => el('option', { value: id }, title)));
     select.value = settings[key]; select.disabled = reviewStarting;
-    select.addEventListener('change', () => researchReview.settings({ ...researchReview.context.settings, [key]: select.value }));
+    select.addEventListener('change', () => { if (select.isConnected && researchReview.context) researchReview.settings({ ...researchReview.context.settings, [key]: select.value }); });
     controls.append(el('label', {}, label, select));
   }
     const rows = [...(challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : regeneration ? [el('p', {}, 'Question generation is queued in the attached chat. Cancellation rejects its result but does not stop the chat turn. No isolated research helper or web retrieval is started by this action.')] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. ${regeneration ? 'Needs-review answer text is withheld; required prerequisites and selected coverage are shown below.' : 'Saved journey records are complete; project prefixes are labeled separately.'}`),
@@ -2790,21 +2834,27 @@ function renderResearchReview() {
   if (coverage.omissionSample?.total) rows.push(display('Omitted saved records: review-only sample, not sent to the model; remaining counts records beyond this sample', coverage.omissionSample));
   for (const [kind, records] of [['Ancestor', context.path.slice(0, -1)], ['Other answer', context.decisionsElsewhere]]) for (const record of records) {
     const input = el('input', { type: 'checkbox', 'data-node-id': record.id }); input.checked = true;
-    input.addEventListener('change', () => researchReview.exclude(record.id, !input.checked));
+    input.addEventListener('change', () => { if (input.isConnected) researchReview.exclude(record.id, !input.checked); });
     rows.push(el('section', { class: 'review-record' }, el('label', {}, input, ` Include optional ${kind.toLowerCase()}: ${record.question}`), el('pre', {}, JSON.stringify(record, null, 2))));
   }
   for (const id of value.excluded) {
     const input = el('input', { type: 'checkbox', 'data-node-id': id });
-    input.addEventListener('change', () => researchReview.exclude(id, !input.checked));
+    input.addEventListener('change', () => { if (input.isConnected) researchReview.exclude(id, !input.checked); });
     rows.push(el('label', {}, input, ` Re-include excluded record ${id}`));
   }
-  rows.push(el('details', {}, el('summary', {}, 'Exact Explorer input strings'), el('h3', {}, 'Instructions'), el('pre', { id: 'research-review-instructions' }, instructions), el('h3', {}, 'Prompt'), el('pre', { id: 'research-review-prompt' }, prompt)));
-  area.replaceChildren(...rows);
-  if (value.prepared.model) area.prepend(el('p', { id: 'research-review-model' }, modelDescription(value.prepared.model)));
+  rows.push(el('details', { id: 'research-review-strings' }, el('summary', {}, 'Exact Explorer input strings'), el('h3', {}, 'Instructions'), el('pre', { id: 'research-review-instructions' }, instructions), el('h3', {}, 'Prompt'), el('pre', { id: 'research-review-prompt' }, prompt)));
+  if (ordinary) {
+    const effort = rows.find(row => row.id === 'research-settings-summary');
+    area.replaceChildren(researchReviewSummary(value.prepared),
+      el('details', { id: 'research-review-advanced' }, el('summary', {}, 'Effort and source preferences'), controls, effort),
+      el('details', { id: 'research-review-exact' }, el('summary', {}, 'Exact inputs, exclusions and omissions'), el('p', { class: 'quiet' }, $('research-review-privacy').textContent), ...rows.filter(row => row !== controls && row !== effort)));
+  } else area.replaceChildren(...rows);
+  for (const id of openDetails) { const detail = $(id); if (area.contains(detail)) detail.open = true; }
   if (focusedId) [...area.querySelectorAll('input')].find(input => input.dataset.nodeId === focusedId)?.focus({ preventScroll: true });
   if (focusedSetting) [...area.querySelectorAll('select')].find(select => select.dataset.setting === focusedSetting)?.focus({ preventScroll: true });
+  if (focusedDisclosure && area.contains($(focusedDisclosure))) $(focusedDisclosure).querySelector('summary')?.focus({ preventScroll: true });
 }
-$('research-review-close').addEventListener('click', closeResearchReview);
+$('research-review-close').addEventListener('click', () => closeResearchReview());
 $('research-review-dialog').addEventListener('cancel', event => { event.preventDefault(); closeResearchReview(); });
 $('research-review-refresh').addEventListener('click', () => { void researchReview.prepare(); });
 $('research-review-start').addEventListener('click', async () => {
@@ -2832,7 +2882,15 @@ function renderFollowup(node) {
   const draft = followupDraft?.journey === journey && followupDraft.nodeId === node.id ? followupDraft : null;
   const question = el('textarea', { id: 'followup-question', rows: '3', maxlength: '4000' }); question.value = draft?.question ?? '';
   const hypothetical = el('input', { id: 'followup-hypothetical', type: 'checkbox' }); hypothetical.checked = draft?.hypothetical ?? false;
-  const remember = () => { followupDraft = { journey, nodeId: node.id, question: question.value, hypothetical: hypothetical.checked }; };
+  const remember = () => {
+    if (!question.isConnected) return;
+    followupDraft = { journey, nodeId: node.id, question: question.value, hypothetical: hypothetical.checked };
+    const context = researchReview.context;
+    if (inlineResearchReview && context?.journey === journey && context.nodeId === node.id && context.followup && (context.followup.question !== question.value || context.followup.hypothetical !== hypothetical.checked)) {
+      closeResearchReview(false);
+      notice('Follow-up changed. Review its context again before researching.');
+    }
+  };
   question.addEventListener('input', remember); hypothetical.addEventListener('change', remember);
   return el('section', { class: 'research-followup' }, el('h3', {}, 'Ask about this research'),
     el('p', { class: 'quiet' }, 'Ask why, clarify a recommendation, or explore a changed assumption. Changes described here are hypothetical; saved answers and guidance stay unchanged. Up to four complete exchanges (64 KiB) stay in this canvas until it closes or restarts. Navigation hides this history; asking on another node replaces it. Reload clears the typed question but can reconnect to history while this canvas remains open. Started work continues until it finishes or you cancel; a reload never starts another request.'),
@@ -3523,7 +3581,10 @@ let lastCoverage = '';
 function showCoverage(value, label) {
   $('context-coverage').textContent = `${label} ${value.kind} context: ${value.bytes.toLocaleString()} / ${value.limit.toLocaleString()} UTF-8 bytes. Included ${value.included.pins} user constraints, ${value.included.path} path records and ${value.included.decisionsElsewhere} additional decisions and ${value.included.generationContext ?? 0} generation cues. Omitted ${value.omitted.path} ancestors and ${value.omitted.decisionsElsewhere} additional decisions and ${value.omitted.generationContext ?? 0} generation cues (${value.omitted.budget} for size; ${value.omitted.scope} by scope). No text was truncated.`;
 }
-$('context-scope').addEventListener('change', () => { $('context-coverage').textContent = 'Scope changed for the next request. Check context or continue your current action; no inference has started.'; });
+$('context-scope').addEventListener('change', () => {
+  $('context-coverage').textContent = 'Scope changed for the next request. Check context or continue your current action; no inference has started.';
+  if (inlineResearchReview && researchReview.context) { researchReview.context = { ...researchReview.context, scope: $('context-scope').value }; void researchReview.prepare(); }
+});
 for (const kind of ['questions', 'research']) $(`check-${kind === 'questions' ? 'question' : kind}-context`).addEventListener('click', async () => {
   if (!state.document || !selected) return;
   const result = await api('context-coverage', { kind, nodeId: selected });
@@ -4620,6 +4681,10 @@ $('question-drawer-handle').addEventListener('click', () => { setQuestionTools(t
 $('workspace').addEventListener('keydown', event => {
   if (event.key !== 'Escape' || event.isComposing || $('question-drawer').hidden) return;
   if ($('research-draft-preview')?.contains(event.target) && !$('research-draft-preview').hidden) { event.preventDefault(); event.stopPropagation(); $('research-draft-cancel').click(); return; }
+  if (inlineResearchReview) {
+    if (event.target.closest('select')) return;
+    event.preventDefault(); event.stopPropagation(); closeResearchReview(); return;
+  }
   if ($('answer-revisit') && !$('answer-revisit').closest('[hidden]')) { event.preventDefault(); event.stopPropagation(); $('revisit-cancel').click(); return; }
   event.preventDefault(); event.stopPropagation(); setQuestionTools(false); focusQuestionToolsReturn();
 }, true);
@@ -4727,7 +4792,7 @@ window.addEventListener('pagehide', event => {
   if ($('project-copy-dialog').open) closeProjectCopy();
   clearProjectListing('Page suspended. Refresh project journeys before selecting.');
   if (viewerTarget) { invalidateViewer('The page was suspended. Reopen Export maps and preview again.'); viewerTarget = null; $('viewer-preview').disabled = true; }
-  closeResearchReview();
+  closeResearchReview(false);
   suspended = true; pageEpoch++; actionEpoch++; stopPolling(); actionAbort?.abort(); actionAbort = null; busy = false;
   cancelProjectGitStatus(); renderProjectGitStatus();
   minimap.reset();

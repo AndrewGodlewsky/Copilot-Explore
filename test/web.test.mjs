@@ -663,7 +663,7 @@ test('Commands reveals a closed question drawer before opening a tool review', a
   $('palette-open').click();
   const command = $('palette-commands').querySelector('[data-command="research-request"]');
   assert.equal(command.getAttribute('aria-disabled'), 'false'); command.click();
-  await until(() => $('research-review-dialog').open, 'review opened');
+  await until(() => !$('research-review-inline').hidden, 'inline review opened');
   assert.equal($('question-tools-body').hidden, false); assert.equal($('question-tools-research').hidden, false);
   assert.equal(f.document.querySelector('[data-tool-tab=research]').getAttribute('aria-selected'), 'true');
   assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep my private text'); assert.equal(f.explorer.pending, null);
@@ -1865,7 +1865,7 @@ test('closing or suspending a merge preview rejects late responses and keeps the
 async function startReviewedResearch(f) {
   await until(() => !f.document.getElementById('research-review-start').disabled, 'review ready');
   f.document.getElementById('research-review-start').click();
-  await until(() => !f.document.getElementById('research-review-dialog').open, 'reviewed start response applied');
+  await until(() => !f.document.getElementById('research-review-dialog').open && f.document.getElementById('research-review-panel').parentElement.id === 'research-review-dialog', 'reviewed start response applied');
   if (f.explorer.pending?.kind === 'research') await until(() => f.researchReady(), 'owned research dispatched');
 }
 
@@ -2255,6 +2255,10 @@ test('research follow-up keeps typing and focus during polling, renders prior ev
   question.value = 'What if <script>cost</script> doubles?'; question.dispatchEvent(new f.window.Event('input', { bubbles: true }));
   f.document.getElementById('followup-hypothetical').click(); f.document.getElementById('followup-review').click();
   await until(() => !f.document.getElementById('research-review-start').disabled, 'follow-up review');
+  assert.ok(f.document.getElementById('question-tools-research').contains(f.document.getElementById('research-review-panel')));
+  assert.equal(f.document.getElementById('research-review-dialog').open, false);
+  assert.match(f.document.getElementById('research-review-followup').textContent, /What if <script>cost<\/script> doubles/);
+  assert.equal(f.document.getElementById('followup-question'), question);
   assert.match(f.document.getElementById('research-review-prompt').textContent, /What if <script>cost<\/script> doubles/);
   await startReviewedResearch(f); await until(() => finish, 'follow-up started');
   question.value = 'Next question 🌿'; question.dispatchEvent(new f.window.Event('input', { bubbles: true })); question.focus(); question.setSelectionRange(2, 5);
@@ -2971,6 +2975,214 @@ test('regeneration keeps retained selection editable after a limit error without
   assert.equal(f.sent.length, 0); $('research-review-close').click();
 });
 
+test('inline Research review summarizes saved inputs and keeps disclosures local while refreshing explicit choices', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    await e.command('guidance', { revision: e.doc.revision, objective: 'Choose a durable approach', successCriteria: 'Retain user choices' });
+    await e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[2].id, answer: 'Saved context <script>🌿' });
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'PRIVATE unsaved draft');
+  const answer = $('answer'); answer.setSelectionRange(2, 8);
+  $('research-request').click(); await until(() => !$('research-review-start').disabled, 'inline review ready');
+  const panel = $('research-review-panel'), token = f.explorer.researchReview.current.token;
+  assert.equal(f.document.activeElement.id, 'research-review-title', 'inline review begins at its visible heading');
+  assert.ok($('question-tools-research').contains(panel)); assert.equal($('research-review-dialog').open, false);
+  assert.equal($('question-drawer').hidden, false); assert.equal($('research-review-start').textContent, 'Research');
+  assert.equal($('question-drawer').dataset.expanded, 'true', 'explicit review makes room for reading');
+  assert.equal($('research-review-question').textContent, f.explorer.doc.nodes[1].question);
+  assert.match($('research-review-summary').textContent, /Choose a durable approach/);
+  assert.match($('research-review-summary').textContent, /Unsaved answer draft is excluded/);
+  assert.match($('research-review-sources').textContent, /Model provider/);
+  assert.match($('research-review-sources').textContent, /search.*page retrieval/);
+  assert.match($('research-review-sources').textContent, /without new retrieval.*not yet available/);
+  assert.equal($('research-review-exact').open, false); assert.equal($('research-review-advanced').open, false);
+  $('research-review-exact').open = true; $('research-review-advanced').open = true;
+  $('research-review-strings').open = true; await delay(20);
+  assert.equal(f.explorer.researchReview.current.token, token); assert.equal(f.explorer.pending, null);
+  assert.ok(!$('research-review-prompt').textContent.includes('PRIVATE unsaved draft'));
+  const depth = $('research-depth'); depth.focus(); depth.value = 'quick'; depth.dispatchEvent(new f.window.Event('change'));
+  await until(() => !$('research-review-start').disabled && f.explorer.researchReview.current.token !== token, 'fresh explicit choices');
+  assert.equal($('research-review-exact').open, true); assert.equal($('research-review-advanced').open, true); assert.equal($('research-review-strings').open, true);
+  assert.equal(f.document.activeElement.id, 'research-depth'); assert.match($('research-settings-summary').textContent, /Quick: 60 seconds.*8 tool attempts/);
+  const currentToken = f.explorer.researchReview.current.token;
+  depth.value = 'deeper'; depth.dispatchEvent(new f.window.Event('change')); await delay(20);
+  assert.equal(f.explorer.researchReview.current.token, currentToken, 'detached preference controls cannot change a new review');
+  f.type('answer', 'Still private'); await delay(20);
+  assert.equal(f.explorer.researchReview.current.token, currentToken, 'excluded unsaved typing does not re-prepare');
+  $('context-scope').value = 'path'; $('context-scope').dispatchEvent(new f.window.Event('change'));
+  await until(() => !$('research-review-start').disabled && f.explorer.researchReview.current.prepared.context.scope === 'path', 'scope change gets a fresh review');
+  $('research-depth').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.ok($('question-tools-research').contains(panel), 'Escape from a select keeps review available');
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'Still private');
+  $('research-answer-draft').click(); assert.equal(f.document.activeElement, answer); assert.ok($('question-tools-research').contains(panel));
+  $('research-review-close').click(); assert.ok($('research-review-dialog').contains(panel)); assert.equal(f.explorer.pending, null);
+});
+
+test('inline Research review keeps the full literal question and exposes large omitted context without inference', async t => {
+  const question = '<script>決定🌿</script> ' + '界'.repeat(450);
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].question = question; doc.nodes[1].generation.originalQuestion = question;
+    for (let i = 0; i < 20; i++) doc.nodes.push({ id: `omission-${i}`, parentId: doc.rootId, question: `Large saved record ${i}?`, category: 'Scope', answer: 'Long saved context '.repeat(1000), answerState: 'assumption', research: null, review: false });
+    await e.command('import', { revision: e.doc.revision, document: doc });
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); $('research-request').click(); await until(() => !$('research-review-start').disabled, 'bounded review');
+  assert.equal($('research-review-question').textContent, question); assert.equal($('research-review-panel').querySelector('script'), null);
+  assert.ok(f.explorer.researchReview.current.prepared.coverage.omitted.budget > 0);
+  assert.match($('research-review-exact').textContent, /for size/); assert.match($('research-review-summary').textContent, /records omitted/);
+  const before = f.explorer.researchReview.current.token;
+  $('research-review-exact').open = true; $('research-review-strings').open = true; await delay(20);
+  assert.equal($('research-review-prompt').textContent, f.explorer.researchReview.current.prepared.prompt);
+  assert.equal(f.explorer.researchReview.current.token, before); assert.equal(f.explorer.pending, null);
+});
+
+for (const leave of ['close', 'tab', 'node', 'collapse', 'home', 'suspend']) test(`inline Research review rejects a delayed preparation after ${leave} and keeps one reusable panel`, async t => {
+  const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Retain this draft');
+  const original = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/research-review' && JSON.parse(options.body).action === 'prepare') await new Promise(resolve => { release = resolve; });
+    return response;
+  };
+  t.after(() => release?.()); $('research-request').click(); await until(() => release, 'held preparation');
+  const panel = $('research-review-panel'); assert.ok($('question-tools-research').contains(panel));
+  if (leave === 'close') $('question-drawer-close').click();
+  if (leave === 'tab') $('question-tab-context').click();
+  if (leave === 'node') f.open(f.explorer.doc.nodes[2].id);
+  if (leave === 'collapse') $('collapse-node').click();
+  if (leave === 'home') $('library-toggle').click();
+  if (leave === 'suspend') f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  release(); await until(() => !f.explorer.researchReview.current, 'review cancelled'); await delay(25);
+  assert.equal(f.document.querySelectorAll('#research-review-panel').length, 1); assert.ok($('research-review-dialog').contains(panel));
+  assert.equal($('research-review-dialog').open, false); assert.equal(f.explorer.pending, null);
+  assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
+
+for (const pending of [false, true]) test(`inline Research review survives external removal of its question while ${pending ? 'preparing' : 'ready'}`, async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); f.type('answer', 'Recover this removed-question draft');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'durable draft');
+  const original = f.window.fetch; let release;
+  if (pending) f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/research-review' && JSON.parse(options.body).action === 'prepare') await new Promise(resolve => { release = resolve; });
+    return response;
+  };
+  t.after(() => release?.()); $('research-request').click();
+  await until(() => pending ? release : !$('research-review-start').disabled, 'review reached');
+  const panel = $('research-review-panel');
+  const next = structuredClone(f.explorer.doc); next.nodes = next.nodes.filter(n => n.id !== node.id);
+  await f.explorer.save(next, 'Remove selected question');
+  try { await f.poll(); } finally { if (!panel.isConnected) $('research-review-dialog').append(panel); }
+  release?.(); f.window.fetch = original;
+  await until(() => !f.explorer.researchReview.current, 'unused review cancelled'); await delay(25);
+  assert.equal(f.document.querySelectorAll('#research-review-panel').length, 1);
+  assert.ok($('research-review-dialog').contains(panel)); assert.equal($('research-review-start').disabled, true);
+  await until(() => $('orphan-drafts').querySelector('textarea')?.value === 'Recover this removed-question draft', 'recoverable draft');
+  f.open(f.explorer.doc.nodes[1].id); $('research-request').click();
+  await until(() => !$('research-review-start').disabled, 'review another question');
+  assert.ok($('research-review-inline').contains(panel)); assert.equal(f.explorer.pending, null);
+});
+
+for (const focus of ['research-review-advanced', 'research-review-exact', 'research-review-strings', 'answer']) test(`inline Research review preserves current ${focus} focus after delayed refresh`, async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); $('research-request').click();
+  await until(() => !$('research-review-start').disabled, 'review ready');
+  const original = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/research-review' && JSON.parse(options.body).action === 'prepare') await new Promise(resolve => { release = resolve; });
+    return response;
+  };
+  t.after(() => release?.()); $('research-review-refresh').click(); await until(() => release, 'held refresh');
+  if (focus === 'answer') { f.type('answer', 'Keep this text'); $('answer').focus(); }
+  else {
+    if (focus === 'research-review-strings') $('research-review-exact').open = true;
+    $(focus).open = true; $(focus).querySelector('summary').focus();
+  }
+  release(); await until(() => !$('research-review-start').disabled, 'fresh review');
+  assert.equal(f.document.activeElement, focus === 'answer' ? $('answer') : $(focus).querySelector('summary'));
+  if (focus !== 'answer') assert.equal($(focus).open, true);
+  assert.equal(f.explorer.pending, null);
+});
+
+for (const pending of [false, true]) for (const input of ['question', 'hypothetical']) test(`inline Research review invalidates changed follow-up ${input} while ${pending ? 'preparing' : 'ready'}`, async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].research = optionFindings();
+    await e.command('import', { revision: e.doc.revision, document: doc });
+  } }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('followup-question', 'Original follow-up?');
+  const composer = $('followup-question'), original = f.window.fetch; let release;
+  if (pending) f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/research-review' && JSON.parse(options.body).action === 'prepare') await new Promise(resolve => { release = resolve; });
+    return response;
+  };
+  t.after(() => release?.()); $('followup-review').click();
+  await until(() => pending ? release : !$('research-review-start').disabled, 'follow-up review reached');
+  if (input === 'question') {
+    composer.focus(); composer.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+    composer.value = 'Changed follow-up?'; composer.setSelectionRange(2, 5);
+    composer.dispatchEvent(new f.window.InputEvent('input', { bubbles: true, isComposing: true }));
+  } else { $('followup-hypothetical').focus(); $('followup-hypothetical').click(); }
+  assert.equal($('research-review-start').disabled, true);
+  assert.ok($('research-review-dialog').contains($('research-review-panel')));
+  assert.equal($('followup-question'), composer);
+  assert.equal(f.document.activeElement, input === 'question' ? composer : $('followup-hypothetical'));
+  if (input === 'question') { assert.equal(composer.selectionStart, 2); assert.equal(composer.selectionEnd, 5); composer.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true })); }
+  release?.(); f.window.fetch = original;
+  await until(() => !f.explorer.researchReview.current, 'old review cancelled'); await delay(25);
+  assert.equal($('research-review-start').disabled, true); assert.equal(f.explorer.pending, null);
+  $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'new follow-up reviewed');
+  assert.equal(f.explorer.researchReview.current.prepared.followup.question, composer.value);
+  assert.equal(f.explorer.researchReview.current.prepared.followup.hypothetical, $('followup-hypothetical').checked);
+});
+
+test('inline Research review rejects edited replacement follow-up after an older start finishes', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].research = optionFindings();
+    await e.command('import', { revision: e.doc.revision, document: doc });
+  } }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+  f.open(node.id); $('research-request').click();
+  await until(() => !$('research-review-start').disabled, 'first review');
+  await confirmAnswer(f.explorer, { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Changed committed source' });
+  const original = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/action' && JSON.parse(options.body).action === 'research') await new Promise(resolve => { release = resolve; });
+    return response;
+  };
+  t.after(() => release?.()); $('research-review-start').click(); await until(() => release, 'held stale start response');
+  $('research-review-close').click(); f.type('followup-question', 'Original replacement?'); $('followup-review').click();
+  await until(() => $('research-review-followup')?.textContent.includes('Original replacement?'), 'replacement prepared');
+  const composer = $('followup-question'); composer.focus(); f.type('followup-question', 'Changed replacement?');
+  release(); await until(() => !f.explorer.researchReview.current, 'changed replacement cancelled'); await delay(30);
+  assert.equal($('research-review-start').disabled, true);
+  assert.equal(f.document.activeElement, composer); assert.equal(f.explorer.pending, null);
+});
+
+test('inline Research review allows editing the next follow-up while a successful start response is delayed', async t => {
+  let finish;
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].research = optionFindings();
+    await e.command('import', { revision: e.doc.revision, document: doc });
+  }, runFollowup: () => new Promise(resolve => { finish = resolve; }) }), $ = id => f.document.getElementById(id);
+  f.open(f.explorer.doc.nodes[1].id); f.type('followup-question', 'Reviewed question?'); $('followup-review').click();
+  await until(() => !$('research-review-start').disabled, 'follow-up ready');
+  const original = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/action' && JSON.parse(options.body).action === 'research-follow-up') await new Promise(resolve => { release = resolve; });
+    return response;
+  };
+  t.after(() => release?.()); $('research-review-start').click(); await until(() => release && finish, 'started helper with held response');
+  const composer = $('followup-question'); composer.focus(); f.type('followup-question', 'My next question?');
+  assert.equal(f.document.activeElement, composer); assert.ok(f.explorer.pending, 'editing does not cancel started work');
+  release(); finish({ answer: 'Answer to reviewed question', uncertainty: 'Fixture only', claims: [{ id: 'c1', text: 'Fixture reasoning', basis: 'reasoning', evidence: [], limitations: 'No retrieved evidence' }], sources: [] });
+  await until(() => $('followup-history').textContent.includes('Answer to reviewed question'), 'started result retained');
+  assert.equal($('followup-question'), composer); assert.equal(composer.value, 'My next question?');
+  assert.equal(f.document.activeElement, composer);
+});
+
 test('research review preserves draft state, caret and composition, sends only the explicitly reviewed context', async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {
     await e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[2].id, answer: 'OPTIONAL-SECRET<script>\ud83c\udf3f' });
@@ -2984,7 +3196,7 @@ test('research review preserves draft state, caret and composition, sends only t
   assert.equal(f.explorer.pending, null); assert.equal($('answer'), answer); assert.equal(answer.value, 'RAW-DRAFT-CANARY');
   assert.equal(answer.selectionStart, 2); assert.equal(answer.selectionEnd, 6); assert.equal($('answer-state').value, 'assumption');
   assert.ok(!$('research-review-content').textContent.includes('RAW-DRAFT-CANARY'));
-  assert.match($('research-review-dialog').textContent, /No project files/);
+  assert.match($('research-review-panel').textContent, /No project files/);
   assert.match($('research-selection-policy')?.textContent ?? '', /literal.*pinned constraints/);
   assert.equal($('research-review-content').querySelectorAll('script').length, 0);
   for (const [key, value] of [['depth', 'deeper'], ['sourceFocus', 'primary'], ['recency', 'recent']]) {
@@ -3036,7 +3248,7 @@ test('research review cancels voice and ignores late HTTP preview and start resp
   $('research-review-close').click(); holdPrepare = false;
   $('research-request').click(); await until(() => !$('research-review-start').disabled, 'new preview');
   const newest = f.explorer.researchReview.current.token; held[0](); await delay(20);
-  assert.equal(f.explorer.researchReview.current.token, newest); assert.equal($('research-review-dialog').open, true); assert.equal(f.explorer.pending, null);
+  assert.equal(f.explorer.researchReview.current.token, newest); assert.equal($('research-review-inline').hidden, false); assert.equal(f.explorer.pending, null);
   holdStart = true; $('research-review-start').click(); await until(() => held.length === 2, 'held start response');
   $('research-review-close').click(); held[1](); await delay(20);
   assert.equal($('research-review-dialog').open, false); assert.equal($('answer').value, 'Private draft');
@@ -3058,7 +3270,7 @@ test('late failed research start does not leave a replacement review disabled', 
   $('research-review-close').click(); $('research-request').click();
   await until(() => $('research-review-prompt')?.textContent.includes('Changed committed source'), 'replacement review');
   release(); await until(() => !$('research-review-start').disabled, 'replacement review enabled');
-  assert.equal($('research-review-dialog').open, true); assert.equal(f.explorer.pending, null);
+  assert.equal($('research-review-inline').hidden, false); assert.equal(f.explorer.pending, null);
   $('research-review-close').click();
 });
 

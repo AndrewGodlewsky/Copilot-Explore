@@ -309,6 +309,18 @@ try {
       await inspectWorkspace(page, `${scenario.name}/research-answer-return`, { answer: true, scroll: true });
       await page.locator('#research-request').click();
       await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      expect(await page.locator('#research-review-panel').evaluate(el => document.getElementById('question-tools-research').contains(el) && !document.getElementById('research-review-dialog').open), `${scenario.name}: review stays inside the Research drawer`, {});
+      expect(await page.locator('#question-drawer').getAttribute('data-expanded') === 'true', `${scenario.name}: explicit review expands the existing drawer for reading`, {});
+      expect(await page.locator('#research-review-exact').evaluate(el => !el.open) && await page.locator('#research-review-advanced').evaluate(el => !el.open), `${scenario.name}: exact inputs and preferences start collapsed`, {});
+      await page.locator('#research-review-title').scrollIntoViewIfNeeded(); await settle(page);
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-research-review-summary.png`) });
+      await page.locator('#research-review-advanced > summary').focus(); await page.keyboard.press('Enter');
+      await page.keyboard.press('Tab');
+      expect(await page.locator('#research-depth').evaluate(el => el === document.activeElement), `${scenario.name}: advanced preferences are keyboard reachable`, {});
+      await page.keyboard.press('Escape');
+      expect(await page.locator('#research-review-inline').evaluate(el => !el.hidden), `${scenario.name}: Escape from a preference select retains review`, {});
+      await page.locator('#research-review-advanced > summary').click();
+      await page.locator('#research-review-exact > summary').focus(); await page.keyboard.press('Enter');
       expect((await page.locator('#research-selection-policy').innerText()).includes('pinned constraints'), `${scenario.name}: research selection policy is inspectable`, {});
       const optional = page.locator(`#research-review-content input[data-node-id="${answered.id}"]`);
       await optional.uncheck();
@@ -318,18 +330,20 @@ try {
       const omissionText = await omissions.locator('pre').innerText(), omitted = JSON.parse(omissionText);
       expect(omitted.entries.some(item => item.id === answered.id && item.reason === 'excluded' && !Object.hasOwn(item, 'answer')), `${scenario.name}: omitted questions retain reason without answer text`, omitted);
       expect(!omissionText.includes(answered.answer) && !(await page.locator('#research-review-prompt').textContent()).includes(answered.answer), `${scenario.name}: excluded answer stays out of the sample and prompt`, {});
-      for (const block of [page.locator('#research-selection-policy'), omissions]) {
+      for (const block of [page.locator('#research-review-question'), page.locator('#research-review-sources'), page.locator('#research-review-effort'), page.locator('#research-selection-policy'), omissions, page.locator('#research-review-close'), page.locator('#research-review-refresh'), page.locator('#research-review-start')]) {
         await block.scrollIntoViewIfNeeded(); await settle(page);
         const geometry = await block.evaluate(el => {
-          const dialog = document.getElementById('research-review-dialog'), d = dialog.getBoundingClientRect(), r = el.getBoundingClientRect();
-          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, dialogLeft: d.left, dialogRight: d.right, dialogTop: d.top, dialogBottom: d.bottom, scrollWidth: dialog.scrollWidth, clientWidth: dialog.clientWidth, width: innerWidth, height: innerHeight };
+          const drawer = document.getElementById('question-tools-body'), d = drawer.getBoundingClientRect(), r = el.getBoundingClientRect();
+          let top = 0, bottom = innerHeight;
+          for (let parent = el.parentElement; parent; parent = parent.parentElement) if (['auto', 'scroll', 'hidden', 'clip'].includes(getComputedStyle(parent).overflowY)) { const bounds = parent.getBoundingClientRect(); top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom); }
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, drawerLeft: d.left, drawerRight: d.right, visible: Math.min(r.bottom, bottom) - Math.max(r.top, top), elementHeight: r.height, scrollWidth: drawer.scrollWidth, clientWidth: drawer.clientWidth, width: innerWidth };
         });
-        expect(geometry.dialogLeft >= 0 && geometry.dialogRight <= geometry.width + 1 && geometry.dialogTop >= 0 && geometry.dialogBottom <= geometry.height + 1 && geometry.scrollWidth <= geometry.clientWidth + 1, `${scenario.name}: research review fits the viewport without horizontal overflow`, geometry);
-        expect(geometry.left >= geometry.dialogLeft && geometry.right <= geometry.dialogRight + 1 && Math.min(geometry.bottom, geometry.dialogBottom) - Math.max(geometry.top, geometry.dialogTop) >= 24, `${scenario.name}: research policy and omission sample can be reached by scrolling`, geometry);
+        expect(geometry.drawerLeft >= 0 && geometry.drawerRight <= geometry.width + 1 && geometry.scrollWidth <= geometry.clientWidth + 1, `${scenario.name}: inline research review fits without horizontal overflow`, geometry);
+        expect(geometry.left >= geometry.drawerLeft && geometry.right <= geometry.drawerRight + 1 && geometry.visible >= Math.min(geometry.elementHeight, 24) - 1, `${scenario.name}: review summary, exact records and actions can be reached by scrolling`, geometry);
       }
       if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-research-review.png`) });
       await page.keyboard.press('Escape');
-      expect(await page.locator('#research-review-dialog').evaluate(el => !el.open) && await page.locator('#research-request').evaluate(el => el === document.activeElement), `${scenario.name}: cancelling review restores its trigger focus`, {});
+      expect(await page.locator('#research-review-dialog').evaluate(el => !el.open && el.contains(document.getElementById('research-review-panel'))) && await page.locator('#research-request').evaluate(el => el === document.activeElement), `${scenario.name}: cancelling review restores its trigger focus`, {});
       expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: research review preserves the same draft editor`, {});
       expect(explorer.pending === null, `${scenario.name}: context review starts no model operation`, {});
       await page.locator('#navigation-open').click(); await page.locator('#research-model-open').click();

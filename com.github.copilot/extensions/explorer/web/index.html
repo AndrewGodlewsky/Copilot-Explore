@@ -288,13 +288,13 @@
     <div id="check-status" role="status"></div><div id="check-content"></div>
     <div class="actions"><button id="run-check">Run check on journey summary</button><button id="review-challenge">Review challenge scope</button><button id="cancel-check" hidden>Cancel check / challenge</button><button id="refresh-check">Refresh saved journey</button><button id="close-check">Close</button></div>
   </dialog>
-  <dialog id="research-review-dialog" aria-labelledby="research-review-title"><h2 id="research-review-title">Review research context</h2>
+  <dialog id="research-review-dialog" aria-labelledby="research-review-title"><section id="research-review-panel" aria-labelledby="research-review-title"><h2 id="research-review-title" tabindex="-1">Review research context</h2>
     <p id="research-review-description">Review the Explorer-supplied input for the isolated research helper. Choices apply only to this request. Viewing or excluding context starts no inference.</p>
-    <p class="quiet">Guidance, pins and answers are user statements and states, not verified facts. Historical AI rationale and raw answer drafts are excluded. Ordinary research excludes prior research; a follow-up includes the displayed original recommendation and complete optional evidence and exchanges. No project files or source attachments are included. This does not erase earlier main-chat context or restrict the separate native get_exploration snapshot.</p>
+    <p id="research-review-privacy" class="quiet">Guidance, pins and answers are user statements and states, not verified facts. Historical AI rationale and raw answer drafts are excluded. Ordinary research excludes prior research; a follow-up includes the displayed original recommendation and complete optional evidence and exchanges. No project files or source attachments are included. This does not erase earlier main-chat context or restrict the separate native get_exploration snapshot.</p>
     <p id="research-review-status" role="status" aria-live="polite"></p><div id="research-review-content"></div>
     <p class="quiet">This review expires after 10 minutes. Changed saved sources require a fresh review and explicit start. Cancel or reload discards these choices and preserves your answer draft.</p>
     <div class="guidance-actions"><button id="research-review-close">Cancel</button><button id="research-review-refresh">Refresh context</button><button id="research-review-start" class="primary" disabled>Research</button></div>
-  </dialog>
+  </section></dialog>
   <dialog id="palette-dialog" aria-labelledby="palette-title">
     <h2 id="palette-title">Commands and local search</h2>
     <label for="palette-query">Find an action, journey or question</label><input id="palette-query" type="search" maxlength="4000" autocomplete="off" aria-controls="palette-commands palette-results">

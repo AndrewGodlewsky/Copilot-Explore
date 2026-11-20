@@ -40,6 +40,28 @@ export class ProjectBriefWorkspace {
     try { return await deadline(this.mode.captureCurrent(capture, { content, signal: abort.signal }), 5000); }
     finally { abort.abort(); signal?.removeEventListener('abort', cancel); }
   }
+  approvalCurrent(guard) {
+    const capture = this.observe();
+    return !!guard && !!this.approval && guard.approval === this.approval && guard.draft === this.draft && guard.epoch === this.epoch &&
+      guard.journey === this.boundJourney && this.boundJourney === this.journey() && guard.capture.id === capture?.id && this.approval.revision === this.revision;
+  }
+  async assertApproval(guard, { signal } = {}) {
+    if (!this.approvalCurrent(guard)) throw changed();
+    try {
+      if (!await this.verify(guard.capture, true, signal) || !this.approvalCurrent(guard)) throw changed();
+    } catch (error) {
+      if (this.approvalCurrent(guard) && !signal?.aborted) this.invalidate('Project files or scope changed or could not be verified. Review and approve a current brief again.');
+      throw error;
+    }
+  }
+  async approvedInput({ signal } = {}) {
+    const capture = this.observe();
+    if (!capture || !this.approval || !this.draft) throw Error('Approve a current project brief first, or use ordinary questions without project context.');
+    const guard = Object.freeze({ capture, approval: this.approval, draft: this.draft, epoch: this.epoch, journey: this.boundJourney });
+    await this.assertApproval(guard, { signal });
+    const claims = Object.entries(this.draft.sections).flatMap(([section, claims]) => claims.map(({ id, text, kind }) => ({ id, section, text, kind })));
+    return { guard, brief: { revision: this.revision, claims } };
+  }
   view(input) {
     const capture = this.mode.capture(), state = this.work?.status === 'pending' ? 'pending' : this.preview ? 'review' : this.error ? 'error' : this.approval ? 'approved' : this.draft ? 'draft' : capture ? 'ready' : 'off';
     return structuredClone({ purpose, clientId: input.clientId, sequence: input.sequence, journey: input.journey, state, revision: this.revision,

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.127",
+    "summary": "Review your approved project brief and saved map context to generate project-aware questions with a separate tool-free helper. Inspect and accept suggestions without changing your answers. Changed context blocks stale results; ordinary generation remains available and unsaved drafts stay private."
+  },
+  {
     "version": "0.1.126",
     "summary": "Generate a project brief from explicitly reviewed file excerpts with an isolated tool-free helper. Inspect file-backed claims, inferences and unknowns; edit or add user assertions, then approve the exact revision. Changed files revoke approval and saved corrections survive same-project refresh. Ordinary questions remain unchanged."
   },

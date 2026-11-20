@@ -61,6 +61,46 @@ import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, 
 import { MODES, effectiveMode } from '../com.github.copilot/extensions/explorer/web/modes.mjs';
 import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from '../com.github.copilot/extensions/explorer/web/decision-impact.mjs';
 
+test('project question review shows approved claims without research settings and retains the answer draft through preview', async t => {
+  const calls = [], guard = {};
+  const f = await fixture(t, 340, undefined, false, { before: async explorer => {
+    explorer.projectBrief.approvedInput = async () => ({ guard, brief: { revision: 2, claims: [{ id: 'fixture', section: 'stack', text: 'PRIVATE_CONTEXT <img src=x> 🌿', kind: 'user' }] } });
+    explorer.projectBrief.approvalCurrent = value => value === guard;
+    explorer.projectBrief.assertApproval = async value => { assert.equal(value, guard); };
+    explorer.projectQuestionHelper = { close() {}, run: async prepared => { calls.push(prepared); return [{ question: 'Should the current design change?', category: 'Design', rationale: 'The future choice is open.', importance: 'high', importanceReason: 'It affects later decisions.' }]; } };
+  } });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id); f.type('answer', 'Keep my unsaved answer 🌿');
+  const editor = $('answer'); editor.focus(); editor.setSelectionRange(4, 9);
+  $('project-questions').click(); await until(() => !$('research-review-start').disabled, 'project question review');
+  assert.match($('research-review-title').textContent, /project questions/i); assert.equal($('research-depth'), null);
+  assert.match($('research-review-content').textContent, /PRIVATE_CONTEXT <img src=x> 🌿/); assert.equal($('research-review-content').querySelector('img'), null);
+  assert.ok(!$('research-review-prompt').textContent.includes('Keep my unsaved answer')); assert.equal(calls.length, 0);
+  assert.match($('research-review-start').textContent, /Generate project questions/); $('research-review-start').click();
+  await until(() => !!f.explorer.preview, 'project preview'); f.window.__updates.apply(f.explorer.uiSnapshot());
+  assert.equal(calls.length, 1); assert.match($('preview-title').textContent, /project questions/i);
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep my unsaved answer 🌿'); assert.equal(editor.selectionStart, 4);
+  assert.equal(f.explorer.doc.nodes.length, 3); $('accept-questions').click(); await until(() => f.explorer.doc.nodes.length === 4, 'explicit project acceptance');
+  assert.equal(f.explorer.doc.nodes.at(-1).answer, ''); assert.ok(!JSON.stringify(f.explorer.doc).includes('PRIVATE_CONTEXT'));
+});
+
+test('unavailable project question review offers explicit ordinary generation without changing the draft', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async explorer => {
+    await explorer.command('answer', { revision: explorer.doc.revision, nodeId: explorer.doc.nodes[1].id, answer: 'Saved starting point', answerState: 'tentative' });
+  } }), $ = id => f.document.getElementById(id), sends = [];
+  f.explorer.send = async input => { sends.push(input); }; f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Preserved draft');
+  $('project-questions').click(); await until(() => $('project-questions-fallback'), 'ordinary fallback');
+  assert.equal($('research-review-start').disabled, true); assert.match($('research-review-status').textContent, /unavailable|SDK|ordinary/i);
+  $('project-questions-fallback').click(); await until(() => sends.length, 'ordinary question enqueue');
+  assert.equal(sends[0].mode, 'enqueue'); assert.ok(!sends[0].prompt.includes('Preserved draft')); assert.equal($('answer').value, 'Preserved draft');
+});
+
+test('project question fallback explains the existing saved-answer prerequisite instead of sending an unsaved draft', async t => {
+  const f = await fixture(t, 340), $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Unsent draft');
+  $('project-questions').click(); await until(() => $('project-questions-fallback'), 'fallback prerequisite');
+  assert.equal($('project-questions-fallback').disabled, true); assert.match($('research-review-content').textContent, /Save an answer or answer state/);
+  assert.equal($('answer').value, 'Unsent draft'); assert.equal(f.explorer.pending, null);
+});
+
 test('research attempt partials stay separate and deeper review preserves drafts, disclosures and focus', async t => {
   let run; let sends = 0;
   const f = await fixture(t, 340, undefined, false, { runResearch: (_, options) => { sends++; return new Promise((resolve, reject) => { run = { ...options, resolve, reject }; }); } });

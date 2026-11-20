@@ -9,6 +9,7 @@ import { createAnswerCheckHelper, prepareAnswerCheck, prepareChallenge } from '.
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { ProjectContext } from '../com.github.copilot/extensions/explorer/project-context.mjs';
 import { createProjectBriefHelper, prepareProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
+import { createProjectQuestionHelper, prepareProjectQuestions } from '../com.github.copilot/extensions/explorer/project-questions.mjs';
 
 const sdkDirectory = process.env.COPILOT_SDK_DIR, cli = process.env.COPILOT_CLI_PATH;
 assert.ok(sdkDirectory && cli, 'Set COPILOT_SDK_DIR and COPILOT_CLI_PATH to the installed desktop pair.');
@@ -21,13 +22,15 @@ const [selected] = addQuestions(document, document.rootId, [{ question: 'What do
 document.pins = [{ id: 'constraint-00000000000000', text: 'Use familiar vocabulary' }];
 const challenge = process.argv.includes('--challenge');
 const projectBrief = process.argv.includes('--project-brief');
+const projectQuestions = process.argv.includes('--project-questions');
+assert.ok([challenge, projectBrief, projectQuestions].filter(Boolean).length <= 1, 'Choose one fixture operation.');
 selected.answer = 'Use the simpler route'; selected.answerState = 'tentative';
 const project = join(temporary, 'selected-project'); await mkdir(project);
 const projectCanary = 'INSTALLED-CHALLENGE-FILE-CANARY 🌿'; await writeFile(join(project, 'design.md'), projectCanary);
 const selectedFiles = await new ProjectContext(async () => project).select(['design.md']);
-const prepared = projectBrief ? prepareProjectBrief({ id: 'fixture-project-capture', sources: selectedFiles.sources }) : challenge ? prepareChallenge(document, [], selectedFiles.sources) : prepareAnswerCheck(document);
-const usageLabel = projectBrief ? 'Explorer Project Brief' : challenge ? 'Explorer Challenge Review' : 'Explorer Answer Check';
-const output = projectBrief ? Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: 'Synthetic project claim.', kind: 'file-backed', sources: [{ id: selectedFiles.sources[0].id, quote: projectCanary }] }]])) : { findings: [{ id: 'u', category: challenge ? 'counterargument' : 'untested-assumption', explanation: 'The saved question may need evidence.', resolution: 'Ask the user which evidence would settle it.', sources: [{ kind: 'node', id: selected.id }] }] };
+const prepared = projectQuestions ? prepareProjectQuestions(document, selected.id, { revision: 2, claims: [{ id: 'claim-fixture', section: 'purpose', text: projectCanary, kind: 'user' }] }) : projectBrief ? prepareProjectBrief({ id: 'fixture-project-capture', sources: selectedFiles.sources }) : challenge ? prepareChallenge(document, [], selectedFiles.sources) : prepareAnswerCheck(document);
+const usageLabel = projectQuestions ? 'Explorer Project Questions' : projectBrief ? 'Explorer Project Brief' : challenge ? 'Explorer Challenge Review' : 'Explorer Answer Check';
+const output = projectQuestions ? { questions: [{ question: 'Should the current design change for Élodie 🌿?', category: 'Design', rationale: 'The future choice remains open.', importance: 'high', importanceReason: 'It changes later decisions.' }] } : projectBrief ? Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: 'Synthetic project claim.', kind: 'file-backed', sources: [{ id: selectedFiles.sources[0].id, quote: projectCanary }] }]])) : { findings: [{ id: 'u', category: challenge ? 'counterargument' : 'untested-assumption', explanation: 'The saved question may need evidence.', resolution: 'Ask the user which evidence would settle it.', sources: [{ kind: 'node', id: selected.id }] }] };
 if (challenge) output.findings[0].sources.push({ kind: 'project', id: selectedFiles.sources[0].id });
 const fixture = createServer(async (req, res) => {
   let body = ''; for await (const chunk of req) body += chunk;
@@ -69,11 +72,12 @@ const runtime = async () => ({ path: cli, sdk: { RuntimeConnection: sdk.RuntimeC
       } };
   }
 } } });
-const helper = (projectBrief ? createProjectBriefHelper : createAnswerCheckHelper)(parent, { runtime, usageDirectory: join(temporary, 'usage') });
+const helper = (projectQuestions ? createProjectQuestionHelper : projectBrief ? createProjectBriefHelper : createAnswerCheckHelper)(parent, { runtime, usageDirectory: join(temporary, 'usage') });
 const timer = setTimeout(() => { for (const client of owned) void client.forceStop(); }, 55000);
 try {
   const result = await helper.run(prepared);
-  if (projectBrief) { assert.equal(result.sections.purpose[0].text, output.purpose[0].text); assert.equal(result.sources[0].excerpt, undefined); }
+  if (projectQuestions) assert.equal(result[0].question, output.questions[0].question);
+  else if (projectBrief) { assert.equal(result.sections.purpose[0].text, output.purpose[0].text); assert.equal(result.sources[0].excerpt, undefined); }
   else assert.equal(result.findings[0].explanation, output.findings[0].explanation);
   assert.equal(prepared.operation === 'challenge-review', challenge);
   assert.ok(prepared.bytes <= 131072);
@@ -82,7 +86,7 @@ try {
     assert.equal(prompt.tools?.length ?? 0, 0);
     assert.equal(prompt.messages.some(m => m.role === 'user' && m.content.includes(selected.question)), !projectBrief);
     assert.ok(!JSON.stringify(prompt).includes('unsaved answer'));
-    assert.equal(JSON.stringify(prompt).includes(projectCanary), challenge || projectBrief);
+    assert.equal(JSON.stringify(prompt).includes(projectCanary), challenge || projectBrief || projectQuestions);
     assert.equal(prompt.messages.some(m => m.role === 'user' && m.content.includes('Use familiar vocabulary')), !projectBrief);
   }
   const ids = await readdir(join(temporary, 'usage', 'session-state'));
@@ -100,7 +104,7 @@ try {
   await held; abort.abort(); await cancelled; assert.equal(initialized, 2);
   assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 2);
   for (const workspace of workspaces) await assert.rejects(stat(workspace), { code: 'ENOENT' });
-  console.log((projectBrief ? 'PASS isolated project brief: ' : challenge ? 'PASS isolated challenge review: ' : 'PASS isolated answer check: ') + ' exact captured SDK strings/byte budget, zero initialized tools, root-anchored context, bounded structured output, attributed receipts, cancellation and release. No paid inference or existing session.');
+  console.log((projectQuestions ? 'PASS isolated project questions: ' : projectBrief ? 'PASS isolated project brief: ' : challenge ? 'PASS isolated challenge review: ' : 'PASS isolated answer check: ') + ' exact captured SDK strings/byte budget, zero initialized tools, reviewed context, bounded structured output, attributed receipts, cancellation and release. No paid inference or existing session.');
 } finally {
   clearTimeout(timer); await helper.close(); await Promise.allSettled([...owned].map(client => client.forceStop()));
   fixture.closeAllConnections(); await new Promise(resolve => fixture.close(resolve));

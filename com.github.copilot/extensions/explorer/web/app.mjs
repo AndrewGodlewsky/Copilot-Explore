@@ -2191,6 +2191,10 @@ function renderWorkspace() {
   toolPanels.details.append(button('Review comments on this node', () => { if (current()) comments.open(node.id); }, { id: 'comments-node-open', 'aria-haspopup': 'dialog' }));
   toolPanels.details.append(button('Review handoffs for this branch', () => { if (current()) reviewHandoffs.open(node.id); }, { id: 'review-handoffs-node-open', 'aria-haspopup': 'dialog' }));
   toolPanels.details.append(button('Copy portable reference', () => { if (current()) void portableReferences.open(node.id); }, { id: 'portable-reference-node-copy', 'aria-haspopup': 'dialog' }));
+  (root || !isQuestion(node) ? content : toolPanels.explore).append(button('Project questions', () => {
+    if (!current() || state.pending || state.preview) return;
+    openResearchReview(node.id, undefined, 'project-questions');
+  }, { id: 'project-questions', disabled: pending || !!state.preview, 'aria-haspopup': 'dialog', title: 'Review the approved project brief and saved map context for new questions. Unsaved answer text is excluded.' }));
   if (root) {
     content.append(el('p', { class: 'quiet' }, 'Pick a connected question to explore it. Each question opens into its own workspace on the map.'), button(doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions', () => api('questions', { nodeId: node.id }), { id: 'generate-questions', disabled: pending || !!state.preview }));
   } else if (!isQuestion(node)) {
@@ -2557,7 +2561,7 @@ function renderWorkspace() {
     update('pending', [state.pending, byId.get(state.pending?.nodeId)?.category], () => {
       if (pending) {
         const workNode = byId.get(state.pending.nodeId);
-        return el('div', { class: 'pending', role: 'status' }, el('strong', {}, ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? `${state.pending.progress ?? 'Researching'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? 'Research runs separately from your chat. Cancelling stops its helper.' : 'Cancelling discards the result; the chat turn may still finish.'));
+        return el('div', { class: 'pending', role: 'status' }, el('strong', {}, ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? `${state.pending.progress ?? 'Researching'}…` : state.pending.owner === 'project-questions' ? `${state.pending.progress ?? 'Considering project questions'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? 'Research runs separately from your chat. Cancelling stops its helper.' : state.pending.owner === 'project-questions' ? 'Project questions run separately from your chat. Cancelling stops only this helper.' : 'Cancelling discards the result; the chat turn may still finish.'));
       }
     });
     update('review', [node.review, isQuestion(node), pending], () => node.review ? el('div', { class: 'note' },
@@ -2595,6 +2599,7 @@ function renderWorkspace() {
       const retry = state.questionRetry;
       if (!await api('refresh-answer') || !current()) return;
       if (retry?.purpose === 'adr-questions') openAdrQuestions();
+      else if (retry?.purpose === 'project-questions') openResearchReview(retry.nodeId, undefined, 'project-questions');
       else await api('questions', { nodeId: retry?.nodeId ?? node.id });
     }, { id: 'refresh-question-context' }) : null);
     const attempt = state.researchAttempt?.nodeId === node.id ? state.researchAttempt : null;
@@ -2623,7 +2628,7 @@ function renderWorkspace() {
     for (const id of ['research-request', 'followup-review', 'followup-clear', 'research-deeper-review', 'save-deeper', 'regenerate-followups']) if ($(id)) $(id).disabled = pending;
     if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending?.kind);
     if ($('save-answer')) $('save-answer').disabled = pending && !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind);
-    for (const id of ['generate-questions', 'add-direction', 'restart-branch', 'fork-scenario']) if ($(id)) $(id).disabled = pending || !!state.preview;
+    for (const id of ['generate-questions', 'project-questions', 'add-direction', 'restart-branch', 'fork-scenario']) if ($(id)) $(id).disabled = pending || !!state.preview;
     if (root && $('generate-questions')) $('generate-questions').textContent = doc.nodes.length > 1 ? 'Find more directions' : 'Generate questions';
     if ($('manual-question').value !== ui.question) $('manual-question').value = ui.question;
     const answer = $('answer'), value = drafts.get(node.id) ?? node.answer;
@@ -2688,7 +2693,7 @@ function renderQuestionFeedback() {
 function renderQuestionPreview() {
   const batch = state.preview, edits = previewEdits.questions;
   const section = el('section', { id: 'question-preview', class: 'question-preview', 'aria-labelledby': 'preview-title' },
-    el('h3', { id: 'preview-title' }, batch.purpose === 'adr-questions' ? 'Review ADR questions' : batch.purpose === 'question-regeneration' ? 'Review new follow-up questions' : 'Review suggested questions'),
+    el('h3', { id: 'preview-title' }, batch.purpose === 'project-questions' ? 'Review project questions' : batch.purpose === 'adr-questions' ? 'Review ADR questions' : batch.purpose === 'question-regeneration' ? 'Review new follow-up questions' : 'Review suggested questions'),
     el('p', { class: 'quiet' }, 'Not saved. Select questions and optionally adjust their wording. Closing or restarting this canvas discards this preview.'));
   const stale = el('p', { id: 'preview-stale', class: 'notice' }, 'Saved context changed. Dismiss and generate again.'); stale.hidden = !batch.stale; section.append(stale);
   edits.forEach((edit, index) => {
@@ -2724,13 +2729,14 @@ function renderQuestionPreview() {
     if (!await api('dismiss-questions', { batchId: batch.id })) return;
     if (await api('refresh-answer')) {
       if (batch.purpose === 'adr-questions') openAdrQuestions();
-      else if (batch.purpose === 'question-regeneration') {
+      else if (['question-regeneration', 'project-questions'].includes(batch.purpose)) {
         if (state.document.nodes.some(n => n.id === batch.nodeId)) openResearchReview(batch.nodeId, undefined, batch.purpose);
         else notice('The corrected question is no longer saved. Select another question to review.');
       } else await api('questions', { nodeId: state.document.nodes.some(n => n.id === batch.nodeId) ? batch.nodeId : state.document.rootId });
     }
   }, { id: 'preview-retry' }); retry.hidden = !batch.stale; section.append(retry);
   if (batch.purpose === 'question-regeneration') { retry.textContent = 'Dismiss, refresh & review context'; section.prepend(el('p', { class: 'quiet' }, 'These are new candidates. Existing questions remain saved; accepting adds selected candidates without replacing old branches.')); }
+  if (batch.purpose === 'project-questions') { retry.textContent = 'Dismiss, refresh & review project context'; section.prepend(el('p', { class: 'quiet' }, 'Suggestions use your reviewed brief and saved map context. Current implementation can be questioned; these suggestions do not supply an answer. Accepted wording and rationale may reflect that reviewed context.')); }
   if (batch.purpose === 'adr-questions') {
     retry.textContent = 'Dismiss, refresh & review ADR context';
     section.prepend(el('p', { class: 'quiet' }, batch.questions.length ? 'Optional questions about missing ADR reasoning. Accepting adds questions below the saved focal decision; your answers and decision rationale remain yours.' : 'The AI found no material gaps in the supplied context. This is not a readiness judgment or approval of an ADR. No questions were added.'));
@@ -2888,18 +2894,32 @@ function renderResearchReview() {
   const focusedDisclosure = area.contains(document.activeElement) && document.activeElement.tagName === 'SUMMARY' ? document.activeElement.parentElement.id : null;
   const challenge = researchReview.context?.purpose === 'challenge-review';
   const regeneration = researchReview.context?.purpose === 'question-regeneration';
+  const projectQuestions = researchReview.context?.purpose === 'project-questions';
   const reconsideration = researchReview.context?.purpose === 'research-reconsideration';
-  const ordinary = !challenge && !regeneration;
+  const ordinary = !challenge && !regeneration && !projectQuestions;
   $('research-review-privacy').hidden = ordinary;
   $('research-review-close').textContent = ordinary ? 'Back' : 'Cancel';
-  $('research-review-title').textContent = reconsideration ? 'Review hypothetical priorities' : regeneration ? 'Regenerate follow-ups: review saved context' : challenge ? 'Challenge decisions: review selected inputs' : 'Review research context';
-  $('research-review-description').textContent = reconsideration ? 'Review your hypothetical priorities and the exact saved inputs. Reconsideration suggests a comparison for you to accept or keep aside; it never saves an answer.' : regeneration ? 'Review the exact Explorer input for new questions from the corrected saved answer. Nothing runs until you choose Generate reviewed follow-ups. The attached chat retains its own history and can read the committed map; this preview shows only Explorer-supplied input.' : challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Check the saved context and effort, then choose Research. Your answer stays yours.';
-  $('research-review-start').textContent = reconsideration ? 'Reconsider recommendation' : regeneration ? 'Generate reviewed follow-ups' : challenge ? 'Start reviewed challenge' : 'Research';
+  $('research-review-title').textContent = projectQuestions ? 'Review project questions' : reconsideration ? 'Review hypothetical priorities' : regeneration ? 'Regenerate follow-ups: review saved context' : challenge ? 'Challenge decisions: review selected inputs' : 'Review research context';
+  $('research-review-description').textContent = projectQuestions ? 'Review the approved project brief and saved map inputs before generating suggestions. Your unsaved answer is excluded. Current implementation can be questioned; only you supply answers and accept questions.' : reconsideration ? 'Review your hypothetical priorities and the exact saved inputs. Reconsideration suggests a comparison for you to accept or keep aside; it never saves an answer.' : regeneration ? 'Review the exact Explorer input for new questions from the corrected saved answer. Nothing runs until you choose Generate reviewed follow-ups. The attached chat retains its own history and can read the committed map; this preview shows only Explorer-supplied input.' : challenge ? 'Select saved answers for one tool-free hypothesis review. This does not change exploration mode. No new evidence is retrieved from the web; selected project excerpts are unverified inputs. Prior research and claims are excluded. References identify your inputs, not evidence support.' : 'Check the saved context and effort, then choose Research. Your answer stays yours.';
+  $('research-review-start').textContent = projectQuestions ? 'Generate project questions' : reconsideration ? 'Reconsider recommendation' : regeneration ? 'Generate reviewed follow-ups' : challenge ? 'Start reviewed challenge' : 'Research';
   $('research-review-start').disabled = !value || researchReview.loading || reviewStarting || researchReview.projectDirty || (challenge && !value.prepared.canStart);
   $('research-review-refresh').disabled = researchReview.loading || reviewStarting;
   $('research-review-status').textContent = (researchReview.loading ? 'Preparing context. No inference has started.' : researchReview.error || '') + (ordinary && !value && area.children.length ? ' Previous inputs are shown below and cannot be started; refresh and review again.' : '');
   area.setAttribute('aria-busy', String(researchReview.loading));
   const projectControls = el('section', { class: 'review-record' }, el('h3', {}, 'Optional project files for this challenge only'));
+  const ordinaryQuestionsReady = () => {
+    const node = state.document.nodes.find(node => node.id === researchReview.context?.nodeId);
+    return !!node && (!isQuestion(node) || effectiveAnswerState(node) !== 'unanswered');
+  };
+  const projectFallback = () => el('section', { class: 'review-record' },
+    el('p', { class: 'quiet' }, 'Ordinary questions use the saved map in the attached chat without the project brief. You can also review or correct your brief before trying project questions again.'),
+    ...(!ordinaryQuestionsReady() ? [el('p', {}, 'Save an answer or answer state before ordinary follow-up generation, or choose the journey root or a direction. Your unsaved draft stays in the editor.')] : []),
+    button('Use ordinary questions', async () => {
+      const context = researchReview.context;
+      if (context?.purpose !== 'project-questions' || !ordinaryQuestionsReady() || state.pending || state.preview || reviewStarting) return;
+      closeResearchReview(false); await api('questions', { nodeId: context.nodeId });
+    }, { id: 'project-questions-fallback', disabled: !ordinaryQuestionsReady() || !!state.pending || !!state.preview || reviewStarting }),
+    button('Review project brief', () => { if (!reviewStarting) { closeResearchReview(false); projectMode.open(); } }, { id: 'project-questions-brief', disabled: reviewStarting }));
   if (challenge) {
     const input = el('textarea', { id: 'project-paths', rows: '3', maxlength: '1204', 'aria-label': 'Project file paths, one relative path per line' }); input.value = researchReview.projectDraft; input.disabled = researchReview.loading || reviewStarting;
     input.addEventListener('input', () => { researchReview.projectDraft = input.value; researchReview.projectDirty = true; $('research-review-start').disabled = true; });
@@ -2917,7 +2937,7 @@ function renderResearchReview() {
       el('p', { class: 'quiet' }, `${children.length} current child questions available. Select none or several using your platform's multiple-selection keys. Selected and unselected questions both remain saved. Questions needing review cannot be reused. Removed questions stay in History; they are excluded from this request.`));
   };
   if (!value) {
-    if (!ordinary && (!researchReview.loading || !area.children.length)) area.replaceChildren(...(challenge ? [projectControls] : regeneration ? [retainedControls()] : []));
+    if (!ordinary && (!researchReview.loading || !area.children.length)) area.replaceChildren(...(challenge ? [projectControls] : regeneration ? [retainedControls()] : projectQuestions && !researchReview.loading ? [projectFallback()] : []));
     if (researchReview.loading) for (const id of ['project-paths', 'project-read', 'project-clear', 'regeneration-retained']) { const control = $(id); if (control) control.disabled = true; }
     return;
   }
@@ -2925,7 +2945,7 @@ function renderResearchReview() {
   const display = (label, item) => el('section', { class: 'review-record' }, el('h3', {}, label), el('pre', {}, JSON.stringify(item, null, 2)));
   const { topic, objective, successCriteria, mode, pins } = context;
   const controls = el('section', { class: 'review-record research-preferences' }, el('h3', {}, 'Research preferences'));
-  for (const [key, label, choices] of (challenge || regeneration || reconsideration ? [] : [
+  for (const [key, label, choices] of (projectQuestions || challenge || regeneration || reconsideration ? [] : [
     ['profile', 'Topic guidance', researchProfiles.map(profile => [profile.id, profile.title])],
     ['depth', 'Depth', [['quick', 'Quick - 60 seconds / 8 tool attempts'], ['standard', 'Standard - 180 seconds / 24 tool attempts'], ['deeper', 'Deeper - 300 seconds / 40 tool attempts']]],
     ['sourceFocus', 'Source focus', [['balanced', 'Balanced evidence'], ['primary', 'Prefer primary sources']]],
@@ -2937,7 +2957,7 @@ function renderResearchReview() {
     controls.append(el('label', {}, label, select));
   }
   if (value.prepared.guidance) controls.append(el('p', {}, value.prepared.guidance.applicability), el('details', { id: 'research-guidance-detail' }, el('summary', {}, 'Selected topic guidance'), el('pre', {}, value.prepared.guidance.text)), el('p', { class: 'quiet' }, 'Guidance changes the comparison criteria, not tool permissions or the effort limit. General handles mixed or unfamiliar topics.'));
-    const rows = [...(challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : regeneration ? [el('p', {}, 'Question generation is queued in the attached chat. Cancellation rejects its result but does not stop the chat turn. No isolated research helper or web retrieval is started by this action.')] : reconsideration ? [] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. ${regeneration ? 'Needs-review answer text is withheld; required prerequisites and selected coverage are shown below.' : 'Saved journey records are complete; project prefixes are labeled separately.'}`),
+    const rows = [...(projectQuestions ? [el('p', {}, 'Uses the selected Copilot model in a separate helper with zero tools and a 180-second operation allowance. Cancellation stops only this helper. Model-provider input and normal Copilot usage apply; shutdown/accounting may continue afterward.'), display('Approved project brief: file-backed interpretations, inferences, unknowns and user assertions', value.prepared.projectBrief)] : challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : regeneration ? [el('p', {}, 'Question generation is queued in the attached chat. Cancellation rejects its result but does not stop the chat turn. No isolated research helper or web retrieval is started by this action.')] : reconsideration ? [] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. ${regeneration ? 'Needs-review answer text is withheld; required prerequisites and selected coverage are shown below.' : 'Saved journey records are complete; project prefixes are labeled separately.'}`),
     display('Required: committed journey guidance and mode', { topic, objective, successCriteria, mode, pins }),
       display(challenge ? 'Required: journey root' : 'Required: selected question and committed answer state', context.path.at(-1))];
   if (challenge) {
@@ -2945,7 +2965,7 @@ function renderResearchReview() {
     if (!context.projectSources?.length) rows.push(el('p', { id: 'project-empty' }, researchReview.projectDraft.trim() ? 'No files are attached to this preview. Read/refresh the entered paths or remove them before starting.' : 'No project files selected.'));
     if (!value.prepared.projectFresh) rows.push(el('p', { id: 'project-stale', class: 'notice' }, 'Project files or working root changed or are unavailable. These are the previously reviewed excerpts. Explicitly read/refresh files and review again before starting.'));
     for (const source of context.projectSources ?? []) rows.push(el('section', { class: 'review-record' }, el('h3', {}, `Project source: ${source.name}`), el('p', {}, `${source.excerptBytes} / ${source.bytes} UTF-8 bytes included${source.truncated ? ' (prefix excerpt)' : ' (complete file)'}. ${value.prepared.projectFresh ? 'Current at last check.' : 'Stale or unavailable.'} Source ${source.id}; SHA-256 ${source.fingerprint}`), el('pre', {}, source.excerpt)));
-  } else if (!regeneration) rows.unshift(el('p', { class: 'quiet' }, 'Project files are excluded from Research, follow-ups and reconsideration. Selected files are available only in an explicit Challenge decisions review.'));
+  } else if (!regeneration && !projectQuestions) rows.unshift(el('p', { class: 'quiet' }, 'Project files are excluded from Research, follow-ups and reconsideration. Selected files are available only in an explicit Challenge decisions review.'));
   if (regeneration) {
     rows.unshift(retainedControls());
     rows.push(display('Required: current prerequisites and selected retained coverage', context.regeneration));
@@ -2970,7 +2990,8 @@ function renderResearchReview() {
     area.replaceChildren(researchReviewSummary(value.prepared),
       ...(reconsideration ? [] : [el('details', { id: 'research-review-advanced' }, el('summary', {}, 'Guidance, effort and source preferences'), controls, effort)]),
       el('details', { id: 'research-review-exact' }, el('summary', {}, 'Exact inputs, exclusions and omissions'), el('p', { class: 'quiet' }, $('research-review-privacy').textContent), ...rows.filter(row => row !== controls && row !== effort)));
-  } else area.replaceChildren(...rows);
+  } else if (projectQuestions) area.replaceChildren(el('p', {}, `${value.prepared.projectBrief.claims.length} approved claims, brief revision ${value.prepared.projectBrief.revision}. Saved map records and their uncertainty are included below. Full file excerpts and supporting quotes are excluded.`), el('details', { id: 'project-questions-inputs' }, el('summary', {}, 'Review project brief and exact inputs'), ...rows), projectFallback());
+  else area.replaceChildren(...rows);
   for (const id of openDetails) { const detail = $(id); if (area.contains(detail)) detail.open = true; }
   if (focusedId) [...area.querySelectorAll('input')].find(input => input.dataset.nodeId === focusedId)?.focus({ preventScroll: true });
   if (focusedSetting) [...area.querySelectorAll('select')].find(select => select.dataset.setting === focusedSetting)?.focus({ preventScroll: true });
@@ -2996,7 +3017,7 @@ $('research-review-start').addEventListener('click', async () => {
     else { researchReview.value = null; researchReview.error = $('check-status').textContent; renderResearchReview(); }
     return;
   }
-  const result = await api(value.prepared.operation === 'research-reconsideration' ? 'research-reconsideration' : value.prepared.operation === 'question-regeneration' ? 'regenerate-questions' : value.prepared.followup ? 'research-follow-up' : 'research', { journey: value.journey, nodeId: value.nodeId, token: value.token });
+  const result = await api(value.prepared.operation === 'project-questions' ? 'project-questions' : value.prepared.operation === 'research-reconsideration' ? 'research-reconsideration' : value.prepared.operation === 'question-regeneration' ? 'regenerate-questions' : value.prepared.followup ? 'research-follow-up' : 'research', { journey: value.journey, nodeId: value.nodeId, token: value.token });
   reviewStarting = false;
   if (sequence !== researchReview.sequence) { if (researchReview.context) renderResearchReview(); return; }
   if (result) { closeResearchReview(); $('cancel-request')?.focus({ preventScroll: true }); }

@@ -1,0 +1,99 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, dirname, basename, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
+import { createDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
+import { parseProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
+import { waitFor } from './helpers/wait-for.mjs';
+
+async function fixture(t, { hold = false, unavailable = false, approve = true } = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'explorer-project-questions-')), root = join(directory, 'project'), file = join(directory, 'map.json');
+  await mkdir(root); await promisify(execFile)('git', ['init', '--quiet', root], { windowsHide: true });
+  const canary = 'PRIVATE_PROJECT_QUESTION_FACT 🌿'; await writeFile(join(root, 'README.md'), canary);
+  const doc = createDocument('Question grounding'), ordinary = [], calls = []; await writeFile(file, JSON.stringify(doc)); let working = root, release, signal;
+  const helper = { close: async () => {}, run: async (prepared, options) => {
+    calls.push(prepared); signal = options.signal; if (hold) await new Promise(resolve => { release = resolve; }); signal.throwIfAborted();
+    return [{ question: 'Should the existing design change for café users 🌿?', category: 'Design', rationale: 'The future choice is unresolved.', importance: 'high', importanceReason: 'It changes future work.' }];
+  } };
+  const projectBriefHelper = { close: async () => {}, run: async prepared => parseProjectBrief(JSON.stringify(Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: 'Unknown.', kind: 'unknown', sources: [] }]]))), prepared) };
+  const explorer = await new Explorer({ file, projectRoot: () => working, projectBriefHelper, projectQuestionHelper: unavailable ? undefined : helper, send: async input => { ordinary.push(input); } }).load();
+  t.after(async () => { explorer.clearPending(); release?.(); await explorer.close(); assert.equal(dirname(resolve(directory)), resolve(tmpdir())); assert.ok(basename(directory).startsWith('explorer-project-questions-')); await rm(directory, { recursive: true, force: true }); });
+  let scopeSequence = 0, briefSequence = 0, sequence = 0; const scopeClient = randomUUID(), briefClient = randomUUID(), clientId = randomUUID();
+  const scope = (action, extra = {}) => explorer.projectModeRequest({ action, purpose: 'project-questions', journey: doc.id, clientId: scopeClient, sequence: ++scopeSequence, ...extra });
+  const brief = (action, extra = {}) => explorer.projectBriefRequest({ action, purpose: 'project-brief', journey: doc.id, clientId: briefClient, sequence: ++briefSequence, ...extra });
+  if (approve) {
+    await scope('status'); const preview = await scope('prepare', { paths: ['README.md'], exclusions: [] }); const enabled = await scope('approve', { token: preview.token }); await scope('read', { token: enabled.readToken });
+    await brief('status'); const review = await brief('prepare'); await brief('start', { id: randomUUID(), token: review.token }); await waitFor(() => explorer.projectBrief.work?.status !== 'pending');
+    const draft = await brief('status'); await brief('approve', { revision: draft.revision, changes: { edits: [], remove: [], additions: [{ section: 'purpose', text: canary }] } });
+  }
+  const review = () => explorer.reviewResearch({ action: 'prepare', purpose: 'project-questions', journey: doc.id, nodeId: doc.rootId, scope: 'decisions', excluded: [], clientId, sequence: ++sequence });
+  const start = value => explorer.command('project-questions', { revision: explorer.doc.revision, journey: doc.id, nodeId: doc.rootId, token: value.token });
+  const accept = () => explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: [{ index: 0, question: explorer.preview.questions[0].question }] });
+  return { explorer, root, file, doc, canary, ordinary, calls, scope, brief, review, start, accept, ready: () => release, release: () => release?.(), signal: () => signal, setRoot: value => { working = value; } };
+}
+
+test('project questions use only a purpose-reviewed helper and stage Unicode suggestions without saving answers', async t => {
+  const f = await fixture(t, { hold: true }), before = await readFile(f.file, 'utf8'), review = await f.review();
+  assert.equal(f.calls.length, 0); assert.ok(review.prepared.prompt.includes(f.canary));
+  assert.ok(!JSON.stringify(review).includes(f.root)); assert.equal(review.prepared.settings, undefined); assert.equal(review.prepared.model, undefined);
+  await assert.rejects(f.explorer.command('regenerate-questions', { revision: f.doc.revision, journey: f.doc.id, nodeId: f.doc.rootId, token: review.token }), /purpose/);
+  await f.start(review); await waitFor(() => f.ready()); assert.equal(f.ordinary.length, 0); assert.equal(f.calls[0].prompt, review.prepared.prompt);
+  const requestId = f.explorer.pending.id;
+  await assert.rejects(f.explorer.receive('questions', { requestId, questions: [] }), /owned|isolated/i);
+  await assert.rejects(f.explorer.receive('fail', { requestId, message: 'Spoofed attached chat failure' }), /owned|isolated/i);
+  f.release(); await waitFor(() => !f.explorer.pending); assert.equal(f.explorer.preview.questions.length, 1);
+  assert.equal(await readFile(f.file, 'utf8'), before); assert.ok(!JSON.stringify(f.explorer.nativeSnapshot()).includes(f.canary));
+  assert.ok(!JSON.stringify(f.explorer.uiSnapshot()).includes(f.canary)); await f.accept();
+  assert.equal(f.explorer.doc.nodes.length, 2); assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.match(f.explorer.doc.nodes[1].question, /café users 🌿/);
+  assert.ok(!(await readFile(f.file, 'utf8')).includes(f.canary)); await assert.rejects(f.start(review));
+});
+
+test('revoking a brief or disabling scope aborts owned questions and cannot install a late preview', async t => {
+  for (const action of ['revoke', 'disable']) {
+    const f = await fixture(t, { hold: true }), review = await f.review(); await f.start(review); await waitFor(() => f.ready());
+    if (action === 'disable') await f.scope('disable'); else await f.brief('revoke', { revision: f.explorer.projectBrief.revision });
+    assert.equal(f.signal().aborted, true); f.release(); await f.explorer.toolFreeTask; await waitFor(() => !f.explorer.pending);
+    assert.equal(f.explorer.preview, null); assert.equal(f.explorer.doc.nodes.length, 1);
+  }
+});
+
+test('changed project content, root and saved map reject a completed project preview before acceptance', async t => {
+  for (const change of ['content', 'root', 'map']) {
+    const f = await fixture(t), review = await f.review(); await f.start(review); await waitFor(() => !f.explorer.pending); assert.ok(f.explorer.preview);
+    if (change === 'content') await writeFile(join(f.root, 'README.md'), 'Changed input');
+    if (change === 'root') f.setRoot(join(dirname(f.root), 'another-project'));
+    if (change === 'map') f.explorer.doc.objective = 'Changed goal';
+    await assert.rejects(f.accept(), /changed|stale|review/i); assert.equal(f.explorer.doc.nodes.length, 1);
+  }
+});
+
+test('unavailable or unapproved project mode leaves ordinary enqueue usable without project disclosure', async t => {
+  for (const options of [{ unavailable: true }, { approve: false }]) {
+    const f = await fixture(t, options); await assert.rejects(f.review(), /brief|SDK|unavailable|ordinary/i); assert.equal(f.calls.length, 0);
+    await f.explorer.command('questions', { revision: f.explorer.doc.revision, nodeId: f.doc.rootId }); await waitFor(() => f.ordinary.length);
+    assert.equal(f.ordinary[0].mode, 'enqueue'); assert.ok(!f.ordinary[0].prompt.includes(f.canary));
+  }
+});
+
+test('cancelling a queued project request prevents helper invocation and retains the shared shutdown barrier', async t => {
+  const f = await fixture(t); let releaseQueue; f.explorer.toolFreeTask = new Promise(resolve => { releaseQueue = resolve; });
+  try { const review = await f.review(); await f.start(review); await f.explorer.command('cancel'); }
+  finally { releaseQueue(); }
+  await f.explorer.toolFreeTask;
+  assert.equal(f.calls.length, 0); assert.equal(f.explorer.preview, null);
+  let release; f.explorer.trackToolFreeRelease({ releaseConfirmed: new Promise(resolve => { release = resolve; }) });
+  await assert.rejects(f.start(await f.review()), /not confirmed shutdown/); assert.equal(f.calls.length, 0); release(true);
+});
+
+test('project approval revoked during the last asynchronous map read cannot pass source validation', async t => {
+  const f = await fixture(t), review = await f.review(); await f.start(review); await waitFor(() => !!f.explorer.preview);
+  const read = f.explorer.readCurrent.bind(f.explorer), verify = f.explorer.projectBrief.assertApproval.bind(f.explorer.projectBrief); let verified = false;
+  f.explorer.projectBrief.assertApproval = async (...args) => { await verify(...args); verified = true; };
+  f.explorer.readCurrent = async () => { const current = await read(); if (verified) f.explorer.projectBrief.approval = null; return current; };
+  await assert.rejects(f.explorer.checkQuestionSource(f.doc.rootId), /changed/); assert.equal(f.explorer.preview.stale, true);
+});

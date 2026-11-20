@@ -60,12 +60,15 @@ validateDocument(doc); await writeFile(file, JSON.stringify(doc));
 const offlineDoc = structuredClone(doc), offlineFile = join(directory, 'support.html');
 offlineDoc.nodes.find(node => node.id === parent.id).research.sources[0].title = 'X'.repeat(300);
 await writeFile(offlineFile, viewerArtifact(viewerSnapshot(validateDocument(offlineDoc), [{ nodeId: parent.id, answer: false, research: true }])).content);
-let requests = 0, comparisons = 0, briefRuns = 0, effortRuns = 0, effortFixture = false, followupRuns = 0, followupFixture = false, voiceReady = false, voiceJob, modelCatalogError = false;
+let requests = 0, comparisons = 0, briefRuns = 0, projectQuestionRuns = 0, projectQuestionDraft = '', effortRuns = 0, effortFixture = false, followupRuns = 0, followupFixture = false, voiceReady = false, voiceJob, modelCatalogError = false;
 const explorer = await new Explorer({ file, projectRoot: async () => directory, projectBriefHelper: { close: async () => {}, run: async prepared => {
   briefRuns++;
   const output = Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: `${section}: not established by this fixture.`, kind: 'unknown', sources: [] }]]));
   output.purpose = [{ id: 'purpose', text: 'Synthetic <script>literal</script> 🌿 ' + 'λ'.repeat(400), kind: 'file-backed', sources: [{ id: prepared.context.sources[0].id, quote: '<script>literal</script> 🌿' }] }];
   return parseProjectBrief(JSON.stringify(output), prepared);
+} }, projectQuestionHelper: { close: async () => {}, run: async prepared => {
+  assert.ok(prepared.prompt.includes('Reviewed user correction 🌿')); assert.ok(projectQuestionDraft && !prepared.prompt.includes(projectQuestionDraft)); projectQuestionRuns++;
+  return [{ question: 'Should the current design change for café users 🌿?', category: 'Design', rationale: 'The future choice remains open.', importance: 'high', importanceReason: 'It affects later decisions.' }];
 } }, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
   models: async () => { if (modelCatalogError) throw Error('Synthetic catalog failure'); return fixtureResearchModels(); },
   run: async (_, { prepared, onReport }) => {
@@ -489,6 +492,33 @@ try {
       expect(await claim.evaluate(el => el.readOnly) && await claim.inputValue() === 'Reviewed user correction 🌿', `${scenario.name}: approved correction is read-only`, {});
       expect(explorer.projectBrief.draft.sections.purpose[0].kind === 'user' && await editor.inputValue() === 'Keep this private draft', `${scenario.name}: correcting the brief preserves answer text and changes provenance`, {});
       if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-project-brief.png`) });
+      await page.locator('#project-mode-close').click();
+      const toolsWereOpen = await page.locator('#question-tools-toggle').getAttribute('aria-expanded') === 'true';
+      const priorToolTab = await page.locator('[data-tool-tab][aria-selected="true"]').getAttribute('data-tool-tab');
+      if (!toolsWereOpen) await page.locator('#question-tools-toggle').click();
+      await page.locator('[data-tool-tab="explore"]').click();
+      const beforeProjectQuestions = projectQuestionRuns, beforeProjectNodes = explorer.doc.nodes.length;
+      projectQuestionDraft = `Unsent project-question draft ${scenario.name} 🌿`; await editor.fill(projectQuestionDraft);
+      await page.locator('#project-questions').focus(); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      expect(projectQuestionRuns === beforeProjectQuestions, `${scenario.name}: project question review starts no inference`, {});
+      await page.locator('#project-questions-inputs > summary').click();
+      expect((await page.locator('#research-review-content').textContent()).includes('Reviewed user correction 🌿') && await page.locator('#research-depth').count() === 0, `${scenario.name}: project questions review claims without Research settings`, {});
+      for (const id of ['research-review-start', 'project-questions-fallback', 'project-questions-brief']) {
+        const control = page.locator('#' + id); await control.scrollIntoViewIfNeeded();
+        const bounds = await control.evaluate(el => { const r = el.getBoundingClientRect(), d = el.closest('dialog').getBoundingClientRect(); return { left: r.left, right: r.right, height: r.height, visible: Math.min(r.bottom, d.bottom) - Math.max(r.top, d.top), scroll: el.closest('dialog').scrollWidth, client: el.closest('dialog').clientWidth, width: innerWidth }; });
+        expect(bounds.left >= 0 && bounds.right <= bounds.width + 1 && bounds.visible >= Math.min(bounds.height, 24) - 1 && bounds.scroll <= bounds.client + 1, `${scenario.name}: project question review controls fit and remain reachable`, bounds);
+      }
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-project-questions.png`) });
+      await page.locator('#research-review-start').focus(); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.getElementById('preview-title')?.textContent === 'Review project questions');
+      expect(projectQuestionRuns === beforeProjectQuestions + 1 && explorer.doc.nodes.length === beforeProjectNodes && await editor.inputValue() === projectQuestionDraft, `${scenario.name}: project suggestions require acceptance and preserve the editor`, {});
+      await page.locator('#dismiss-questions').click(); await page.waitForFunction(() => !document.getElementById('question-preview'));
+      await editor.fill('Keep this private draft');
+      if (priorToolTab) await page.locator(`[data-tool-tab="${priorToolTab}"]`).click();
+      if (!toolsWereOpen) await page.locator('#question-tools-toggle').click();
+      await page.locator('#navigation-open').click(); await page.locator('#project-mode-open').click();
+      await page.waitForFunction(() => !document.getElementById('project-brief-revoke').disabled);
       await page.locator('#project-brief-revoke').click(); await page.waitForFunction(() => !document.querySelector('#project-brief-claims textarea').readOnly);
       await page.locator('#project-mode-disable').click(); await page.waitForFunction(() => document.getElementById('project-mode-indicator').hidden);
       await page.keyboard.press('Escape');

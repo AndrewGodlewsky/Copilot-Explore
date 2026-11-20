@@ -20,6 +20,21 @@ function fixture(t) {
 }
 const noChanges = () => ({ edits: [], remove: [], additions: [] });
 
+test('project question input requires approval and guards revision, capture and content without disclosing raw sources', async t => {
+  const f = fixture(t); await assert.rejects(f.workspace.approvedInput(), /approve|brief/i);
+  const draft = await f.generate(); await assert.rejects(f.workspace.approvedInput(), /approve|brief/i);
+  await f.request('approve', { revision: draft.revision, changes: { ...noChanges(), additions: [{ section: 'purpose', text: 'A corrected purpose 🌿.' }] } });
+  const input = await f.workspace.approvedInput();
+  assert.ok(input.brief.claims.some(item => item.kind === 'user' && item.text === 'A corrected purpose 🌿.'));
+  assert.ok(!JSON.stringify(input.brief).includes('C:/project')); assert.ok(!JSON.stringify(input.brief).includes(f.initial.sources[0].excerpt));
+  assert.equal(f.workspace.approvalCurrent(input.guard), true); await f.workspace.assertApproval(input.guard);
+  f.setFresh(false); await assert.rejects(f.workspace.assertApproval(input.guard));
+  assert.equal(f.workspace.approvalCurrent(input.guard), false);
+  f.setFresh(true); const next = await f.generate(); const approved = await f.request('approve', { revision: next.revision, changes: noChanges() });
+  const later = await f.workspace.approvedInput(); await f.request('revoke', { revision: approved.revision });
+  assert.equal(f.workspace.approvalCurrent(later.guard), false);
+});
+
 test('brief review starts no model; one-use explicit generation stays unapproved until revision-bound approval', async t => {
   const f = fixture(t); const status = await f.request('status'); assert.equal(status.captureAvailable, true); assert.equal(status.approved, false);
   const preview = await f.request('prepare'); assert.ok(preview.prepared.prompt.includes('community tools')); assert.equal(f.sends(), 0);

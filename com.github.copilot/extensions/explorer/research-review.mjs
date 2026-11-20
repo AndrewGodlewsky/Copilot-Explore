@@ -30,10 +30,10 @@ export class ResearchReview {
     const challenge = input?.purpose === 'challenge-review';
     const handoff = input?.purpose === 'implementation-handoff';
     const adrScope = input?.purpose === 'adr-scope', adrQuestions = input?.purpose === 'adr-questions', adrDraft = input?.purpose === 'adr-draft', savedAdr = adrQuestions || adrDraft, selected = handoff || adrScope;
-    const regeneration = input?.purpose === 'question-regeneration';
+    const regeneration = input?.purpose === 'question-regeneration', projectQuestions = input?.purpose === 'project-questions';
     const reconsideration = input?.purpose === 'research-reconsideration';
     if (!input || typeof input !== 'object' || Array.isArray(input) || !['prepare', 'cancel'].includes(input.action) ||
-      (reconsideration ? Object.keys(input).sort().join(',') !== 'action,clientId,comparison,excluded,journey,nodeId,purpose,scope,sequence' : savedAdr ? Object.keys(input).sort().join(',') !== 'action,clientId,journey,nodeId,purpose,sequence' : regeneration ? Object.keys(input).sort().join(',') !== 'action,clientId,excluded,journey,nodeId,purpose,retained,scope,sequence' : selected ? Object.keys(input).sort().join(',') !== 'action,clientId,journey,nodeId,purpose,selection,sequence' : !['action,clientId,excluded,journey,nodeId,scope,sequence', 'action,clientId,excluded,journey,nodeId,scope,sequence,settings'].includes(Object.keys(input).filter(key => key !== 'followup' && !(challenge && ['purpose', 'project'].includes(key))).sort().join(','))) ||
+      (projectQuestions ? Object.keys(input).sort().join(',') !== 'action,clientId,excluded,journey,nodeId,purpose,scope,sequence' : reconsideration ? Object.keys(input).sort().join(',') !== 'action,clientId,comparison,excluded,journey,nodeId,purpose,scope,sequence' : savedAdr ? Object.keys(input).sort().join(',') !== 'action,clientId,journey,nodeId,purpose,sequence' : regeneration ? Object.keys(input).sort().join(',') !== 'action,clientId,excluded,journey,nodeId,purpose,retained,scope,sequence' : selected ? Object.keys(input).sort().join(',') !== 'action,clientId,journey,nodeId,purpose,selection,sequence' : !['action,clientId,excluded,journey,nodeId,scope,sequence', 'action,clientId,excluded,journey,nodeId,scope,sequence,settings'].includes(Object.keys(input).filter(key => key !== 'followup' && !(challenge && ['purpose', 'project'].includes(key))).sort().join(','))) ||
       (challenge && (input.followup !== undefined || input.scope !== 'decisions')) ||
       typeof input.clientId !== 'string' || !/^[a-zA-Z0-9-]{20,80}$/.test(input.clientId) ||
       !Number.isSafeInteger(input.sequence) || input.sequence < 1 ||
@@ -48,11 +48,11 @@ export class ResearchReview {
     if (input.action === 'cancel') return { status: 'cancelled' };
     if (explorer.closed || !explorer.doc || input.journey !== (explorer.activeKey ?? explorer.doc.id)) obsolete();
     if (explorer.pending) throw new Error('Wait for research or cancel the current request first.');
-    if ((regeneration || adrQuestions) && explorer.preview) throw Error('Accept or dismiss the existing question preview before asking again.');
+    if ((regeneration || adrQuestions || projectQuestions) && explorer.preview) throw Error('Accept or dismiss the existing question preview before asking again.');
     const file = explorer.file, key = explorer.activeKey;
     const current = regeneration || adrScope || savedAdr ? await explorer.fresh() : await explorer.readCurrent();
     if (explorer.closed || this.order !== order || explorer.file !== file || explorer.activeKey !== key) obsolete();
-    if (challenge || selected || savedAdr ? input.nodeId !== current.rootId : !isQuestion(findNode(current, input.nodeId))) throw new Error(challenge || selected || savedAdr ? 'This review must use the journey root.' : 'Select a question to research.');
+    if (challenge || selected || savedAdr ? input.nodeId !== current.rootId : projectQuestions ? !findNode(current, input.nodeId) : !isQuestion(findNode(current, input.nodeId))) throw new Error(challenge || selected || savedAdr ? 'This review must use the journey root.' : 'Select a question to research.');
     if (challenge && input.project) {
       const capture = await explorer.projectContext.select(input.project.paths, this.selection?.capture);
       if (explorer.closed || this.order !== order || explorer.file !== file || explorer.activeKey !== key) obsolete();
@@ -65,12 +65,12 @@ export class ResearchReview {
     const projectFresh = observedFresh && !this.selection?.stale;
     if (explorer.closed || this.order !== order || explorer.file !== file || explorer.activeKey !== key) obsolete();
     const scenarioPolicy = await explorer.scenarioPolicy(), scenario = scenarioPolicy.label;
-    const guided = !reconsideration && !adrDraft && !adrQuestions && !adrScope && !regeneration && !handoff && !challenge && input.followup === undefined ? guidedResearchSettings(settings) : null;
+    const guided = !projectQuestions && !reconsideration && !adrDraft && !adrQuestions && !adrScope && !regeneration && !handoff && !challenge && input.followup === undefined ? guidedResearchSettings(settings) : null;
     if (guided) settings = guided.settings;
-    const content = reconsideration ? prepareReconsideration(current, input.nodeId, input.comparison, { scenario, scope: input.scope, excluded: input.excluded }) : adrDraft ? prepareAdrDraft(current, { scenario }) : adrQuestions ? explorer.prepareAdrQuestionRequest(current, randomUUID(), scenario) : adrScope ? prepareAdrScope(current, input.selection, { scenario }) : regeneration ? explorer.prepareRequest('questions', input.nodeId, randomUUID(), input.scope, scenario, { document: current, retained: input.retained, excluded: input.excluded }) : handoff ? prepareHandoff(current, input.selection, { scenario }) : challenge ? Object.freeze({ ...prepareChallenge(current, input.excluded, projectCapture?.sources, { scenario }), projectCapture, projectFresh }) : input.followup !== undefined ? prepareFollowup(current, input.nodeId, input.followup, { settings, scenario, scope: input.scope, excluded: input.excluded, history: explorer.currentFollowup(current, input.nodeId) }) : Object.freeze({ ...prepareResearch(current, input.nodeId, { ...researchFraming(current, settings), scenario, scope: input.scope, excluded: input.excluded }), settings, guidance: guided.guidance, limits: researchLimits(settings) });
+    const content = projectQuestions ? await explorer.prepareProjectQuestionRequest(current, input.nodeId, { scenario, scope: input.scope, excluded: input.excluded }) : reconsideration ? prepareReconsideration(current, input.nodeId, input.comparison, { scenario, scope: input.scope, excluded: input.excluded }) : adrDraft ? prepareAdrDraft(current, { scenario }) : adrQuestions ? explorer.prepareAdrQuestionRequest(current, randomUUID(), scenario) : adrScope ? prepareAdrScope(current, input.selection, { scenario }) : regeneration ? explorer.prepareRequest('questions', input.nodeId, randomUUID(), input.scope, scenario, { document: current, retained: input.retained, excluded: input.excluded }) : handoff ? prepareHandoff(current, input.selection, { scenario }) : challenge ? Object.freeze({ ...prepareChallenge(current, input.excluded, projectCapture?.sources, { scenario }), projectCapture, projectFresh }) : input.followup !== undefined ? prepareFollowup(current, input.nodeId, input.followup, { settings, scenario, scope: input.scope, excluded: input.excluded, history: explorer.currentFollowup(current, input.nodeId) }) : Object.freeze({ ...prepareResearch(current, input.nodeId, { ...researchFraming(current, settings), scenario, scope: input.scope, excluded: input.excluded }), settings, guidance: guided.guidance, limits: researchLimits(settings) });
     settings = content.settings ?? settings;
     await explorer.assertScenarioPolicy(scenarioPolicy);
-    const modelCapture = !challenge && !handoff && !adrScope && !regeneration && !savedAdr ? await explorer.captureResearchModel() : null;
+    const modelCapture = !projectQuestions && !challenge && !handoff && !adrScope && !regeneration && !savedAdr ? await explorer.captureResearchModel() : null;
     const reuseNamespace = content.followup ? await explorer.researchReuseNamespace() : null;
     if (explorer.closed || this.order !== order || explorer.file !== file || explorer.activeKey !== key) obsolete();
     const reusePolicy = content.followup ? Object.freeze({ scope: input.scope, excluded: Object.freeze([...input.excluded]) }) : null;
@@ -78,7 +78,7 @@ export class ResearchReview {
     const prepared = Object.freeze({ ...content, scenarioPolicy, ...(modelCapture ? { modelCapture } : {}), ...(content.followup ? { reuseNamespace, reusePolicy, ...(reuse ? { reuse } : {}) } : {}) });
     const token = randomUUID(), expiresAt = Date.now() + REVIEW_TTL;
     const response = { token, journey: input.journey, nodeId: input.nodeId, clientId: input.clientId, sequence: input.sequence, expiresAt,
-      excluded: [...input.excluded ?? []], prepared: { context: prepared.context, instructions: prepared.instructions, prompt: prepared.prompt, bytes: prepared.bytes, limit: prepared.limit, coverage: prepared.coverage, ...(reconsideration || regeneration || selected || savedAdr ? { operation: prepared.operation, canStart: true } : challenge ? { operation: 'challenge-review', canStart: prepared.canStart && projectFresh, projectFresh } : { settings, guidance: prepared.guidance }), limits: prepared.limits, ...(prepared.followup ? { followup: prepared.followup } : {}), ...(reuse ? { reuse } : {}), ...(reconsideration ? { comparison: prepared.comparison } : {}), ...(modelCapture ? { model: researchModelSummary(modelCapture) } : {}) } };
+      excluded: [...input.excluded ?? []], prepared: { context: prepared.context, instructions: prepared.instructions, prompt: prepared.prompt, bytes: prepared.bytes, limit: prepared.limit, coverage: prepared.coverage, ...(projectQuestions || reconsideration || regeneration || selected || savedAdr ? { operation: prepared.operation, canStart: true } : challenge ? { operation: 'challenge-review', canStart: prepared.canStart && projectFresh, projectFresh } : { settings, guidance: prepared.guidance }), limits: prepared.limits, ...(projectQuestions ? { projectBrief: prepared.projectBrief } : {}), ...(prepared.followup ? { followup: prepared.followup } : {}), ...(reuse ? { reuse } : {}), ...(reconsideration ? { comparison: prepared.comparison } : {}), ...(modelCapture ? { model: researchModelSummary(modelCapture) } : {}) } };
     if (Buffer.byteLength(JSON.stringify(response), 'utf8') > REVIEW_RESPONSE_LIMIT) throw new Error('The research review exceeds its 1 MiB response limit. Reduce optional exclusions or choose a narrower scope.');
     this.current = { token, journey: input.journey, nodeId: input.nodeId, file, key, prepared, expiresAt };
     clearTimeout(this.timer); this.timer = setTimeout(() => this.clear(), REVIEW_TTL); this.timer.unref?.();
@@ -92,20 +92,21 @@ export class ResearchReview {
     const challenge = review.prepared.operation === 'challenge-review';
     const handoff = review.prepared.operation === 'implementation-handoff';
     const adrScope = review.prepared.operation === 'adr-scope';
-    const regeneration = review.prepared.operation === 'question-regeneration';
+    const regeneration = review.prepared.operation === 'question-regeneration', projectQuestions = review.prepared.operation === 'project-questions';
     const adrQuestions = review.prepared.operation === 'adr-questions';
     const adrDraft = review.prepared.operation === 'adr-draft';
-    if ((regeneration || adrQuestions) && (explorer.pending || explorer.preview)) throw Error('Finish or dismiss the current questions before asking again.');
+    if ((regeneration || adrQuestions || projectQuestions) && (explorer.pending || explorer.preview)) throw Error('Finish or dismiss the current questions before asking again.');
     if (challenge && !review.prepared.canStart) throw new Error('Select at least one saved nonempty answer to challenge. Tentative answers remain tentative.');
     this.clear(true);
     await explorer.assertScenarioPolicy(review.prepared.scenarioPolicy);
+    if (projectQuestions) await explorer.projectBrief.assertApproval(review.prepared.projectApproval);
     if (review.prepared.modelCapture && !sameResearchModel(review.prepared.modelCapture, await explorer.captureResearchModel())) throw Error('The reviewed Research model or settings changed. Refresh the review before starting.');
     const current = await explorer.readCurrent();
     if (explorer.closed || explorer.file !== review.file || explorer.activeKey !== review.key) obsolete();
     if (review.prepared.operation === 'research-reconsideration' && findNode(current, input.nodeId).researchStale) throw Error('The reviewed research is stale. Research again before reconsidering.');
     if (review.prepared.projectCapture && (!review.prepared.projectFresh || !await explorer.projectContext.fresh(review.prepared.projectCapture))) throw new Error('Reviewed project files or working root changed or are unavailable. Explicitly refresh files and review before starting.');
     explorer.currentFollowup(current);
-    if (explorer.closed || !sameResearchSources(review.prepared.dependencies, current) || ((regeneration || adrQuestions) && !sameResearchSources(review.prepared.dependencies, explorer.doc)) || (!challenge && !handoff && !adrScope && !regeneration && !adrQuestions && !adrDraft && !sameResearchDestination(review.prepared.dependencies, current))) throw new Error('Reviewed sources or saved research changed. Refresh and review context before starting.');
+    if (explorer.closed || !sameResearchSources(review.prepared.dependencies, current) || ((regeneration || adrQuestions || projectQuestions) && !sameResearchSources(review.prepared.dependencies, explorer.doc)) || (!projectQuestions && !challenge && !handoff && !adrScope && !regeneration && !adrQuestions && !adrDraft && !sameResearchDestination(review.prepared.dependencies, current))) throw new Error('Reviewed sources or saved research changed. Refresh and review context before starting.');
     if (!sameReviewedResearchFreshness(review.prepared)) throw Error('Reviewed evidence freshness changed. Refresh the review before starting.');
     if (adrDraft) {
       const captured = captureAdrDraft(review.prepared), scenario = review.prepared.context.scenario;

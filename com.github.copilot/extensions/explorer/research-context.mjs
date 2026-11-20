@@ -116,7 +116,7 @@ function prepareResearchInput(doc, nodeId, options, rechecking = false) {
   const stateful = node => isQuestion(node) && (node.answer.trim() || effectiveAnswerState(node) !== 'unanswered');
   const decisionsElsewhere = relevance ? relevance.optional.filter(item => item.key === 'decisionsElsewhere').map(item => record(byId.get(item.id))) : doc.nodes.filter(node => (options?.operation === 'brief' || stateful(node)) && !seen.has(node.id))
     .sort((a, b) => (options?.operation === 'brief' ? Number(!!stateful(b)) - Number(!!stateful(a)) : 0) || distances.get(a.id) - distances.get(b.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).map(record);
-  const generationContext = options?.operation === 'questions' ? [
+  const generationContext = ['questions', 'project-questions'].includes(options?.operation) ? [
     ...path.slice().reverse().map(item => byId.get(item.id)).filter(node => (node.rationale || node.importance) && node.generation).map(node => generationRecord(node, 'path')),
     ...doc.nodes.filter(node => node.parentId === nodeId).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0).map(node => generationRecord(node, 'child')),
   ] : undefined;
@@ -133,6 +133,7 @@ function prepareResearchInput(doc, nodeId, options, rechecking = false) {
   const sentIds = new Set(sent.map(item => item.id));
   const omissionSample = relevance && !rechecking ? researchOmissions(byId, relevance.optional, sentIds, prepared.context.scope, options?.excluded) : undefined;
   const selection = relevance ? { scope: prepared.context.scope, excluded: options?.excluded ?? [], fixedBytes: bytes(options?.instructions ?? '') + bytes(options?.prefix ?? ''),
+    ...(options?.operation === 'project-questions' ? { operation: options.operation } : {}),
     fallbackIds: relevance.optional.filter(item => item.rank[0] === 0 && sentIds.has(item.id)).map(item => item.id),
     ...(options?.scenario === undefined ? {} : { scenario: options.scenario }), signature: fingerprint([prepared.context.path, prepared.context.decisionsElsewhere]) } : undefined;
   return immutable({ ...prepared, ...(omissionSample ? { coverage: { ...prepared.coverage, omissionSample } } : {}), dependencies: structuredClone({ identity: identity(doc), framing: framing(doc), nodeId,
@@ -145,8 +146,8 @@ export function sameResearchSources(dependencies, doc) {
   if (!dependencies || !doc || !equal(dependencies.identity, identity(doc)) || !equal(dependencies.framing, framing(doc))) return false;
   if (dependencies.selection) {
     try {
-      const { scope, excluded, fixedBytes, scenario, signature } = dependencies.selection;
-      if (prepareResearchInput(doc, dependencies.nodeId, { scope, excluded, scenario, prefix: ' '.repeat(fixedBytes) }, dependencies.selection).dependencies.selection.signature !== signature) return false;
+      const { scope, excluded, fixedBytes, scenario, signature, operation } = dependencies.selection;
+      if (prepareResearchInput(doc, dependencies.nodeId, { scope, excluded, scenario, operation, prefix: ' '.repeat(fixedBytes) }, dependencies.selection).dependencies.selection.signature !== signature) return false;
     } catch { return false; }
   }
   const nodes = new Map(doc.nodes.map(node => [node.id, node]));

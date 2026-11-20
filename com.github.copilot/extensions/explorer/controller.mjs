@@ -7,6 +7,7 @@ import { comparisonInput, comparisonResult } from './research-comparison.mjs';
 import { ProjectContext } from './project-context.mjs';
 import { ProjectMode } from './project-mode.mjs';
 import { ProjectBriefWorkspace } from './project-brief-workspace.mjs';
+import { prepareProjectQuestions } from './project-questions.mjs';
 import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
@@ -68,7 +69,7 @@ export { atomicWrite } from './storage.mjs';
 const restoreCandidate = (snapshot, current) => ({ ...snapshot, id: current.id, createdAt: current.createdAt, revision: current.revision, updatedAt: current.updatedAt });
 
 export class Explorer {
-  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, briefHelper, checkHelper, projectBriefHelper, projectRoot, timeoutMs = 240000 }) {
+  constructor({ file, library, binding, send, target, researcher, cleaner, questionHelper, briefHelper, checkHelper, projectBriefHelper, projectQuestionHelper, projectRoot, timeoutMs = 240000 }) {
     this.file = file; this.send = send; this.target = target; this.timeoutMs = timeoutMs;
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null;
@@ -88,6 +89,7 @@ export class Explorer {
     this.researcher = researcher; this.researchTasks = new Set(); this.researchTask = Promise.resolve(); this.unconfirmedResearchRelease = null; this.researchWork = null;
     this.briefHelper = briefHelper; this.briefWork = null; this.checkHelper = checkHelper; this.checkWork = null; this.cleaner = cleaner; this.cleanup = null; this.questionHelper = questionHelper; this.help = null; this.toolFreeTask = Promise.resolve(); this.unconfirmedToolFreeRelease = null; this.helpContexts = new Map(); this.closed = false;
     this.projectBriefHelper = projectBriefHelper;
+    this.projectQuestionHelper = projectQuestionHelper; this.projectQuestionWork = null;
     this.projectBrief = new ProjectBriefWorkspace({ mode: this.projectMode, journey: () => this.closed ? null : this.activeKey ?? this.doc?.id, execute: task => {
       const run = this.toolFreeTask.then(async () => {
         this.requireToolFreeRelease();
@@ -547,7 +549,7 @@ export class Explorer {
   uiSnapshot() {
     let stale = this.preview?.stale ?? false;
     if (this.preview) {
-      try { stale ||= !sameResearchSources(this.questionSource?.dependencies, this.doc) || this.questionSource?.journey !== (this.activeKey ?? this.doc.id) || !this.scenarioPreferences.matches(this.questionSource?.scenarioPolicy); }
+      try { stale ||= !sameResearchSources(this.questionSource?.dependencies, this.doc) || this.questionSource?.journey !== (this.activeKey ?? this.doc.id) || !this.scenarioPreferences.matches(this.questionSource?.scenarioPolicy) || !!this.questionSource?.projectApproval && !this.projectBrief.approvalCurrent(this.questionSource.projectApproval); }
       catch { stale = true; } // Another canvas can remove the parent before an explicit refresh.
     }
     const preview = this.preview ? { ...this.preview, stale } : null;
@@ -562,8 +564,9 @@ export class Explorer {
     const source = this.questionSource;
     try {
       await this.assertScenarioPolicy(source?.scenarioPolicy);
+      if (source?.projectApproval) await this.projectBrief.assertApproval(source.projectApproval, { signal: this.projectQuestionWork?.abort.signal });
       const current = await this.readCurrent();
-      if (source !== this.questionSource || !sameResearchSources(source?.dependencies, this.doc) || !sameResearchSources(source?.dependencies, current) || source?.journey !== (this.activeKey ?? this.doc.id)) throw new Error('Source changed');
+      if (source !== this.questionSource || !sameResearchSources(source?.dependencies, this.doc) || !sameResearchSources(source?.dependencies, current) || source?.journey !== (this.activeKey ?? this.doc.id) || source?.projectApproval && !this.projectBrief.approvalCurrent(source.projectApproval)) throw new Error('Source changed');
     } catch {
       if (this.preview && source === this.questionSource) this.preview.stale = true;
       throw new Error('The saved question context changed. Dismiss this preview, refresh the saved journey and generate again.');
@@ -632,10 +635,22 @@ export class Explorer {
     return work;
   }
   projectModeRequest(input) {
-    const pending = this.projectMode.request(input); this.projectBrief.observe();
-    return pending.finally(() => this.projectBrief.observe());
+    const pending = this.projectMode.request(input); this.invalidateProjectQuestions();
+    return pending.finally(() => this.invalidateProjectQuestions());
   }
-  projectBriefRequest(input) { return this.projectBrief.request(input); }
+  projectBriefRequest(input) { const pending = this.projectBrief.request(input); this.invalidateProjectQuestions(); return pending.finally(() => this.invalidateProjectQuestions()); }
+  invalidateProjectQuestions() {
+    this.projectBrief.observe();
+    if (this.researchReview.current?.prepared.projectApproval && !this.projectBrief.approvalCurrent(this.researchReview.current.prepared.projectApproval)) this.researchReview.clear();
+    if (!this.questionSource?.projectApproval || this.projectBrief.approvalCurrent(this.questionSource.projectApproval)) return;
+    if (this.pending?.owner === 'project-questions') { this.clearPending(); this.error = 'The saved question context changed. Review the current project brief or use ordinary questions.'; }
+    if (this.preview?.purpose === 'project-questions') this.preview.stale = true;
+  }
+  async prepareProjectQuestionRequest(document, nodeId, options) {
+    if (!this.projectQuestionHelper) throw Error('Project questions require the installed Copilot SDK helper. Use ordinary questions while it is unavailable.');
+    const input = await this.projectBrief.approvedInput();
+    return Object.freeze({ ...prepareProjectQuestions(document, nodeId, input.brief, options), projectApproval: input.guard });
+  }
   async readCurrent() {
     if (this.projectStore) {
       if (this.projectChange) throw Error(this.projectChange.message);
@@ -1128,7 +1143,7 @@ export class Explorer {
       if (confirmed && this.unconfirmedResearchRelease === marker) this.unconfirmedResearchRelease = null;
     }).catch(() => {});
   }
-  clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; }
+  clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; this.projectQuestionWork?.abort.abort(); this.projectQuestionWork = null; }
   reviewResearch(input) { return this.transact(() => this.researchReview.prepare(this, input)); }
   adrFormatRequest(input) { return this.transact(() => this.adrFormats.request(this, input)); }
   adrFileRequest(input) { return this.transact(() => input?.action === 'sources' ? this.adrWriter.request(this, input) : this.withDocumentLock(() => this.adrWriter.request(this, input))); }
@@ -1174,16 +1189,39 @@ export class Explorer {
     const scenarioPolicy = reviewed?.scenarioPolicy ?? await this.scenarioPolicy();
     if (reviewed) await this.assertScenarioPolicy(scenarioPolicy);
     const prepared = reviewed ?? this.prepareRequest(kind, nodeId, id, scope, scenarioPolicy.label);
+    const ownedProject = prepared.operation === 'project-questions';
     if (ownedResearch) this.requireResearchRelease();
+    if (ownedProject) this.requireToolFreeRelease();
     this.contextCoverage = { journey: this.activeKey ?? this.doc.id, kind, nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage };
-    this.pending = { id, kind, nodeId, startedAt: new Date().toISOString() };
+    this.pending = { id, kind, nodeId, startedAt: new Date().toISOString(), ...(ownedProject ? { owner: 'project-questions' } : {}) };
     this.error = '';
     // Research owns its execution timer; waiting for release does not spend that allowance.
-    this.timer = ownedResearch ? null : setTimeout(() => void this.transact(() => {
+    this.timer = ownedResearch || ownedProject ? null : setTimeout(() => void this.transact(() => {
       if (this.pending?.id === id) { this.clearPending(); this.error = 'Copilot has not returned a result yet. Check the chat, then try again. Your answers are saved.'; }
     }), this.timeoutMs);
     this.timer?.unref?.();
-    if (kind === 'questions') this.questionSource = { journey: this.activeKey ?? this.doc.id, nodeId, dependencies: prepared.dependencies, scenarioPolicy, ...(['question-regeneration', 'adr-questions'].includes(prepared.operation) ? { purpose: prepared.operation } : {}) };
+    if (kind === 'questions') this.questionSource = { journey: this.activeKey ?? this.doc.id, nodeId, dependencies: prepared.dependencies, scenarioPolicy, ...(['question-regeneration', 'adr-questions', 'project-questions'].includes(prepared.operation) ? { purpose: prepared.operation } : {}), ...(ownedProject ? { projectApproval: prepared.projectApproval } : {}) };
+    if (ownedProject) {
+      const work = { id, file: this.file, key: this.activeKey, abort: new AbortController() }; this.projectQuestionWork = work;
+      const active = () => !this.closed && this.pending?.id === id && this.projectQuestionWork === work && !work.abort.signal.aborted;
+      this.pending.progress = 'Waiting for the project question helper';
+      const run = this.toolFreeTask.then(async () => {
+        if (!active()) return;
+        this.requireToolFreeRelease(); await this.checkQuestionSource(nodeId);
+        if (!active()) return;
+        return this.projectQuestionHelper.run(prepared, { signal: work.abort.signal, onProgress: progress => { if (active()) this.pending.progress = progress; } });
+      });
+      this.toolFreeTask = run.then(() => {}, error => { this.trackToolFreeRelease(error); });
+      const task = run.then(result => this.transact(async () => {
+        if (!active()) return;
+        if (this.file !== work.file || this.activeKey !== work.key) throw Error('The question journey changed. Review and generate again.');
+        await this.checkQuestionSource(nodeId); if (!active()) return;
+        const questions = candidateQuestions(this.doc, nodeId, result);
+        this.preview = { id, journey: this.activeKey ?? this.doc.id, nodeId, questions, stale: false, purpose: 'project-questions' };
+        this.clearPending(); this.error = '';
+      })).catch(error => this.transact(() => { if (active()) { this.clearPending(); this.error = error.message; } }));
+      this.researchTasks.add(task); void task.finally(() => this.researchTasks.delete(task)); return;
+    }
     if (ownedResearch) {
       const controller = new AbortController(); this.researchAbort = controller;
       const work = { ...prepared, scenarioPolicy, file: this.file, key: this.activeKey, abort: controller }; this.researchWork = work;
@@ -1378,11 +1416,11 @@ export class Explorer {
         return { ...this.uiSnapshot(), contextCoverage: { scenario: policy.label, kind: input.kind, nodeId: input.nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage } };
       }
       if (action === 'cancel') { this.researchReview.clear(); this.clearPending(); this.error = ''; return this.uiSnapshot(); }
-      if (action === 'regenerate-questions' || action === 'adr-questions') {
+      if (action === 'regenerate-questions' || action === 'adr-questions' || action === 'project-questions') {
         if (this.pending || this.preview) throw Error('Finish or dismiss the current question request or preview before regenerating.');
         if (Object.keys(input).some(key => !['action', 'scope', 'revision', 'journey', 'nodeId', 'token'].includes(key)) || input.revision !== this.doc?.revision) throw Error('Invalid or changed regeneration selection. Review the saved context again.');
         await this.withDocumentLock(async () => {
-          const prepared = await this.researchReview.consume(this, { ...input, purpose: action === 'adr-questions' ? 'adr-questions' : 'question-regeneration' });
+          const prepared = await this.researchReview.consume(this, { ...input, purpose: action === 'regenerate-questions' ? 'question-regeneration' : action });
           await this.request('questions', prepared.targetId ?? input.nodeId, undefined, prepared);
         });
         return this.uiSnapshot();
@@ -1670,6 +1708,7 @@ export class Explorer {
     return this.transact(async () => {
       const pending = this.pending;
       if (!pending || pending.id !== input?.requestId) throw new Error('This request was cancelled, replaced, or already completed. Do not retry it.');
+      if (pending.owner === 'project-questions') throw Error('Project questions are owned by the isolated helper, not the attached chat.');
       if (['research', 'research-follow-up', 'research-reconsideration'].includes(pending.kind)) throw new Error('Research is owned by the isolated helper, not the attached chat.');
       if (kind === 'fail') { this.error = text(input.message, 'Error message', 2000); this.clearPending(); return { saved: false }; }
       if (pending.kind !== kind) throw new Error('The response type does not match this request.');
@@ -1681,5 +1720,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.projectMode.clear(); this.projectBrief.clear(); this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close(), this.projectBriefHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
+  async close() { this.projectMode.clear(); this.projectBrief.clear(); this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close(), this.projectBriefHelper?.close(), this.projectQuestionHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

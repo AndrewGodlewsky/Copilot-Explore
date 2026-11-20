@@ -2,7 +2,7 @@
 
 [Issue #93](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/93) extends the [approved Research workspace](research-workspace-design.md). Read concise choices before the deeper findings. Each new option has a short answer, explanation, fit conditions, material pros/cons and an editable draft suggestion. **Concrete details** and **Findings and evidence** expand on demand. The Research action and wording/term help remain available; existing findings do not repeat the introductory help text.
 
-Viewing an option never saves an answer. **Use this option**, **Use recommendation** and selected details append to the existing private draft, preserving its answer state and conditional undo. The separate Save action commits the answer. A newly stale result disables these actions even if its result bytes have not changed; the application rechecks the live stale marker before applying a suggestion. Existing authored text stays intact.
+Viewing an option never saves an answer. **Append to my draft**, **Append recommendation** and selected details preserve existing private text. Equivalent **Replace** actions show a local preview and require **Replace draft** before editing. **Undo draft change** is available until further editing or saving, with deliberate answer-state choices preserved. The separate Save action commits the answer. A newly stale result disables suggestions and invalidates a pending replacement even if its result bytes have not changed; application rechecks the live state. See [draft actions and recovery](drafts.md#research-suggestions).
 
 ## New result contract
 
@@ -30,7 +30,7 @@ Older saved research without `optionsVersion` retains its original 2–4 option 
 
 Native saves, imports, history and complete JSON preserve option identity and limitations; existing imported-source provenance rules still apply. Complete Markdown includes fit, limitation and option references. The selected offline viewer includes fit and sparse limitations while replacing private option IDs with artifact-local IDs, consistent with its existing source/claim projection. Text remains literal and links retain their validated HTTP(S) boundary.
 
-Follow-up review includes the new format and sparse limitation in mandatory context, so omitted optional options cannot hide why the original result was limited. Included option objects retain their IDs; existing record/byte limits and omission counts remain authoritative. Disclosures and detail selections survive ordinary polling and node navigation within the same canvas/result. Replacing the result resets its local choices. This does not add persistent conversations or draft replacement controls.
+Follow-up review includes the new format and sparse limitation in mandatory context, so omitted optional options cannot hide why the original result was limited. Included option objects retain their IDs; existing record/byte limits and omission counts remain authoritative. Disclosures and detail selections survive ordinary polling and node navigation within the same canvas/result. Replacing the result resets its local choices and pending draft replacement. Persistent conversations remain separate work.
 
 ## Verification limits
 

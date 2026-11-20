@@ -1883,12 +1883,25 @@ function revealNode(id) {
   view.y += Math.max(16 - top, Math.min(0, rect.height - 16 - top - p.height * view.zoom));
   transform();
 }
+const researchDraftBase = node => JSON.stringify([referenceJourney(), node.question, node.answer, effectiveAnswerState(node)]);
+function canUndoResearchDraft(node) {
+  const change = uiFor(node.id).addition, entry = draftClient.entries.get(node.id);
+  return !!change && !composing && !draftClient.savingAnswer && !draftClient.loadError && !entry?.conflict && drafts.has(node.id) &&
+    drafts.get(node.id) === change.after && entry?.textGeneration === change.generation && researchDraftBase(node) === change.base;
+}
+function undoResearchDraft(id) {
+  const node = state.document?.nodes.find(n => n.id === id);
+  if (closed || suspended || !expanded || libraryView || selected !== id || !node || !canUndoResearchDraft(node)) return;
+  const previous = uiFor(id).addition.before;
+  voice.cancel(); uiFor(id).addition = null; draftClient.edit(id, previous); $('answer').value = previous;
+  answerStatus(node); $('research-answer-draft').click(); notice('Draft change undone. Your earlier text is restored.');
+}
 function answerStatus(node) {
   const entry = draftClient.entries.get(node.id);
   if ($('answer-state')) $('answer-state').value = draftClient.state(node.id);
   if ($('answer-status')) $('answer-status').textContent = draftClient.loadError ? 'Draft could not be saved' : entry?.status || (node.answer ? 'Answer saved' : effectiveAnswerState(node) !== 'unanswered' ? 'State saved' : 'No answer yet');
-  const undo = $('undo-addition'), addition = uiFor(node.id).addition;
-  if (undo) { undo.hidden = !addition; undo.disabled = !addition || (drafts.get(node.id) ?? node.answer) !== addition.after; }
+  for (const undo of document.querySelectorAll('[data-research-undo]')) { undo.hidden = !uiFor(node.id).addition; undo.disabled = !canUndoResearchDraft(node); }
+  uiFor(node.id).researchDraftSync?.();
 }
 function renderDraftRecovery(node) {
   const area = $('draft-recovery'); if (!area) return;
@@ -2256,12 +2269,7 @@ function renderWorkspace() {
     panel.append(savebar);
     savebar.addEventListener('keydown', saveKey); toolsBody.addEventListener('keydown', saveKey);
     const researchNote = el('p', { id: 'research-save-note', class: 'quiet' }, 'Save is available during research. Saving its source context discards that research. Wait or cancel research before Explore deeper.'); toolPanels.explore.append(researchNote);
-    toolPanels.details.append(button('Undo addition', () => {
-      const addition = ui.addition;
-      if (!addition || (drafts.get(node.id) ?? node.answer) !== addition.after) return;
-      voice.cancel(); draftClient.edit(node.id, addition.before); answer.value = addition.before; ui.addition = null;
-      answerStatus(node); answer.focus({ preventScroll: true }); notice('Addition undone. Your earlier draft is restored.');
-    }, { id: 'undo-addition', class: 'undo-addition' }));
+    toolPanels.details.append(button('Undo draft change', () => { if (current()) undoResearchDraft(node.id); }, { id: 'undo-addition', class: 'undo-addition', 'data-research-undo': 'true' }));
     toolPanels.details.append(el('div', { id: 'draft-actions' }));
     form.append(el('div', { id: 'draft-recovery', 'aria-live': 'polite' }));
     content.append(form);
@@ -2816,7 +2824,7 @@ function updateFollowupHistory(node) {
   area.replaceChildren(...rows);
 }
 
-function renderComparison(r, ui, selectDetail, addSelected) {
+function renderComparison(r, ui, selectDetail, addSelected, replaceSelected) {
   const criteria = [{ label: 'Description', field: 'description' }, { label: 'Pros', field: 'pros' }, { label: 'Cons', field: 'cons' }];
   const labels = new Set(r.options.flatMap(option => (option.details ?? []).map(detail => detail.label)));
   for (const label of labels) criteria.push({ label });
@@ -2862,12 +2870,14 @@ function renderComparison(r, ui, selectDetail, addSelected) {
     controls.append(el('div', {}, el('label', { class: 'research-detail', for: id }, checkbox, `${criterion.label}${criterion.field ? ' (model judgment)' : ' (detail)'}`), el('label', { for: priorityId }, `Your priority: ${criterion.label}`), priority));
   });
   comparison.append(controls, el('div', { class: 'comparison-scroll', role: 'region', tabindex: '0', 'aria-label': 'Option comparison, scroll horizontally to read all options' }, table));
-  if (labels.size) comparison.append(button('Add selected details to draft', addSelected, { id: 'comparison-add-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' }));
+  if (labels.size) comparison.append(el('div', { class: 'actions' },
+    button('Append selected details', addSelected, { id: 'comparison-add-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' }),
+    button('Replace with selected details…', replaceSelected, { id: 'comparison-replace-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' })));
   renderRows(); return comparison;
 }
 
 function renderResearch(node) {
-  const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r);
+  const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r), journey = referenceJourney();
   const assessment = r.recommendationAssessment, chosen = assessment ? r.options.find(option => option.id === assessment.optionId) : null;
   if (ui.researchKey !== key) { ui.researchKey = key; ui.selectedDetails = new Set(); ui.comparison = null; ui.researchDisclosures = {}; }
   const disclosure = (id, label) => {
@@ -2876,24 +2886,53 @@ function renderResearch(node) {
     detail.addEventListener('toggle', () => { if (detail.isConnected) { (ui.researchDisclosures ??= {})[id] = detail.open; scheduleLayout(); } });
     return detail;
   };
-  const add = suggestion => {
+  let proposal = null;
+  const liveNode = () => {
     const live = state.document?.nodes.find(n => n.id === node.id);
-    if (!live || selected !== node.id || !expanded || libraryView || JSON.stringify(live.research) !== key) return;
-    if (live.researchStale) return notice('This research needs reconsideration. Review and research again before using its suggestions.');
-    node = live;
-    const previous = drafts.get(node.id) ?? node.answer, value = previous ? `${previous}\n\n${suggestion}` : suggestion;
-    if (value.length > 20000) return notice('Your answer is too long to add this suggestion. Shorten it first.');
-    voice.cancel(); ui.addition = { before: previous, after: value };
-    draftClient.edit(node.id, value); $('answer').value = value; answerStatus(node);
-    const answer = $('answer');
-    answer.focus({ preventScroll: true }); answer.setSelectionRange(value.length, value.length);
-    notice('Added to your draft. Edit it before saving, or undo the addition.');
-    if (!outlineMode) refreshScene();
-    const content = !outlineMode && $('node-workspace').classList.contains('scroll-pane') ? $('node-workspace') : answer.closest('.node-content');
-    // Scroll only the editor, never an ancestor of the transformed map.
-    content.scrollTop += answer.getBoundingClientRect().top - content.getBoundingClientRect().top - 40;
+    return !closed && !suspended && section.isConnected && journey === referenceJourney() && live && selected === node.id && expanded && !libraryView && JSON.stringify(live.research) === key ? live : null;
   };
+  const unavailable = live => !live ? 'This question or its research changed. Choose a current suggestion.' : live.researchStale ? 'This research needs reconsideration. Review and research again before using its suggestions.' :
+    composing ? 'Finish composing your answer before changing the draft.' : draftClient.savingAnswer ? 'Wait for the answer save before changing the draft.' :
+      draftClient.loadError || draftClient.entries.get(node.id)?.conflict ? 'Review or retry draft recovery before using a suggestion.' : '';
+  const stamp = live => JSON.stringify([researchDraftBase(live), draftClient.entries.get(node.id)?.generation, draftClient.entries.get(node.id)?.textGeneration]);
+  const dismiss = (message, returnFocus = preview.contains(document.activeElement)) => {
+    const origin = proposal?.origin; proposal = null; preview.hidden = true;
+    if (message) notice(message);
+    if (returnFocus) { const target = origin?.isConnected && !origin.disabled && !origin.closest('[hidden]') ? origin : $('question-tab-research'); revealQuestionTool(target); target?.focus({ preventScroll: true }); }
+  };
+  const applySuggestion = (suggestion, replace = false) => {
+    const live = liveNode(), reason = unavailable(live); if (reason) return notice(reason);
+    const previous = drafts.get(node.id) ?? live.answer, value = replace || !previous ? suggestion : `${previous}\n\n${suggestion}`;
+    if (value.length > 20000) return notice('Your answer is too long for this suggestion. Shorten it first.');
+    dismiss(null, false); voice.cancel(); draftClient.edit(node.id, value);
+    ui.addition = { before: previous, after: value, generation: draftClient.entries.get(node.id).textGeneration, base: researchDraftBase(live) };
+    const answer = $('answer'); answer.value = value; answerStatus(live); $('research-answer-draft').click(); answer.setSelectionRange(value.length, value.length);
+    notice(`${replace ? 'Replaced' : 'Added to'} your draft. Edit it before saving, or undo the draft change.`);
+    if (!outlineMode) refreshScene();
+  };
+  const add = suggestion => applySuggestion(suggestion);
+  const replace = (suggestion, origin) => {
+    const live = liveNode(), reason = unavailable(live); if (reason) return notice(reason);
+    if (suggestion.length > 20000) return notice('This suggestion is too long for an answer. Select fewer details.');
+    proposal = { suggestion, origin, stamp: stamp(live) }; previewText.textContent = suggestion; preview.hidden = false;
+    revealQuestionTool(preview); $('research-draft-preview-title').focus({ preventScroll: true });
+  };
+  const previewText = el('pre', { id: 'research-draft-preview-text', tabindex: '0' });
+  const previewConfirm = button('Replace draft', () => {
+    if (!proposal || !preview.isConnected) return;
+    const live = liveNode(), reason = unavailable(live);
+    if (reason || proposal.stamp !== stamp(live)) return dismiss(reason || 'Your draft changed. Review the replacement again; your text is retained.');
+    applySuggestion(proposal.suggestion, true);
+  }, { id: 'research-draft-confirm' });
+  const preview = el('section', { id: 'research-draft-preview', class: 'research-draft-preview', hidden: true, 'aria-labelledby': 'research-draft-preview-title' },
+    el('h3', { id: 'research-draft-preview-title', tabindex: '-1' }, 'Replace the current draft?'), el('p', {}, 'Only your private draft will change. Review the replacement below; your saved answer stays unchanged. Undo is available until further editing or saving.'), previewText,
+    el('div', { class: 'actions' }, previewConfirm, button('Keep my draft', () => { if (preview.isConnected) dismiss(null, true); }, { id: 'research-draft-cancel' })));
   const section = el('div', { class: 'research' }, el('span', { class: 'basis' }, r.basis === 'sources' ? 'Based on consulted sources' : 'Model reasoning · not externally verified'));
+  ui.researchDraftSync = () => {
+    if (!proposal || !section.isConnected) return;
+    const live = liveNode(), reason = unavailable(live);
+    if (reason || proposal.stamp !== stamp(live)) dismiss(reason || 'Your draft changed. Review the replacement again; your text is retained.');
+  };
   if (r.optionsLimit) section.append(el('p', { id: 'research-options-limit', class: 'review-warning' }, `${r.options.length ? 'Limited answer options' : 'No supported answer options'}: ${r.optionsLimit}`));
   if (r.optionsVersion !== 1) section.append(el('p', { class: 'quiet' }, 'These older results do not include separate fit conditions.'));
   const findings = disclosure('research-findings', 'Findings and evidence');
@@ -2916,12 +2955,14 @@ function renderResearch(node) {
   const selectDetail = (id, checked) => {
     checked ? ui.selectedDetails.add(id) : ui.selectedDetails.delete(id);
     for (const control of [$(id), $(`comparison-${id}`)]) if (control) control.checked = checked;
-    for (const control of [$('add-details'), $('comparison-add-details')]) if (control) control.disabled = !ui.selectedDetails.size || state.document?.nodes.find(n => n.id === node.id)?.researchStale === true;
+    for (const control of [$('add-details'), $('comparison-add-details'), $('replace-details'), $('comparison-replace-details')]) if (control) control.disabled = !ui.selectedDetails.size || state.document?.nodes.find(n => n.id === node.id)?.researchStale === true;
   };
-  const addSelected = () => {
+  const selectedText = () => {
     const selected = details.filter(detail => ui.selectedDetails.has(detail.id));
-    if (selected.length) add(selected.map(detail => `${detail.label}: ${detail.value}`).join('\n'));
+    return selected.map(detail => `${detail.label}: ${detail.value}`).join('\n');
   };
+  const addSelected = () => { const text = selectedText(); if (text) add(text); };
+  const replaceSelected = event => { const text = selectedText(); if (text) replace(text, event.currentTarget); };
   for (const [index, o] of r.options.entries()) {
     const identity = o.id ?? String(index);
     const option = el('section', { id: `research-option-${identity}`, class: 'option', ...(o.id ? { 'data-option-id': o.id } : {}) }, el('h3', {}, o.title));
@@ -2931,7 +2972,8 @@ function renderResearch(node) {
     const empty = r.optionsVersion === 1 ? 'None established.' : 'None recorded.';
     option.append(el('strong', { class: 'pro' }, 'Pros'), o.pros.length ? el('ul', {}, o.pros.map(v => el('li', {}, v))) : el('p', { class: 'quiet' }, empty),
       el('strong', { class: 'con' }, 'Cons'), o.cons.length ? el('ul', {}, o.cons.map(v => el('li', {}, v))) : el('p', { class: 'quiet' }, empty),
-      button('Use this option', () => add(o.proposedAnswer ?? `${o.title}: ${o.description}`), { id: `add-option-${identity}`, 'data-draft-suggestion': 'true' }));
+      el('div', { class: 'actions' }, button('Append to my draft', () => add(o.proposedAnswer ?? `${o.title}: ${o.description}`), { id: `add-option-${identity}`, 'data-draft-suggestion': 'true' }),
+        button('Replace my draft…', event => replace(o.proposedAnswer ?? `${o.title}: ${o.description}`, event.currentTarget), { id: `replace-option-${identity}`, 'data-draft-suggestion': 'true' })));
     const extra = disclosure(`option-details-${identity}`, 'Concrete details');
     for (const [i, detail] of (o.details ?? []).entries()) {
       const id = `detail-${index}-${i}`, checkbox = el('input', { type: 'checkbox', id });
@@ -2961,10 +3003,15 @@ function renderResearch(node) {
       recommendation.append(prior);
     }
   } else recommendation.append(el('p', { id: 'recommendation-compatibility', class: 'quiet' }, 'Older recommendation: no linked option was recorded. Its original wording is preserved without identifying a winner.'));
-  if (chosen || !assessment && r.options.length) recommendation.append(button('Use recommendation', () => add(chosen ? chosen.proposedAnswer : r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation', 'data-draft-suggestion': 'true' }));
+  if (chosen || !assessment && r.options.length) recommendation.append(el('div', { class: 'actions' },
+    button('Append recommendation', () => add(chosen ? chosen.proposedAnswer : r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation', 'data-draft-suggestion': 'true' }),
+    button('Replace with recommendation…', event => replace(chosen ? chosen.proposedAnswer : r.proposedAnswer ?? r.recommendation, event.currentTarget), { id: 'replace-recommendation', 'data-draft-suggestion': 'true' })));
   section.append(recommendation);
-  if (r.options.length > 1) section.append(renderComparison(r, ui, selectDetail, addSelected));
-  if (details.length) section.append(button('Add selected details', addSelected, { id: 'add-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' }));
+  if (r.options.length > 1) section.append(renderComparison(r, ui, selectDetail, addSelected, replaceSelected));
+  if (details.length) section.append(el('div', { class: 'actions' },
+    button('Append selected details', addSelected, { id: 'add-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' }),
+    button('Replace with selected details…', replaceSelected, { id: 'replace-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' })));
+  section.append(preview, button('Undo draft change', () => { if (section.isConnected) undoResearchDraft(node.id); }, { id: 'research-draft-undo', 'data-research-undo': 'true' }));
   section.append(el('h3', {}, 'What is still uncertain'), el('p', {}, r.uncertainty));
   if (r.sources.length) findings.append(el('div', { class: 'sources' }, el('h3', {}, 'Consulted sources'), el('p', { class: 'quiet' }, 'Reading a page does not establish claim support.'), r.sources.map((s, index) => el('div', { id: `source-${index}` }, sourceLink(s), el('p', { class: 'quiet' }, retrieval(s))))));
   section.append(findings);
@@ -4530,6 +4577,7 @@ document.addEventListener('click', event => {
 $('question-drawer-handle').addEventListener('click', () => { setQuestionTools(true); $('question-drawer-close').focus({ preventScroll: true }); });
 $('workspace').addEventListener('keydown', event => {
   if (event.key !== 'Escape' || event.isComposing || $('question-drawer').hidden) return;
+  if ($('research-draft-preview')?.contains(event.target) && !$('research-draft-preview').hidden) { event.preventDefault(); event.stopPropagation(); $('research-draft-cancel').click(); return; }
   if ($('answer-revisit') && !$('answer-revisit').closest('[hidden]')) { event.preventDefault(); event.stopPropagation(); $('revisit-cancel').click(); return; }
   event.preventDefault(); event.stopPropagation(); setQuestionTools(false); focusQuestionToolsReturn();
 }, true);
@@ -4576,11 +4624,13 @@ $('map').addEventListener('auxclick', event => { if (event.button === 1) event.p
 $('map').addEventListener('dragstart', event => { if (event.target.closest('.node,.node-head') || drag?.active) event.preventDefault(); });
 $('nodes').addEventListener('focusout', () => queueMicrotask(() => { if (!closed) renderMap(); }));
 $('node-workspace').addEventListener('focusin', event => { if (expanded && !restoringFocus) { revealNode(selected); revealQuestionStage(event.target); } });
-$('node-workspace').addEventListener('compositionstart', event => { composing = event.target; renderCleanup(); });
-$('node-workspace').addEventListener('compositionend', () => {
-  composing = null;
+const syncComposition = target => {
+  composing = target;
   renderCleanup();
-});
+  const node = state.document?.nodes.find(n => n.id === selected); if (node) answerStatus(node);
+};
+$('node-workspace').addEventListener('compositionstart', event => syncComposition(event.target));
+$('node-workspace').addEventListener('compositionend', () => syncComposition(null));
 $('map').addEventListener('keydown', event => {
   if (outlineMode || event.isComposing || event.defaultPrevented || event.target.matches('select')) return;
   if (event.key === 'Escape' && expanded) { event.preventDefault(); collapseNode(); return; }

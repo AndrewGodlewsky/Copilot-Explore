@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.114",
+    "summary": "Choose explicit append or previewed replacement when using research options, recommendations or selected details. Cancel safely and undo a draft change without erasing newer edits. Keep one answer editor, private draft recovery and a separate Save action. Stale previews cannot overwrite your text; keyboard controls fit narrow panes."
+  },
+  {
     "version": "0.1.113",
     "summary": "Research can now mark one recommended option and explain its fit, main tradeoff and when to reconsider, with links to reviewed prior decisions. It can also decline to recommend. All choices remain available, older results stay readable and stale suggestions cannot edit your draft. No additional internet access."
   },

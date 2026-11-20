@@ -2,7 +2,7 @@
 
 [Issue #95](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/95) adds an explicit recommended-option reference to [research answer options](research-options.md). One option can carry a passive **Recommended option** badge. The explanation states why it fits the reviewed context, its main tradeoff and what changed assumption would make it worth reconsidering. This is contextual judgment from the model, not a verified project fact or an answer the user has accepted.
 
-All alternatives and custom answering stay available. Viewing a recommendation never selects or saves an answer. **Use recommendation** appends the referenced option's editable suggestion to the private draft; Save remains separate. If evidence or constraints do not justify a winner, the result says **No recommendation yet**, explains the limitation and offers no winner action. A null recommendation can accompany multiple viable options as well as an honest zero/one-option result.
+All alternatives and custom answering stay available. Viewing a recommendation never selects or saves an answer. **Append recommendation** adds the referenced option's editable suggestion to the private draft; **Replace with recommendation…** previews a replacement for explicit confirmation. Both offer conditional undo, and Save remains separate. If evidence or constraints do not justify a winner, the result says **No recommendation yet**, explains the limitation and offers no winner action. A null recommendation can accompany multiple viable options as well as an honest zero/one-option result.
 
 ## Result and context contract
 
@@ -27,7 +27,7 @@ Existing answer/guidance/branch changes conservatively mark research as stale. T
 
 Older saved recommendations retain their text and original bounds. They show a compatibility explanation with no guessed option badge; their existing explicit draft action remains available when fresh. Imports and native history preserve validated assessments, including historical references whose source nodes no longer exist. Full Markdown describes the winner or inability to recommend, tradeoff, reconsideration condition and historical state. Selected offline export replaces option/node identities with artifact-local IDs and labels references outside the selection without exposing their original IDs.
 
-The packaged skill asks for an honest conditional judgment. Structural validation and authored cross-branch fixtures cannot prove factual support, relevance or live research quality. Per-statement evidence links remain [#105](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/105); richer draft replacement is [#97](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/97).
+The packaged skill asks for an honest conditional judgment. Structural validation and authored cross-branch fixtures cannot prove factual support, relevance or live research quality. Per-statement evidence links remain [#105](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/105). [Draft replacement and recovery](drafts.md#research-suggestions) preserve the user's ownership of the answer.
 
 ## Verification and boundaries
 

@@ -24,6 +24,18 @@ After fully exiting Copilot, restore a damaged `drafts.json` from a backup. Remo
 
 ## Browser API and behavior
 
+### Research suggestions
+
+Research offers **Append to my draft** and **Replace my draft…** for every option, with equivalent recommendation and selected-detail actions. Append preserves existing wording and adds two newlines before the suggestion; an empty draft receives the suggestion directly. Replace opens a literal, local preview in the bottom drawer. **Replace draft** confirms that edit; **Keep my draft** or Escape cancels it. There is one answer editor, and viewing or applying a suggestion never saves an answer or starts model work.
+
+**Undo draft change** is available in Research and Answer details while the same private text, edit generation and saved answer base still match. It cannot erase intervening edits, even if the user later types the same bytes again, or undo an already committed answer. It preserves the current deliberate answer-state choice. Unrelated research staleness blocks new suggestions but does not prevent undoing a matching private edit.
+
+Replacement previews bind to the question, journey, exact research result, saved answer base and draft generations. Navigation, replaced/stale research, changed/recovered text, composition, an answer save or unresolved draft recovery invalidates or blocks the edit. Ordinary polling keeps a valid preview and its focus. Application returns to the existing editor, with findings still available. All authored Unicode/whitespace and the 20,000-character answer limit remain intact; an oversized combination of selected details is rejected without clipping.
+
+Only applied text/state uses the existing private draft store. An unconfirmed preview and the single conditional undo are local to that page; reload recovers the persisted draft, without reopening a proposal or inventing undo history. Neither is included in map exports or model context. Failed answer saves keep the draft recoverable through the ordinary workflow. Automated DOM and authorized Brave checks cover these behaviors; physical IME/dictation and native Copilot acceptance remain separate.
+
+### Draft client
+
 `new DraftClient({ fetch, drafts, changed, restored })` uses the existing `Map<nodeId, text>` as editor text, with separate metadata in `entries`. `reset(journey, nodes)` begins recovery; `ready` tracks it. `updateNodes(nodes)` tracks committed base changes; `touch(id)` protects editing/selection/IME during initial reads; `edit(id, text)` schedules a 500 ms debounce. `flush(keepalive = false, onlyId = null)` serializes revision-checked writes. A failed/conflicting node does not stop other nodes from persisting. `retry()` retries initial read failures and pending writes.
 
 `state(id)` reads the current draft state; `selectState(id, state, text)` records a deliberate choice and schedules persistence. `edit(id, text)` preserves deliberate choices during typing, dictation, research additions and undo. State-only changes enter the same drafts map and persistence queue as text changes.

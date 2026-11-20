@@ -242,6 +242,36 @@ try {
       expect(await page.locator('#research-prior-decision-0').evaluate(el => el === document.activeElement), `${scenario.name}: prior-context control can receive keyboard focus`, {});
       await inspectDrawer(page, `${scenario.name}/recommendation`);
       if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-recommendation.png`) });
+      // The previous viewport's explicit answer save makes research historical. Supply a fresh synthetic result for draft-action checks.
+      const freshDraftResult = structuredClone(explorer.doc), freshDraftNode = freshDraftResult.nodes.find(n => n.id === parent.id), savedBeforeDraft = freshDraftNode.answer;
+      freshDraftNode.research = structuredClone(parent.research); delete freshDraftNode.researchStale; await explorer.save(freshDraftResult);
+      await page.waitForFunction(() => !document.getElementById('replace-option-distributed').disabled);
+      await page.locator('#replace-option-distributed').focus(); await page.keyboard.press('Enter'); await settle(page);
+      expect(await page.locator('#research-draft-preview').isVisible() && await page.locator('#research-draft-preview-text').textContent() === parent.research.options[1].proposedAnswer, `${scenario.name}: replacement previews the exact option without editing`, {});
+      expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: preview preserves the original editor and text`, {});
+      const previewFocus = await page.evaluate(() => {
+        const focused = document.activeElement, f = focused.getBoundingClientRect(), b = document.getElementById('question-tools-body').getBoundingClientRect();
+        return { id: focused.id, top: f.top, bottom: f.bottom, bodyTop: b.top, bodyBottom: b.bottom, visible: f.bottom > b.top && f.top < b.bottom };
+      });
+      expect(previewFocus.visible, `${scenario.name}: replacement focus is visible inside the drawer`, previewFocus);
+      await inspectDrawer(page, `${scenario.name}/draft-preview`);
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-draft-preview.png`) });
+      await page.keyboard.press('Escape');
+      expect(await page.locator('#research-draft-preview').isHidden() && await page.locator('#replace-option-distributed').evaluate(el => el === document.activeElement), `${scenario.name}: Escape cancels replacement and restores its trigger`, {});
+      await page.keyboard.press('Enter'); await page.keyboard.press('Tab');
+      expect(await page.locator('#research-draft-preview-text').evaluate(el => el === document.activeElement), `${scenario.name}: keyboard review reaches the scrollable replacement text`, {});
+      await page.keyboard.press('Tab');
+      const confirmFocus = await page.locator('#research-draft-confirm').evaluate(el => {
+        const r = el.getBoundingClientRect(), b = document.getElementById('question-tools-body').getBoundingClientRect();
+        return { focused: document.activeElement === el, visible: r.top >= b.top - 1 && r.bottom <= b.bottom + 1 };
+      });
+      expect(confirmFocus.focused && confirmFocus.visible, `${scenario.name}: keyboard confirmation is visible after reviewing text`, confirmFocus);
+      await page.keyboard.press('Enter'); await settle(page);
+      expect(await editor.evaluate((el, expected) => el === document.activeElement && el === document.getElementById('answer') && el.value === expected, parent.research.options[1].proposedAnswer), `${scenario.name}: confirmed replacement changes only the existing editor`, {});
+      expect(explorer.doc.nodes.find(n => n.id === parent.id).answer === savedBeforeDraft, `${scenario.name}: replacement does not save an answer`, {});
+      await page.locator('#research-draft-undo').click(); await settle(page);
+      expect(await editor.evaluate(el => el.value === 'Keep this private draft' && el === document.activeElement), `${scenario.name}: reachable Research undo restores exact prior text`, {});
+      await page.locator('#question-drawer-size').click(); await settle(page);
       await page.locator('#option-details-cupboard-summary').focus(); await page.keyboard.press('Enter');
       expect(await page.locator('#option-details-cupboard').evaluate(el => el.open), `${scenario.name}: option details open by keyboard`, {});
       await page.keyboard.press('Enter');
@@ -296,7 +326,11 @@ try {
       expect(await page.locator('#research-review-dialog').evaluate(el => !el.open) && await page.locator('#research-request').evaluate(el => el === document.activeElement), `${scenario.name}: cancelling review restores its trigger focus`, {});
       expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: research review preserves the same draft editor`, {});
       expect(explorer.pending === null, `${scenario.name}: context review starts no model operation`, {});
+      await page.locator('#replace-option-distributed').click();
+      expect(await page.locator('#research-draft-preview').isVisible(), `${scenario.name}: pending replacement is visible before a source change`, {});
       const stale = structuredClone(explorer.doc); stale.nodes.find(n => n.id === parent.id).researchStale = true; await explorer.save(stale);
+      await page.waitForFunction(() => document.getElementById('research-draft-preview').hidden);
+      expect(await editor.evaluate(el => el.value === 'Keep this private draft'), `${scenario.name}: a stale preview is discarded without changing authored text`, {});
       await page.waitForFunction(() => document.querySelector('[data-recommendation-badge]').textContent.includes('needs review'));
       expect(await page.locator('#use-recommendation').isDisabled() && await editor.evaluate(el => el.isConnected && el.value === 'Keep this private draft'), `${scenario.name}: a late stale marker labels the recommendation and preserves the draft`, {});
       for (const count of [2, 0, 1]) {

@@ -2445,6 +2445,19 @@ test('portable reference UI opens from a fresh welcome screen and requires ackno
   await uiResponse(f, 'api/action', 'open-reference', () => $('portable-reference-go').click()); await until(() => !$('portable-reference-dialog').open && $('answer')?.value === 'Changed answer', 'acknowledged saved target opened'); assert.equal(f.window.__updates.scene().selected, 'saved-question');
 });
 
+// Finished test hooks outlive their fixture; release the evaluated app and DOM graph.
+function fixtureCleanup(resource) {
+  return async () => {
+    try {
+      const { window, requests, server, dir, scriptErrors } = resource;
+      window.dispatchEvent(new window.Event('pagehide'));
+      await Promise.allSettled([...requests]); await delay(0);
+      window.close(); await server.close(); assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true });
+      assert.deepEqual(scriptErrors, [], 'no uncaught app event errors');
+    } finally { resource = null; }
+  };
+}
+
 async function fixture(t, width = 1100, voice = { status: async () => ({ ready: false, error: 'Voice test fixture disabled.' }), close() {} }, useLibrary = false, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'explorer-dom-'));
   let resolveResearch;
@@ -2541,12 +2554,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   const paletteDialog = document.getElementById('palette-dialog');
   if (paletteDialog) { paletteDialog.showModal = () => { paletteDialog.open = true; }; paletteDialog.close = () => { paletteDialog.open = false; }; }
   const requests = new Set(), actions = [];
-  t.after(async () => {
-    window.dispatchEvent(new window.Event('pagehide'));
-    await Promise.allSettled([...requests]); await delay(0);
-    dom.window.close(); await server.close(); assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true });
-    assert.deepEqual(scriptErrors, [], 'no uncaught app event errors');
-  });
+  t.after(fixtureCleanup({ window, requests, server, dir, scriptErrors }));
   const map = document.getElementById('map');
   // jsdom has no visual layout. Only geometry inputs are stubbed; DOM events,
   // the shipped app, HTTP server, controller, persistence and callbacks are real.
@@ -3953,7 +3961,8 @@ for (const wholeCard of [false, true]) test(`adding research scrolls only its ed
   const answer = f.document.getElementById('answer'), pane = wholeCard ? f.document.getElementById('node-workspace') : f.document.querySelector('.node-content'), before = viewOf(f);
   answer.scrollIntoView = () => assert.fail('scrollIntoView can scroll hidden ancestors of the map');
   pane.scrollTop = 400; pane.getBoundingClientRect = () => ({ top: 240 }); answer.getBoundingClientRect = () => ({ top: 340 - pane.scrollTop });
-  f.click('Use recommendation');
+  f.click('Append recommendation');
+  await until(() => pane.scrollTop < 400, 'shared Answer draft action reveals the editor on its animation frame');
   assert.deepEqual(viewOf(f), before); assert.ok(pane.scrollTop < 400); assert.equal(f.document.activeElement, answer);
   assert.ok(answer.getBoundingClientRect().top >= pane.getBoundingClientRect().top, 'the answer is revealed in the unscaled editor');
 });
@@ -4073,7 +4082,7 @@ test('research callbacks and follow-ups work inside a narrow expanded node witho
   await until(() => f.document.querySelector('#question-drawer .option'), 'research delivered');
   assert.equal(f.document.getElementById('answer').value, 'My own thought, still editing');
   assert.match(f.document.getElementById('question-drawer').textContent, /not externally verified/);
-  f.click('Use this option');
+  f.click('Append to my draft');
   assert.match(f.document.getElementById('answer').value, /^My own thought, still editing\n\nOne block/);
   assert.equal(f.explorer.doc.nodes[1].answer, '');
   f.click('Save answer and explore deeper'); await until(() => f.document.getElementById('answer-change-dialog').open, 'review research consequences'); f.document.getElementById('answer-change-confirm').click(); await until(() => f.explorer.pending?.kind === 'questions', 'follow-ups requested');
@@ -4110,18 +4119,18 @@ test('recommendations and selected details append to editable drafts with safe u
   richer.options[0].details = [{ label: 'Pilot size', value: 'Ten neighbors' }, { label: 'Duration', value: 'One month' }];
   f.resolveResearch(richer);
   await until(() => f.document.getElementById('use-recommendation'), 'new controls');
-  f.click('Use recommendation');
+  f.click('Append recommendation');
   assert.equal(f.document.getElementById('answer').value, 'My own words\n\nI will run a pilot.');
   assert.equal(f.explorer.doc.nodes[1].answer, '');
-  f.click('Undo addition'); assert.equal(f.document.getElementById('answer').value, 'My own words');
+  f.click('Undo draft change'); assert.equal(f.document.getElementById('answer').value, 'My own words');
   const check = f.document.getElementById('detail-0-0'); check.click(); check.focus();
-  f.click('Add selected details');
+  f.click('Append selected details');
   assert.equal(f.document.getElementById('answer').value, 'My own words\n\nPilot size: Ten neighbors');
   f.type('answer', f.document.getElementById('answer').value + '\nNew typing');
   assert.equal(f.document.getElementById('undo-addition').disabled, true, 'undo cannot erase newer typing');
-  f.click('Use this option'); f.click('Undo addition');
+  f.click('Append to my draft'); f.click('Undo draft change');
   assert.match(f.document.getElementById('answer').value, /New typing$/);
-  f.type('answer', 'x'.repeat(19999)); f.click('Use recommendation');
+  f.type('answer', 'x'.repeat(19999)); f.click('Append recommendation');
   assert.equal(f.document.getElementById('answer').value.length, 19999); assert.match(f.document.getElementById('notice').textContent, /too long/);
   // A saved answer change retains selection/focus but makes the old suggestions stale.
   check.focus();
@@ -4130,7 +4139,7 @@ test('recommendations and selected details append to editable drafts with safe u
   assert.equal(f.document.getElementById('detail-0-0').checked, true); assert.equal(f.document.activeElement.id, 'detail-0-0');
   assert.equal(f.explorer.doc.nodes[1].researchStale, true);
   for (const id of ['add-details', 'use-recommendation', 'add-option-0']) assert.equal(f.document.getElementById(id).disabled, true);
-  f.click('Add selected details'); assert.equal(f.document.getElementById('answer').value, 'x'.repeat(19999));
+  f.click('Append selected details'); assert.equal(f.document.getElementById('answer').value, 'x'.repeat(19999));
   await delay(50); // Let the voice-status refresh from the background render settle before closing jsdom.
 });
 
@@ -6972,11 +6981,20 @@ test('semantic zoom keeps the same readable editor, composition, reminder draft 
 
 test('semantic zoom and Fit retain active voice ownership and reminder conflict controls', async t => {
   const voice = voiceFixture(), f = await fixture(t, 340, voice), d = f.document, ui = f.window.__updates, node = f.explorer.doc.nodes[1];
+  const fetch = f.window.fetch; let release;
+  f.window.fetch = async (...args) => {
+    const response = await fetch(...args);
+    if (args[0] === 'api/voice' && args[1]?.body && JSON.parse(args[1].body).action === 'start') await new Promise(resolve => { release = resolve; });
+    return response;
+  };
+  t.after(() => release?.());
   f.open(node.id); f.type('revisit-condition', 'Keep mine');
   await f.explorer.command('set-revisit', { revision: f.explorer.doc.revision, nodeId: node.id, date: null, condition: 'Other canvas' }); await f.poll();
   const keep = d.getElementById('keep-revisit'), reminder = d.getElementById('revisit-condition'), answer = d.getElementById('answer');
   assert.ok(keep); await until(() => d.getElementById('voice-status').textContent.includes('Hold Ctrl'), 'voice ready');
   answer.focus(); key(f, 'keydown'); await until(() => voice.counts().starts === 1, 'voice started');
+  await until(() => release, 'start response held'); release();
+  await until(() => !d.getElementById('voice-stop').disabled, 'voice response applied');
   const counts = voice.counts();
   for (const value of [.5, .1, 1, 3]) ui.zoom(value / ui.scene().view.zoom);
   ui.fit();
@@ -7083,4 +7101,203 @@ test('linked recommendation becomes visibly historical on a late stale marker an
   const badges = f.document.querySelectorAll('[data-recommendation-badge]'); assert.equal(badges.length, 1); assert.equal(badges[0].closest('.option').dataset.optionId, 'distributed');
   action.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true })); assert.equal(answer.value, 'Keep this', 'detached prior result cannot append');
   $('use-recommendation').click(); assert.equal(answer.value, `Keep this\n\n${replacement.nodes[1].research.options[1].proposedAnswer}`);
+});
+
+async function researchDraftFixture(t, options = {}) {
+  const result = recommendationFindings();
+  result.options[1].proposedAnswer = '  Distributed storage 中文 🌿\nKeep a shared register.\n';
+  result.options[0].details = [{ label: 'Pilot', value: 'Ten neighbors' }];
+  result.options[1].details = [{ label: 'Access', value: 'Two key holders 中文' }];
+  const f = await fixture(t, 340, undefined, false, { ...options, before: async e => {
+    const doc = structuredClone(e.doc); doc.nodes[1].research = result;
+    await e.command('import', { revision: e.doc.revision, document: doc });
+  } });
+  f.open(f.explorer.doc.nodes[1].id);
+  return { ...f, result: f.explorer.doc.nodes[1].research, $: id => f.document.getElementById(id) };
+}
+
+test('research draft actions append or preview replacement with cancel, conditional undo and separate Save', async t => {
+  const f = await researchDraftFixture(t), { $, result } = f, node = f.explorer.doc.nodes[1];
+  const original = '  My dictated words 中文 🌱\nSecond line\n';
+  f.type('answer', original); $('answer-state').value = 'assumption'; $('answer-state').dispatchEvent(new f.window.Event('change'));
+  const editor = $('answer'), revision = f.explorer.doc.revision;
+  assert.match($('add-option-distributed').textContent, /Append/);
+  $('replace-option-distributed').click();
+  assert.equal(editor.value, original); assert.equal($('research-draft-preview').hidden, false);
+  assert.equal($('research-draft-preview-text').textContent, result.options[1].proposedAnswer);
+  assert.equal($('research-draft-preview').querySelector('textarea'), null, 'preview is not another answer editor');
+  $('research-draft-cancel').click(); assert.equal(editor.value, original);
+  $('replace-option-distributed').click(); $('research-draft-confirm').click();
+  assert.equal($('answer'), editor); assert.equal(editor.value, result.options[1].proposedAnswer);
+  assert.equal($('answer-state').value, 'assumption'); assert.equal(f.document.activeElement, editor);
+  $('research-draft-undo').click(); assert.equal(editor.value, original); assert.equal($('answer-state').value, 'assumption');
+  $('add-option-distributed').click(); assert.equal(editor.value, original + '\n\n' + result.options[1].proposedAnswer);
+  $('research-draft-undo').click(); assert.equal(editor.value, original);
+  assert.equal(f.explorer.doc.revision, revision); assert.equal(f.explorer.doc.nodes[1].answer, '');
+  assert.equal(f.actions.some(a => ['answer', 'research', 'research-follow-up'].includes(a.action)), false);
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'research draft persisted');
+  const saved = await f.explorer.readDrafts(f.explorer.activeKey ?? f.explorer.doc.id);
+  assert.equal(saved.entries.find(e => e.nodeId === node.id).text, original);
+  assert.equal(saved.entries.find(e => e.nodeId === node.id).answerState, 'assumption');
+});
+
+test('research replacement rejects later draft edits, composition and late stale research while polling preserves a valid preview', async t => {
+  const f = await researchDraftFixture(t), { $ } = f;
+  f.type('answer', 'First draft'); $('replace-option-cupboard').click();
+  const confirm = $('research-draft-confirm'), preview = $('research-draft-preview'), editor = $('answer');
+  confirm.focus(); await f.poll(); assert.equal($('research-draft-preview'), preview); assert.equal(f.document.activeElement, confirm);
+  f.type('answer', 'Newer typing'); confirm.click(); assert.equal(editor.value, 'Newer typing');
+  $('replace-option-cupboard').click();
+  editor.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  $('research-draft-confirm').click(); assert.equal(editor.value, 'Newer typing');
+  editor.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  $('replace-option-cupboard').click();
+  const stale = structuredClone(f.explorer.doc); stale.nodes[1].researchStale = true; await f.explorer.save(stale); await f.poll();
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Newer typing');
+  confirm.click(); assert.equal(editor.value, 'Newer typing');
+  for (const control of f.document.querySelectorAll('[data-draft-suggestion]')) assert.equal(control.disabled, true);
+});
+
+test('detached research replacement controls cannot alter another node or a returned original question', async t => {
+  const f = await researchDraftFixture(t), { $ } = f, [a, b] = f.explorer.doc.nodes.slice(1);
+  f.type('answer', 'First node text'); $('replace-option-cupboard').click();
+  const replace = $('replace-option-distributed'), confirm = $('research-draft-confirm');
+  f.window.__updates.select(b.id); f.type('answer', 'Other node text');
+  replace.click(); confirm.click(); assert.equal($('answer').value, 'Other node text');
+  f.window.__updates.select(a.id); replace.click(); confirm.click(); assert.equal($('answer').value, 'First node text');
+});
+
+test('research draft undo rejects intervening edit-away-and-back and replacement preserves exact limits', async t => {
+  const f = await researchDraftFixture(t), { $, result } = f;
+  $('add-option-distributed').click(); assert.equal($('answer').value, result.options[1].proposedAnswer);
+  const inserted = $('answer').value;
+  f.type('answer', inserted + 'Changed'); f.type('answer', inserted);
+  $('research-draft-undo').click(); assert.equal($('answer').value, inserted, 'matching bytes alone do not authorize undo');
+  f.type('answer', '🌿'.repeat(10000)); $('add-option-cupboard').click(); assert.equal($('answer').value.length, 20000);
+  $('replace-option-distributed').click(); $('research-draft-confirm').click(); assert.equal($('answer').value, result.options[1].proposedAnswer);
+  $('research-draft-undo').click(); assert.equal($('answer').value, '🌿'.repeat(10000));
+});
+
+test('research selected parts and recommendation use explicit draft operations without a forced choice', async t => {
+  const f = await researchDraftFixture(t), { $, result } = f;
+  f.type('answer', 'Custom start'); $('detail-0-0').click(); $('detail-1-0').click();
+  $('replace-details').click(); assert.match($('research-draft-preview-text').textContent, /Pilot: Ten neighbors\nAccess: Two key holders 中文/);
+  $('research-draft-confirm').click(); assert.equal($('answer').value, 'Pilot: Ten neighbors\nAccess: Two key holders 中文');
+  $('research-draft-undo').click(); assert.equal($('answer').value, 'Custom start');
+  $('replace-recommendation').click(); assert.equal($('research-draft-preview-text').textContent, result.options[0].proposedAnswer);
+  $('research-draft-cancel').click(); $('add-option-distributed').click();
+  assert.equal($('answer').value, 'Custom start\n\n' + result.options[1].proposedAnswer);
+});
+
+test('research replacement remains recoverable after failed answer save and custom wording saves only explicitly', async t => {
+  const f = await researchDraftFixture(t), { $ } = f, e = f.explorer, node = e.doc.nodes[1];
+  f.type('answer', 'Original'); $('replace-option-distributed').click(); $('research-draft-confirm').click();
+  const combined = $('answer').value + '\nMy own condition 🌿'; f.type('answer', combined);
+  const command = e.command.bind(e); e.command = async (action, input) => {
+    if (action === 'answer') throw Error('Synthetic answer save failure'); return command(action, input);
+  };
+  $('save-answer').click(); await until(() => $('answer-change-dialog').open, 'review retained research before save'); $('answer-change-confirm').click();
+  await until(() => $('notice').textContent.includes('Synthetic answer save failure'), 'answer save failed');
+  assert.equal(e.doc.nodes[1].answer, ''); assert.equal($('answer').value, combined);
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'private suggestion draft durable');
+  assert.equal((await e.readDrafts(e.activeKey ?? e.doc.id)).entries.find(r => r.nodeId === node.id).text, combined);
+  e.command = command; $('save-answer').click(); await until(() => $('answer-change-dialog').open, 'review explicit retry'); $('answer-change-confirm').click();
+  await until(() => e.doc.nodes.find(n => n.id === node.id).answer === combined, 'explicit custom answer saved');
+  assert.equal(e.doc.nodes.find(n => n.id === node.id).answerState, 'tentative');
+});
+
+test('research draft recovery on a fresh page keeps node identity and state without restoring a replacement preview or undo', async t => {
+  const f = await researchDraftFixture(t), { $ } = f, [a, b] = f.explorer.doc.nodes.slice(1);
+  f.type('answer', 'Exact authored text 🌿\n  second line  '); $('add-option-distributed').click();
+  $('answer-state').value = 'needs-evidence'; $('answer-state').dispatchEvent(new f.window.Event('change'));
+  const expected = $('answer').value; await until(() => $('answer-status').textContent === 'Draft saved locally', 'source draft saved');
+  $('replace-option-cupboard').click();
+  const reloaded = await fixture(t, 340, undefined, false, { explorer: f.explorer }), read = id => reloaded.document.getElementById(id);
+  reloaded.open(a.id); await until(() => read('answer').value === expected, 'correct node draft recovered');
+  assert.equal(read('answer-state').value, 'needs-evidence'); assert.equal(read('research-draft-preview').hidden, true); assert.equal(read('research-draft-undo').hidden, true);
+  reloaded.window.__updates.select(b.id); assert.equal(read('answer').value, ''); reloaded.window.__updates.select(a.id); assert.equal(read('answer').value, expected);
+});
+
+test('research replacement rejects changed results and undo stays usable after unrelated research staleness', async t => {
+  const f = await researchDraftFixture(t), { $ } = f;
+  f.type('answer', 'Original'); $('replace-option-cupboard').click(); const oldConfirm = $('research-draft-confirm'); oldConfirm.focus();
+  const newer = structuredClone(f.explorer.doc); newer.nodes[1].research.summary += ' Revised.'; await f.explorer.save(newer); await f.poll();
+  oldConfirm.click(); assert.equal($('answer').value, 'Original'); assert.equal($('research-draft-preview').hidden, true);
+  assert.equal(f.document.activeElement, $('question-tab-research'), 'removed proposal focus has a reachable fallback');
+  $('add-option-distributed').click(); const stale = structuredClone(f.explorer.doc); stale.nodes[1].researchStale = true; await f.explorer.save(stale); await f.poll();
+  assert.equal($('research-draft-undo').disabled, false, 'undoing a private edit does not require fresh research');
+  $('research-draft-undo').click(); assert.equal($('answer').value, 'Original');
+});
+
+test('research undo disables during composition and resumes without overwriting composing text', async t => {
+  const f = await researchDraftFixture(t), { $ } = f;
+  f.type('answer', 'Earlier'); $('add-option-cupboard').click(); const editor = $('answer'), inserted = editor.value;
+  assert.equal($('research-draft-undo').disabled, false);
+  editor.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
+  assert.equal($('research-draft-undo').disabled, true); $('research-draft-undo').click(); assert.equal(editor.value, inserted);
+  editor.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true }));
+  assert.equal($('research-draft-undo').disabled, false); $('research-draft-undo').click(); assert.equal(editor.value, 'Earlier');
+});
+
+test('research combined details reject oversized append and replacement without dropping a private draft', async t => {
+  const f = await researchDraftFixture(t), { $ } = f;
+  const larger = structuredClone(f.explorer.doc), research = larger.nodes[1].research, template = research.options[0];
+  research.options = Array.from({ length: 4 }, (_, i) => ({ ...template, id: `choice-${i}`, title: `Choice ${i}`, proposedAnswer: `Possible answer ${i}`,
+    details: Array.from({ length: 8 }, (_, j) => ({ label: `Part ${i}/${j}`, value: '🌿'.repeat(500) })) }));
+  research.recommendationAssessment.optionId = 'choice-0'; await f.explorer.save(larger); await f.poll();
+  f.type('answer', 'Keep my text'); for (const checkbox of f.document.querySelectorAll('input[id^="detail-"]')) checkbox.click();
+  $('add-details').click(); assert.equal($('answer').value, 'Keep my text'); assert.match($('notice').textContent, /too long/);
+  $('replace-details').click(); assert.equal($('answer').value, 'Keep my text'); assert.equal($('research-draft-preview').hidden, true); assert.match($('notice').textContent, /too long/);
+});
+
+test('research replacement starts focus at its review heading and Escape cancels only the preview', async t => {
+  const f = await researchDraftFixture(t), { $ } = f;
+  $('question-help-open').click(); f.type('answer', 'Keep this draft'); $('replace-option-distributed').click();
+  assert.equal(f.document.activeElement, $('research-draft-preview-title'), 'read the preview before confirmation');
+  $('research-draft-confirm').focus(); $('research-draft-confirm').dispatchEvent(new f.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  assert.equal($('research-draft-preview').hidden, true); assert.equal($('question-drawer').hidden, false);
+  assert.equal(f.document.activeElement, $('replace-option-distributed')); assert.equal($('answer').value, 'Keep this draft');
+});
+
+test('retained research draft controls cannot change a pending or completed answer save', async t => {
+  const f = await researchDraftFixture(t), { $ } = f, e = f.explorer, node = e.doc.nodes[1];
+  f.type('answer', 'Original'); $('add-option-distributed').click();
+  const inserted = $('answer').value, editor = $('answer'); $('replace-option-cupboard').click();
+  const controls = ['replace-option-cupboard', 'research-draft-confirm', 'research-draft-undo', 'undo-addition'].map($);
+  assert.ok(controls.every(Boolean));
+  const command = e.command.bind(e); let release;
+  e.command = async (action, input) => {
+    if (action === 'answer') await new Promise(resolve => { release = resolve; });
+    return command(action, input);
+  };
+  t.after(() => release?.());
+  $('save-answer').click(); await until(() => $('answer-change-dialog').open, 'review retained research'); $('answer-change-confirm').click();
+  await until(() => release, 'answer command held before commit');
+  for (const control of controls) {
+    control.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true }));
+    assert.equal(editor.value, inserted, `${control.id} cannot change the saving draft`);
+    assert.equal(e.doc.nodes.find(n => n.id === node.id).answer, '');
+  }
+  release();
+  await until(() => e.doc.nodes.find(n => n.id === node.id).answer === inserted && $('answer') !== editor, 'answer committed and save navigation completed');
+  f.window.__updates.select(node.id);
+  assert.equal($('answer').value, inserted);
+  for (const control of controls) control.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true }));
+  assert.equal($('answer').value, inserted); assert.equal(e.doc.nodes.find(n => n.id === node.id).answer, inserted);
+  const fresh = structuredClone(e.doc); delete fresh.nodes.find(n => n.id === node.id).researchStale; await e.save(fresh); await f.poll();
+  assert.equal($('research-draft-undo').disabled, true, 'fresh research cannot restore undo after an answer save');
+  $('research-draft-undo').dispatchEvent(new f.window.MouseEvent('click', { bubbles: true }));
+  assert.equal($('answer').value, inserted); assert.equal(e.doc.nodes.find(n => n.id === node.id).answer, inserted);
+});
+
+test('research draft undo preserves an answer state deliberately changed after insertion', async t => {
+  const f = await researchDraftFixture(t), { $ } = f, node = f.explorer.doc.nodes[1];
+  f.type('answer', 'Earlier wording'); $('add-option-cupboard').click();
+  $('answer-state').value = 'needs-evidence'; $('answer-state').dispatchEvent(new f.window.Event('change'));
+  assert.equal($('research-draft-undo').disabled, false); $('research-draft-undo').click();
+  assert.equal($('answer').value, 'Earlier wording'); assert.equal($('answer-state').value, 'needs-evidence');
+  await until(() => $('answer-status').textContent === 'Draft saved locally', 'undo and later state persisted');
+  const saved = (await f.explorer.readDrafts(f.explorer.activeKey ?? f.explorer.doc.id)).entries.find(entry => entry.nodeId === node.id);
+  assert.equal(saved.text, 'Earlier wording'); assert.equal(saved.answerState, 'needs-evidence');
+  assert.equal(f.explorer.doc.nodes.find(n => n.id === node.id).answer, '');
 });

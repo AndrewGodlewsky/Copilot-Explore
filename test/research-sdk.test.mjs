@@ -10,6 +10,7 @@ import { researchSettings, researchLimits } from '../com.github.copilot/extensio
 import { prepareFollowup } from '../com.github.copilot/extensions/explorer/research-followup.mjs';
 import { operationEvidence } from '../com.github.copilot/extensions/explorer/operation-recovery.mjs';
 import { recommendationFindings } from './helpers/research-recommendation.mjs';
+import { supportFindings } from './helpers/research-support.mjs';
 import { answerNode, addDirection } from '../com.github.copilot/extensions/explorer/model.mjs';
 
 test('owned research follow-up sends reviewed strings, credits prior and current sources separately and attributes retained receipts', async t => {
@@ -148,6 +149,32 @@ test('Research model discovery does not start a helper and reviewed dedicated/de
     const [id] = await readdir(join(f.dir, 'usage', 'session-state'));
     const receipt = JSON.parse(await readFile(join(f.dir, 'usage', 'session-state', id, 'operation.json'), 'utf8'));
     assert.equal(receipt.model, modelId ?? model.id); assert.equal(receipt.status, 'completed');
+  }
+});
+
+test('research helper links exact tradeoffs to observed reads and captured user intent without claiming verification', async t => {
+  const doc = createDocument('Support fixture'), [target, prior] = addQuestions(doc, doc.rootId, [{ question: 'Where?', category: 'Storage' }, { question: 'Access?', category: 'Access' }]);
+  answerNode(doc, prior.id, 'Two key holders might help.', 'assumption'); prior.review = true;
+  const prepared = prepareResearch(doc, target.id, researchFraming(doc));
+  assert.match(prepared.instructions, /"support"/);
+  for (const mode of ['valid', 'changed-text', 'missing-source', 'unknown-context']) {
+    const raw = supportFindings(prior.id); raw.sources = raw.sources.map(({ id, title, url }) => ({ id, title, url }));
+    raw.recommendationAssessment.decisionRefs = raw.recommendationAssessment.decisionRefs.map(({ nodeId, reason }) => ({ nodeId, reason }));
+    if (mode === 'changed-text') raw.options[0].pros[0] = 'A revised factual claim.';
+    if (mode === 'missing-source') raw.claims[0].evidence[0].sourceId = 'missing';
+    if (mode === 'unknown-context') raw.support[2].decisionIds = ['not-reviewed'];
+    const f = await fixture(t, { result: raw, resolve: async () => [{ address: '93.184.216.34' }], send: async calls => {
+      assert.deepEqual(await calls.config.hooks.onPreToolUse({ toolName: 'web_fetch', toolCallId: 'support-read', toolArgs: { url: 'https://example.com/hours' } }), {});
+      calls.config.hooks.onPostToolUse({ toolName: 'web_fetch', toolCallId: 'support-read', toolResult: { resultType: 'success', textResultForLlm: 'The office closes on Sunday. No fee information.' } });
+    } });
+    if (mode !== 'valid') await assert.rejects(f.researcher.run(prepared.context, { prepared }), /invalid comparison/);
+    else {
+      const result = await f.researcher.run(prepared.context, { prepared });
+      assert.deepEqual(result.support, raw.support); assert.equal(result.sources[0].provenance, 'recorded-read');
+      assert.match(result.claims[0].limitations, /contradicts/); assert.match(result.claims[1].limitations, /irrelevant/);
+      assert.equal(result.recommendationAssessment.decisionRefs[0].answerState, 'assumption'); assert.equal(result.recommendationAssessment.decisionRefs[0].review, true);
+      assert.equal(f.calls.prompt, prepared.prompt); assert.equal(f.calls.config.systemMessage.content, prepared.instructions);
+    }
   }
 });
 

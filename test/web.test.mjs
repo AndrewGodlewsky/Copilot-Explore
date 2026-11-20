@@ -2,6 +2,7 @@ import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/dashboard.mjs';
 import { optionFindings } from './helpers/research-options.mjs';
 import { recommendationFindings } from './helpers/research-recommendation.mjs';
+import { supportFindings } from './helpers/research-support.mjs';
 import { attachMinimap, projectOverview, overviewPaths } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import test from 'node:test';
@@ -1789,7 +1790,16 @@ test('Git status refresh separates private drafts from file and Git state withou
   assert.ok(!$('project-git-result').textContent.includes(project));
   const denied = await fetch(new URL('api/project-git-status', f.window.location.href), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: '{}' }); assert.equal(denied.status, 403);
   await f.explorer.command('cancel');
-  await promisify(execFile)('git', ['-C', project, 'symbolic-ref', 'HEAD', 'refs/heads/status-other'], { windowsHide: true });
+  await until(() => !f.window.__updates.polling(), 'previous poll finished', 1000);
+  let releasePoll, held = false;
+  const heldResponse = new Promise(resolve => { releasePoll = resolve; });
+  f.pauseState(() => { held = true; return heldResponse; });
+  const previousPoll = f.poll();
+  try {
+    await until(() => held, 'pre-checkout poll response held', 1000);
+    await promisify(execFile)('git', ['-C', project, 'symbolic-ref', 'HEAD', 'refs/heads/status-other'], { windowsHide: true });
+  } finally { f.pauseState(null); releasePoll(); await previousPoll; }
+  // A poll already in flight intentionally skips another call. Observe the new checkout after it settles.
   f.explorer.projectObservedAt = 0; await f.poll(); assert.ok(f.explorer.projectChange);
   assert.match($('project-git-result').textContent, /Refresh to inspect/);
   await uiResponse(f, 'api/project-reconciliation', 'inspect', () => $('project-change-review').click()); await until(() => !$('project-reconcile-reload').hidden, 'same-byte branch preview'); await uiResponse(f, 'api/action', 'project-reload', () => $('project-reconcile-reload').click());
@@ -2802,7 +2812,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.DecisionImpact = DecisionImpact; window.impactPath = impactPath; window.decisionImpactKey = decisionImpactKey; window.criticalPaths = criticalPaths;
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
-  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
+  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, polling: () => !!pollFlight, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
   window.eval(script.replace("import { ChangeSummaryClient } from './change-summary-client.mjs';", '').replace("import { AdrSourcesClient } from './adr-sources-client.mjs';", '').replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.empty ? !document.getElementById('library-home').hidden : options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
@@ -7688,4 +7698,46 @@ test('research draft undo preserves an answer state deliberately changed after i
   const saved = (await f.explorer.readDrafts(f.explorer.activeKey ?? f.explorer.doc.id)).entries.find(entry => entry.nodeId === node.id);
   assert.equal(saved.text, 'Earlier wording'); assert.equal(saved.answerState, 'needs-evidence');
   assert.equal(f.explorer.doc.nodes.find(n => n.id === node.id).answer, '');
+});
+
+test('statement support sits beside each tradeoff and premise with honest contradictory irrelevant and unknown evidence', async t => {
+  const value = supportFindings(); value.options[0].pros[0] = '<img src=x onerror=bad()> 中文 🌿'; value.support[0].text = value.options[0].pros[0];
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  assert.equal(f.document.querySelectorAll('.research [data-statement-support]').length, 8);
+  const contrary = $('support-cupboard-pros-0'), irrelevant = $('support-cupboard-pros-1'), context = $('support-cupboard-cons-0');
+  assert.ok(contrary.closest('li').textContent.includes(value.options[0].pros[0])); assert.equal(contrary.open, false);
+  assert.match(contrary.querySelector('summary').textContent, /not verified/);
+  assert.match(contrary.textContent, /contradicts/); assert.match(irrelevant.textContent, /irrelevant/);
+  assert.match(contrary.textContent, /Imported read metadata/); assert.equal(contrary.querySelector('a').href, 'https://example.com/hours');
+  assert.match(context.textContent, /Historical user context.*Assumption.*needed review/s);
+  assert.match(context.textContent, /not verified facts|not factual verification/);
+  assert.match($('support-distributed-pros-0').querySelector('summary').textContent, /Support unknown/);
+  assert.match($('support-mainTradeoff').querySelector('summary').textContent, /Support unknown/);
+  assert.match($('support-recommendation').textContent, /Model reasoning.*factual support/s);
+  assert.equal(f.document.querySelector('.research').querySelector('img,script'), null);
+  assert.equal(f.actions.some(a => ['research', 'research-follow-up', 'research-reconsideration'].includes(a.action)), false);
+});
+
+test('statement support disclosures preserve focus drafts composer and polling state and reset on replacement research', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = supportFindings(); await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  f.type('answer', 'My private answer'); f.type('followup-question', 'What about weekends?');
+  const answer = $('answer'), composer = $('followup-question'), detail = $('support-cupboard-pros-0'), summary = detail.querySelector('summary');
+  summary.focus(); summary.click(); await f.poll();
+  assert.equal(detail.open, true); assert.equal(f.document.activeElement, summary); assert.equal($('answer'), answer); assert.equal($('followup-question'), composer);
+  assert.equal(answer.value, 'My private answer'); assert.equal(composer.value, 'What about weekends?');
+  const next = structuredClone(f.explorer.doc); next.nodes[1].research = supportFindings(); next.nodes[1].research.summary += ' Replacement result.';
+  await f.explorer.save(next); await f.poll();
+  assert.equal($('support-cupboard-pros-0').open, false); assert.equal($('answer'), answer); assert.equal(answer.value, 'My private answer');
+  assert.equal(composer.value, 'What about weekends?');
+});
+
+test('legacy statement support remains visibly unknown without fuzzy matching standalone claims', async t => {
+  const value = supportFindings(); delete value.support;
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  f.open(f.explorer.doc.nodes[1].id);
+  const summaries = [...f.document.querySelectorAll('.research [data-statement-support] > summary')];
+  assert.equal(summaries.length, 8); assert.ok(summaries.every(summary => summary.textContent === 'Support unknown'));
+  assert.equal(f.explorer.doc.nodes[1].research.support, undefined);
 });

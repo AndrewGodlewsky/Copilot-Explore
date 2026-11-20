@@ -15,6 +15,9 @@ function text(value, max = 20000) {
 function researchProjection(r, nodeIds) {
   const sourceIds = new Map();
   const optionIds = new Map(r.options.map((option, i) => [option.id, `o${i}`]));
+  const claimIds = new Map((r.claims ?? []).map((claim, i) => [claim.id, `c${i}`]));
+  const decisionIds = new Map((r.recommendationAssessment?.decisionRefs ?? []).map((ref, i) => [ref.nodeId, `d${i}`]));
+  const reference = (ids, id) => { if (!ids.has(id)) throw Error('Unknown statement support reference.'); return ids.get(id); };
   const sources = bounded(r.sources, 15, (s, i) => {
     let url;
     try { url = new URL(text(s.url, 2000)); } catch { throw Error('Invalid research source URL.'); }
@@ -25,6 +28,8 @@ function researchProjection(r, nodeIds) {
   const claims = r.claims === undefined ? null : bounded(r.claims, 12, (c, i) => ({ id: `c${i}`, text: text(c.text, 1000), basis: c.basis, limitations: text(c.limitations, 1000),
     evidence: bounded(c.evidence, 3, e => { const sourceId = sourceIds.get(e.sourceId); if (!sourceId) throw Error('Unknown research source.'); return { sourceId, paraphrase: text(e.paraphrase, 1000) }; }) }));
   return { basis: r.basis, summary: text(r.summary, 5000),
+    ...(r.support !== undefined ? { support: bounded(r.support, 35, entry => ({ optionId: entry.optionId === null ? null : reference(optionIds, entry.optionId), field: text(entry.field, 20), text: text(entry.text, 800),
+      claimIds: bounded(entry.claimIds, 3, id => reference(claimIds, id)), decisionIds: bounded(entry.decisionIds, 8, id => reference(decisionIds, id)) })) } : {}),
     ...(r.optionsVersion === 1 ? { optionsVersion: 1, ...(r.optionsLimit ? { optionsLimit: text(r.optionsLimit, 600) } : {}) } : {}),
     options: bounded(r.options, 4, (o, i) => ({ ...(r.optionsVersion === 1 ? { id: `o${i}`, fit: text(o.fit, 400) } : {}), title: text(o.title, 150), description: text(o.description, 3000), pros: bounded(o.pros, 6, p => text(p, 1000)), cons: bounded(o.cons, 6, c => text(c, 1000)),
       details: bounded(o.details ?? [], 8, d => ({ label: text(d.label, 80), value: text(d.value, 1000) })), proposedAnswer: o.proposedAnswer === undefined ? null : text(o.proposedAnswer, 5000) })),
@@ -32,7 +37,7 @@ function researchProjection(r, nodeIds) {
     ...(r.recommendationAssessment ? { recommendationAssessment: {
       optionId: r.recommendationAssessment.optionId === null ? null : optionIds.get(r.recommendationAssessment.optionId),
       mainTradeoff: text(r.recommendationAssessment.mainTradeoff, 600), reconsiderIf: text(r.recommendationAssessment.reconsiderIf, 600),
-      decisionRefs: bounded(r.recommendationAssessment.decisionRefs, 8, ref => ({ nodeId: nodeIds.get(ref.nodeId) ?? null, reason: text(ref.reason, 400), answerState: ref.answerState, review: ref.review })),
+      decisionRefs: bounded(r.recommendationAssessment.decisionRefs, 8, (ref, i) => ({ id: `d${i}`, nodeId: nodeIds.get(ref.nodeId) ?? null, reason: text(ref.reason, 400), answerState: ref.answerState, review: ref.review })),
     } } : {}), proposedAnswer: r.proposedAnswer === undefined ? null : text(r.proposedAnswer, 5000), uncertainty: text(r.uncertainty, 3000), sources, claims };
 }
 

@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.118",
+    "summary": "Inspect support beside research pros, cons and recommendation premises. Expand source paraphrases, limitations and historical user context; missing support stays visible. Exact statement links survive saved maps and exports, while changed wording rejects stale references. A recorded source read remains retrieval, not fact verification."
+  },
+  {
     "version": "0.1.117",
     "summary": "Compare question-specific criteria and set local priorities. Review a tool-free reconsideration using your Research model, then use or dismiss its proposed comparison. See changed reasoning and unknown evidence, keep saved research and drafts intact, and read stacked comparisons in narrow panes."
   },

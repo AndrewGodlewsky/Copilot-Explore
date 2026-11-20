@@ -203,11 +203,35 @@ function researchRecommendation(value, optionIds) {
   return { optionId: value.optionId, mainTradeoff: text(value.mainTradeoff, 'Main recommendation tradeoff', 600),
     reconsiderIf: text(value.reconsiderIf, 'Changed recommendation assumption', 600), decisionRefs };
 }
+function researchSupport(value, result) {
+  const claims = new Set(result.claims.map(claim => claim.id)), decisions = new Set((result.recommendationAssessment?.decisionRefs ?? []).map(ref => ref.nodeId)), targets = new Set();
+  const references = (values, known, limit) => {
+    const seen = new Set();
+    return list(values, 'statement support references', limit, id => {
+      if (!known.has(id) || seen.has(id)) throw Error('Unknown or duplicate statement support reference.');
+      seen.add(id); return id;
+    });
+  };
+  return list(value, 'statement support', 35, entry => {
+    evidenceKeys(entry, ['optionId', 'field', 'text', 'claimIds', 'decisionIds']);
+    const statement = text(entry.text, 'Support statement', 800);
+    if (entry.optionId === null) {
+      if (!['recommendation', 'mainTradeoff', 'reconsiderIf'].includes(entry.field) || statement !== (entry.field === 'recommendation' ? result.recommendation : result.recommendationAssessment?.[entry.field])) throw Error('Statement support does not match a current recommendation premise.');
+    } else {
+      const option = result.options.find(option => option.id === entry.optionId);
+      if (!option || !['pros', 'cons'].includes(entry.field) || !option[entry.field].includes(statement)) throw Error('Statement support does not match a current option tradeoff.');
+    }
+    const key = JSON.stringify([entry.optionId, entry.field, statement]);
+    if (targets.has(key)) throw Error('Duplicate statement support target.');
+    targets.add(key);
+    return { optionId: entry.optionId, field: entry.field, text: statement, claimIds: references(entry.claimIds, claims, 3), decisionIds: references(entry.decisionIds, decisions, 8) };
+  });
+}
 export function research(value) {
   const hasClaims = Object.hasOwn(value ?? {}, 'claims'), versioned = Object.hasOwn(value ?? {}, 'optionsVersion'), assessed = Object.hasOwn(value ?? {}, 'recommendationAssessment');
   if (versioned && (value.optionsVersion !== 1 || !hasClaims)) throw new Error('Unsupported research options version or missing claims.');
-  if (!versioned && (assessed || Object.hasOwn(value ?? {}, 'optionsLimit') || Array.isArray(value?.options) && value.options.some(o => Object.hasOwn(o ?? {}, 'id') || Object.hasOwn(o ?? {}, 'fit')))) throw new Error('New option fields require an options version.');
-  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims', ...(versioned ? ['optionsVersion', 'optionsLimit', 'recommendationAssessment'] : [])]);
+  if (!versioned && (assessed || Object.hasOwn(value ?? {}, 'optionsLimit') || Object.hasOwn(value ?? {}, 'support') || Array.isArray(value?.options) && value.options.some(o => Object.hasOwn(o ?? {}, 'id') || Object.hasOwn(o ?? {}, 'fit')))) throw new Error('New option fields require an options version.');
+  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims', ...(versioned ? ['optionsVersion', 'optionsLimit', 'recommendationAssessment', 'support'] : [])]);
   const { sources, claims } = researchEvidence(value);
   const ids = new Set(), titles = new Set(), answers = new Set();
   const distinct = (value, seen) => {
@@ -246,6 +270,7 @@ export function research(value) {
     ...(assessed ? { recommendationAssessment: researchRecommendation(value.recommendationAssessment, ids) } : {}),
     ...(value.proposedAnswer !== undefined ? { proposedAnswer: text(value.proposedAnswer, 'Proposed answer', 5000) } : {}),
     uncertainty: text(value.uncertainty, 'Uncertainty', 3000), sources };
+  if (Object.hasOwn(value, 'support')) result.support = researchSupport(value.support, result);
   if (hasClaims && Buffer.byteLength(JSON.stringify(result)) > MAX_RESEARCH_BYTES) throw new Error('Research evidence exceeds its serialized limit.');
   return result;
 }
@@ -563,20 +588,25 @@ export function toMarkdown(doc) {
     }
     if (n.research) {
       const r = n.research;
+      const statementSupport = (optionId, field, value) => {
+        const support = r.support?.find(item => item.optionId === optionId && item.field === field && item.text === value);
+        if (!support || !support.claimIds.length && !support.decisionIds.length) return 'Support unknown: no claim or prior-context reference recorded for this statement.';
+        return `Statement support (model interpretation, not verified): ${support.claimIds.length ? `claims ${support.claimIds.map(md).join(', ')}. ` : ''}${support.decisionIds.length ? `Historical user context: ${support.decisionIds.map(md).join(', ')}; user intent, not factual verification.` : ''}`;
+      };
       lines.push('### AI research', '', `Basis: ${r.basis === 'sources' ? 'Consulted sources' : 'Model reasoning; not externally verified'}.`, '', researchSettingsText(r.settings), '', md(r.summary), '');
       if (r.optionsLimit) lines.push('**Limited options:** ' + md(r.optionsLimit), '');
       for (const o of r.options) {
-        lines.push(`#### ${md(o.title)}`, '', md(o.description), '', '**Pros**', '', ...o.pros.map(p => `- ${md(p)}`), '', '**Cons**', '', ...o.cons.map(p => `- ${md(p)}`), '');
+        lines.push(`#### ${md(o.title)}`, '', md(o.description), '', '**Pros**', '', ...o.pros.map(p => `- ${md(p)}\n  ${statementSupport(o.id, 'pros', p)}`), '', '**Cons**', '', ...o.cons.map(p => `- ${md(p)}\n  ${statementSupport(o.id, 'cons', p)}`), '');
         if (r.optionsVersion === 1) lines.push(`Option reference: ${o.id}`, '', '**Fits when:** ' + md(o.fit), '');
         if (o.proposedAnswer) lines.push('Suggested draft: ' + md(o.proposedAnswer), '');
         for (const detail of o.details ?? []) lines.push(`- ${md(detail.label)}: ${md(detail.value)}`);
       }
-      lines.push('**Recommendation:** ' + md(r.recommendation), '');
+      lines.push('**Recommendation:** ' + md(r.recommendation), '', statementSupport(null, 'recommendation', r.recommendation), '');
       if (r.recommendationAssessment) {
         const assessment = r.recommendationAssessment, chosen = r.options.find(o => o.id === assessment.optionId);
         lines.push('**Recommended option:** ' + (chosen ? `${md(chosen.title)} (${chosen.id})` : 'None justified.'), '',
           'Contextual model judgment, not verified project facts or a saved user answer.', '',
-          '**Main tradeoff:** ' + md(assessment.mainTradeoff), '', '**Reconsider if:** ' + md(assessment.reconsiderIf), '');
+          '**Main tradeoff:** ' + md(assessment.mainTradeoff), '', statementSupport(null, 'mainTradeoff', assessment.mainTradeoff), '', '**Reconsider if:** ' + md(assessment.reconsiderIf), '', statementSupport(null, 'reconsiderIf', assessment.reconsiderIf), '');
         for (const ref of assessment.decisionRefs) lines.push(`Prior context ${md(ref.nodeId)} (${ANSWER_STATES[ref.answerState]}${ref.review ? '; needed review' : ''} at research time): ${md(ref.reason)}`, '');
       }
       lines.push('**Uncertainty:** ' + md(r.uncertainty), '');

@@ -3136,6 +3136,25 @@ function renderResearch(node) {
   findings.append(el('p', {}, r.summary), el('p', { class: 'quiet' }, researchSettingsText(r.settings)));
   const retrieval = source => !source.retrievedAt ? 'Retrieval time unknown.' : `${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation' : 'Recorded successful read of requested URL'}: ${source.retrievedAt}. Redirect destination and publication date unknown.`;
   const sourceLink = source => el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer' }, `${source.id ? source.id + ': ' : ''}${source.title}`);
+  const statementSupport = (id, optionId, field, text) => {
+    const support = r.support?.find(item => item.optionId === optionId && item.field === field && item.text === text);
+    const claims = (support?.claimIds ?? []).map(id => r.claims.find(claim => claim.id === id));
+    const decisions = (support?.decisionIds ?? []).map(id => r.recommendationAssessment.decisionRefs.find(ref => ref.nodeId === id));
+    const label = claims.some(claim => claim.basis === 'sources') ? 'Source-linked interpretation · not verified' : decisions.length ? 'User context · not factual verification' : claims.some(claim => claim.basis === 'reasoning') ? 'Model reasoning · no external support' : 'Support unknown';
+    const detail = disclosure(id, label); detail.className = 'statement-support'; detail.dataset.statementSupport = 'true';
+    detail.append(el('p', { class: 'quiet' }, 'Recorded associations are model interpretations. A page read confirms retrieval, not relevance, entailment or truth.'));
+    if (!claims.length && !decisions.length) detail.append(el('p', {}, 'No claim or prior-context reference was recorded for this statement. Factual support is unknown.'));
+    for (const claim of claims) {
+      const block = el('section', {}, el('h4', {}, `${claim.id}: ${claim.text}`), el('p', { class: 'quiet' }, claim.basis === 'sources' ? 'Source-linked model interpretation; not independently verified.' : claim.basis === 'reasoning' ? 'Model reasoning; factual support not established.' : 'Unknown support.'), el('p', {}, `Limitations: ${claim.limitations}`));
+      for (const evidence of claim.evidence) {
+        const source = r.sources.find(item => item.id === evidence.sourceId);
+        block.append(el('p', {}, `Model paraphrase: ${evidence.paraphrase}`), sourceLink(source), el('p', { class: 'quiet' }, retrieval(source)));
+      }
+      detail.append(block);
+    }
+    for (const ref of decisions) detail.append(el('p', {}, `Historical user context (${ANSWER_STATES[ref.answerState]}${ref.review ? '; needed review' : ''} at research time): ${ref.reason}`), el('p', { class: 'quiet' }, 'User intent, not verified facts or current state.'));
+    return detail;
+  };
   if (r.claims) {
     findings.append(el('h3', {}, 'Claims and evidence'), el('p', { class: 'quiet' }, 'Selected model assertions, not an exhaustive check of this comparison. A page read does not verify a claim; supporting paraphrases are model interpretations.'));
     for (const claim of r.claims) {
@@ -3166,9 +3185,11 @@ function renderResearch(node) {
     if (chosen === o) option.append(el('span', { class: 'basis recommendation-badge', 'data-recommendation-badge': 'true' }, node.researchStale ? 'Recommended option · needs review' : 'Recommended option'));
     option.append(el('p', {}, o.description));
     if (r.optionsVersion === 1) option.append(el('p', { class: 'option-fit' }, el('strong', {}, 'Fits when: '), o.fit));
+    option.append(el('p', { class: 'quiet' }, 'Explanation and fit: model judgment, not verified facts.'));
     const empty = r.optionsVersion === 1 ? 'None established.' : 'None recorded.';
-    option.append(el('strong', { class: 'pro' }, 'Pros'), o.pros.length ? el('ul', {}, o.pros.map(v => el('li', {}, v))) : el('p', { class: 'quiet' }, empty),
-      el('strong', { class: 'con' }, 'Cons'), o.cons.length ? el('ul', {}, o.cons.map(v => el('li', {}, v))) : el('p', { class: 'quiet' }, empty),
+    const tradeoffs = field => el('ul', {}, o[field].map((value, i) => el('li', {}, el('span', {}, value), statementSupport(`support-${identity}-${field}-${i}`, o.id, field, value))));
+    option.append(el('strong', { class: 'pro' }, 'Pros'), o.pros.length ? tradeoffs('pros') : el('p', { class: 'quiet' }, empty),
+      el('strong', { class: 'con' }, 'Cons'), o.cons.length ? tradeoffs('cons') : el('p', { class: 'quiet' }, empty),
       el('div', { class: 'actions' }, button('Append to my draft', () => add(o.proposedAnswer ?? `${o.title}: ${o.description}`), { id: `add-option-${identity}`, 'data-draft-suggestion': 'true' }),
         button('Replace my draft…', event => replace(o.proposedAnswer ?? `${o.title}: ${o.description}`, event.currentTarget), { id: `replace-option-${identity}`, 'data-draft-suggestion': 'true' })));
     const extra = disclosure(`option-details-${identity}`, 'Concrete details');
@@ -3182,9 +3203,11 @@ function renderResearch(node) {
     section.append(option);
   }
   const recommendation = el('div', { class: 'recommendation' }, el('h3', {}, assessment ? chosen ? 'Why this recommendation' : 'No recommendation yet' : r.options.length ? 'Recommendation' : 'Further context needed'), el('p', {}, r.recommendation));
+  recommendation.append(statementSupport('support-recommendation', null, 'recommendation', r.recommendation));
   if (assessment) {
     recommendation.append(el('p', { class: 'quiet' }, 'Contextual judgment from the model, not verified project facts or a decision you have made.'),
-      el('p', {}, el('strong', {}, 'Main tradeoff: '), assessment.mainTradeoff), el('p', {}, el('strong', {}, 'Reconsider if: '), assessment.reconsiderIf));
+      el('p', {}, el('strong', {}, 'Main tradeoff: '), assessment.mainTradeoff), statementSupport('support-mainTradeoff', null, 'mainTradeoff', assessment.mainTradeoff),
+      el('p', {}, el('strong', {}, 'Reconsider if: '), assessment.reconsiderIf), statementSupport('support-reconsiderIf', null, 'reconsiderIf', assessment.reconsiderIf));
     for (const [index, ref] of assessment.decisionRefs.entries()) {
       const source = state.document?.nodes.find(item => item.id === ref.nodeId);
       const prior = el('section', { class: 'recommendation-prior' }, el('h4', {}, `Prior decision ${index + 1}`), el('p', {}, ref.reason),

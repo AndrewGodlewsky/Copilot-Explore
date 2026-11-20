@@ -14,6 +14,28 @@ export function renderOfflineViewer(snapshot) {
   }
   function research(parent, r) {
     const section = el('section'); section.append(el('h2', 'Recorded AI suggestions — not user decisions'));
+    const statementSupport = (container, optionId, field, text) => {
+      const support = r.support?.find(item => item.optionId === optionId && item.field === field && item.text === text);
+      const claims = (support?.claimIds ?? []).map(id => r.claims.find(claim => claim.id === id));
+      const decisions = (support?.decisionIds ?? []).map(id => r.recommendationAssessment.decisionRefs.find(ref => ref.id === id));
+      const label = claims.some(claim => claim.basis === 'sources') ? 'Source-linked interpretation · not verified' : decisions.length ? 'User context · not factual verification' : claims.some(claim => claim.basis === 'reasoning') ? 'Model reasoning · no external support' : 'Support unknown';
+      const detail = el('details'); detail.setAttribute('data-statement-support', 'true'); detail.append(el('summary', label));
+      detail.append(el('p', 'These recorded associations are model interpretations. A page read confirms retrieval, not relevance, entailment or truth.'));
+      if (!claims.length && !decisions.length) detail.append(el('p', 'No claim or prior-context reference was recorded for this statement. Factual support is unknown.'));
+      for (const claim of claims) {
+        detail.append(el('p', `${claim.id}: ${claim.text}`), el('p', claim.basis === 'sources' ? 'Source-linked model interpretation; not independently verified.' : claim.basis === 'reasoning' ? 'Model reasoning; factual support not established.' : 'Unknown support.'), el('p', `Limitations: ${claim.limitations}`));
+        for (const evidence of claim.evidence) {
+          const source = r.sources.find(item => item.id === evidence.sourceId);
+          detail.append(el('p', `Model paraphrase of ${evidence.sourceId}: ${evidence.paraphrase}`));
+          const link = el('a', `${source.id}: ${source.title}`);
+          try { const url = new URL(source.url); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw Error(); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.referrerPolicy = 'no-referrer'; const row = el('p'); row.append(link); detail.append(row); }
+          catch { detail.append(el('p', 'Source URL unavailable.')); }
+          detail.append(el('p', `${source.provenance === 'imported' ? 'Imported read metadata; not observed by this installation.' : source.provenance === 'recorded-read' ? 'Recorded successful read of requested URL; not claim verification.' : 'Read provenance unknown.'} Retrieval time: ${source.retrievedAt ?? 'Unknown'}.`));
+        }
+      }
+      for (const ref of decisions) detail.append(el('p', `Historical user context (${ref.answerState}${ref.review ? '; needed review' : ''} at research time): ${ref.reason}`), el('p', 'User intent, not verified facts or current state.'));
+      container.append(detail);
+    };
     section.append(el('p', r.basis === 'sources' ? 'Consulted sources. A recorded read does not establish claim support or truth.' : 'Model reasoning; not externally verified.'));
     paragraph(section, 'Summary', r.summary);
     if (r.optionsLimit) paragraph(section, 'Limited options', r.optionsLimit);
@@ -21,18 +43,23 @@ export function renderOfflineViewer(snapshot) {
       const article = el('section'); article.append(el('h3', option.title), el('p', option.description));
       if (r.recommendationAssessment && r.recommendationAssessment.optionId === option.id) article.append(el('p', 'Recommended option — historical model judgment, not a user decision.'));
       if (r.optionsVersion === 1) paragraph(article, 'Fits when', option.fit);
-      paragraph(article, 'Model-stated pros', option.pros.join('\n') || 'None recorded');
-      paragraph(article, 'Model-stated cons', option.cons.join('\n') || 'None recorded');
+      for (const [field, label] of [['pros', 'Model-stated pros'], ['cons', 'Model-stated cons']]) {
+        article.append(el('h3', label));
+        if (!option[field].length) article.append(el('p', 'None recorded'));
+        for (const value of option[field]) { article.append(el('p', value)); statementSupport(article, option.id, field, value); }
+      }
       for (const detail of option.details) paragraph(article, detail.label, detail.value);
       if (option.proposedAnswer !== null) paragraph(article, 'AI suggested answer for this option', option.proposedAnswer);
       section.append(article);
     }
     paragraph(section, 'AI recommendation', r.recommendation);
+    statementSupport(section, null, 'recommendation', r.recommendation);
     if (r.recommendationAssessment) {
       const assessment = r.recommendationAssessment;
       if (assessment.optionId === null) section.append(el('p', 'No recommendation is justified by the recorded context.'));
       section.append(el('p', 'Contextual model judgment. Referenced states describe user intent at research time, not verified facts or current state.'));
-      paragraph(section, 'Main tradeoff', assessment.mainTradeoff); paragraph(section, 'Reconsider if', assessment.reconsiderIf);
+      paragraph(section, 'Main tradeoff', assessment.mainTradeoff); statementSupport(section, null, 'mainTradeoff', assessment.mainTradeoff);
+      paragraph(section, 'Reconsider if', assessment.reconsiderIf); statementSupport(section, null, 'reconsiderIf', assessment.reconsiderIf);
       for (const [i, ref] of assessment.decisionRefs.entries()) {
         paragraph(section, `Prior context ${i + 1} (${ref.answerState}${ref.review ? '; needed review' : ''} at research time)`, ref.reason);
         if (ref.nodeId && byId.has(ref.nodeId)) jump(section, ref.nodeId, `Review included prior question ${i + 1}`);

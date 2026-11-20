@@ -44,6 +44,12 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .research-claim h4 { margin: 0; font-size: 13px; }
 .research-claim .basis { margin-block: 8px; }
 .research-claim details p { line-height: 1.5; }
+.statement-support { margin-block: 4px 10px; }
+.statement-support > summary { font-size: 11px; font-weight: 500; }
+.statement-support[open] { border-left: 2px solid var(--line); padding: 4px 10px; }
+.statement-support h4 { font-size: 12px; margin-block: 8px 4px; }
+.statement-support p { line-height: 1.5; }
+.statement-support a { overflow-wrap: anywhere; }
 .research > details, .option > details { margin-block: 12px; }
 .research > details[open] > summary, .option > details[open] > summary { margin-bottom: 12px; }
 .research-options-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 16px; }

@@ -22,7 +22,7 @@ Unknown fields/versions, duplicate IDs, duplicate titles or draft answers after 
 
 The packaged skill requests substantively different, feasible choices and honest sparse results. Structural validation catches repeated wording; it cannot prove semantic distinctness, factual support or research quality. Those need separately authorized evaluation. Successful source reads still establish retrieval attribution rather than truth or support for every option sentence.
 
-IDs belong to one validated result and survive order changes and native serialization. They do not identify the same choice across independent runs. The panel binds draft actions to the current saved result; it never infers option identity from recommendation prose. [Linked recommendations](research-recommendation.md) identify one current option or explicitly decline to recommend, with a rationale and historical prior-decision references. [#105](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/105) owns per-statement evidence links; unsupported fields remain rejected.
+IDs belong to one validated result and survive order changes and native serialization. They do not identify the same choice across independent runs. The panel binds draft actions to the current saved result; it never infers option identity from recommendation prose. [Linked recommendations](research-recommendation.md) identify one current option or explicitly decline to recommend, with a rationale and historical prior-decision references. [Statement support](research-support.md) connects pros/cons and recommendation premises to known claims and historical user context. Missing associations stay visibly unknown; mismatched references are rejected.
 
 ## Compatibility and retention
 

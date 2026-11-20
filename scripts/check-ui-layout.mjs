@@ -9,6 +9,7 @@ import { Explorer } from '../com.github.copilot/extensions/explorer/controller.m
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { ResearchModelSettings } from '../com.github.copilot/extensions/explorer/research-model-settings.mjs';
 import { fixtureResearchModels } from '../test/helpers/research-model.mjs';
+import { viewerSnapshot, viewerArtifact } from '../com.github.copilot/extensions/explorer/offline-viewer.mjs';
 
 if (!process.env.EXPLORER_PLAYWRIGHT_PATH) throw Error('Set EXPLORER_PLAYWRIGHT_PATH to an installed playwright/index.mjs; this check downloads nothing.');
 const { chromium } = await import(pathToFileURL(resolve(process.env.EXPLORER_PLAYWRIGHT_PATH)).href);
@@ -35,7 +36,24 @@ parent.research = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic s
   { id: 'cupboard', title: 'A small shared cupboard', description: '日本語 🌿 A long explanation with an unbroken reference: ' + 'abcdefghλ'.repeat(32), fit: 'When one location can serve the neighborhood.', proposedAnswer: 'I will try a shared cupboard.', pros: ['Simple handovers'], cons: ['Limited availability'], details: [{ label: 'Review', value: 'Review access after one month.' }] },
   { id: 'distributed', title: 'Several storage locations', description: 'Compare another approach while keeping a private answer draft.', fit: 'When nearby access matters more than simple coordination.', proposedAnswer: 'I will arrange several nearby storage locations.', pros: ['Nearby access'], cons: ['More coordination'] },
 ], recommendation: 'Consider a small pilot first; the shared location still needs evidence.', recommendationAssessment: { optionId: 'cupboard', mainTradeoff: 'A single location makes access depend on its key holders.', reconsiderIf: 'If neighbors cannot reliably reach one location, consider distributed storage.', decisionRefs: [{ nodeId: answered.id, reason: 'The earlier cupboard answer is unresolved and needs review; confirm access before committing. 中文 🌿', answerState: 'needs-evidence', review: true }] }, uncertainty: 'Synthetic fixture; no external verification.', sources: [], claims: [{ id: 'access', text: 'Local access is unconfirmed.', basis: 'unknown', evidence: [], limitations: 'Synthetic fixture; no real evidence.' }] };
+parent.research.basis = 'sources';
+parent.research.options[0].pros[0] = 'Open every Sunday';
+parent.research.sources = [{ id: 'fixture-source', title: 'Synthetic office hours · 中文 🌿', url: 'https://example.com/' + 'long-reference-'.repeat(12), retrievedAt: '2026-11-20T00:00:00.000Z', provenance: 'imported' }];
+parent.research.claims.push(
+  { id: 'contrary', text: 'Open every Sunday', basis: 'sources', evidence: [{ sourceId: 'fixture-source', paraphrase: 'The synthetic passage says the office is closed on Sunday.' }], limitations: 'Contradictory fixture: this passage does not support Sunday access.' },
+  { id: 'irrelevant', text: 'Limited availability', basis: 'sources', evidence: [{ sourceId: 'fixture-source', paraphrase: 'Synthetic office hours do not describe cupboard availability.' }], limitations: 'Irrelevant citation: actual cupboard access remains unconfirmed.' },
+  { id: 'judgment', text: 'A pilot may fit the saved priorities.', basis: 'reasoning', evidence: [], limitations: 'Synthetic contextual judgment, not a verified fact.' },
+);
+parent.research.support = [
+  { optionId: 'cupboard', field: 'pros', text: parent.research.options[0].pros[0], claimIds: ['contrary'], decisionIds: [] },
+  { optionId: 'cupboard', field: 'cons', text: parent.research.options[0].cons[0], claimIds: ['irrelevant'], decisionIds: [] },
+  { optionId: null, field: 'recommendation', text: parent.research.recommendation, claimIds: ['judgment'], decisionIds: [answered.id] },
+  { optionId: null, field: 'mainTradeoff', text: parent.research.recommendationAssessment.mainTradeoff, claimIds: [], decisionIds: [answered.id] },
+];
 validateDocument(doc); await writeFile(file, JSON.stringify(doc));
+const offlineDoc = structuredClone(doc), offlineFile = join(directory, 'support.html');
+offlineDoc.nodes.find(node => node.id === parent.id).research.sources[0].title = 'X'.repeat(300);
+await writeFile(offlineFile, viewerArtifact(viewerSnapshot(validateDocument(offlineDoc), [{ nodeId: parent.id, answer: false, research: true }])).content);
 let requests = 0, comparisons = 0, voiceReady = false, voiceJob, modelCatalogError = false;
 const explorer = await new Explorer({ file, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
   models: async () => { if (modelCatalogError) throw Error('Synthetic catalog failure'); return fixtureResearchModels(); },
@@ -147,6 +165,15 @@ try {
     const context = await browser.newContext({ viewport: { width: scenario.width, height: scenario.height }, colorScheme: scenario.colorScheme });
     const page = await context.newPage(); page.setDefaultTimeout(10000); page.on('pageerror', error => failures.push({ message: `${scenario.name}: page error`, detail: error.message }));
     try {
+      await page.goto(pathToFileURL(offlineFile).href); await settle(page);
+      const offlineSupport = page.locator('[data-statement-support]').first(), offlineSummary = offlineSupport.locator('summary');
+      await offlineSummary.focus(); await page.keyboard.press('Space');
+      expect(await offlineSupport.evaluate(el => el.open), `${scenario.name}: offline support opens by keyboard`, {});
+      const offlineBounds = await offlineSupport.evaluate(el => ({ viewport: innerWidth, pageWidth: document.documentElement.scrollWidth, width: el.clientWidth, scrollWidth: el.scrollWidth }));
+      expect(offlineBounds.pageWidth <= offlineBounds.viewport + 1 && offlineBounds.scrollWidth <= offlineBounds.width + 1, `${scenario.name}: offline source title wraps inside support disclosure`, offlineBounds);
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-offline-support.png`) });
+      await page.keyboard.press('Space');
+      expect(await offlineSupport.evaluate(el => !el.open && document.activeElement === el.querySelector('summary')), `${scenario.name}: closing offline support preserves keyboard focus`, {});
       await page.goto(server.url); await page.locator('#nodes .node.root').waitFor(); await settle(page);
       const topbar = await page.evaluate(() => {
         const brand = document.querySelector('.brand').getBoundingClientRect(), nav = document.querySelector('.topbar nav').getBoundingClientRect();
@@ -243,6 +270,19 @@ try {
         return { ids: options.map(o => o.dataset.optionId), first: !!(options.at(-1).compareDocumentPosition(findings) & Node.DOCUMENT_POSITION_FOLLOWING), deepOpen: findings.open, text: options[0].textContent };
       });
       expect(optionOrder.ids.join(',') === 'cupboard,distributed' && optionOrder.first && !optionOrder.deepOpen && optionOrder.text.includes('Fits when'), `${scenario.name}: concise identified options precede closed deeper findings`, optionOrder);
+      const support = page.locator('#support-cupboard-pros-0'), supportSummary = support.locator('summary'), callsBeforeSupport = requests;
+      await supportSummary.focus(); await page.keyboard.press('Enter'); await settle(page);
+      expect(await support.evaluate(el => el.open) && (await support.innerText()).includes('Contradictory fixture'), `${scenario.name}: keyboard opens contrary evidence beside the tradeoff`, {});
+      expect((await supportSummary.innerText()).includes('not verified') && (await support.innerText()).includes('Imported read metadata'), `${scenario.name}: receipt does not imply verified support`, {});
+      expect((await page.locator('#support-cupboard-cons-0').textContent()).includes('Irrelevant citation') && (await page.locator('#support-distributed-pros-0 > summary').innerText()) === 'Support unknown', `${scenario.name}: irrelevant and unsupported claims stay honest`, {});
+      expect((await page.locator('#support-mainTradeoff').textContent()).includes('Historical user context'), `${scenario.name}: prior user intent remains separate from source evidence`, {});
+      await supportSummary.scrollIntoViewIfNeeded(); await inspectDrawer(page, `${scenario.name}/statement-support`);
+      const supportGeometry = await support.evaluate(el => { const r = el.getBoundingClientRect(), p = el.closest('.option').getBoundingClientRect(); return { width: r.width, left: r.left, right: r.right, parentLeft: p.left, parentRight: p.right, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }; });
+      expect(supportGeometry.width > 120 && supportGeometry.left >= supportGeometry.parentLeft - 1 && supportGeometry.right <= supportGeometry.parentRight + 1 && supportGeometry.scrollWidth <= supportGeometry.clientWidth + 1, `${scenario.name}: expanded statement evidence wraps within its option`, supportGeometry);
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-statement-support.png`) });
+      await supportSummary.focus(); await page.keyboard.press('Enter');
+      expect(await support.evaluate(el => !el.open && el.querySelector('summary') === document.activeElement) && requests === callsBeforeSupport, `${scenario.name}: closing support retains focus and starts no inference`, {});
+      expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: inspecting evidence retains the answer editor and text`, {});
       const badges = page.locator('[data-recommendation-badge]');
       expect(await badges.count() === 1 && await badges.evaluate(el => el.closest('.option').dataset.optionId) === 'cupboard', `${scenario.name}: exactly one passive recommended option is identified`, {});
       const recommendation = page.locator('.recommendation');
@@ -420,6 +460,7 @@ try {
         const next = structuredClone(explorer.doc), limited = structuredClone(parent.research);
         limited.options.length = count; if (count < 2) limited.optionsLimit = 'Local access is unconfirmed; additional choices would be speculative.';
         limited.recommendationAssessment.optionId = null; limited.recommendation = 'Confirm local access before choosing.';
+        limited.support = limited.support.filter(entry => entry.optionId !== null && limited.options.some(option => option.id === entry.optionId));
         const target = next.nodes.find(n => n.id === parent.id); target.research = limited; delete target.researchStale; await explorer.save(next);
         await page.waitForFunction(count => document.querySelectorAll('.research .option').length === count && document.querySelector('.recommendation h3').textContent === 'No recommendation yet', count);
         expect(await page.locator('#option-comparison').count() === Number(count > 0) && await page.locator('#use-recommendation').count() === 0 && await badges.count() === 0, `${scenario.name}: limited evidence never invents a winner and keeps viable alternatives`, { count });
@@ -428,7 +469,7 @@ try {
         if (screenshots && count === 2) await page.screenshot({ path: join(output, `${scenario.name}-no-recommendation.png`) });
         if (screenshots && !count) await page.screenshot({ path: join(output, `${scenario.name}-limited-options.png`) });
       }
-      const legacy = structuredClone(explorer.doc), legacyResult = structuredClone(parent.research); delete legacyResult.recommendationAssessment;
+      const legacy = structuredClone(explorer.doc), legacyResult = structuredClone(parent.research); delete legacyResult.recommendationAssessment; delete legacyResult.support;
       legacy.nodes.find(n => n.id === parent.id).research = legacyResult; await explorer.save(legacy);
       await page.locator('#recommendation-compatibility').waitFor();
       expect(await badges.count() === 0 && (await page.locator('#recommendation-compatibility').innerText()).includes('no linked option'), `${scenario.name}: older results retain text without a guessed winner`, {});

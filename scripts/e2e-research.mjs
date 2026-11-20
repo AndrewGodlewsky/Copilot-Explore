@@ -30,6 +30,7 @@ const comparisonOutput = prepared => ({ cells: prepared.comparison.criteria.flat
   recommendation: { optionId: 'pilot', reason: 'Fits the hypothetical priorities.', changed: 'Coordination is prioritized.', unchanged: 'Participation remains unknown.' }, uncertainty: 'No new retrieval or verification.' });
 function limitedFindings(count) {
   const value = { ...findings, recommendation: 'Gather the missing context before choosing.', recommendationAssessment: { ...findings.recommendationAssessment, optionId: null }, options: findings.options.slice(0, count), optionsLimit: 'The fixture supplies insufficient evidence for further choices.' };
+  value.support = findings.support.filter(entry => value.options.some(option => option.id === entry.optionId));
   return value;
 }
 const fixture = createServer(async (req, res) => {
@@ -122,10 +123,17 @@ try {
   assert.equal(owned.size, 0); assert.equal(prompts.length, 0); selectedId = dedicated.id;
   const prepared = Object.freeze({ ...prepareResearch(researchDoc, target.id, { ...researchFraming(researchDoc, settings), excluded: [excluded.id] }), settings, modelCapture });
   findings.recommendationAssessment.decisionRefs = [{ nodeId: prerequisite.id, reason: 'Unconfirmed shared space favors testing access with a small pilot.' }];
+  findings.support = [
+    { optionId: 'pilot', field: 'pros', text: findings.options[0].pros[0], claimIds: ['c1'], decisionIds: [] },
+    { optionId: null, field: 'recommendation', text: findings.recommendation, claimIds: ['c1'], decisionIds: [prerequisite.id] },
+  ];
   const expected = value => ({ ...value, recommendationAssessment: { ...value.recommendationAssessment, decisionRefs: value.recommendationAssessment.decisionRefs.map(ref => ({ ...ref, answerState: 'assumption', review: false })) }, settings });
   assert.ok(prepared.context.decisionsElsewhere.find(node => node.id === prerequisite.id).selection.includes('Explicit prerequisite'));
   const completed = await researcher.run(prepared.context, { prepared, onProgress: value => progress.push(value) });
   assert.deepEqual(completed, expected(findings));
+  assert.match(prepared.instructions, /"support"/);
+  assert.deepEqual(completed.support[1].decisionIds, [prerequisite.id]);
+  assert.equal(completed.recommendationAssessment.decisionRefs[0].answerState, 'assumption');
   assert.match(prepared.instructions, /Quick: 60 seconds.*8 tool attempts/);
   assert.match(prepared.instructions, /Prefer recently published/);
   assert.ok(sendTimeouts[0] > 0 && sendTimeouts[0] < 60000);

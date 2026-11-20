@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.124",
+    "summary": "Review the current project and explicit file scope from Settings → Use project context. Scope starts off, shows file names and sizes, and rejects changed projects or obsolete approvals. This first step checks metadata only; file review and a project brief are still required before questions can use project context."
+  },
+  {
     "version": "0.1.123",
     "summary": "Choose General, Software and versions, Products and services, or Concepts and design tradeoffs guidance in Research review. Inspect the profile and version before starting. Follow-ups retain their reviewed profile, earlier answers keep their own labels, and changing guidance disables incompatible answer reuse. Profiles preserve existing tools and effort limits."
   },

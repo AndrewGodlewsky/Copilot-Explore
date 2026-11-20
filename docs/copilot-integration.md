@@ -20,7 +20,7 @@ Initial questions and Save & explore deeper deliberately queue a request in the 
 
 Enhance Prompt's automatic-send approval flow, rewrite styles, code-reading policies, vendor migrations, React build pipeline, and product-specific usage aggregation are not Explorer requirements. They were not copied. Explorer's iteration and publishing workflow follows the owner's direct instructions recorded in [AGENTS.md](../AGENTS.md#complete-every-iteration).
 
-Explorer reads only explicitly selected, bounded project files for a reviewed tool-free challenge; other operations omit them. It changes neither reference project. The attached agent can use its existing conversation for questions. The researcher receives only a bounded snapshot of the selected path and saved decisions, plus Explorer's packaged research instructions; it has no access to the main conversation or unsaved drafts.
+Explorer's current content reader supplies explicitly selected, bounded project files to reviewed tool-free Challenge Review. Separate **Use project context** scope approval checks metadata only and starts no helper or content read. The owner approved an owned isolated tool-free route for project-aware questions after scope, file and brief review; ordinary questions remain queued in the attached chat. Challenge tokens and project-question scope are not interchangeable. See [scope and rollout boundaries](project-context.md#project-aware-question-scope). The researcher receives only a bounded snapshot of the selected path and saved decisions, plus Explorer's packaged research instructions; it has no access to these project captures, the main conversation or unsaved drafts.
 
 ## Background model work
 

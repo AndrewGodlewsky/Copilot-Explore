@@ -1,6 +1,6 @@
 {
   "name": "copilot-explorer",
-  "version": "0.1.123",
+  "version": "0.1.124",
   "private": true,
   "type": "module",
   "description": "An exploration map canvas for the GitHub Copilot desktop app.",

@@ -15,6 +15,19 @@
   <div id="connection-status" class="notice" role="status" aria-live="polite" hidden></div>
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
   <div id="project-change" class="notice" role="alert" hidden><span id="project-change-text"></span> <button id="project-change-review">Review project changes</button></div>
+  <div id="project-mode-indicator" class="notice" role="status" hidden><span id="project-mode-indicator-text"></span> <button id="project-mode-manage" type="button" aria-haspopup="dialog">Review scope</button></div>
+  <dialog id="project-mode-dialog" aria-labelledby="project-mode-title">
+    <header class="settings-heading"><h2 id="project-mode-title">Use project context</h2><button id="project-mode-close" type="button">Close</button></header>
+    <p id="project-mode-state" role="status" aria-live="polite"></p>
+    <p>Copilot working folder</p><p id="project-mode-project"></p>
+    <p>Purpose: project-aware questions. This scope check reads names and sizes only. It reads no file contents and starts no AI request.</p>
+    <label for="project-mode-paths">Relative project files, one per line</label>
+    <textarea id="project-mode-paths" rows="4" maxlength="1204" spellcheck="false" placeholder="README.md&#10;package.json" aria-describedby="project-mode-limits"></textarea>
+    <p id="project-mode-limits" class="quiet">Up to 5 regular files: 64 KiB each, 128 KiB total. Hidden, secret-name and linked files are excluded.</p>
+    <pre id="project-mode-scope" tabindex="0" aria-label="Reviewed file scope"></pre>
+    <details><summary>How project context will be used</summary><p>File contents and a correctable project brief need their own review before they can influence questions. Only reviewed context may go to a separate tool-free Copilot helper. This scope does not allow web research, attached-chat disclosure, repository commands or exports. Ordinary questions remain available.</p><p>The folder comes from the attached local session; Git repository status is not inferred.</p></details>
+    <div class="guidance-actions"><button id="project-mode-refresh" type="button">Refresh project</button><button id="project-mode-prepare" type="button">Review scope</button><button id="project-mode-approve" type="button" class="primary" disabled>Enable reviewed scope</button><button id="project-mode-disable" type="button" disabled>Turn off</button></div>
+  </dialog>
   <div id="scenario-preference-banner" class="notice" role="status" hidden><span id="scenario-preference-text"></span> <button id="scenario-preference-manage">Scenario preference</button></div>
   <section id="welcome" class="welcome">
     <button id="portable-reference-welcome" type="button" aria-haspopup="dialog">Open a shared reference</button>
@@ -148,6 +161,7 @@
     <p class="quiet">Preferences for Explorer on this device.</p>
     <div id="voice-settings-host" class="settings-section"></div>
     <section class="settings-section"><h3>Research</h3><button id="research-model-open" type="button" aria-haspopup="dialog">Research model</button></section>
+    <section class="settings-section"><h3>Project context</h3><p id="project-mode-settings-status">Off. Ordinary questions use no project files.</p><button id="project-mode-open" type="button" aria-haspopup="dialog">Use project context</button></section>
     <section class="settings-section"><h3>Shared contributions</h3><button id="contributor-open" type="button" aria-haspopup="dialog">Contributor name</button></section>
     <details id="map-settings" class="settings-section"><summary>Map and motion</summary><form id="navigation-form"><label for="navigation-wheel">Scroll wheel and trackpad</label><select id="navigation-wheel"><option value="zoom">Zoom around pointer</option><option value="pan">Pan map</option></select><p class="quiet">Ctrl/Command+scroll always zooms. Scrolling inside a question stays with its content.</p><label for="navigation-sensitivity">Scroll sensitivity</label><input id="navigation-sensitivity" type="number" min="0.25" max="3" step="any" value="1" required><p class="quiet">Changes wheel movement only; buttons and keyboard steps stay the same.</p><label for="navigation-motion">Motion</label><select id="navigation-motion"><option value="system">Follow system</option><option value="reduce">Reduce</option><option value="full">Full</option></select><p class="quiet">Controls recording feedback animation and scrolling behavior.</p><p id="navigation-error" class="notice" role="alert" hidden></p><div class="guidance-actions"><button type="button" id="navigation-reset">Reset to defaults</button><button type="button" id="navigation-refresh" hidden>Refresh saved settings</button><button type="submit" id="navigation-save" class="primary">Save map settings</button></div></form></details>
     <details class="settings-section"><summary>Keyboard</summary><label class="settings-check"><input id="palette-shortcut" type="checkbox"> Enable Ctrl+Shift+P for Commands in this canvas</label><p class="quiet">Ctrl/Command+Enter saves your answer. Dictation shortcuts follow Copilot.</p></details>

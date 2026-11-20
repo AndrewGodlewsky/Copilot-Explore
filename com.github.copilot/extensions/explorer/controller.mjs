@@ -5,6 +5,7 @@ import { createReuseRecord, reusableFollowup, reuseNamespace } from './research-
 import { deadline } from './owned-helper.mjs';
 import { comparisonInput, comparisonResult } from './research-comparison.mjs';
 import { ProjectContext } from './project-context.mjs';
+import { ProjectMode } from './project-mode.mjs';
 import { ProjectRepository } from './project-repository.mjs';
 import { ProjectLibrary } from './project-library.mjs';
 import { ProjectCopy } from './project-copy.mjs';
@@ -78,6 +79,7 @@ export class Explorer {
     this.changeSummaries = new ChangeSummary();
     this.branchRestoration = new BranchRestoration();
     this.projectContext = new ProjectContext(projectRoot);
+    this.projectMode = new ProjectMode(this.projectContext, () => this.closed ? null : this.activeKey ?? this.doc?.id);
     this.adrFormats = new AdrFormatReview(projectRoot);
     this.adrWriter = new AdrFileWorkflow(projectRoot);
     this.adrLifecycle = new AdrLifecycleWorkflow(projectRoot);
@@ -165,6 +167,7 @@ export class Explorer {
     this.replaceStorage(store);
   }
   replaceStorage(store) {
+    this.projectMode.clear();
     this.changeSummaries.clear();
     this.adrFormats.clear();
     this.adrWriter.clear();
@@ -618,6 +621,7 @@ export class Explorer {
     this.queue = work.catch(() => {});
     return work;
   }
+  projectModeRequest(input) { return this.transact(() => this.projectMode.request(input)); }
   async readCurrent() {
     if (this.projectStore) {
       if (this.projectChange) throw Error(this.projectChange.message);
@@ -1513,6 +1517,7 @@ export class Explorer {
           await this.request('questions', this.doc.rootId, input.scope);
           break;
         case 'import':
+          this.projectMode.clear();
           if (this.library) {
             const record = await this.library.import(input.document, { asCopy: input.asCopy }); this.dashboard?.invalidate();
             if (record.conflict) return { ...this.snapshot(), importConflict: { entries: record.conflict } };
@@ -1662,5 +1667,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
+  async close() { this.projectMode.clear(); this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

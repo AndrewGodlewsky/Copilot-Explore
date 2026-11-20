@@ -18,6 +18,7 @@ const output = resolve(process.argv[2] || '.preview-data/ui-layout');
 const screenshots = process.argv.includes('--screenshots');
 await mkdir(output, { recursive: true });
 const directory = await mkdtemp(join(tmpdir(), 'explorer-ui-layout-')), file = join(directory, 'layout.explore.json');
+await writeFile(join(directory, 'project-notes.md'), 'Synthetic project scope only. No model request.');
 const doc = createDocument('I want to build a neighborhood tool-sharing library');
 const [parent, answered, leaf] = addQuestions(doc, doc.rootId, [
   { category: 'Long category for neighborhood logistics', question: 'Where will the tools be physically kept between loans, and who will open the storage room?', importance: 'high', importanceReason: 'Storage controls access.' },
@@ -429,6 +430,24 @@ try {
       expect(await page.locator('#research-review-dialog').evaluate(el => !el.open && el.contains(document.getElementById('research-review-panel'))) && await page.locator('#research-request').evaluate(el => el === document.activeElement), `${scenario.name}: cancelling review restores its trigger focus`, {});
       expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: research review preserves the same draft editor`, {});
       expect(explorer.pending === null, `${scenario.name}: context review starts no model operation`, {});
+      await page.locator('#navigation-open').click(); await page.locator('#project-mode-open').click();
+      await page.waitForFunction(() => !document.getElementById('project-mode-refresh').disabled);
+      expect(await page.locator('#project-mode-approve').isDisabled(), `${scenario.name}: project scope starts off`, {});
+      await page.locator('#project-mode-paths').fill('project-notes.md'); await page.locator('#project-mode-prepare').click();
+      await page.waitForFunction(() => !document.getElementById('project-mode-approve').disabled);
+      for (const id of ['project-mode-project', 'project-mode-paths', 'project-mode-prepare', 'project-mode-approve', 'project-mode-close']) {
+        const control = page.locator('#' + id); await control.scrollIntoViewIfNeeded();
+        const bounds = await control.evaluate(el => { const r = el.getBoundingClientRect(), d = el.closest('dialog').getBoundingClientRect(); return { left: r.left, right: r.right, height: r.height, visible: Math.min(r.bottom, d.bottom) - Math.max(r.top, d.top), dialogWidth: d.width, scroll: el.closest('dialog').scrollWidth, client: el.closest('dialog').clientWidth, width: innerWidth }; });
+        expect(bounds.left >= 0 && bounds.right <= bounds.width + 1 && bounds.visible >= Math.min(bounds.height, 24) - 1 && bounds.scroll <= bounds.client + 1, `${scenario.name}: project scope controls fit and remain reachable`, bounds);
+      }
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-project-scope.png`) });
+      await page.locator('#project-mode-approve').focus(); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => !document.getElementById('project-mode-indicator').hidden);
+      expect(await editor.evaluate(el => el.isConnected && el.value === 'Keep this private draft'), `${scenario.name}: project scope preserves answer draft`, {});
+      expect(explorer.pending === null, `${scenario.name}: enabling scope starts no model operation`, {});
+      await page.locator('#project-mode-disable').click(); await page.waitForFunction(() => document.getElementById('project-mode-indicator').hidden);
+      await page.keyboard.press('Escape');
+      expect(await page.locator('#navigation-open').evaluate(el => el === document.activeElement), `${scenario.name}: scope dialog restores keyboard focus`, {});
       await page.locator('#navigation-open').click(); await page.locator('#research-model-open').click();
       await page.waitForFunction(() => !document.getElementById('research-model-save').disabled);
       expect(await page.locator('#research-model-choice').inputValue() === '', `${scenario.name}: model starts with selected chat default`, {});

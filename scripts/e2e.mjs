@@ -163,6 +163,15 @@ try {
   assert.equal(await realpath(metadata.workingDirectory), await realpath(project));
   assert.notEqual(metadata.workingDirectory, metadata.workspacePath);
   const projectCanary = 'INSTALLED-PROJECT-CONTEXT-CANARY λ'; await writeFile(join(project, 'design.md'), projectCanary);
+  let scopeSequence = 0;
+  const scopeRequest = async (action, extra = {}) => {
+    const response = await fetch(opened.url + 'api/project-mode', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify({ action, journey: snapshot.activeKey ?? snapshot.document.id, clientId: 'fixture-scope-000000000001', sequence: ++scopeSequence, purpose: 'project-questions', ...extra }) });
+    assert.equal(response.status, 200); return response.json();
+  };
+  assert.equal((await scopeRequest('status')).state, 'off');
+  const scopePreview = await scopeRequest('prepare', { paths: ['design.md'] });
+  assert.equal(scopePreview.project.root, await realpath(project)); assert.ok(!JSON.stringify(scopePreview).includes(projectCanary));
+  assert.equal((await scopeRequest('approve', { token: scopePreview.token })).state, 'active');
   const projectReviewInput = { action: 'prepare', purpose: 'challenge-review', clientId: 'fixture-project-000000000001', sequence: 1, journey: snapshot.activeKey ?? snapshot.document.id, nodeId: snapshot.document.rootId, scope: 'decisions', excluded: [], project: { action: 'refresh', paths: ['design.md'] } };
   const projectReviewResponse = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify(projectReviewInput) });
   assert.equal(projectReviewResponse.status, 200); const projectReview = await projectReviewResponse.json();
@@ -172,6 +181,7 @@ try {
   assert.ok(!(await (await fetch(opened.url + 'export.json')).text()).includes(projectCanary));
   const otherProject = join(temporary, 'other-project'); await mkdir(otherProject);
   await session.rpc.metadata.setWorkingDirectory({ workingDirectory: otherProject });
+  assert.equal((await scopeRequest('status')).state, 'stale');
   const { project: ignoredProjectSelection, ...existingProjectReview } = projectReviewInput;
   const changedRootResponse = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify({ ...existingProjectReview, sequence: 2 }) });
   assert.equal(changedRootResponse.status, 200); const changedRootReview = await changedRootResponse.json();
@@ -179,6 +189,8 @@ try {
   assert.equal(changedRootReview.prepared.context.projectSources[0].excerpt, projectCanary);
   await session.rpc.metadata.setWorkingDirectory({ workingDirectory: project });
   console.log('Installed metadata cwd selected the explicit project file; artifact workspace, native context and exports excluded it.');
+  assert.equal((await scopeRequest('status')).state, 'off');
+  console.log('Installed metadata bound metadata-only project scope to the active working root; changing it revoked approval without a model call.');
   const templateCanary = 'INSTALLED-ADR-TEMPLATE-BODY-CANARY';
   await writeFile(join(project, 'adr-template.md'), `# Example title\n## Context\n${templateCanary}\n## Decision\nExample decision\n`);
   const formatRequest = async input => fetch(opened.url + 'api/adr-format', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify(input) });

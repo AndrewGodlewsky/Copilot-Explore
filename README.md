@@ -3,7 +3,7 @@
 Contributors can compare research changes with the [20-case offline benchmark, human rubric and baseline](docs/research-evaluation.md). Run `npm run benchmark:research` for development cases, or add `-- --split all --candidate docs/research-evaluation-candidate.md` for the complete scripted comparison. Fixture results do not measure live research quality or provider cost.
 
 <!-- explorer-current-version:start -->
-**Proof of concept, v0.1.110.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
+**Proof of concept, v0.1.111.** Explore an idea through a branching question map inside the GitHub Copilot desktop app. Start with `/explore`, answer the questions that matter, research options when you are unsure, and keep going as deep as you need. Questions expand into workspaces inside the installed map. **History** previews saved revisions and named checkpoints; **Undo** previews the latest committed change before you restore it.
 
 **Usage dashboard** compares current maps, saved answer states and structure, newly observed canvas visits/committed question growth, and retained owned-helper outcomes and usage. UTC date filters apply to observations and receipts, not current stock. Scans are bounded and explicitly refreshed; missing usage and incomplete coverage stay visible. It preserves your editor and drafts. See [metric definitions, inventory, privacy and retention](docs/usage-dashboard.md).
 
@@ -127,7 +127,7 @@ While creating a journey, open **Add exploration guidance** to choose a mode or 
 
 **File** holds Library, import, recovery, exports and Finish. **Tools** holds decision helpers and the Usage dashboard. The **Settings** gear opens Voice, Map and motion, Keyboard, and Local data and diagnostics from any view. **Journey details** holds guidance, mode, progress and AI context controls. Within a question, the answer, compact Record control, **Save & continue** and **More options** stay up front. More options opens a full-width drawer below the map with **Explore**, **Research**, **Answer details** and **Context** tabs. Expand the drawer for more room. It remembers drafts and your place; Escape closes it without closing the question. See the [card workspace design and experience checks](docs/card-workspace.md).
 
-The proposed Research redesign has an [offline interactive prototype](docs/prototypes/research-workspace.html) and [interaction specification](docs/research-workspace-design.md) for owner review. It covers concise alternatives, context review, comparison, follow-ups and answer drafting. The production redesign and internet-access policy remain pending their separate reviews.
+The approved Research redesign has an [offline interactive prototype](docs/prototypes/research-workspace.html) and [interaction specification](docs/research-workspace-design.md). The drawer, Help me answer entry and Answer draft return have shipped; native Copilot acceptance and the remaining redesign issues are still tracked separately. The [approved research policy](docs/research-architecture-decision.md) calls for existing-context help first and a separate bounded **Research** request. General no-retrieval routing and the technical prerequisites for expanded access remain implementation work.
 
 1. Use `/explore` to open your library, or `/explore <idea>` to start a journey. Search saved topics, pin favorites, or show archived journeys. **Open** continues a journey in the current chat; **New exploration** starts another without replacing the saved map. Copilot creates questions in several directions around a new idea.
 2. Select a question in the map or searchable **Outline**. The node expands in its branch for writing; research and follow-up controls are in its screen-level drawer.
@@ -341,7 +341,7 @@ For each release, run `npm version <next-version> --no-git-tag-version --ignore-
 Manual acceptance in Copilot:
 
 <!-- explorer-install-check:start -->
-- Update to v0.1.110, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.110**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
+- Update to v0.1.111, start a new session, invoke `/explore`, and confirm the bottom label reads **Explorer v0.1.111**. In a narrow pane, choose each mode in creation and Edit guidance; check its description, active label, keyboard focus, retained draft, and old question explanations after a change.
 <!-- explorer-install-check:end -->
 - Open **Settings > Map and motion** in a narrow pane. Try wheel zoom and pan with a mouse and trackpad, Ctrl/Command+scroll over an answer, Shift+vertical scroll in Pan mode, and a system reduced-motion change. Check the mode hint, focus return, and recording feedback in light and dark themes.
 - Select a question and confirm it expands within the map, with no separate question sidebar. Collapse it and check its saved-answer preview.

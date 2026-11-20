@@ -4,15 +4,19 @@ Issue [#88](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/88).
 Assessed November 18, 2026 against Explorer v0.1.66 (`b00dadc`) and installed
 SDK/runtime `1.0.106-8.unstable.r43566476370.g869eef3`.
 
-**Status: investigation delivered; owner retrieval-policy decision pending.**
+**Status: investigation delivered; owner interaction and retrieval-approval
+policy approved November 19, 2026. Implementation and capability gates remain.**
+The [default interaction decision](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/88#issuecomment-7016077364)
+and [bounded-request approval decision](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/88#issuecomment-7016259614)
+resolve the product choices that held this investigation open.
 No broader network access, provider, credential, ambient skill, or runtime
 dependency is enabled by this document. The owner's existing requirement in
 [#41](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/41) that private
-text stay absent from tool logs remains in force; this proposal does not narrow
+text stay absent from tool logs remains in force; this decision does not narrow
 it to search-only filtering. The transport verification gap in
 [#42](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/42) also remains.
 
-## Recommendation for review
+## Chosen direction and approved interaction
 
 Keep Explorer's owned installed-SDK helper, validation, review tokens and usage
 receipts. Improve its packaged research guidance and evidence/option contract
@@ -20,19 +24,31 @@ incrementally. Borrow planning, source selection, counter-evidence and evaluatio
 practices from [the pinned prior-art comparison](research-prior-art.md); do not
 import a report-writing framework or assume its settings enforce our policy.
 
-Proposed future interaction: explain existing findings without new retrieval
-first when that can answer the user's question, and offer a separate explicit
-research action when fresh evidence is needed. The user reviews what is being
-sent and the chosen retrieval scope. A declined or unavailable retrieval mode
-must still permit useful reasoning with visible limits. This is a proposal,
-not a shipped source-mode selector or an owner-approved default.
+Approved target interaction: start with help from the existing exploration map
+and previous findings, with no new retrieval. Offer a separate explicit action
+labeled exactly **Research** when further evidence is needed. Before starting,
+show the question, scope and effort limit. One approval covers searches and page
+reads within that bounded request; approval of every query/page is not the
+default product interaction. Changed scope, additional disclosure or increased
+effort requires a new review/start. Host-required approvals still apply.
+
+A declined or unavailable retrieval mode must still permit useful reasoning
+with visible limits. The default is approved, but general no-retrieval research
+routing is not yet shipped; see #104 below. Existing wording/term help already
+uses a tool-free helper. Neither tool-free path is offline: inputs can still be
+sent to the model provider. If a required boundary cannot be enforced, the
+dependent capability stays unavailable rather than silently broadening access.
 
 The smallest initial work is UI, structured findings, stronger guidance and a
 representative benchmark under existing permissions. A multi-researcher system
 or a new service has additional latency, credentials, dependency and permission
 costs; none has demonstrated a net benefit for Explorer's concise answers.
 
-## Three retrieval policies to decide between
+## Retrieval policies compared
+
+Existing-material help is the approved default. Bounded explicit research is
+the approved optional interaction, subject to the gates below. An exact-URL-only
+mode remains a compared alternative, not a separately shipped or required mode.
 
 | Policy | What it permits | User review and benefit | Limits and implementation gate |
 | --- | --- | --- | --- |
@@ -46,10 +62,11 @@ prompts, or treating a saved answer as consent for a different destination.
 Retrieval availability must be separate from confidence: a retrieved page can
 be irrelevant, stale or wrong, and a fetch receipt cannot prove claim support.
 
-## What the current implementation actually enforces
+## Implementation evidence and remaining capabilities
 
-These findings come from local source, installed declarations and deterministic
-fixtures, not a live research-quality trial:
+The November 18 baseline findings come from local source, installed declarations
+and deterministic fixtures, not a live research-quality trial. Reconciliation
+against v0.1.110 retains these boundaries; it does not claim a newer SDK contract:
 
 - [`owned-helper.mjs`](../com.github.copilot/extensions/explorer/owned-helper.mjs)
   validates the host-paired runtime, creates an owned temporary workspace/home,
@@ -144,25 +161,43 @@ Normal `npm test` exercises real preparation, schema, receipts, cancellation and
 review contracts with local fixtures. Its outcome is recorded in #88's
 publication comment. It does not evaluate live answers to the six questions.
 
-## Owner decisions for tomorrow
+## Settled decisions and outstanding gates
 
-1. **Preferred default interaction:** approve or revise the proposed
-   existing-material-first explanation followed by a separate optional research
-   action. Ordinary research behavior remains unchanged until this is decided
-   and the new mode has been implemented and tested.
-2. **External retrieval boundary:** choose whether approved URLs and/or scoped
-   web search should be offered once the relevant #41/#42 capabilities are
-   demonstrable. Specify acceptable query/destination review granularity.
-   Existing private-tool-log requirements remain unchanged unless the owner
-   explicitly revises them; generic consent is not a solution to missing APIs.
-3. **Live evaluation:** decide later whether to authorize a bounded provider,
-   model, topic set and usage budget for comparing actual research quality.
-   Until then, fixture/source results must stay separate from effectiveness claims.
+- **Interaction and ordinary approval granularity are decided.** The approvals
+  above cover a single reviewed request, not ongoing permission. They do not
+  grant private repository disclosure in external queries, arbitrary tools, new
+  providers or permission to bypass the host.
+- **#41/#42 remain technical prerequisites for relevant expansion.** The
+  inspected runtime supplies neither a supported pre-journal sanitization seam
+  satisfying the private-tool-log requirement nor the verified per-hop
+  redirect/DNS transport contract. Generic consent cannot supply either. The
+  transport gap is missing verification, not proof of a vulnerability. Project
+  excerpts retain their separate reviewed, tool-free Challenge contract.
+- **The initial #110 live pilot is separately approved and has not run.** Its
+  [consolidated authorization](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/110#issuecomment-7017687445)
+  permits at most 12 explicit requests total: six synthetic cases with identical
+  fixed sources, each run once under each of two guidance variants, with web and
+  ambient tools/context disabled. Capture the eligible model selected in Explore
+  through a supported host boundary and pin its exact ID. Started failures,
+  cancellations and timeouts count; a durable allowance ledger prevents restart
+  from resetting the limit. No retries, replacements or follow-up requests.
+  Preserve isolation, deadlines, cancellation and usage receipts. This is a
+  request-count limit, not a dollar/credit cap. Invented source support, ignored
+  critical constraints or hidden major uncertainty fail the quality gate even
+  if other cases improve. Execution and human scoring remain outstanding; the
+  offline benchmark does not establish actual model quality. Ordinary automated
+  tests continue to use local fixtures only.
 
 ## Sequenced work and integration cost
 
-Start with the [workspace design #90](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/90)
-and [benchmark #110](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/110).
+The [workspace design #90](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/90)
+is approved. The [Research drawer #91](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/91)
+and [Help me answer entry #92](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/92)
+shipped in v0.1.109/v0.1.110; #91's native Copilot acceptance remains pending.
+[Relevant map context #94](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/94)
+shipped in v0.1.108. The [benchmark #110](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/110)
+has an offline harness; its separately authorized actual-answer pilot still
+needs implementation, execution and human scoring.
 Improve the existing [guidance #103](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/103),
 [claim links #105](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/105),
 [uncertainty #107](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/107)
@@ -171,7 +206,7 @@ without assuming new permissions. Guidance-only adaptations have the smallest
 integration surface, but still need quality evaluation.
 
 [Explanation routing #104](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/104)
-adds an explicit helper/purpose contract and should follow the chosen policy.
+adds an explicit helper/purpose contract and must implement the approved default.
 [Freshness #106](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/106) and
 [reuse #109](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/109) require
 honest provenance and invalidation. Framework replacement would require a
@@ -179,7 +214,10 @@ separate approved dependency/runtime architecture plus comparable quality and
 resource evidence; no such replacement is selected here.
 
 [Project-aware research #118](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/118)
-stays gated on this owner decision, #41/#42 and reviewed project-context work.
-UI work and ordinary Smart question design can progress independently. Record
-the owner's eventual choice in #88 and update this status before claiming it is
-approved or enabling dependent network behavior.
+stays gated on #41/#42 and reviewed project-context work; the product policy is
+settled. UI work and ordinary Smart question design can progress independently.
+The [dedicated research model setting #120](https://github.com/AndrewGodlewsky/Copilot-Explore/issues/120)
+is approved but not yet implemented. It will default to the selected chat model
+and permit a personal eligible-model override. It does not expand retrieval permission or the pilot allowance and
+is not a prerequisite for that pilot. Closing this investigation records the
+decisions; it does not close these implementation issues or enable new access.

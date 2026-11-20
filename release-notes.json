@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.111",
+    "summary": "Record the approved research direction: existing-context help first, a separate Research action and one approval per bounded request. Clarify which features still need implementation, retain the SDK privacy and transport gates, and document the separately approved evaluation pilot as not yet run. No runtime behavior changes."
+  },
+  {
     "version": "0.1.110",
     "summary": "Open Research in one step with Help me answer beside the answer actions, even before typing or while research is running. Find existing results or navigate to wording and term explanations without starting AI work. Close or Escape returns to the originating button while retaining your answer draft, caret and state."
   },

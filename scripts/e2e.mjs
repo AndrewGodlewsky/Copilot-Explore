@@ -18,6 +18,7 @@ const { CopilotClient, RuntimeConnection } = await import(pathToFileURL(join(sdk
 const root = fileURLToPath(new URL('../', import.meta.url));
 const temporary = await mkdtemp(join(tmpdir(), 'explorer-runtime-'));
 const project = join(temporary, 'project'); await mkdir(project);
+await promisify(execFile)('git', ['init', '--quiet', project], { windowsHide: true });
 const requests = [];
 const fixture = createServer(async (req, res) => {
   let body = ''; for await (const chunk of req) body += chunk;
@@ -169,9 +170,14 @@ try {
     assert.equal(response.status, 200); return response.json();
   };
   assert.equal((await scopeRequest('status')).state, 'off');
-  const scopePreview = await scopeRequest('prepare', { paths: ['design.md'] });
+  const inventory = await scopeRequest('discover', { exclusions: [] }); assert.ok(inventory.inventory.candidates.some(file => file.name === 'design.md'));
+  assert.ok(!JSON.stringify(inventory).includes(projectCanary));
+  const scopePreview = await scopeRequest('prepare', { paths: ['design.md'], exclusions: [] });
   assert.equal(scopePreview.project.root, await realpath(project)); assert.ok(!JSON.stringify(scopePreview).includes(projectCanary));
-  assert.equal((await scopeRequest('approve', { token: scopePreview.token })).state, 'active');
+  const enabledScope = await scopeRequest('approve', { token: scopePreview.token }); assert.equal(enabledScope.state, 'active');
+  assert.ok(!JSON.stringify(enabledScope).includes(projectCanary));
+  const projectCapture = await scopeRequest('read', { token: enabledScope.readToken }); assert.equal(projectCapture.receipt.sources[0].excerpt, projectCanary);
+  assert.ok(!JSON.stringify(requests).includes(projectCanary));
   const projectReviewInput = { action: 'prepare', purpose: 'challenge-review', clientId: 'fixture-project-000000000001', sequence: 1, journey: snapshot.activeKey ?? snapshot.document.id, nodeId: snapshot.document.rootId, scope: 'decisions', excluded: [], project: { action: 'refresh', paths: ['design.md'] } };
   const projectReviewResponse = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify(projectReviewInput) });
   assert.equal(projectReviewResponse.status, 200); const projectReview = await projectReviewResponse.json();
@@ -190,7 +196,7 @@ try {
   await session.rpc.metadata.setWorkingDirectory({ workingDirectory: project });
   console.log('Installed metadata cwd selected the explicit project file; artifact workspace, native context and exports excluded it.');
   assert.equal((await scopeRequest('status')).state, 'off');
-  console.log('Installed metadata bound metadata-only project scope to the active working root; changing it revoked approval without a model call.');
+  console.log('Installed metadata bound discovery and an explicit local read to reviewed scope; changing the root revoked it without a model call or export/native disclosure.');
   const templateCanary = 'INSTALLED-ADR-TEMPLATE-BODY-CANARY';
   await writeFile(join(project, 'adr-template.md'), `# Example title\n## Context\n${templateCanary}\n## Decision\nExample decision\n`);
   const formatRequest = async input => fetch(opened.url + 'api/adr-format', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify(input) });

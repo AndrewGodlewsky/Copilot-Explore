@@ -53,31 +53,47 @@ export class ProjectContext {
     if (stat.size > BigInt(PROJECT_LIMITS.fileBytes)) throw new Error('Project file exceeds the 64 KiB per-file limit.');
     return { path, size: Number(stat.size), stamp: stamp(stat), parents: parents.join('/') };
   }
-  async read(root, name, expected) {
+  async read(root, name, expected, signal) {
+    signal?.throwIfAborted();
     const entry = await this.entry(root, name);
+    signal?.throwIfAborted();
     if (expected && (entry.stamp !== expected.stamp || entry.parents !== expected.parents)) unavailable();
     const handle = await open(entry.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
+      signal?.throwIfAborted();
       if (stamp(await handle.stat({ bigint: true })) !== entry.stamp) unavailable();
+      signal?.throwIfAborted();
       const again = await this.entry(root, name);
+      signal?.throwIfAborted();
       if (again.stamp !== entry.stamp || again.parents !== entry.parents || JSON.stringify(await this.root()) !== JSON.stringify(root)) unavailable();
+      signal?.throwIfAborted();
       const bytes = Buffer.alloc(entry.size + 1); let count = 0;
-      while (count < bytes.length) { const part = await handle.read(bytes, count, bytes.length - count, count); if (!part.bytesRead) break; count += part.bytesRead; }
+      while (count < bytes.length) { signal?.throwIfAborted(); const part = await handle.read(bytes, count, bytes.length - count, count); signal?.throwIfAborted(); if (!part.bytesRead) break; count += part.bytesRead; }
       if (count !== entry.size || stamp(await handle.stat({ bigint: true })) !== entry.stamp) unavailable();
+      signal?.throwIfAborted();
       const after = await this.entry(root, name);
+      signal?.throwIfAborted();
       if (after.stamp !== entry.stamp || after.parents !== entry.parents || JSON.stringify(await this.root()) !== JSON.stringify(root)) unavailable();
+      signal?.throwIfAborted();
       return { ...entry, content: bytes.subarray(0, count) };
     } finally { await handle.close(); }
   }
-  async select(values, previous) {
+  async select(values, previous, { expected, signal } = {}) {
+    signal?.throwIfAborted();
     const names = paths(values);
     if (!names.length) return null;
     try {
       const root = await this.root(), entries = [], sources = []; let bytes = 0, excerpts = 0;
+      signal?.throwIfAborted();
+      if (expected && (JSON.stringify(root) !== JSON.stringify(expected.root) || JSON.stringify(names) !== JSON.stringify(expected.paths) || expected.entries?.length !== names.length)) unavailable();
       // Reject aggregate sizes before any file content is read.
-      for (const name of names) { const entry = await this.entry(root, name); bytes += entry.size; if (bytes > PROJECT_LIMITS.totalBytes) throw new Error('Selected project files exceed the 128 KiB total read limit.'); entries.push(entry); }
       for (const [index, name] of names.entries()) {
-        const entry = await this.read(root, name, entries[index]); let text;
+        signal?.throwIfAborted(); const entry = await this.entry(root, name); signal?.throwIfAborted();
+        if (expected && (entry.stamp !== expected.entries[index]?.stamp || entry.parents !== expected.entries[index]?.parents)) unavailable();
+        bytes += entry.size; if (bytes > PROJECT_LIMITS.totalBytes) throw new Error('Selected project files exceed the 128 KiB total read limit.'); entries.push(entry);
+      }
+      for (const [index, name] of names.entries()) {
+        signal?.throwIfAborted(); const entry = await this.read(root, name, entries[index], signal); signal?.throwIfAborted(); let text;
         try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(entry.content); } catch { throw new Error('Project documents must contain valid UTF-8 text.'); }
         if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) throw new Error('Binary or control-character project documents are excluded.');
         let excerpt = '', excerptBytes = 0;
@@ -88,6 +104,7 @@ export class ProjectContext {
       }
       return { root, entries: entries.map(({ stamp, parents }) => ({ stamp, parents })), sources: Object.freeze(sources) };
     } catch (error) {
+      signal?.throwIfAborted();
       if (/^(?:Project |Selected |Binary )/.test(error.message)) throw error;
       unavailable();
     }

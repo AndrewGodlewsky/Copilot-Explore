@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.125",
+    "summary": "Find candidate project files, review their scope, then explicitly read bounded local excerpts with fingerprints. Discovery respects Git ignore rules, exclusions and traversal limits. Changed files or projects invalidate captures. These steps make no AI request; a reviewed project brief is still required before questions use the context."
+  },
+  {
     "version": "0.1.124",
     "summary": "Review the current project and explicit file scope from Settings → Use project context. Scope starts off, shows file names and sizes, and rejects changed projects or obsolete approvals. This first step checks metadata only; file review and a project brief are still required before questions can use project context."
   },

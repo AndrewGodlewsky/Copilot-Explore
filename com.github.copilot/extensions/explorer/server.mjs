@@ -70,7 +70,7 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
       const route = url.pathname.slice(prefix.length);
       if (req.method === 'POST' && route === 'api/project-mode') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
-        return json(200, await explorer.projectModeRequest(await body(req, 4096)));
+        return json(200, await explorer.projectModeRequest(await body(req, 16384)));
       }
       if (req.method === 'POST' && route === 'api/dashboard') {
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });

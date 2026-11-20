@@ -10,6 +10,8 @@ import { Explorer } from '../com.github.copilot/extensions/explorer/controller.m
 import { createDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'explorer-mode-')), root = join(directory, 'project'); await mkdir(root);
@@ -73,13 +75,17 @@ test('clearing or changing the journey while metadata is pending rejects the lat
 
 test('scope endpoint checks Origin and purpose; native/saved/export data stay unchanged and a new canvas is off', async t => {
   const f = await fixture(t), doc = createDocument('Ordinary exploration'), file = join(f.directory, 'map.explore.json'); await writeFile(file, JSON.stringify(doc));
+  await promisify(execFile)('git', ['init', '--quiet', f.root], { windowsHide: true });
   const explorer = await new Explorer({ file, projectRoot: async () => f.root }).load(), server = await startServer(explorer);
   t.after(async () => { await server.close(); await explorer.close(); });
   const before = await readFile(file, 'utf8'), snapshot = JSON.stringify(explorer.nativeSnapshot()), clientId = randomUUID(); let sequence = 0;
   const send = (action, extra = {}, validOrigin = true) => fetch(`${server.url}api/project-mode`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', ...(validOrigin ? { Origin: new URL(server.url).origin } : {}) }, body: JSON.stringify({ action, journey: doc.id, clientId, sequence: ++sequence, purpose: 'project-questions', ...extra }) });
   assert.equal((await send('status', {}, false)).status, 403); assert.equal((await send('status', { purpose: 'research' })).status, 400);
   assert.equal((await (await send('status')).json()).state, 'off'); const review = await (await send('prepare', { paths: ['notes.md'] })).json();
-  assert.equal((await (await send('approve', { token: review.token })).json()).state, 'active');
+  const enabled = await (await send('approve', { token: review.token })).json(); assert.equal(enabled.state, 'active');
+  assert.equal((await send('read', { token: enabled.readToken }, false)).status, 403);
+  const captured = await (await send('read', { token: enabled.readToken })).json(); assert.equal(captured.receipt.sources[0].excerpt, 'PRIVATE PROJECT CANARY 🌿');
+  assert.equal((await send('read', { token: enabled.readToken })).status, 400);
   assert.equal(await readFile(file, 'utf8'), before); assert.equal(JSON.stringify(explorer.nativeSnapshot()), snapshot);
   assert.ok(!(await (await fetch(`${server.url}export.md`)).text()).includes('notes.md'));
   assert.ok(!JSON.stringify(explorer.uiSnapshot()).includes(f.root));
@@ -90,12 +96,14 @@ test('scope endpoint checks Origin and purpose; native/saved/export data stay un
 
 test('ordinary questions never request project access or include an approved scope', async t => {
   const f = await fixture(t), doc = createDocument('Ordinary questions'), file = join(f.directory, 'plain.explore.json'); await writeFile(file, JSON.stringify(doc));
+  await promisify(execFile)('git', ['init', '--quiet', f.root], { windowsHide: true });
   const sent = []; let rootReads = 0;
   const explorer = await new Explorer({ file, send: async message => { sent.push(message); }, projectRoot: async () => { rootReads++; return f.root; } }).load(); t.after(() => explorer.close());
   const clientId = randomUUID(), base = { journey: doc.id, clientId, purpose: 'project-questions' };
   await explorer.projectModeRequest({ ...base, action: 'status', sequence: 1 });
   const preview = await explorer.projectModeRequest({ ...base, action: 'prepare', sequence: 2, paths: ['notes.md'] });
-  await explorer.projectModeRequest({ ...base, action: 'approve', sequence: 3, token: preview.token }); rootReads = 0;
+  const enabled = await explorer.projectModeRequest({ ...base, action: 'approve', sequence: 3, token: preview.token });
+  await explorer.projectModeRequest({ ...base, action: 'read', sequence: 4, token: enabled.readToken }); rootReads = 0;
   await explorer.command('questions', { nodeId: doc.rootId, revision: doc.revision });
   await waitFor(() => sent.length === 1);
   assert.equal(rootReads, 0); assert.equal(sent.length, 1); assert.ok(!JSON.stringify(sent).includes('notes.md')); assert.ok(!JSON.stringify(sent).includes('PRIVATE PROJECT CANARY'));

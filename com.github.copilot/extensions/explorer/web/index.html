@@ -20,13 +20,19 @@
     <header class="settings-heading"><h2 id="project-mode-title">Use project context</h2><button id="project-mode-close" type="button">Close</button></header>
     <p id="project-mode-state" role="status" aria-live="polite"></p>
     <p>Copilot working folder</p><p id="project-mode-project"></p>
-    <p>Purpose: project-aware questions. This scope check reads names and sizes only. It reads no file contents and starts no AI request.</p>
+    <p>Purpose: project-aware questions. Find candidates and review their names and sizes first. Only “Read reviewed files” reads their contents, locally. These steps start no AI request.</p>
+    <details><summary>Exclude files or folders</summary><label for="project-mode-exclusions">Exact relative paths, one per line</label><textarea id="project-mode-exclusions" rows="3" maxlength="2409" spellcheck="false" placeholder="docs/private/&#10;src/internal.ts" aria-describedby="project-mode-exclusions-help"></textarea><p id="project-mode-exclusions-help" class="quiet">Up to 10 paths. End a folder with /. No wildcards. Git ignore rules and default exclusions also apply to manual selections.</p></details>
+    <button id="project-mode-discover" type="button">Find candidate files</button>
+    <p id="project-mode-discovery-summary" class="quiet"></p><div id="project-mode-candidates" role="group" aria-label="Candidate project files"></div>
+    <details id="project-mode-skips" hidden><summary>Why files were skipped</summary><ul id="project-mode-skipped"></ul></details>
     <label for="project-mode-paths">Relative project files, one per line</label>
     <textarea id="project-mode-paths" rows="4" maxlength="1204" spellcheck="false" placeholder="README.md&#10;package.json" aria-describedby="project-mode-limits"></textarea>
-    <p id="project-mode-limits" class="quiet">Up to 5 regular files: 64 KiB each, 128 KiB total. Hidden, secret-name and linked files are excluded.</p>
+    <p id="project-mode-limits" class="quiet">Up to 5 regular text files: 64 KiB each, 128 KiB total. Excerpts are limited to 8 KiB each, 32 KiB total. Hidden, secret-name, generated, ignored and linked files are excluded.</p>
     <pre id="project-mode-scope" tabindex="0" aria-label="Reviewed file scope"></pre>
-    <details><summary>How project context will be used</summary><p>File contents and a correctable project brief need their own review before they can influence questions. Only reviewed context may go to a separate tool-free Copilot helper. This scope does not allow web research, attached-chat disclosure, repository commands or exports. Ordinary questions remain available.</p><p>The folder comes from the attached local session; Git repository status is not inferred.</p></details>
+    <details><summary>How project context will be used</summary><p>A correctable project brief needs its own review before context can influence questions. Only reviewed context may go to a separate tool-free Copilot helper. Captured excerpts stay in this local workspace until context is turned off, changed or the session ends. They are not saved in the map or included in exports. Ordinary questions remain available.</p><p>The folder comes from the attached local session. Discovery and reads require a local Git repository and available Git ignore checks. Discovery is limited to 3 levels, 40 directories, 300 entries and 40 candidates, with a 5-second budget checked between operations. It runs no project code and makes no network request.</p></details>
     <div class="guidance-actions"><button id="project-mode-refresh" type="button">Refresh project</button><button id="project-mode-prepare" type="button">Review scope</button><button id="project-mode-approve" type="button" class="primary" disabled>Enable reviewed scope</button><button id="project-mode-disable" type="button" disabled>Turn off</button></div>
+    <p><button id="project-mode-read" type="button" disabled>Read reviewed files</button></p>
+    <section id="project-mode-capture" hidden aria-labelledby="project-mode-receipt-title"><h3 id="project-mode-receipt-title" tabindex="-1">Captured project excerpts</h3><p class="quiet">Inspect the excerpts below. A reviewed project brief is still required before questions can use them.</p><div id="project-mode-receipt"></div></section>
   </dialog>
   <div id="scenario-preference-banner" class="notice" role="status" hidden><span id="scenario-preference-text"></span> <button id="scenario-preference-manage">Scenario preference</button></div>
   <section id="welcome" class="welcome">

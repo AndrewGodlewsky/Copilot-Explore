@@ -64,6 +64,29 @@ test('enforce byte/count/encoding boundaries and visibly bounded Unicode excerpt
   await assert.rejects(f.context.select(['unicode.txt', 'unicode.txt']), /duplicate/i);
 });
 
+test('reviewed metadata binds the entire selection before any source content read', async t => {
+  const f = await fixture(t), paths = ['first.md', 'second.md'];
+  for (const name of paths) await writeFile(join(f.root, name), 'reviewed');
+  const root = await f.context.root(), entries = await Promise.all(paths.map(name => f.context.entry(root, name))), expected = { root, paths, entries };
+  const read = f.context.read.bind(f.context); let reads = 0;
+  f.context.read = (...args) => { reads++; return read(...args); };
+  await writeFile(join(f.root, 'second.md'), 'changed after review');
+  await assert.rejects(f.context.select(paths, null, { expected }), /changed|unavailable/i);
+  assert.equal(reads, 0, 'a changed later file prevents reading the earlier file');
+  await assert.rejects(f.context.select(['first.md'], null, { expected })); assert.equal(reads, 0);
+  const fresh = { root, paths, entries: await Promise.all(paths.map(name => f.context.entry(root, name))) };
+  const capture = await f.context.select(paths, null, { expected: fresh }); assert.equal(reads, 2); assert.equal(capture.sources[1].excerpt, 'changed after review');
+});
+
+test('cancelled reviewed reads stop before opening subsequent selected files', async t => {
+  const f = await fixture(t), paths = ['first.md', 'second.md'];
+  for (const name of paths) await writeFile(join(f.root, name), 'reviewed');
+  const abort = new AbortController(), read = f.context.read.bind(f.context); let reads = 0;
+  f.context.read = async (...args) => { const value = await read(...args); reads++; abort.abort(); return value; };
+  await assert.rejects(f.context.select(paths, null, { signal: abort.signal })); assert.equal(reads, 1);
+  await assert.rejects(f.context.select(paths, null, { signal: abort.signal })); assert.equal(reads, 1);
+});
+
 async function reviewFixture(t) {
   const f = await fixture(t), doc = createDocument('Grounded exploration');
   addQuestions(doc, doc.rootId, [{ question: 'Which design?', category: 'Design' }]); doc.nodes[1].answer = 'Use a small service';

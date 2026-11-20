@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createDocument, addQuestions, answerNode, validateDocument, research } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
@@ -18,7 +20,8 @@ const output = resolve(process.argv[2] || '.preview-data/ui-layout');
 const screenshots = process.argv.includes('--screenshots');
 await mkdir(output, { recursive: true });
 const directory = await mkdtemp(join(tmpdir(), 'explorer-ui-layout-')), file = join(directory, 'layout.explore.json');
-await writeFile(join(directory, 'project-notes.md'), 'Synthetic project scope only. No model request.');
+await promisify(execFile)('git', ['init', '--quiet', directory], { windowsHide: true });
+await writeFile(join(directory, 'README.md'), 'Synthetic project excerpt <script>literal</script> 🌿. No model request.');
 const doc = createDocument('I want to build a neighborhood tool-sharing library');
 const [parent, answered, leaf] = addQuestions(doc, doc.rootId, [
   { category: 'Long category for neighborhood logistics', question: 'Where will the tools be physically kept between loans, and who will open the storage room?', importance: 'high', importanceReason: 'Storage controls access.' },
@@ -433,7 +436,11 @@ try {
       await page.locator('#navigation-open').click(); await page.locator('#project-mode-open').click();
       await page.waitForFunction(() => !document.getElementById('project-mode-refresh').disabled);
       expect(await page.locator('#project-mode-approve').isDisabled(), `${scenario.name}: project scope starts off`, {});
-      await page.locator('#project-mode-paths').fill('project-notes.md'); await page.locator('#project-mode-prepare').click();
+      await page.locator('#project-mode-discover').click();
+      await page.waitForFunction(() => !!document.querySelector('#project-mode-candidates input'));
+      expect(await page.locator('#project-mode-paths').inputValue() === '', `${scenario.name}: discovery does not select or ingest files`, {});
+      await page.locator('#project-mode-candidates input[value="README.md"]').focus(); await page.keyboard.press('Space');
+      await page.locator('#project-mode-prepare').click();
       await page.waitForFunction(() => !document.getElementById('project-mode-approve').disabled);
       for (const id of ['project-mode-project', 'project-mode-paths', 'project-mode-prepare', 'project-mode-approve', 'project-mode-close']) {
         const control = page.locator('#' + id); await control.scrollIntoViewIfNeeded();
@@ -445,6 +452,14 @@ try {
       await page.waitForFunction(() => !document.getElementById('project-mode-indicator').hidden);
       expect(await editor.evaluate(el => el.isConnected && el.value === 'Keep this private draft'), `${scenario.name}: project scope preserves answer draft`, {});
       expect(explorer.pending === null, `${scenario.name}: enabling scope starts no model operation`, {});
+      await page.locator('#project-mode-read').click(); await page.waitForFunction(() => !document.getElementById('project-mode-capture').hidden);
+      expect(await page.locator('#project-mode-receipt-title').evaluate(el => el === document.activeElement), `${scenario.name}: explicit read focuses local receipt`, {});
+      await page.locator('#project-mode-receipt summary').click();
+      const excerpt = page.locator('#project-mode-receipt pre'); await excerpt.scrollIntoViewIfNeeded();
+      expect((await excerpt.textContent()).includes('<script>literal</script> 🌿') && await page.locator('#project-mode-receipt script').count() === 0, `${scenario.name}: captured text stays literal`, {});
+      const captureBounds = await excerpt.evaluate(el => { const r = el.getBoundingClientRect(), d = el.closest('dialog'); return { left: r.left, right: r.right, width: innerWidth, scroll: d.scrollWidth, client: d.clientWidth }; });
+      expect(captureBounds.left >= 0 && captureBounds.right <= captureBounds.width + 1 && captureBounds.scroll <= captureBounds.client + 1, `${scenario.name}: local excerpts fit the scope dialog`, captureBounds);
+      expect(explorer.pending === null && await editor.inputValue() === 'Keep this private draft', `${scenario.name}: explicit read starts no model and preserves the answer draft`, {});
       await page.locator('#project-mode-disable').click(); await page.waitForFunction(() => document.getElementById('project-mode-indicator').hidden);
       await page.keyboard.press('Escape');
       expect(await page.locator('#navigation-open').evaluate(el => el === document.activeElement), `${scenario.name}: scope dialog restores keyboard focus`, {});

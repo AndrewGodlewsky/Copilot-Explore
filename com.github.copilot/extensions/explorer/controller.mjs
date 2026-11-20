@@ -621,7 +621,7 @@ export class Explorer {
     this.queue = work.catch(() => {});
     return work;
   }
-  projectModeRequest(input) { return this.transact(() => this.projectMode.request(input)); }
+  projectModeRequest(input) { return this.projectMode.request(input); }
   async readCurrent() {
     if (this.projectStore) {
       if (this.projectChange) throw Error(this.projectChange.message);

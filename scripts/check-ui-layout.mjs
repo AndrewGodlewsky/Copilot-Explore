@@ -32,7 +32,7 @@ answered.revisit = { date: '2020-01-01', condition: 'After the first month', ack
 parent.research = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic saved options for layout checks.', options: [
   { id: 'cupboard', title: 'A small shared cupboard', description: '日本語 🌿 A long explanation with an unbroken reference: ' + 'abcdefghλ'.repeat(32), fit: 'When one location can serve the neighborhood.', proposedAnswer: 'I will try a shared cupboard.', pros: ['Simple handovers'], cons: ['Limited availability'], details: [{ label: 'Review', value: 'Review access after one month.' }] },
   { id: 'distributed', title: 'Several storage locations', description: 'Compare another approach while keeping a private answer draft.', fit: 'When nearby access matters more than simple coordination.', proposedAnswer: 'I will arrange several nearby storage locations.', pros: ['Nearby access'], cons: ['More coordination'] },
-], recommendation: 'Consider a small pilot first.', uncertainty: 'Synthetic fixture; no external verification.', sources: [], claims: [{ id: 'access', text: 'Local access is unconfirmed.', basis: 'unknown', evidence: [], limitations: 'Synthetic fixture; no real evidence.' }] };
+], recommendation: 'Consider a small pilot first; the shared location still needs evidence.', recommendationAssessment: { optionId: 'cupboard', mainTradeoff: 'A single location makes access depend on its key holders.', reconsiderIf: 'If neighbors cannot reliably reach one location, consider distributed storage.', decisionRefs: [{ nodeId: answered.id, reason: 'The earlier cupboard answer is unresolved and needs review; confirm access before committing. 中文 🌿', answerState: 'needs-evidence', review: true }] }, uncertainty: 'Synthetic fixture; no external verification.', sources: [], claims: [{ id: 'access', text: 'Local access is unconfirmed.', basis: 'unknown', evidence: [], limitations: 'Synthetic fixture; no real evidence.' }] };
 validateDocument(doc); await writeFile(file, JSON.stringify(doc));
 let requests = 0, voiceReady = false, voiceJob;
 const explorer = await new Explorer({ file, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; } }).load();
@@ -232,6 +232,16 @@ try {
         return { ids: options.map(o => o.dataset.optionId), first: !!(options.at(-1).compareDocumentPosition(findings) & Node.DOCUMENT_POSITION_FOLLOWING), deepOpen: findings.open, text: options[0].textContent };
       });
       expect(optionOrder.ids.join(',') === 'cupboard,distributed' && optionOrder.first && !optionOrder.deepOpen && optionOrder.text.includes('Fits when'), `${scenario.name}: concise identified options precede closed deeper findings`, optionOrder);
+      const badges = page.locator('[data-recommendation-badge]');
+      expect(await badges.count() === 1 && await badges.evaluate(el => el.closest('.option').dataset.optionId) === 'cupboard', `${scenario.name}: exactly one passive recommended option is identified`, {});
+      const recommendation = page.locator('.recommendation');
+      await recommendation.scrollIntoViewIfNeeded(); await settle(page);
+      const recommendationText = await recommendation.innerText();
+      expect(recommendationText.includes(parent.research.recommendationAssessment.mainTradeoff) && recommendationText.includes('Need evidence') && recommendationText.includes('needs review'), `${scenario.name}: recommendation explains tradeoff and historical prior-context state`, {});
+      await page.locator('#research-prior-decision-0').focus();
+      expect(await page.locator('#research-prior-decision-0').evaluate(el => el === document.activeElement), `${scenario.name}: prior-context control can receive keyboard focus`, {});
+      await inspectDrawer(page, `${scenario.name}/recommendation`);
+      if (screenshots) await page.screenshot({ path: join(output, `${scenario.name}-recommendation.png`) });
       await page.locator('#option-details-cupboard-summary').focus(); await page.keyboard.press('Enter');
       expect(await page.locator('#option-details-cupboard').evaluate(el => el.open), `${scenario.name}: option details open by keyboard`, {});
       await page.keyboard.press('Enter');
@@ -286,19 +296,27 @@ try {
       expect(await page.locator('#research-review-dialog').evaluate(el => !el.open) && await page.locator('#research-request').evaluate(el => el === document.activeElement), `${scenario.name}: cancelling review restores its trigger focus`, {});
       expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: research review preserves the same draft editor`, {});
       expect(explorer.pending === null, `${scenario.name}: context review starts no model operation`, {});
-      for (const count of [0, 1]) {
+      const stale = structuredClone(explorer.doc); stale.nodes.find(n => n.id === parent.id).researchStale = true; await explorer.save(stale);
+      await page.waitForFunction(() => document.querySelector('[data-recommendation-badge]').textContent.includes('needs review'));
+      expect(await page.locator('#use-recommendation').isDisabled() && await editor.evaluate(el => el.isConnected && el.value === 'Keep this private draft'), `${scenario.name}: a late stale marker labels the recommendation and preserves the draft`, {});
+      for (const count of [2, 0, 1]) {
         const next = structuredClone(explorer.doc), limited = structuredClone(parent.research);
-        limited.options.length = count; limited.optionsLimit = 'Local access is unconfirmed; additional choices would be speculative.';
-        if (!count) limited.recommendation = 'Confirm local access before choosing.';
-        next.nodes.find(n => n.id === parent.id).research = limited; await explorer.save(next);
-        await page.waitForFunction(count => document.querySelectorAll('.research .option').length === count && !!document.getElementById('research-options-limit'), count);
-        expect(await page.locator('#option-comparison').count() === 0 && (count || await page.locator('#use-recommendation').count() === 0), `${scenario.name}: sparse research has no invented comparison or empty-result draft winner`, { count });
+        limited.options.length = count; if (count < 2) limited.optionsLimit = 'Local access is unconfirmed; additional choices would be speculative.';
+        limited.recommendationAssessment.optionId = null; limited.recommendation = 'Confirm local access before choosing.';
+        const target = next.nodes.find(n => n.id === parent.id); target.research = limited; delete target.researchStale; await explorer.save(next);
+        await page.waitForFunction(count => document.querySelectorAll('.research .option').length === count && document.querySelector('.recommendation h3').textContent === 'No recommendation yet', count);
+        expect(await page.locator('#option-comparison').count() === Number(count > 1) && await page.locator('#use-recommendation').count() === 0 && await badges.count() === 0, `${scenario.name}: limited evidence never invents a winner and keeps viable alternatives`, { count });
         expect(await editor.evaluate(el => el.isConnected && el === document.getElementById('answer') && el.value === 'Keep this private draft'), `${scenario.name}: sparse result keeps the same authored draft`, { count });
-        await page.locator('#research-options-limit').scrollIntoViewIfNeeded(); await inspectDrawer(page, `${scenario.name}/limited-${count}`);
+        await page.locator(count < 2 ? '#research-options-limit' : '.recommendation').scrollIntoViewIfNeeded(); await inspectDrawer(page, `${scenario.name}/limited-${count}`);
+        if (screenshots && count === 2) await page.screenshot({ path: join(output, `${scenario.name}-no-recommendation.png`) });
         if (screenshots && !count) await page.screenshot({ path: join(output, `${scenario.name}-limited-options.png`) });
       }
+      const legacy = structuredClone(explorer.doc), legacyResult = structuredClone(parent.research); delete legacyResult.recommendationAssessment;
+      legacy.nodes.find(n => n.id === parent.id).research = legacyResult; await explorer.save(legacy);
+      await page.locator('#recommendation-compatibility').waitFor();
+      expect(await badges.count() === 0 && (await page.locator('#recommendation-compatibility').innerText()).includes('no linked option'), `${scenario.name}: older results retain text without a guessed winner`, {});
       const restored = structuredClone(explorer.doc); restored.nodes.find(n => n.id === parent.id).research = structuredClone(parent.research); await explorer.save(restored);
-      await page.waitForFunction(() => document.querySelectorAll('.research .option').length === 2);
+      await page.waitForFunction(() => document.querySelectorAll('.research .option').length === 2 && document.querySelectorAll('[data-recommendation-badge]').length === 1);
       await page.locator('[data-tool-tab="details"]').click();
       await page.locator('#revisit-editor > summary').click(); await page.locator('#revisit-condition').fill('After our pilot');
       await page.locator('#revisit-condition').press('Escape'); await page.locator('#navigation-open').click(); await page.locator('#navigation-cancel').click();

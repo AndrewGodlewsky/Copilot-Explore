@@ -2,7 +2,7 @@ import { parseFollowup } from './research-followup.mjs';
 import { readFile } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { research, MAX_RESEARCH_BYTES } from './model.mjs';
+import { research, MAX_RESEARCH_BYTES, isQuestion, effectiveAnswerState } from './model.mjs';
 import { prepareContext, RESEARCH_CONTEXT_LIMIT } from './research-context.mjs';
 export { boundedContext } from './research-context.mjs';
 import { modePolicy } from './web/modes.mjs';
@@ -99,7 +99,14 @@ export function createResearcher(parent, options = {}) {
           if (typeof content !== 'string' || content.length > 80000 || Buffer.byteLength(content) > MAX_RESEARCH_BYTES) throw new Error();
           const raw = JSON.parse(content.trim().replace(/^```(?:json)?\s*\n([\s\S]*)\n```$/, '$1'));
           if (raw.optionsVersion !== 1 || !Object.hasOwn(raw, 'claims') || !Array.isArray(raw.sources) || raw.sources.length > 15) throw new Error();
-          result = research({ ...raw, settings: prepared.settings, sources: raw.sources.map(source => {
+          if (!raw.recommendationAssessment || !Array.isArray(raw.recommendationAssessment.decisionRefs) || raw.recommendationAssessment.decisionRefs.length > 8) throw new Error();
+          const decisions = new Map([...prepared.context.path, ...prepared.context.decisionsElsewhere].filter(node => node.parentId != null && isQuestion(node) && typeof node.answer === 'string' && node.answer.trim() && effectiveAnswerState(node) !== 'unanswered').map(node => [node.id, node]));
+          const decisionRefs = raw.recommendationAssessment.decisionRefs.map(ref => {
+            if (!ref || Object.keys(ref).sort().join(',') !== 'nodeId,reason') throw new Error();
+            const source = decisions.get(ref.nodeId); if (!source) throw new Error();
+            return { ...ref, answerState: effectiveAnswerState(source), review: source.review === true };
+          });
+          result = research({ ...raw, recommendationAssessment: { ...raw.recommendationAssessment, decisionRefs }, settings: prepared.settings, sources: raw.sources.map(source => {
             const retrievedAt = pages.get(sourceKey(source.url));
             return { ...source, retrievedAt: retrievedAt ?? null, provenance: retrievedAt ? 'recorded-read' : 'imported' };
           }) });

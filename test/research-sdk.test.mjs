@@ -9,6 +9,8 @@ import { createDocument, addQuestions } from '../com.github.copilot/extensions/e
 import { researchSettings, researchLimits } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { prepareFollowup } from '../com.github.copilot/extensions/explorer/research-followup.mjs';
 import { operationEvidence } from '../com.github.copilot/extensions/explorer/operation-recovery.mjs';
+import { recommendationFindings } from './helpers/research-recommendation.mjs';
+import { answerNode, addDirection } from '../com.github.copilot/extensions/explorer/model.mjs';
 
 test('owned research follow-up sends reviewed strings, credits prior and current sources separately and attributes retained receipts', async t => {
   const doc = createDocument('Follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Target' }]);
@@ -71,7 +73,7 @@ test('bounded research context retains committed guidance inside its total budge
 const result = { optionsVersion: 1, basis: 'reasoning', summary: 'Comparison', options: [
   { id: 'pilot', title: 'Small', description: 'Pilot', fit: 'When learning comes first.', proposedAnswer: 'I will start small.', pros: ['Simple'], cons: ['Limited'] },
   { id: 'launch', title: 'Large', description: 'Launch', fit: 'When broad reach matters.', proposedAnswer: 'I will launch broadly.', pros: ['Reach'], cons: ['Cost'] },
-], recommendation: 'Pilot first.', uncertainty: 'No pages read.', sources: [], claims: [{ id: 'c1', text: 'Pilot first', basis: 'reasoning', evidence: [], limitations: 'No externally supported claim.' }] };
+], recommendation: 'Pilot first.', recommendationAssessment: { optionId: 'pilot', mainTradeoff: 'The first group has limited reach.', reconsiderIf: 'If broad reach is essential immediately, consider the launch.', decisionRefs: [] }, uncertainty: 'No pages read.', sources: [], claims: [{ id: 'c1', text: 'Pilot first', basis: 'reasoning', evidence: [], limitations: 'No externally supported claim.' }] };
 const auth = { isAuthenticated: true, login: 'fixture', host: 'github.com' };
 const model = { id: 'fixture-model', provider: { kind: 'copilot' }, policy: { state: 'enabled' } };
 const expectedTools = [{ name: 'web_fetch' }, { name: 'web_search', namespacedName: 'github-mcp-server/web_search', mcpServerName: 'github-mcp-server', mcpToolName: 'web_search' }];
@@ -228,13 +230,16 @@ test('new helper comparisons require concise option identity while accepting hon
   const old = await fixture(t, { result: legacy }); await assert.rejects(old.researcher.run(context), /invalid comparison/);
   for (const count of [0, 1]) {
     const limited = structuredClone(result); limited.options.length = count; limited.optionsLimit = 'More evidence is needed to compare alternatives.';
+    limited.recommendationAssessment.optionId = null;
     const current = await fixture(t, { result: limited });
     assert.deepEqual(await current.researcher.run(context), { ...limited, settings: researchSettings() });
   }
 });
 
 test('raw Unicode bytes and SDK character envelope accept their exact boundaries and reject one over', async t => {
-  const value = { ...result, summary: '界'.repeat(5000), recommendation: '界'.repeat(5000), proposedAnswer: '界'.repeat(5000), uncertainty: '界'.repeat(3000),
+  const value = { ...result, summary: '界'.repeat(5000), recommendation: '界'.repeat(800), uncertainty: '界'.repeat(3000),
+    recommendationAssessment: { ...result.recommendationAssessment, mainTradeoff: '界'.repeat(600), reconsiderIf: '界'.repeat(600) },
+    options: result.options.map(option => ({ ...option, description: '界'.repeat(600), fit: '界'.repeat(400), proposedAnswer: option.id + '界'.repeat(980), pros: Array(4).fill('界'.repeat(240)), cons: Array(4).fill('界'.repeat(240)), details: Array.from({ length: 4 }, () => ({ label: '界'.repeat(80), value: '界'.repeat(1000) })) })),
     claims: Array.from({ length: 12 }, (_, i) => ({ id: `c${i}`, text: '界'.repeat(1000), basis: 'reasoning', evidence: [], limitations: '界'.repeat(1000) })) };
   const json = JSON.stringify(value), raw = json + ' '.repeat(160000 - Buffer.byteLength(json));
   assert.ok(raw.length < 80000); assert.equal(Buffer.byteLength(raw), 160000);
@@ -378,4 +383,55 @@ test('a timed-out research run exposes late actual release instead of retrying i
   try { await f.researcher.run(context, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' } }); } catch (value) { error = value; }
   assert.match(error.message, /cleanup or usage accounting/); assert.ok(error.releaseConfirmed); assert.equal(f.calls.sends, 1);
   release(); assert.equal(await error.releaseConfirmed, true); assert.equal(f.calls.stops, 1);
+});
+test('recommendation rationale changes with included cross-branch constraints and retains their provisional status', async t => {
+  const summaries = [];
+  for (const [answer, winner] of [['Two neighbors may hold keys.', 'cupboard'], ['No shared location is available.', 'distributed']]) {
+    const doc = createDocument('Tool library');
+    const [target, prior] = addQuestions(doc, doc.rootId, [{ question: 'Where do tools stay?', category: 'Storage' }, { question: 'What access do we have?', category: 'Access' }]);
+    answerNode(doc, prior.id, answer, 'assumption'); prior.review = true;
+    const prepared = prepareResearch(doc, target.id, researchFraming(doc)), raw = recommendationFindings();
+    const f = await fixture(t, { result: raw, send: async calls => {
+      const supplied = JSON.parse(calls.prompt.split('EXPLORATION DATA\n')[1]);
+      const constraint = supplied.decisionsElsewhere.find(n => n.id === prior.id);
+      assert.equal(constraint.answer, answer); assert.equal(constraint.answerState, 'assumption'); assert.equal(constraint.review, true);
+      // Authored protocol fixture, not a test of a real model's research quality.
+      raw.recommendationAssessment.optionId = constraint.answer.startsWith('Two') ? 'cupboard' : 'distributed';
+      if (raw.recommendationAssessment.optionId === 'distributed') {
+        raw.recommendationAssessment.mainTradeoff = 'Distributed storage needs more separate collection arrangements.';
+        raw.recommendationAssessment.reconsiderIf = 'If a shared location and reliable key holders become available, consider one cupboard.';
+      }
+      raw.recommendation = `Given the unverified earlier answer “${constraint.answer}”, consider ${raw.recommendationAssessment.optionId}. Recheck access before committing.`;
+      raw.recommendationAssessment.decisionRefs = [{ nodeId: prior.id, reason: `The provisional access constraint “${constraint.answer}” changes which arrangement is plausible.` }];
+    } });
+    const output = await f.researcher.run(prepared.context, { prepared });
+    assert.equal(output.recommendationAssessment.optionId, winner);
+    assert.deepEqual(output.recommendationAssessment.decisionRefs, [{ ...raw.recommendationAssessment.decisionRefs[0], answerState: 'assumption', review: true }]);
+    assert.equal(f.calls.prompt, prepared.prompt); summaries.push(output.recommendation);
+  }
+  assert.notEqual(summaries[0], summaries[1]);
+});
+
+test('new helper recommendation rejects omitted, unknown, structural and unanswered prior references', async t => {
+  for (const kind of ['excluded', 'unknown', 'root', 'direction', 'unanswered', 'model-state']) {
+    const doc = createDocument('Tool library');
+    const direction = addDirection(doc, doc.rootId, 'Consider storage access');
+    const [target] = addQuestions(doc, direction.id, [{ question: 'Where do tools stay?', category: 'Storage' }]);
+    const [prior] = addQuestions(doc, doc.rootId, [{ question: 'What access do we have?', category: 'Access' }]);
+    answerNode(doc, prior.id, 'Two neighbors may hold keys.', 'tentative');
+    const prepared = prepareResearch(doc, target.id, { ...researchFraming(doc), ...(kind === 'excluded' ? { excluded: [prior.id] } : {}) });
+    const raw = recommendationFindings();
+    raw.recommendationAssessment.decisionRefs = [{ nodeId: kind === 'unknown' ? 'absent' : kind === 'root' ? doc.rootId : kind === 'direction' ? direction.id : kind === 'unanswered' ? target.id : prior.id, reason: 'This prior input favors storage.', ...(kind === 'model-state' ? { answerState: 'decided', review: false } : {}) }];
+    const f = await fixture(t, { result: raw });
+    await assert.rejects(f.researcher.run(prepared.context, { prepared }), /invalid comparison/, kind);
+  }
+});
+
+test('new helper requires an explicit recommendation assessment and accepts no justified winner', async t => {
+  const old = recommendationFindings(); delete old.recommendationAssessment;
+  const absent = await fixture(t, { result: old }); await assert.rejects(absent.researcher.run(context), /invalid comparison/);
+  const raw = recommendationFindings(); raw.recommendationAssessment.optionId = null;
+  raw.recommendation = 'No location or access evidence is available to prefer either choice.';
+  const none = await fixture(t, { result: raw });
+  assert.deepEqual(await none.researcher.run(context), { ...raw, settings: researchSettings() });
 });

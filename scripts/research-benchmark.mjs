@@ -29,6 +29,7 @@ function scriptedAnswer(item, sourced) {
   return { optionsVersion: 1, basis: sourced ? 'sources' : 'reasoning', summary: `Synthetic comparison: ${item.question}`,
     options: item.options.map((option, index) => ({ id: `option-${index + 1}`, title: option.title, description: `Synthetic option: ${option.title}`, fit: item.constraint, proposedAnswer: `I would consider ${option.title}.`, pros: [option.pro], cons: [option.con] })),
     recommendation: `For this fixture, consider ${item.options[0].title}. The user may choose either alternative.`,
+    recommendationAssessment: { optionId: 'option-1', mainTradeoff: item.options[0].con, reconsiderIf: `Reconsider if the supplied constraint changes: ${item.constraint}`, decisionRefs: [] },
     uncertainty: `Synthetic ${item.condition} evidence. ${item.constraint} No real research was performed.`,
     sources: sourced ? [{ id: 's1', title: 'Synthetic evidence fixture', url: `https://example.com/explorer-fixtures/${item.id}` }] : [],
     claims: [{ id: 'c1', text: 'The fixture describes this constraint; it does not verify a real-world fact.', basis: sourced ? 'sources' : 'reasoning',

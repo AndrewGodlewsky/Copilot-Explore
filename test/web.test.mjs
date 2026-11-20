@@ -1,5 +1,6 @@
 import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/dashboard.mjs';
 import { optionFindings } from './helpers/research-options.mjs';
+import { recommendationFindings } from './helpers/research-recommendation.mjs';
 import { attachMinimap, projectOverview, overviewPaths } from '../com.github.copilot/extensions/explorer/web/minimap.mjs';
 import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from '../com.github.copilot/extensions/explorer/web/search.mjs';
 import test from 'node:test';
@@ -7011,4 +7012,75 @@ test('semantic zoom anchors the actual compact card and editor point through rel
   for (const zoom of [.5, .7, 1, .5]) atPoint(zoom);
   ui.select(id);
   for (const zoom of [.5, .1, 3, 1]) atPoint(zoom);
+});
+test('linked recommendation marks exactly one optional choice and applies only its editable draft', async t => {
+  const value = recommendationFindings();
+  value.recommendation = 'Contextual judgment <img src=x onerror=bad()> 中文 🌿';
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  f.type('answer', 'My own start'); const answer = $('answer'), revision = f.explorer.doc.revision;
+  const badges = f.document.querySelectorAll('[data-recommendation-badge]');
+  assert.equal(badges.length, 1); assert.equal(badges[0].closest('.option').dataset.optionId, 'cupboard');
+  const block = f.document.querySelector('.recommendation');
+  for (const text of [value.recommendation, value.recommendationAssessment.mainTradeoff, value.recommendationAssessment.reconsiderIf]) assert.ok(block.textContent.includes(text));
+  assert.match(block.textContent, /contextual judgment/i); assert.equal(block.querySelector('img,script,input[type=radio]'), null);
+  assert.equal($('add-option-distributed').disabled, false); assert.equal(answer.value, 'My own start');
+  $('use-recommendation').click(); assert.equal(answer.value, `My own start\n\n${value.options[0].proposedAnswer}`);
+  $('undo-addition').click(); assert.equal(answer.value, 'My own start');
+  $('add-option-distributed').click(); assert.equal(answer.value, `My own start\n\n${value.options[1].proposedAnswer}`);
+  assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.equal(f.explorer.doc.revision, revision);
+  assert.equal(f.actions.filter(a => a.action === 'answer').length, 0);
+});
+
+test('no recommendation and legacy recommendations remain honest while alternatives and custom drafts stay available', async t => {
+  for (const mode of ['none', 'legacy']) {
+    const value = mode === 'legacy' ? optionFindings() : recommendationFindings();
+    if (mode === 'none') { value.recommendationAssessment.optionId = null; value.recommendation = 'Access is unknown; no option can be recommended yet.'; }
+    const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc }); } });
+    const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+    assert.equal(f.document.querySelectorAll('[data-recommendation-badge]').length, 0);
+    if (mode === 'none') { assert.equal($('use-recommendation'), null); assert.match(f.document.querySelector('.recommendation').textContent, /No recommendation/i); }
+    else { assert.ok($('recommendation-compatibility')); assert.match($('recommendation-compatibility').textContent, /no linked|not.*linked/i); }
+    assert.ok(f.document.querySelector('.recommendation').textContent.includes(value.recommendation));
+    for (const option of value.options) assert.equal($(`add-option-${option.id}`).disabled, false);
+    f.type('answer', 'My independent answer'); assert.equal($('answer').value, 'My independent answer');
+    assert.equal(f.explorer.doc.nodes[1].answer, '');
+  }
+});
+
+test('recommendation prior-context navigation preserves drafts and reports missing historical references', async t => {
+  let value, priorId;
+  const f = await fixture(t, 340, undefined, false, { before: async e => {
+    const doc = structuredClone(e.doc), prior = doc.nodes[2]; priorId = prior.id;
+    prior.answer = 'Two possible key holders.'; prior.answerState = 'assumption'; prior.review = true;
+    value = recommendationFindings(); value.recommendationAssessment.decisionRefs = [
+      { nodeId: prior.id, reason: 'Possible access remains an unverified assumption.', answerState: 'assumption', review: true },
+      { nodeId: 'removed-reference', reason: 'Earlier context is no longer available.', answerState: 'tentative', review: false },
+    ];
+    doc.nodes[1].research = value; await e.command('import', { revision: e.doc.revision, document: doc });
+  } });
+  const $ = id => f.document.getElementById(id), target = f.explorer.doc.nodes[1]; f.open(target.id);
+  f.type('answer', 'Keep my draft 🌿'); const answer = $('answer'); answer.focus(); answer.setSelectionRange(2, 7);
+  await f.poll(); assert.equal($('answer'), answer); assert.equal(answer.selectionStart, 2); assert.equal(answer.selectionEnd, 7);
+  const block = f.document.querySelector('.recommendation'); assert.match(block.textContent, /Assumption/); assert.match(block.textContent, /needs review/i); assert.match(block.textContent, /unavailable/i);
+  const link = $('research-prior-decision-0'); assert.ok(link); link.focus(); await f.poll(); assert.equal(f.document.activeElement, link);
+  link.click(); assert.equal($('expanded-title').textContent, f.explorer.doc.nodes.find(n => n.id === priorId).question);
+  f.open(target.id); assert.equal($('answer').value, 'Keep my draft 🌿'); assert.equal(f.explorer.doc.nodes[1].answer, '');
+});
+
+test('linked recommendation becomes visibly historical on a late stale marker and safely follows a replacement result', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = recommendationFindings(); await e.command('import', { revision: e.doc.revision, document: doc }); } });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep this');
+  const answer = $('answer'), block = f.document.querySelector('.research'), action = $('use-recommendation');
+  const stale = structuredClone(f.explorer.doc); stale.nodes[1].researchStale = true; await f.explorer.save(stale); await f.poll();
+  assert.equal(f.document.querySelector('.research'), block); assert.equal($('answer'), answer);
+  assert.match(f.document.querySelector('[data-recommendation-badge]').textContent, /needs review|historical/i);
+  assert.equal(action.disabled, true); action.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true })); assert.equal(answer.value, 'Keep this');
+  const replacement = structuredClone(f.explorer.doc); delete replacement.nodes[1].researchStale;
+  replacement.nodes[1].research.recommendationAssessment.optionId = 'distributed';
+  await f.explorer.save(replacement); await f.poll();
+  assert.equal($('answer'), answer); assert.equal(answer.value, 'Keep this');
+  const badges = f.document.querySelectorAll('[data-recommendation-badge]'); assert.equal(badges.length, 1); assert.equal(badges[0].closest('.option').dataset.optionId, 'distributed');
+  action.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true })); assert.equal(answer.value, 'Keep this', 'detached prior result cannot append');
+  $('use-recommendation').click(); assert.equal(answer.value, `Keep this\n\n${replacement.nodes[1].research.options[1].proposedAnswer}`);
 });

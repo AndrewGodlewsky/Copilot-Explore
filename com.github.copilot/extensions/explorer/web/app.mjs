@@ -2539,6 +2539,7 @@ function renderWorkspace() {
       return research;
     });
     if ($('research-stale-warning')) $('research-stale-warning').hidden = !node.researchStale;
+    for (const badge of $('question-drawer').querySelectorAll('[data-recommendation-badge]')) badge.textContent = node.researchStale ? 'Recommended option · needs review' : 'Recommended option';
     if ($('research-assistance-copy')) $('research-assistance-copy').hidden = !!node.research;
     for (const control of $('question-drawer').querySelectorAll('[data-draft-suggestion]')) control.disabled = node.researchStale === true || control.dataset.selectionRequired === 'true' && !ui.selectedDetails?.size;
     update('children', doc.nodes.filter(n => n.parentId === node.id).map(n => [n.id, n.question]), () => {
@@ -2867,6 +2868,7 @@ function renderComparison(r, ui, selectDetail, addSelected) {
 
 function renderResearch(node) {
   const r = node.research, ui = uiFor(node.id), key = JSON.stringify(r);
+  const assessment = r.recommendationAssessment, chosen = assessment ? r.options.find(option => option.id === assessment.optionId) : null;
   if (ui.researchKey !== key) { ui.researchKey = key; ui.selectedDetails = new Set(); ui.comparison = null; ui.researchDisclosures = {}; }
   const disclosure = (id, label) => {
     const detail = el('details', { id }, el('summary', { id: `${id}-summary` }, label));
@@ -2922,7 +2924,9 @@ function renderResearch(node) {
   };
   for (const [index, o] of r.options.entries()) {
     const identity = o.id ?? String(index);
-    const option = el('section', { id: `research-option-${identity}`, class: 'option', ...(o.id ? { 'data-option-id': o.id } : {}) }, el('h3', {}, o.title), el('p', {}, o.description));
+    const option = el('section', { id: `research-option-${identity}`, class: 'option', ...(o.id ? { 'data-option-id': o.id } : {}) }, el('h3', {}, o.title));
+    if (chosen === o) option.append(el('span', { class: 'basis recommendation-badge', 'data-recommendation-badge': 'true' }, node.researchStale ? 'Recommended option · needs review' : 'Recommended option'));
+    option.append(el('p', {}, o.description));
     if (r.optionsVersion === 1) option.append(el('p', { class: 'option-fit' }, el('strong', {}, 'Fits when: '), o.fit));
     const empty = r.optionsVersion === 1 ? 'None established.' : 'None recorded.';
     option.append(el('strong', { class: 'pro' }, 'Pros'), o.pros.length ? el('ul', {}, o.pros.map(v => el('li', {}, v))) : el('p', { class: 'quiet' }, empty),
@@ -2938,8 +2942,27 @@ function renderResearch(node) {
     if (o.details?.length) option.append(extra);
     section.append(option);
   }
-  section.append(el('div', { class: 'recommendation' }, el('h3', {}, r.options.length ? 'Recommendation' : 'Further context needed'), el('p', {}, r.recommendation),
-    ...(r.options.length ? [button('Use recommendation', () => add(r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation', 'data-draft-suggestion': 'true' })] : [])));
+  const recommendation = el('div', { class: 'recommendation' }, el('h3', {}, assessment ? chosen ? 'Why this recommendation' : 'No recommendation yet' : r.options.length ? 'Recommendation' : 'Further context needed'), el('p', {}, r.recommendation));
+  if (assessment) {
+    recommendation.append(el('p', { class: 'quiet' }, 'Contextual judgment from the model, not verified project facts or a decision you have made.'),
+      el('p', {}, el('strong', {}, 'Main tradeoff: '), assessment.mainTradeoff), el('p', {}, el('strong', {}, 'Reconsider if: '), assessment.reconsiderIf));
+    for (const [index, ref] of assessment.decisionRefs.entries()) {
+      const source = state.document?.nodes.find(item => item.id === ref.nodeId);
+      const prior = el('section', { class: 'recommendation-prior' }, el('h4', {}, `Prior decision ${index + 1}`), el('p', {}, ref.reason),
+        el('p', { class: 'quiet' }, `At research time: ${ANSWER_STATES[ref.answerState]}${ref.review ? ' · needs review' : ''}. This is historical user intent, not verification or the current state.`));
+      if (source && isQuestion(source)) prior.append(button(`Review prior decision ${index + 1}`, () => {
+        const live = state.document?.nodes.find(item => item.id === node.id);
+        if (!live || selected !== node.id || !expanded || libraryView || JSON.stringify(live.research) !== key) return;
+        const target = state.document.nodes.find(item => item.id === ref.nodeId);
+        if (!target || !isQuestion(target)) return notice('This prior question is no longer available in the map.');
+        select(ref.nodeId);
+      }, { id: `research-prior-decision-${index}` }));
+      else prior.append(el('p', { class: 'quiet' }, 'Prior question unavailable in this map.'));
+      recommendation.append(prior);
+    }
+  } else recommendation.append(el('p', { id: 'recommendation-compatibility', class: 'quiet' }, 'Older recommendation: no linked option was recorded. Its original wording is preserved without identifying a winner.'));
+  if (chosen || !assessment && r.options.length) recommendation.append(button('Use recommendation', () => add(chosen ? chosen.proposedAnswer : r.proposedAnswer ?? r.recommendation), { id: 'use-recommendation', 'data-draft-suggestion': 'true' }));
+  section.append(recommendation);
   if (r.options.length > 1) section.append(renderComparison(r, ui, selectDetail, addSelected));
   if (details.length) section.append(button('Add selected details', addSelected, { id: 'add-details', disabled: !ui.selectedDetails.size, 'data-draft-suggestion': 'true', 'data-selection-required': 'true' }));
   section.append(el('h3', {}, 'What is still uncertain'), el('p', {}, r.uncertainty));

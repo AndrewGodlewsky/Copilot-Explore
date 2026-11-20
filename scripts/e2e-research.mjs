@@ -18,14 +18,13 @@ const calls = [], toolCalls = [], prompts = [], captured = [], sendTimeouts = []
 const findings = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic local comparison.', options: [
   { id: 'pilot', title: 'Pilot', description: 'Small first step.', fit: 'When learning with a small group matters.', pros: ['Learn'], cons: ['Limited'] , proposedAnswer: 'I will run a pilot.', details: [{ label: 'Size', value: 'Ten people' }] },
   { id: 'launch', title: 'Launch', description: 'Broad first step.', fit: 'When broad reach matters more than setup cost.', pros: ['Reach'], cons: ['Cost'], proposedAnswer: 'I will launch broadly.', details: [] },
-], recommendation: 'Pilot first.', proposedAnswer: 'I will run a pilot.', uncertainty: 'Local fixture: no real sources read.', sources: [], claims: [
+], recommendation: 'Pilot first while shared space remains an unconfirmed assumption.', recommendationAssessment: { optionId: 'pilot', mainTradeoff: 'The pilot reaches fewer neighbors.', reconsiderIf: 'If shared space and demand are confirmed, consider a broader launch.', decisionRefs: [] }, uncertainty: 'Local fixture: no real sources read.', sources: [], claims: [
   { id: 'c1', text: 'A pilot could help learning.', basis: 'reasoning', evidence: [], limitations: 'Model judgment; no page fetched.' },
   { id: 'c2', text: 'Local cost is unknown.', basis: 'unknown', evidence: [], limitations: 'Search snippets do not establish fetched evidence.' },
 ] };
 let hold = false, onHeld, falseCitation = false, followupMode = false, limitedCount = null;
 function limitedFindings(count) {
-  const value = { ...findings, options: findings.options.slice(0, count), optionsLimit: 'The fixture supplies insufficient evidence for further choices.' };
-  if (!count) { delete value.proposedAnswer; value.recommendation = 'Gather the missing context before choosing.'; }
+  const value = { ...findings, recommendation: 'Gather the missing context before choosing.', recommendationAssessment: { ...findings.recommendationAssessment, optionId: null }, options: findings.options.slice(0, count), optionsLimit: 'The fixture supplies insufficient evidence for further choices.' };
   return value;
 }
 const fixture = createServer(async (req, res) => {
@@ -100,8 +99,11 @@ try {
   addDependency(researchDoc, target.id, prerequisite.id);
   const settings = Object.freeze({ depth: 'quick', sourceFocus: 'primary', recency: 'recent' });
   const prepared = Object.freeze({ ...prepareResearch(researchDoc, target.id, { ...researchFraming(researchDoc, settings), excluded: [excluded.id] }), settings });
+  findings.recommendationAssessment.decisionRefs = [{ nodeId: prerequisite.id, reason: 'Unconfirmed shared space favors testing access with a small pilot.' }];
+  const expected = value => ({ ...value, recommendationAssessment: { ...value.recommendationAssessment, decisionRefs: value.recommendationAssessment.decisionRefs.map(ref => ({ ...ref, answerState: 'assumption', review: false })) }, settings });
   assert.ok(prepared.context.decisionsElsewhere.find(node => node.id === prerequisite.id).selection.includes('Explicit prerequisite'));
-  assert.deepEqual(await researcher.run(prepared.context, { prepared, onProgress: value => progress.push(value) }), { ...findings, settings });
+  const completed = await researcher.run(prepared.context, { prepared, onProgress: value => progress.push(value) });
+  assert.deepEqual(completed, expected(findings));
   assert.match(prepared.instructions, /Quick: 60 seconds.*8 tool attempts/);
   assert.match(prepared.instructions, /Prefer recently published/);
   assert.ok(sendTimeouts[0] > 0 && sendTimeouts[0] < 60000);
@@ -147,7 +149,7 @@ try {
   falseCitation = false;
   followupMode = true;
   const doc = createDocument('Scoped follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why pilot?', category: 'Target' }]);
-  doc.nodes[1].research = { ...findings, basis: 'sources', sources: [{ id: 's1', title: 'Earlier imported source', url: 'https://example.com/prior', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported' }] };
+  doc.nodes[1].research = { ...completed, basis: 'sources', sources: [{ id: 's1', title: 'Earlier imported source', url: 'https://example.com/prior', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported' }] };
   const followup = prepareFollowup(doc, doc.nodes[1].id, { question: 'What if the budget doubles? ??', hypothetical: true }, { settings });
   const startIndex = captured.length;
   const followupResult = await researcher.runFollowup(followup.context, { prepared: followup });
@@ -171,10 +173,10 @@ try {
   hold = false; followupMode = false;
   for (const count of [0, 1]) {
     limitedCount = count;
-    assert.deepEqual(await researcher.run(prepared.context, { prepared }), { ...limitedFindings(count), settings });
+    assert.deepEqual(await researcher.run(prepared.context, { prepared }), expected(limitedFindings(count)));
   }
   assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 7);
-  console.log('PASS isolated research and scoped follow-up: concise stable options and honest zero/one-option results; historical imported evidence unchanged, unread new source rejected, separate completed/failed/cancelled operation receipts, real installed MCP search, reasoning/unknown claims, rejection of search-only fabricated source/time, exact reviewed inputs, retained completed/failed receipts and cancellation/release. Successful builtin web_fetch is NOT exercised; deterministic hook tests separately cover successful read provenance. No paid provider or user session.');
+  console.log('PASS isolated research and scoped follow-up: linked recommendation with captured prior-context state, honest null recommendations and zero/one-option results; historical imported evidence unchanged, unread new source rejected, separate completed/failed/cancelled operation receipts, real installed MCP search, reasoning/unknown claims, rejection of search-only fabricated source/time, exact reviewed inputs, retained completed/failed receipts and cancellation/release. Successful builtin web_fetch is NOT exercised; deterministic hook tests separately cover successful read provenance. No paid provider or user session.');
 } finally {
   clearTimeout(deadline); await researcher.close();
   await Promise.allSettled([...owned].map(client => client.forceStop()));

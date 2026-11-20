@@ -12,8 +12,9 @@ function text(value, max = 20000) {
   if (typeof value !== 'string' || value.length > max) throw Error(limitMessage);
   return value;
 }
-function researchProjection(r) {
+function researchProjection(r, nodeIds) {
   const sourceIds = new Map();
+  const optionIds = new Map(r.options.map((option, i) => [option.id, `o${i}`]));
   const sources = bounded(r.sources, 15, (s, i) => {
     let url;
     try { url = new URL(text(s.url, 2000)); } catch { throw Error('Invalid research source URL.'); }
@@ -27,7 +28,12 @@ function researchProjection(r) {
     ...(r.optionsVersion === 1 ? { optionsVersion: 1, ...(r.optionsLimit ? { optionsLimit: text(r.optionsLimit, 600) } : {}) } : {}),
     options: bounded(r.options, 4, (o, i) => ({ ...(r.optionsVersion === 1 ? { id: `o${i}`, fit: text(o.fit, 400) } : {}), title: text(o.title, 150), description: text(o.description, 3000), pros: bounded(o.pros, 6, p => text(p, 1000)), cons: bounded(o.cons, 6, c => text(c, 1000)),
       details: bounded(o.details ?? [], 8, d => ({ label: text(d.label, 80), value: text(d.value, 1000) })), proposedAnswer: o.proposedAnswer === undefined ? null : text(o.proposedAnswer, 5000) })),
-    recommendation: text(r.recommendation, 5000), proposedAnswer: r.proposedAnswer === undefined ? null : text(r.proposedAnswer, 5000), uncertainty: text(r.uncertainty, 3000), sources, claims };
+    recommendation: text(r.recommendation, 5000),
+    ...(r.recommendationAssessment ? { recommendationAssessment: {
+      optionId: r.recommendationAssessment.optionId === null ? null : optionIds.get(r.recommendationAssessment.optionId),
+      mainTradeoff: text(r.recommendationAssessment.mainTradeoff, 600), reconsiderIf: text(r.recommendationAssessment.reconsiderIf, 600),
+      decisionRefs: bounded(r.recommendationAssessment.decisionRefs, 8, ref => ({ nodeId: nodeIds.get(ref.nodeId) ?? null, reason: text(ref.reason, 400), answerState: ref.answerState, review: ref.review })),
+    } } : {}), proposedAnswer: r.proposedAnswer === undefined ? null : text(r.proposedAnswer, 5000), uncertainty: text(r.uncertainty, 3000), sources, claims };
 }
 
 export function canonicalViewerSelection(selection) {
@@ -50,7 +56,7 @@ export function viewerSnapshot(doc, selection, scenarioNote) {
     const result = { id: ids.get(n.id), parentId: ids.get(n.parentId) ?? null, role, question: text(n.question, 4000), category: text(n.category, 60), status: nodeStatus(n), review: n.review === true,
       ...(role === 'question' && n.importance ? { importance: n.importance, importanceReason: text(n.importanceReason, 600), originalQuestion: text(n.generation.originalQuestion, 600) } : {}),
       answer: choice.answer && role === 'question' ? text(n.answer) : null,
-      research: choice.research && n.research ? researchProjection(n.research) : null,
+      research: choice.research && n.research ? researchProjection(n.research, ids) : null,
       ...(choice.research && n.researchStale ? { researchStale: true } : {}) };
     bytes += Buffer.byteLength(JSON.stringify(result)); if (bytes > VIEWER_LIMITS.inputBytes) throw Error(limitMessage);
     return result;

@@ -19,6 +19,7 @@ export function renderOfflineViewer(snapshot) {
     if (r.optionsLimit) paragraph(section, 'Limited options', r.optionsLimit);
     for (const option of r.options) {
       const article = el('section'); article.append(el('h3', option.title), el('p', option.description));
+      if (r.recommendationAssessment && r.recommendationAssessment.optionId === option.id) article.append(el('p', 'Recommended option — historical model judgment, not a user decision.'));
       if (r.optionsVersion === 1) paragraph(article, 'Fits when', option.fit);
       paragraph(article, 'Model-stated pros', option.pros.join('\n') || 'None recorded');
       paragraph(article, 'Model-stated cons', option.cons.join('\n') || 'None recorded');
@@ -27,6 +28,17 @@ export function renderOfflineViewer(snapshot) {
       section.append(article);
     }
     paragraph(section, 'AI recommendation', r.recommendation);
+    if (r.recommendationAssessment) {
+      const assessment = r.recommendationAssessment;
+      if (assessment.optionId === null) section.append(el('p', 'No recommendation is justified by the recorded context.'));
+      section.append(el('p', 'Contextual model judgment. Referenced states describe user intent at research time, not verified facts or current state.'));
+      paragraph(section, 'Main tradeoff', assessment.mainTradeoff); paragraph(section, 'Reconsider if', assessment.reconsiderIf);
+      for (const [i, ref] of assessment.decisionRefs.entries()) {
+        paragraph(section, `Prior context ${i + 1} (${ref.answerState}${ref.review ? '; needed review' : ''} at research time)`, ref.reason);
+        if (ref.nodeId && byId.has(ref.nodeId)) jump(section, ref.nodeId, `Review included prior question ${i + 1}`);
+        else section.append(el('p', 'This prior question is outside the exported selection.'));
+      }
+    } else section.append(el('p', 'Legacy recommendation: no linked option was recorded.'));
     if (r.proposedAnswer !== null) paragraph(section, 'AI suggested answer', r.proposedAnswer);
     paragraph(section, 'Uncertainty', r.uncertainty);
     section.append(el('h3', 'Recorded claims and model interpretation'));

@@ -189,11 +189,25 @@ export function researchEvidence(value) {
   }
   return { sources, ...(hasClaims ? { claims } : {}) };
 }
+function researchRecommendation(value, optionIds) {
+  evidenceKeys(value, ['optionId', 'mainTradeoff', 'reconsiderIf', 'decisionRefs']);
+  if (value.optionId !== null && !optionIds.has(value.optionId)) throw Error('A recommendation must identify one current option or explicitly choose none.');
+  const seen = new Set();
+  const decisionRefs = list(value.decisionRefs, 'prior decision references', 8, ref => {
+    evidenceKeys(ref, ['nodeId', 'reason', 'answerState', 'review']);
+    if (typeof ref.nodeId !== 'string' || !ref.nodeId.trim() || ref.nodeId !== ref.nodeId.trim() || ref.nodeId.length > 100 || seen.has(ref.nodeId)) throw Error('Invalid or duplicate prior decision reference.');
+    if (typeof ref.answerState !== 'string' || !Object.hasOwn(ANSWER_STATES, ref.answerState) || ref.answerState === 'unanswered' || typeof ref.review !== 'boolean') throw Error('Invalid historical decision state.');
+    seen.add(ref.nodeId);
+    return { nodeId: ref.nodeId, reason: text(ref.reason, 'Prior decision relevance', 400), answerState: ref.answerState, review: ref.review };
+  });
+  return { optionId: value.optionId, mainTradeoff: text(value.mainTradeoff, 'Main recommendation tradeoff', 600),
+    reconsiderIf: text(value.reconsiderIf, 'Changed recommendation assumption', 600), decisionRefs };
+}
 export function research(value) {
-  const hasClaims = Object.hasOwn(value ?? {}, 'claims'), versioned = Object.hasOwn(value ?? {}, 'optionsVersion');
+  const hasClaims = Object.hasOwn(value ?? {}, 'claims'), versioned = Object.hasOwn(value ?? {}, 'optionsVersion'), assessed = Object.hasOwn(value ?? {}, 'recommendationAssessment');
   if (versioned && (value.optionsVersion !== 1 || !hasClaims)) throw new Error('Unsupported research options version or missing claims.');
-  if (!versioned && (Object.hasOwn(value ?? {}, 'optionsLimit') || Array.isArray(value?.options) && value.options.some(o => Object.hasOwn(o ?? {}, 'id') || Object.hasOwn(o ?? {}, 'fit')))) throw new Error('New option fields require an options version.');
-  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims', ...(versioned ? ['optionsVersion', 'optionsLimit'] : [])]);
+  if (!versioned && (assessed || Object.hasOwn(value ?? {}, 'optionsLimit') || Array.isArray(value?.options) && value.options.some(o => Object.hasOwn(o ?? {}, 'id') || Object.hasOwn(o ?? {}, 'fit')))) throw new Error('New option fields require an options version.');
+  if (hasClaims) evidenceKeys(value, ['basis', 'summary', 'options', 'settings', 'recommendation', 'proposedAnswer', 'uncertainty', 'sources', 'claims', ...(versioned ? ['optionsVersion', 'optionsLimit', 'recommendationAssessment'] : [])]);
   const { sources, claims } = researchEvidence(value);
   const ids = new Set(), titles = new Set(), answers = new Set();
   const distinct = (value, seen) => {
@@ -223,11 +237,13 @@ export function research(value) {
   if (versioned && options.length < 2) optionsLimit = text(value.optionsLimit, 'Options limitation', 600);
   if (versioned && options.length >= 2 && Object.hasOwn(value, 'optionsLimit')) throw new Error('An options limitation requires fewer than two options.');
   if (versioned && !options.length && Object.hasOwn(value, 'proposedAnswer')) throw new Error('Research without options cannot propose an answer.');
+  if (assessed && Object.hasOwn(value, 'proposedAnswer')) throw Error('A linked recommendation uses its option draft, not a separate proposed answer.');
   const result = { ...(versioned ? { optionsVersion: 1 } : {}), basis: value.basis, summary: text(value.summary, 'Research summary', 5000), options,
     ...(optionsLimit !== undefined ? { optionsLimit } : {}),
     ...(hasClaims ? { claims } : {}),
     ...(Object.hasOwn(value, 'settings') ? { settings: researchSettings(value.settings) } : {}),
-    recommendation: text(value.recommendation, 'Recommendation', 5000),
+    recommendation: text(value.recommendation, 'Recommendation', assessed ? 800 : 5000),
+    ...(assessed ? { recommendationAssessment: researchRecommendation(value.recommendationAssessment, ids) } : {}),
     ...(value.proposedAnswer !== undefined ? { proposedAnswer: text(value.proposedAnswer, 'Proposed answer', 5000) } : {}),
     uncertainty: text(value.uncertainty, 'Uncertainty', 3000), sources };
   if (hasClaims && Buffer.byteLength(JSON.stringify(result)) > MAX_RESEARCH_BYTES) throw new Error('Research evidence exceeds its serialized limit.');
@@ -555,7 +571,15 @@ export function toMarkdown(doc) {
         if (o.proposedAnswer) lines.push('Suggested draft: ' + md(o.proposedAnswer), '');
         for (const detail of o.details ?? []) lines.push(`- ${md(detail.label)}: ${md(detail.value)}`);
       }
-      lines.push('**Recommendation:** ' + md(r.recommendation), '', '**Uncertainty:** ' + md(r.uncertainty), '');
+      lines.push('**Recommendation:** ' + md(r.recommendation), '');
+      if (r.recommendationAssessment) {
+        const assessment = r.recommendationAssessment, chosen = r.options.find(o => o.id === assessment.optionId);
+        lines.push('**Recommended option:** ' + (chosen ? `${md(chosen.title)} (${chosen.id})` : 'None justified.'), '',
+          'Contextual model judgment, not verified project facts or a saved user answer.', '',
+          '**Main tradeoff:** ' + md(assessment.mainTradeoff), '', '**Reconsider if:** ' + md(assessment.reconsiderIf), '');
+        for (const ref of assessment.decisionRefs) lines.push(`Prior context ${md(ref.nodeId)} (${ANSWER_STATES[ref.answerState]}${ref.review ? '; needed review' : ''} at research time): ${md(ref.reason)}`, '');
+      }
+      lines.push('**Uncertainty:** ' + md(r.uncertainty), '');
       if (r.proposedAnswer) lines.push('Suggested draft: ' + md(r.proposedAnswer), '');
       if (r.claims) {
         lines.push('#### Claims and evidence', '', 'Model interpretation of support; a recorded page read does not verify a claim.', '');

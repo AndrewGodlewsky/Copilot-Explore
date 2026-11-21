@@ -83,8 +83,10 @@ export function prepareFollowup(doc, nodeId, input, { settings = researchSetting
     followup.original.push(item); followup.coverage.originalIncluded++; followup.coverage.originalOmitted--;
     try { prepared = prepare(); } catch (error) { if (!error.message.includes('mandatory')) throw error; followup.original.pop(); followup.coverage.originalIncluded--; followup.coverage.originalOmitted++; }
   }
-  for (const exchange of exchanges.slice().reverse()) {
-    followup.exchanges.unshift({ ...exchange, freshness: researchFreshness(exchange.result, now) }); followup.coverage.exchangesIncluded++; followup.coverage.exchangesOmitted--;
+  for (const exchange of exchanges.slice(-4).reverse()) {
+    const included = { ...exchange, freshness: researchFreshness(exchange.result, now) };
+    if (size([included, ...followup.exchanges]) > FOLLOWUP_HISTORY_BYTES) continue;
+    followup.exchanges.unshift(included); followup.coverage.exchangesIncluded++; followup.coverage.exchangesOmitted--;
     try { prepared = prepare(); } catch (error) { if (!error.message.includes('mandatory')) throw error; followup.exchanges.shift(); followup.coverage.exchangesIncluded--; followup.coverage.exchangesOmitted++; }
   }
   // Recompute once with final omission counters, including when the last candidate did not fit.

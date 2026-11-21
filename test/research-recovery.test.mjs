@@ -21,7 +21,7 @@ async function fixture(t) {
   t.after(async () => { for (const pending of runs) pending.resolve(research(recommendationFindings())); await e.close(); assert.equal(dirname(resolve(dir)), resolve(tmpdir())); await rm(dir, { recursive: true, force: true }); });
   const start = async (extra = {}) => {
     const count = runs.length;
-    const reviewed = await e.reviewResearch({ action: 'prepare', journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [doc.nodes[2].id],
+    const reviewed = await e.reviewResearch({ action: 'prepare', ...(extra.followup ? { conversationScope: e.uiSnapshot().conversationScope } : {}), journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [doc.nodes[2].id],
       settings: { depth: 'quick', sourceFocus: 'primary', recency: 'recent' }, clientId: randomUUID(), sequence: 1, ...extra });
     await e.command(extra.followup ? 'research-follow-up' : 'research', { journey: doc.id, nodeId: doc.nodes[1].id, token: reviewed.token });
     await waitFor(() => runs.length > count); return runs.at(-1);

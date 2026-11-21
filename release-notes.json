@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.134",
+    "summary": "Research conversations and composer drafts now resume privately for each question and research revision. Historical discussions stay separate from current prompts. Keep up to 20 exchanges while reviewing at most four per request. Clear or delete saved conversations explicitly; conflicts and unconfirmed saves retain text for recovery. Shared files and exports omit private discussion."
+  },
+  {
     "version": "0.1.133",
     "summary": "Follow-ups default to explaining existing findings without new retrieval. Choose Find additional sources and review before Research. The drawer discloses source mode and provider access; history, partials, retries and reuse retain that mode. Evidence dates and drafts stay intact. Project context opens reliably; Git-backed saves get a bounded response window."
   },

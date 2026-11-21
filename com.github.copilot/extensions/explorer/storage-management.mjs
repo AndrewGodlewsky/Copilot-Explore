@@ -18,7 +18,7 @@ const identity = stat => [stat.dev, stat.ino, stat.birthtimeNs].join(':');
 const stamp = stat => [identity(stat), stat.size, stat.mtimeNs, stat.ctimeNs, stat.nlink].join(':');
 const defaults = () => ({ version: 1, revision: 0, keepHistory: 50 });
 const validSettings = value => value?.version === 1 && Number.isSafeInteger(value.revision) && value.revision >= 0 && choices.includes(value.keepHistory) && Object.keys(value).sort().join(',') === 'keepHistory,revision,version';
-const protectedText = 'Only listed old unnamed history snapshots can be removed. All journeys, drafts and tombstones, newest recovery versions, undo versions, named checkpoints, usage receipts, local observations, preferences, locks, intents, recovery and unknown files remain protected. Protected versions can exceed the keep target. Removal is irreversible; this is not a backup.';
+const protectedText = 'Only listed old unnamed history snapshots can be removed. All journeys, private research conversations, drafts and tombstones, newest recovery versions, undo versions, named checkpoints, usage receipts, local observations, preferences, locks, intents, recovery and unknown files remain protected. Protected versions can exceed the keep target. Removal is irreversible; this is not a backup.';
 
 function category(parts) {
   const name = parts.at(-1);
@@ -29,6 +29,7 @@ function category(parts) {
   if (parts[0] === 'references' || ['voice-settings.json', 'navigation-settings.json', 'storage-settings.json'].includes(name)) return 'preferences';
   if (parts.length === 1 && name.endsWith('.explore.json')) return 'journeys';
   if (parts.length === 1 && name.endsWith('.md')) return 'exports';
+  if (parts.length === 1 && name === 'research-conversations.json') return 'conversations';
   if (parts.length === 1 && name === 'drafts.json') return 'drafts';
   if (parts.length === 1 && name === 'library.json') return 'library';
   return 'unknown';
@@ -123,7 +124,7 @@ export class StorageManagement {
     } finally { await lock.release(); }
   }
   async inventory() {
-    const categories = Object.fromEntries(['journeys', 'exports', 'library', 'drafts', 'history', 'recovery', 'usage', 'analytics', 'preferences', 'unknown'].map(name => [name, { files: 0, apparentBytes: 0, uniqueBytes: 0 }]));
+    const categories = Object.fromEntries(['journeys', 'exports', 'library', 'drafts', 'conversations', 'history', 'recovery', 'usage', 'analytics', 'preferences', 'unknown'].map(name => [name, { files: 0, apparentBytes: 0, uniqueBytes: 0 }]));
     const result = { categories, apparentBytes: 0, uniqueBytes: 0, duplicateBytes: 0, manifestDeclaredHistoryBytes: 0, manifests: 0, entries: 0, partial: false, issues: [], journeyNames: [], limits: STORAGE_LIMITS, historyLimits: HISTORY_LIMITS, protection: protectedText };
     const seen = new Set(); let stopped = false, metadataBytes = 0;
     const issue = (path, message) => { result.partial = true; if (result.issues.length < 100) result.issues.push({ path, message }); };

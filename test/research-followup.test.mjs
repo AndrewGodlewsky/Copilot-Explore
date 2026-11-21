@@ -122,7 +122,7 @@ async function fixture(t) {
   const e = await new Explorer({ file, researcher: { models: fixtureResearchModels, runFollowup(context, options) { return new Promise((resolve, reject) => runs.push({ context, ...options, resolve, reject })); } } }).load();
   t.after(async () => { for (const run of runs) run.resolve(result); await e.close(); await rm(dir, { recursive: true, force: true }); });
   let sequence = 0; const clientId = randomUUID();
-  const review = (question, target, sourceMode = 'existing') => e.reviewResearch({ action: 'prepare', journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, followup: { question, hypothetical: true, sourceMode, ...(target ? { target } : {}) } });
+  const review = (question, target, sourceMode = 'existing') => e.reviewResearch({ action: 'prepare', conversationScope: e.uiSnapshot().conversationScope, journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, followup: { question, hypothetical: true, sourceMode, ...(target ? { target } : {}) } });
   const start = value => e.command('research-follow-up', { journey: doc.id, nodeId: doc.nodes[1].id, token: value.token });
   const settle = async () => { await new Promise(setImmediate); await Promise.all([...e.researchTasks]); };
   return { e, file, doc, runs, review, start, settle };
@@ -229,7 +229,9 @@ test('earlier transmitted dependencies remain fresh across exclusions; metadata 
   const reviewed = await f.review('Again?'); assert.equal(reviewed.prepared.followup.exchanges.length, 1); assert.equal(f.e.followup.id, stableId);
   disk.nodes[0].answer = 'A changed ancestor'; disk.revision++; await writeFile(f.file, JSON.stringify(disk));
   await assert.rejects(f.start(reviewed), /changed/); assert.equal(f.runs.length, 1);
-  const fresh = await f.review('Under the change?'); assert.equal(fresh.prepared.followup.exchanges.length, 0); assert.equal(f.e.followup.historical, true);
+  await assert.rejects(f.review('Under the change?'), /historical.*fresh conversation/); assert.equal(f.e.followup.historical, true);
+  await f.e.command('followup-clear', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, historyId: f.e.followup.id, revision: f.e.doc.revision });
+  const fresh = await f.review('Under the change?'); assert.equal(fresh.prepared.followup.exchanges.length, 0);
   disk.nodes[1].research.recommendation = 'A replacement recommendation'; disk.revision++; await writeFile(f.file, JSON.stringify(disk));
   await assert.rejects(f.start(fresh), /research changed/);
   const replacement = await f.review('Why the replacement?'); assert.equal(replacement.prepared.followup.recommendation, 'A replacement recommendation'); assert.equal(replacement.prepared.followup.exchanges.length, 0);
@@ -290,6 +292,8 @@ for (const boundary of ['review consumption', 'helper completion']) {
       await f.e.command('refresh-answer', { revision: f.e.doc.revision });
       assert.equal(f.e.uiSnapshot().followup.historical, true);
       assert.deepEqual(f.e.uiSnapshot().followup.exchanges, retained);
+      await assert.rejects(f.review('After content reversal'), /historical.*fresh conversation/);
+      await f.e.command('followup-clear', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, historyId: f.e.followup.id, revision: f.e.doc.revision });
       const afterReversal = await f.review('After content reversal');
       assert.equal(afterReversal.prepared.followup.exchanges.length, 0);
       assert.equal(await readFile(f.file, 'utf8'), reversedBytes);

@@ -226,11 +226,12 @@ test('library cleanup preserves archived journeys and independent draft/usage/re
 test('inventory reports exact apparent category lengths without scanning unknown directories', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'explorer-exact-storage-test-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const files = { 'map.explore.json': '123', 'map.md': '12345', 'library.json': '1234567', 'drafts.json': '123456789', 'voice-settings.json': '12', 'drafts.json.partial.tmp': '1234', 'unknown.bin': '123456' };
+  const files = { 'map.explore.json': '123', 'map.md': '12345', 'library.json': '1234567', 'drafts.json': '123456789', 'voice-settings.json': '12', 'drafts.json.partial.tmp': '1234', 'unknown.bin': '123456', 'research-conversations.json': 'PRIVATE_LITERAL' };
   for (const [name, data] of Object.entries(files)) await writeFile(join(directory, name), data);
   await mkdir(join(directory, 'other-plugin')); await writeFile(join(directory, 'other-plugin', 'secret'), 'NEVER SCANNED');
   const inventory = await new StorageManagement(directory).inventory();
-  assert.equal(inventory.apparentBytes, 36); assert.equal(inventory.uniqueBytes, 36);
+  assert.equal(inventory.apparentBytes, 51); assert.equal(inventory.uniqueBytes, 51);
+  assert.equal(inventory.categories.conversations.apparentBytes, 15); assert.equal(JSON.stringify(inventory).includes('PRIVATE_LITERAL'), false);
   assert.equal(inventory.categories.journeys.apparentBytes, 3); assert.equal(inventory.categories.exports.apparentBytes, 5);
   assert.equal(inventory.categories.drafts.apparentBytes, 9); assert.equal(inventory.categories.recovery.apparentBytes, 4);
   assert.ok(inventory.partial); assert.match(inventory.issues[0].message, /unscanned/);

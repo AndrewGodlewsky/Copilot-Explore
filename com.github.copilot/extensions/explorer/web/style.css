@@ -565,3 +565,5 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .project-brief-claim textarea { margin-bottom: 6px; }
 .project-brief-claim blockquote { margin: 8px 0; padding-left: 12px; border-left: 2px solid var(--border); white-space: pre-wrap; }
 #project-brief-add-section { max-width: 100%; margin-bottom: 10px; }
+
+#conversation-local-recovery pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; font: inherit; }

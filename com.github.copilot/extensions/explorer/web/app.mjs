@@ -3,6 +3,7 @@ import { attachDashboard } from './dashboard.mjs';
 import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';
 import { attachVoice } from './voice.mjs';
 import { DraftClient } from './drafts.mjs';
+import { ConversationClient } from './research-conversations-client.mjs';
 import { CommentsClient } from './comments-client.mjs';
 import { ReviewHandoffsClient } from './review-handoffs-client.mjs';
 import { PortableReferenceClient } from './portable-reference-client.mjs';
@@ -28,7 +29,11 @@ import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';
 const $ = id => document.getElementById(id);
 attachDashboard({ document, fetch: (...args) => fetch(...args), available: () => !closed && !suspended });
 let researchReviewReturn = null, reviewStarting = false, inlineResearchReview = null;
-let followupDraft = null;
+let conversationRenderQueued = false;
+const conversationClient = new ConversationClient({ fetch: (...args) => fetch(...args), beforeMutation: conversationMutation, changed: () => {
+  if (conversationRenderQueued) return; conversationRenderQueued = true;
+  queueMicrotask(() => { conversationRenderQueued = false; if (!closed && !suspended) { workspace?.update(); renderUnsavedConversation(); } });
+} });
 const researchReview = new ResearchReviewClient({ fetch: (...args) => fetch(...args), changed: () => renderResearchReview() });
 const colors = ['#628e9b', '#b58c4c', '#7a8e62', '#947b9a', '#697fb0', '#ad7669'];
 let state = { document: null, pending: null, error: '' };
@@ -538,6 +543,21 @@ document.addEventListener('keydown', event => {
 window.addEventListener('pagehide', () => { if ($('palette-dialog').open) closePalette(false); });
 
 let answerChange = null;
+function conversationMutation(binding, action, extra) {
+  const page = pageEpoch, epoch = actionEpoch, attachment = conversationClient.epoch, scope = binding.conversationScope;
+  const target = action === 'cleanup' ? extra.target : { namespace: scope, nodeId: extra.nodeId };
+  const fields = ['followup', 'followupTurn', 'researchOperation', 'researchAttempt'];
+  const captured = new Map(fields.map(name => [name, JSON.stringify(state[name])]));
+  return cleared => {
+    if (closed || suspended || busy || page !== pageEpoch || epoch !== actionEpoch || attachment !== conversationClient.epoch || scope !== state.conversationScope || target.namespace !== scope) return;
+    if (!Array.isArray(cleared) || new Set(cleared).size !== cleared.length || !cleared.every(name => fields.includes(name))) return;
+    const update = Object.fromEntries(cleared.filter(name => state[name]?.nodeId === target.nodeId && JSON.stringify(state[name]) === captured.get(name)).map(name => [name, null]));
+    if (!Object.keys(update).length) return;
+    // A pre-mutation poll must not restore the work that this response cleared.
+    actionEpoch++; stateCursor = null; pollFlight?.abort.abort();
+    apply({ ...state, ...update });
+  };
+}
 const answerChangeWork = () => JSON.stringify([state.pending && [state.pending.id, state.pending.kind, state.pending.nodeId], state.preview, state.followup]);
 async function answerChangeRequest(input) {
   const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 10000);
@@ -706,8 +726,10 @@ async function api(action, input = {}) {
   busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort();
   const epoch = actionEpoch, page = pageEpoch, abort = new AbortController(); actionAbort = abort;
   const journeyAction = ['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'open-compared-source', 'open-preferred-source', 'import'].includes(action);
-  const timeout = setTimeout(() => abort.abort(), journeyAction || state.storage?.scope === 'project' ? 30000 : 10000);
+  let timeout;
   try {
+    if (journeyAction || ['research', 'research-follow-up', 'research-follow-up-reuse', 'research-reconsideration'].includes(action)) await conversationClient.flush();
+    timeout = setTimeout(() => abort.abort(), journeyAction || state.storage?.scope === 'project' ? 30000 : 10000);
     const response = await fetch('api/action', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, revision: state.document?.revision, scope: action === 'start' ? $('start-scope').value : $('context-scope').value, ...input }) });
     const result = await response.json();
     if (closed || suspended || page !== pageEpoch || epoch !== actionEpoch) return null;
@@ -745,7 +767,7 @@ function apply(next, reset = false) {
   const workspaceFocused = ($('node-workspace').contains(document.activeElement) || $('question-drawer').contains(document.activeElement));
   const compactFocused = $('nodes').contains(document.activeElement);
   const previousSelection = selected;
-  const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey;
+  const changedDocument = reset || state.document?.id !== next.document?.id || state.activeKey !== next.activeKey || state.conversationScope !== next.conversationScope;
   if (briefOperation === 'adrDraft' && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) { adrDraftReview.close(); adrDraftReview.error = 'Saved inputs or scenario changed. Review current ADR input before generating.'; invalidateAdrReadiness('Saved inputs changed. Check readiness again; manual wording is retained.'); renderAdrDraftReview(); }
   if ($('adr-questions-dialog').open && !changedDocument && (JSON.stringify(state.document) !== JSON.stringify(next.document) || JSON.stringify(state.scenario) !== JSON.stringify(next.scenario))) invalidateAdrQuestions('Saved inputs or scenario changed. Refresh and review again.');
   if (adrFormat && (adrFormat.value || adrFormat.action === 'prepare') && !changedDocument && JSON.stringify(state.document) !== JSON.stringify(next.document)) invalidateAdrFormat('Saved journey changed. Review the format again before saving.');
@@ -802,6 +824,7 @@ function apply(next, reset = false) {
     acceptedIds.clear(); acceptedParentId = null;
   }
   signature = stamp; state = next;
+  conversationClient.attach(state.conversationScope); renderUnsavedConversation();
   projectMode.observe();
   projectBrief.observe();
   if (refreshAdrUpdate && adrFile) { adrFile.inspection = null; $('adr-file-inspection').hidden = true; adrFile.needsInspect = true; scheduleAdrInspection(); }
@@ -1644,7 +1667,7 @@ async function switchJourney(action, input, current = () => true) {
   voice.cancel();
   $('workspace').inert = true; $('welcome').inert = true;
   let result;
-  try { await draftClient.flush(); if (current()) result = await api(action, input); }
+  try { await draftClient.flush(); await conversationClient.flush(); if (current()) result = await api(action, input); }
   catch (error) { notice(`Draft could not be saved. ${error.message} Return to the map to retry or explicitly discard the draft.`); }
   finally { $('workspace').inert = false; $('welcome').inert = false; }
   if (result?.importConflict) {
@@ -1675,6 +1698,10 @@ function select(id, { outlineRow = false } = {}) {
   updateFocusStatus();
   const rect = $('map').getBoundingClientRect(), width = Math.min(560, rect.width - 32), old = anchorPoint(id);
   const anchor = { id, x: Math.max(width / 2 + 16, Math.min(rect.width - width / 2 - 16, old?.x ?? rect.width / 2)), y: focusTop(id, rect.height) };
+  if (id !== selected) {
+    const epoch = pageEpoch, scope = state.conversationScope;
+    void conversationClient.flush().catch(error => { if (conversationUiCurrent(epoch, scope)) notice(error.message); });
+  }
   captureWorkspace(); selected = id; expanded = true; view.zoom = 1;
   renderWorkspace(); refreshScene(anchor); if (outlineMode && !outlineRow) revealOutlineSelection(false); else renderOutline(); $('expanded-title').focus({ preventScroll: true });
 }
@@ -2640,7 +2667,7 @@ function renderWorkspace() {
     updateFollowupHistory(node);
     updateFollowupTurn(node);
     ui.comparisonSync?.();
-    for (const id of ['research-request', 'followup-review', 'followup-clear', 'research-deeper-review', 'save-deeper', 'regenerate-followups']) if ($(id)) $(id).disabled = pending;
+    for (const id of ['research-request', 'followup-review', 'followup-clear', 'research-deeper-review', 'save-deeper', 'regenerate-followups']) if ($(id)) $(id).disabled = pending || !!state.unsavedConversation || id === 'research-deeper-review' && !!state.researchAttempt?.followup && !!state.researchAttempt.historical || (id === 'followup-review' || id === 'followup-clear') && !!ui.followupEntry?.deleting;
     if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending?.kind);
     if ($('save-answer')) $('save-answer').disabled = pending && !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind);
     for (const id of ['generate-questions', 'project-questions', 'add-direction', 'restart-branch', 'fork-scenario']) if ($(id)) $(id).disabled = pending || !!state.preview;
@@ -2801,7 +2828,7 @@ function openResearchReview(nodeId, followup, purpose, comparison, settings, pol
     revealQuestionTool($('research-review-panel'));
   }
   $(inline ? 'research-review-title' : 'research-review-close').focus({ preventScroll: true });
-  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: purpose === 'challenge-review' ? 'decisions' : policy?.scope ?? $('context-scope').value, ...(policy ? { excluded: [...policy.excluded] } : {}), ...(purpose ? { purpose } : {}), ...(followup ? { followup } : {}), ...(comparison ? { comparison } : {}), ...(settings ? { settings } : {}) });
+  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: purpose === 'challenge-review' ? 'decisions' : policy?.scope ?? $('context-scope').value, ...(policy ? { excluded: [...policy.excluded] } : {}), ...(purpose ? { purpose } : {}), ...(followup ? { followup, conversationScope: state.conversationScope } : {}), ...(comparison ? { comparison } : {}), ...(settings ? { settings } : {}) });
 }
 
 function researchRecoveryAdvice(operation) {
@@ -3122,9 +3149,107 @@ function followupTargets(research) {
     ...research.options.map((option, index) => ({ key: `option:${index}`, label: `Option ${index + 1}: ${short(option.title)}`, target: { kind: 'option', index } })),
     ...(research.claims ?? []).map(claim => ({ key: `claim:${claim.id}`, label: `Claim: ${short(claim.text)}`, target: { kind: 'claim', id: claim.id } }))];
 }
+function conversationUiCurrent(epoch, scope) { return !closed && !suspended && pageEpoch === epoch && state.conversationScope === scope; }
+function conversationFocus(node, ui, entry) {
+  const epoch = pageEpoch, scope = state.conversationScope, editor = $('followup-question');
+  return () => { if (conversationUiCurrent(epoch, scope) && ui.followupEntry === entry && selected === node.id && editor?.isConnected) editor.focus({ preventScroll: true }); };
+}
+function renderUnsavedConversation() {
+  let area = $('conversation-recovery');
+  if (!area) { area = el('section', { id: 'conversation-recovery', class: 'review-warning', role: 'status', hidden: '' }); $('notice').insertAdjacentElement('afterend', area); }
+  const value = state.unsavedConversation, stamp = JSON.stringify([value, selected, state.conversationScope]);
+  if (area.dataset.value === stamp) return;
+  area.dataset.value = stamp; area.hidden = !value; area.replaceChildren(); if (!value) return;
+  const binding = { journey: referenceJourney(), conversationScope: state.conversationScope };
+  const act = async action => {
+    const epoch = pageEpoch;
+    try {
+      await conversationClient.request(binding, action, { id: value.id, ...(action === 'retry-save' ? { nodeId: value.nodeId } : {}) });
+      if (!conversationUiCurrent(epoch, binding.conversationScope) || state.unsavedConversation?.id !== value.id) return;
+      state.unsavedConversation = null; stateCursor = null; renderUnsavedConversation();
+      const entry = uiFor(selected).followupEntry; if (entry) await conversationClient.refresh(entry);
+    } catch (error) { if (conversationUiCurrent(epoch, binding.conversationScope)) notice(error.message); }
+  };
+  area.append(el('p', {}, value.message));
+  if (value.here && state.document?.nodes.some(node => node.id === value.nodeId)) area.append(button('Open original question', () => select(value.nodeId)));
+  area.append(button('Save again', () => void act('retry-save'), { id: 'conversation-retry-save', disabled: !value.here || value.nodeId !== selected }), button('Discard unsaved reply', () => void act('discard-unsaved'), { id: 'conversation-discard-unsaved' }));
+}
+function renderConversationControls(node, ui) {
+  const status = el('p', { id: 'conversation-save-status', class: 'quiet', role: 'status' }), warning = el('p', { class: 'quiet' });
+  const picker = el('select', { id: 'conversation-history-select' }), archiveDraft = el('p', { id: 'conversation-archive-draft', class: 'quiet', hidden: '' });
+  const attempt = work => async () => { const epoch = pageEpoch, scope = state.conversationScope; try { await work(); } catch (error) { if (conversationUiCurrent(epoch, scope) && status.isConnected) notice(error.message); } };
+  const retry = button('Retry loading', attempt(() => conversationClient.refresh(ui.followupEntry)), { id: 'conversation-refresh' });
+  const keep = button('Keep my draft', attempt(() => conversationClient.resolve(ui.followupEntry, 'local')), { id: 'conversation-keep' });
+  const saved = button('Use saved draft', attempt(() => conversationClient.resolve(ui.followupEntry, 'saved')), { id: 'conversation-use-saved' });
+  const remove = button('Delete saved conversation', attempt(async () => {
+    const entry = ui.followupEntry, archived = ui.followupArchive, focus = conversationFocus(node, ui, entry);
+    if (archived) {
+      await conversationClient.flush();
+      await conversationClient.request(entry.binding, 'delete', { nodeId: node.id, research: archived.research, guard: archived.guard });
+      conversationClient.forget({ namespace: entry.binding.conversationScope, nodeId: node.id, research: archived.research });
+      if (ui.followupArchive === archived) ui.followupArchive = null;
+      await conversationClient.refresh(entry);
+    } else await conversationClient.mutate(entry, 'delete');
+    focus();
+  }), { id: 'conversation-delete' });
+  picker.addEventListener('change', attempt(async () => {
+    const entry = ui.followupEntry, research = picker.value, epoch = pageEpoch;
+    if (!research) { ui.followupArchive = null; ui.conversationControlsSync(); updateFollowupHistory(node); return; }
+    const value = await conversationClient.archive(entry, research);
+    if (!conversationUiCurrent(epoch, entry.binding.conversationScope) || entry !== ui.followupEntry || picker.value !== research || !picker.isConnected) return;
+    ui.followupArchive = value; ui.conversationControlsSync(); updateFollowupHistory(node);
+  }));
+  const inventory = el('div', { id: 'conversation-inventory' });
+  const manage = button('List saved conversation metadata', attempt(async () => {
+    const entry = ui.followupEntry, epoch = pageEpoch, value = await conversationClient.request(entry.binding, 'inventory');
+    if (!conversationUiCurrent(epoch, entry.binding.conversationScope) || !inventory.isConnected || entry !== ui.followupEntry) return;
+    inventory.replaceChildren(el('p', { class: 'quiet' }, `${value.entries.length} of 128 records. These labels contain no discussion or draft text. Deletion removes the selected discussion and composer.`), ...value.entries.map(item => el('div', { class: 'research-claim' },
+      el('p', {}, `${item.currentJourney ? 'Current journey' : 'Other journey'} · question ${item.target.nodeId.slice(0, 8)} · research ${item.target.research.slice(0, 8)} · ${item.updatedAt} · ${item.exchanges} exchanges${item.hasDraft ? ' · draft present' : ''}`),
+      button('Delete this saved record', attempt(async () => {
+        const epoch = pageEpoch;
+        const local = [...conversationClient.entries.values()].find(value => value.binding.conversationScope === item.target.namespace && value.binding.nodeId === item.target.nodeId && value.research === item.target.research && (value.dirty || value.saving || value.deleting));
+        if (local) throw Error('Resolve the local draft for this record before deleting it. Other saved records can be deleted to free space.');
+        await conversationClient.request(entry.binding, 'cleanup', { target: item.target, guard: item.guard });
+        conversationClient.forget(item.target);
+        if (!conversationUiCurrent(epoch, entry.binding.conversationScope) || !inventory.isConnected || entry !== ui.followupEntry) return;
+        inventory.replaceChildren(el('p', {}, 'Deleted. List metadata again for current records.'));
+        workspace?.update();
+      }), { disabled: !!state.pending }))));
+  }), { id: 'conversation-inventory-load' });
+  const management = el('details', {}, el('summary', {}, 'Manage private conversations'), manage, inventory);
+  const localRecovery = el('section', { id: 'conversation-local-recovery', class: 'review-warning', hidden: '' });
+  ui.conversationControlsSync = () => {
+    const entry = ui.followupEntry; if (!entry || !status.isConnected) return;
+    const unresolved = [...conversationClient.entries.values()].filter(item => item !== entry && item.binding.conversationScope === state.conversationScope && (item.error || item.conflict) && item.dirty);
+    const localStamp = JSON.stringify(unresolved.map(item => [item.binding, item.generation, item.error, item.conflict?.guard, !!item.saving]));
+    localRecovery.hidden = !unresolved.length;
+    if (localRecovery.dataset.value !== localStamp) {
+      localRecovery.dataset.value = localStamp;
+      localRecovery.replaceChildren(el('h4', {}, 'Earlier drafts need attention'), el('p', {}, 'These local drafts have not been confirmed saved. Save against the latest private record, or explicitly discard only the local copy. Saved discussion is unchanged.'), ...unresolved.map(item => el('div', {},
+        el('p', {}, state.document.nodes.find(value => value.id === item.binding.nodeId)?.question ?? 'Earlier question'),
+        el('pre', {}, item.draft.question), el('p', { class: 'quiet' }, item.error || 'A different saved draft was found.'),
+        button('Save this earlier draft', attempt(async () => { const focus = conversationFocus(node, ui, entry); await conversationClient.resolve(item, 'local'); focus(); }), { disabled: !item.research || !!item.saving }),
+        button('Discard local copy', attempt(() => { conversationClient.discardLocal(item); $('followup-question')?.focus({ preventScroll: true }); }), { disabled: !!item.saving }))));
+    }
+    const text = entry.error ? `${entry.error} Your local composer is retained.` : entry.conflict ? 'A different saved draft was found. Choose which draft to keep.' : entry.deleting ? 'Updating saved conversation…' : entry.saving ? 'Saving private draft…' : entry.loading ? 'Loading private conversation…' : entry.dirty ? 'Draft has unsaved changes.' : entry.value?.durable ? 'Draft saved privately on this computer.' : 'Preview only: conversation and draft remain in memory until this Explorer closes.';
+    if (status.textContent !== text) status.textContent = text;
+    retry.hidden = !entry.error || entry.loaded; keep.hidden = saved.hidden = !(entry.conflict || entry.error && entry.loaded);
+    for (const control of [retry, keep, saved]) control.disabled = !!entry.saving || entry.deleting;
+    remove.disabled = !!state.pending || !!state.unsavedConversation || !entry.loaded || entry.deleting;
+    const options = entry.value?.archives ?? [], stamp = JSON.stringify(options);
+    if (picker.dataset.value !== stamp) { picker.dataset.value = stamp; picker.replaceChildren(el('option', { value: '' }, 'Current research'), ...options.map(item => el('option', { value: item.research }, `Historical · ${item.updatedAt} · ${item.exchanges} exchanges`))); picker.value = ui.followupArchive?.research ?? ''; }
+    picker.disabled = !options.length || entry.deleting;
+    archiveDraft.hidden = !ui.followupArchive;
+    archiveDraft.textContent = ui.followupArchive ? `Historical composer (read only): ${ui.followupArchive.draft.question || '(empty)'}` : '';
+    warning.textContent = ui.followupArchive ? 'Viewing historical research. The composer below still belongs to current research. Delete removes this selected historical discussion and its draft.' : 'Delete removes this discussion and its composer. Your research findings and answer stay saved.';
+  };
+  return el('section', { class: 'conversation-controls' }, localRecovery, status, el('div', { class: 'actions' }, retry, keep, saved), el('label', { for: picker.id }, 'Saved discussion'), picker, archiveDraft, warning, remove, management);
+}
 function renderFollowup(node, ui) {
   const journey = state.activeKey ?? state.document.id;
-  const draft = followupDraft?.journey === journey && followupDraft.nodeId === node.id ? followupDraft : null;
+  const binding = research => ({ journey, conversationScope: state.conversationScope, nodeId: node.id, revision: state.document.revision, researchKey: JSON.stringify(research) });
+  let entry = conversationClient.open(binding(node.research)); ui.followupEntry = entry; ui.followupArchive = null;
+  const draft = entry.draft;
   const question = el('textarea', { id: 'followup-question', rows: '3', maxlength: '4000' }); question.value = draft?.question ?? '';
   const hypothetical = el('input', { id: 'followup-hypothetical', type: 'checkbox' }); hypothetical.checked = draft?.hypothetical ?? false;
   const sourceMode = el('select', { id: 'followup-source-mode', 'aria-describedby': 'followup-source-mode-help' }, ...['existing', 'retrieve'].map(value => el('option', { value }, followupSourceLabel(value)))); sourceMode.value = draft?.sourceMode ?? 'existing';
@@ -3134,8 +3259,8 @@ function renderFollowup(node, ui) {
   let researchKey = JSON.stringify(node.research), choices = followupTargets(node.research);
   const fillTargets = () => target.replaceChildren(...choices.map(choice => el('option', { value: choice.key }, choice.label)));
   fillTargets();
-  if (draft?.researchKey === researchKey) target.value = choices.find(choice => JSON.stringify(choice.target) === JSON.stringify(draft.target ?? null))?.key ?? '';
-  const current = () => question.isConnected && !closed && !suspended && selected === node.id && expanded && journey === referenceJourney();
+  if (draft) target.value = choices.find(choice => JSON.stringify(choice.target) === JSON.stringify(draft.target ?? null))?.key ?? '';
+  const current = () => question.isConnected && !closed && !suspended && selected === node.id && expanded && journey === referenceJourney() && entry.binding.conversationScope === state.conversationScope;
   const input = () => {
     const selectedTarget = choices.find(choice => choice.key === target.value)?.target;
     return { question: question.value, hypothetical: hypothetical.checked, sourceMode: sourceMode.value, ...(selectedTarget ? { target: selectedTarget } : {}) };
@@ -3148,7 +3273,7 @@ function renderFollowup(node, ui) {
   };
   const remember = () => {
     if (!current()) return;
-    const value = input(); followupDraft = { journey, nodeId: node.id, researchKey, ...value }; showStarter();
+    const value = input(); conversationClient.edit(entry, value); showStarter();
     const context = researchReview.context;
     if (inlineResearchReview && context?.journey === journey && context.nodeId === node.id && context.followup && JSON.stringify(context.followup) !== JSON.stringify(value)) {
       closeResearchReview(false);
@@ -3162,29 +3287,45 @@ function renderFollowup(node, ui) {
     question.value = text; remember(); question.focus({ preventScroll: true }); question.setSelectionRange(text.length, text.length);
   }, { id: 'followup-starter', 'aria-describedby': 'followup-starter-text' });
   question.addEventListener('input', remember); hypothetical.addEventListener('change', remember); target.addEventListener('change', remember); sourceMode.addEventListener('change', remember);
+  let restored = entry.restoreVersion, observed = '';
+  const management = renderConversationControls(node, ui);
   ui.followupSync = () => {
     if (!current()) return;
     const latest = state.document.nodes.find(item => item.id === node.id), key = JSON.stringify(latest?.research);
     if (!latest?.research) return;
+    if (entry.forgotten) { entry = conversationClient.open(binding(latest.research)); ui.followupEntry = entry; ui.followupArchive = null; restored = -1; }
     if (key !== researchKey) {
+      const previous = input(), epoch = pageEpoch, scope = entry.binding.conversationScope;
+      void conversationClient.flush(entry).catch(error => { if (conversationUiCurrent(epoch, scope)) notice(error.message); });
       researchKey = key; choices = followupTargets(latest.research); fillTargets(); target.value = '';
+      entry = conversationClient.open(binding(latest.research)); ui.followupEntry = entry; ui.followupArchive = null; restored = entry.restoreVersion;
+      conversationClient.edit(entry, { question: previous.question, hypothetical: previous.hypothetical, sourceMode: previous.sourceMode });
       targetStatus.textContent = 'Research changed. Choose a target from the current findings; your typed question is retained.';
       if (inlineResearchReview && researchReview.context?.followup) closeResearchReview(false);
-      remember();
     }
+    entry.binding.revision = state.document.revision;
+    if (entry.restoreVersion !== restored) {
+      restored = entry.restoreVersion; question.value = entry.draft.question; hypothetical.checked = entry.draft.hypothetical; sourceMode.value = entry.draft.sourceMode;
+      target.value = choices.find(choice => JSON.stringify(choice.target) === JSON.stringify(entry.draft.target ?? null))?.key ?? '';
+    }
+    const stamp = JSON.stringify([state.followup?.id, state.followup?.reuseNotice, state.researchOperation?.status, state.document.revision, state.scenario]);
+    if (observed && stamp !== observed && !entry.loading && !entry.saving) { observed = stamp; void conversationClient.refresh(entry); }
+    else if (!observed) observed = stamp;
+    for (const control of [question, hypothetical, sourceMode, target]) control.disabled = entry.deleting;
+    ui.conversationControlsSync?.();
     scope.textContent = `Discussing this question: ${latest.question} Original findings: ${latest.research.basis === 'sources' ? 'source-linked model interpretation' : latest.research.basis === 'reasoning' ? 'model reasoning' : 'basis not recorded'}. Choose the source mode and review exact context before Research.`;
     showStarter();
   };
-  const retention = el('details', {}, el('summary', {}, 'Discussion scope and retention'), el('p', { class: 'quiet' }, 'Up to four complete exchanges (64 KiB) and one latest submitted turn stay in this canvas until it closes or restarts. Navigation hides this history; asking on another node replaces it. Exact review reports any omitted history or research records. Reload clears the typed question but can reconnect to submitted work while this canvas remains open. Started work continues until it finishes or you cancel; a reload never starts another request.'));
+  const retention = el('details', {}, el('summary', {}, 'Discussion scope and retention'), el('p', { class: 'quiet' }, 'Private local storage retains up to 20 complete exchanges within 256 KiB per question/research revision, plus its composer. Each request includes at most four whole exchanges within 64 KiB; exact review reports omissions. The store holds at most 128 conversations within 8 MiB; explicitly delete records to make room. Shared journey files, exports and diagnostics omit discussion. Restoring text never starts research or restores approval. Check draft save status before closing; page-close saving is best effort.'));
   showStarter();
   return el('section', { class: 'research-followup' }, el('h3', {}, 'Discuss this research'), scope,
     el('p', { class: 'quiet' }, 'Ask about terms, choices or assumptions. Discussion and hypothetical changes do not change your saved answer.'),
-    el('div', { id: 'followup-history', 'aria-live': 'polite' }), el('div', { id: 'followup-turn', hidden: '', 'aria-live': 'polite' }),
+    management, el('div', { id: 'followup-history', 'aria-live': 'polite' }), el('div', { id: 'followup-turn', hidden: '', 'aria-live': 'polite' }),
     el('label', { for: 'followup-target' }, 'Discuss'), target, targetStatus, starterText, starter,
     el('label', { for: 'followup-source-mode' }, 'Sources for this follow-up'), sourceMode, sourceHelp,
     el('label', { for: 'followup-question' }, 'Follow-up question (4,000 characters maximum)'), question,
     el('label', {}, hypothetical, ' Explore a hypothetical assumption'),
-    button('Review follow-up context', () => { if (!current()) return; remember(); if (!question.value.trim()) return notice('Enter a follow-up question.'); openResearchReview(node.id, input()); }, { id: 'followup-review' }), retention);
+    button('Review follow-up context', async () => { if (!current()) return; const epoch = pageEpoch, scope = state.conversationScope; remember(); if (!question.value.trim()) return notice('Enter a follow-up question.'); try { await conversationClient.flush(entry); if (conversationUiCurrent(epoch, scope) && current()) openResearchReview(node.id, input()); } catch (error) { if (conversationUiCurrent(epoch, scope) && current()) notice(error.message); } }, { id: 'followup-review' }), retention);
 }
 function updateFollowupTurn(node) {
   const area = $('followup-turn'); if (!area) return;
@@ -3209,7 +3350,9 @@ function updateFollowupTurn(node) {
 }
 function updateFollowupHistory(node) {
   const area = $('followup-history'); if (!area) return;
-  const value = state.followup?.nodeId === node.id && state.followup.journey === (state.activeKey ?? state.document.id) ? state.followup : null;
+  const ui = uiFor(node.id), entry = ui.followupEntry;
+  let value = ui.followupArchive ? ui.followupArchive.history : entry?.value?.history ?? null;
+  if (!ui.followupArchive && value && state.followup?.id === value.id) value = { ...value, reuseNotice: state.followup.reuseNotice };
   const { reuseNotice, ...history } = value ?? {};
   const signature = JSON.stringify(value ? history : null);
   const showReuse = () => {
@@ -3235,13 +3378,13 @@ function updateFollowupHistory(node) {
   area.dataset.value = signature;
   const rows = [];
   if (value) {
-    rows.push(el('p', { class: 'quiet' }, value.historical ? 'Historical follow-ups: saved source context or original research changed. A new request starts a fresh history.' : 'Follow-ups to this original research; saved answers are unchanged.'));
-    rows.push(el('p', { class: 'quiet' }, 'This canvas keeps up to four complete follow-ups within 64 KiB. Clear removes this discussion and its reusable answer; your saved research and drafts stay available.'),
-      button('Clear follow-up history', async () => {
-        const result = await api('followup-clear', { journey: value.journey, nodeId: node.id, historyId: value.id });
-        if (result && selected === node.id && (state.activeKey ?? state.document.id) === value.journey) $('followup-question')?.focus({ preventScroll: true });
-      }, { id: 'followup-clear', disabled: !!state.pending }));
-    if (value.dropped) rows.push(el('p', { class: 'quiet' }, `${value.dropped} older complete exchanges omitted by the four-exchange / 64 KiB retention limit.`));
+    rows.push(el('p', { class: 'quiet' }, value.historical ? 'Historical follow-ups: saved context or original research changed. Start a fresh conversation before reviewing a new follow-up.' : 'Follow-ups to this original research; saved answers are unchanged.'));
+    rows.push(el('p', { class: 'quiet' }, 'Privately retained discussion: up to 20 complete exchanges within 256 KiB. Clear removes this discussion and its reusable answer; research and composer stay available.'),
+      button(value.historical ? 'Start fresh conversation' : 'Clear follow-up history', async () => {
+        const epoch = pageEpoch, focus = conversationFocus(node, ui, entry);
+        try { await conversationClient.mutate(entry, 'clear'); focus(); } catch (error) { if (conversationUiCurrent(epoch, entry.binding.conversationScope) && area.isConnected && ui.followupEntry === entry) notice(error.message); }
+      }, { id: 'followup-clear', ...(ui.followupArchive ? { hidden: '' } : {}), disabled: !!state.pending || !!state.unsavedConversation || entry?.deleting }));
+    if (value.dropped) rows.push(el('p', { class: 'quiet' }, `${value.dropped} older complete exchanges dropped by the 20-exchange / 256 KiB display retention limit.`));
     for (const exchange of value.exchanges) {
       const result = exchange.result, block = el('section', { class: 'research-claim', id: 'followup-exchange-' + exchange.id, tabindex: '-1' }, el('p', { class: 'quiet', id: 'followup-reused-' + exchange.id, hidden: '' }), el('h4', {}, exchange.hypothetical ? 'You · hypothetical question' : 'You'), el('p', { class: 'quiet' }, exchange.targetLabel ?? 'Whole research'), el('p', {}, exchange.question),
         el('h4', {}, 'Explorer explanation'), el('p', { class: 'quiet' }, 'Completed · saved answers unchanged'), el('p', { class: 'quiet', 'data-followup-source-mode': exchange.id }, followupSourceLabel(exchange.sourceMode)), el('p', { class: 'quiet', 'data-followup-profile': exchange.id }, profileLabel(exchange.profile)), el('p', {}, result.answer), el('p', {}, el('strong', {}, 'Uncertainty: '), result.uncertainty));
@@ -3763,7 +3906,7 @@ async function storageRequest(action) {
     if (action === 'inspect') {
       storageRevision = value.settings.revision; storageSettingsError = !!value.error; $('storage-keep').value = String(storagePreview?.keepHistory ?? value.settings.keepHistory);
       const inventory = value.inventory;
-      const labels = { journeys: 'Journeys', exports: 'Saved Markdown files', library: 'Library metadata', drafts: 'Drafts and tombstones', history: 'History files and manifests', recovery: 'Recovery, staging and locks', usage: 'Usage receipts and lifecycle', analytics: 'Bounded local observations (protected)', preferences: 'Preferences and references', unknown: 'Unknown files (protected)' };
+      const labels = { journeys: 'Journeys', exports: 'Saved Markdown files', library: 'Library metadata', drafts: 'Drafts and tombstones', conversations: 'Private research conversations (protected)', history: 'History files and manifests', recovery: 'Recovery, staging and locks', usage: 'Usage receipts and lifecycle', analytics: 'Bounded local observations (protected)', preferences: 'Preferences and references', unknown: 'Unknown files (protected)' };
       $('storage-inventory').replaceChildren(el('dl', {}, ...Object.entries(inventory.categories).map(([key, row]) => el('div', {}, el('dt', {}, labels[key]), el('dd', {}, `${row.files} files · ${row.apparentBytes.toLocaleString()} bytes`)))),
         el('p', {}, `${inventory.apparentBytes.toLocaleString()} apparent bytes; ${inventory.uniqueBytes.toLocaleString()} bytes after known file-identity deduplication; ${inventory.duplicateBytes.toLocaleString()} duplicate hardlink bytes. These are file lengths, not allocated disk blocks.`),
         el('p', {}, `${inventory.manifestDeclaredHistoryBytes.toLocaleString()} retained snapshot bytes declared by ${inventory.manifests} readable manifests. File totals also include metadata and unreferenced staging; declared bytes do not verify snapshot health.`),
@@ -5215,7 +5358,7 @@ window.addEventListener('pointermove', event => {
 for (const name of ['pointerup', 'pointercancel']) window.addEventListener(name, endDrag);
 $('map').addEventListener('lostpointercapture', event => { if (event.target === $('map')) endDrag(event); });
 window.addEventListener('blur', () => endDrag());
-document.addEventListener('visibilitychange', () => { if (document.hidden) { endDrag(); void draftClient.flush(true).catch(() => {}); } else refreshRevisitDay(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { endDrag(); void draftClient.flush(true).catch(() => {}); void conversationClient.flush().catch(() => {}); } else refreshRevisitDay(); });
 $('map').addEventListener('click', event => {
   if (suppressClick && event.detail > 0) { event.preventDefault(); event.stopImmediatePropagation(); suppressClick = false; }
 }, true);
@@ -5245,7 +5388,7 @@ $('map').addEventListener('keydown', event => {
 $('map').addEventListener('wheel', event => {
   if (!outlineMode) navigation.wheel(event, $('map').getBoundingClientRect());
 }, { passive: false });
-window.addEventListener('beforeunload', event => { if (draftClient.pending()) { void draftClient.flush(true).catch(() => {}); event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if (draftClient.pending() || conversationClient.pending || state.unsavedConversation) { void draftClient.flush(true).catch(() => {}); void conversationClient.flush().catch(() => {}); event.preventDefault(); event.returnValue = ''; } });
 const mapObserver = new ResizeObserver(() => {
   if (outlineMode) return;
   const rect = $('map').getBoundingClientRect();
@@ -5301,7 +5444,9 @@ window.addEventListener('pagehide', event => {
   closeAdrQuestions();
   questionHelp.dispose();
   void draftClient.flush(true).catch(() => {});
+  const conversationFlush = conversationClient.flush().catch(() => {});
   if (event.persisted) return;
+  void conversationFlush.finally(() => conversationClient.dispose());
   closed = true; clearTimeout(pollTimer); cancelAnimationFrame(layoutFrame); endDrag();
   minimap.dispose();
   mapObserver.disconnect(); workspaceObserver.disconnect(); document.fonts?.removeEventListener('loadingdone', fontsChanged);

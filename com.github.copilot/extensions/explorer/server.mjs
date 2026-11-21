@@ -32,6 +32,7 @@ const assets = new Map([
   ['review-handoffs-client.mjs', ['review-handoffs-client.mjs', 'text/javascript; charset=utf-8']],
   ['cleanup.mjs', ['cleanup.mjs', 'text/javascript; charset=utf-8']],
   ['question-help-client.mjs', ['question-help-client.mjs', 'text/javascript; charset=utf-8']],
+  ['research-conversations-client.mjs', ['research-conversations-client.mjs', 'text/javascript; charset=utf-8']],
   ['research-review-client.mjs', ['research-review-client.mjs', 'text/javascript; charset=utf-8']],
   ['research-guidance.mjs', ['research-guidance.mjs', 'text/javascript; charset=utf-8']],
   ['research-policy.mjs', ['research-policy.mjs', 'text/javascript; charset=utf-8']],
@@ -89,6 +90,12 @@ export async function startServer(explorer, voice = new VoiceService({ preferenc
         if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
         const value = await explorer.storageRequest(await body(req, 1024));
         if (Buffer.byteLength(JSON.stringify(value)) > STORAGE_LIMITS.responseBytes) throw new Error('Storage response limit reached. Files are preserved.');
+        return json(200, value);
+      }
+      if (req.method === 'POST' && route === 'api/research-conversations') {
+        if (req.headers['x-explorer-client'] !== '1' || req.headers.origin !== origin) return json(403, { error: 'Invalid request origin.' });
+        const value = await explorer.conversationRequest(await body(req, 32768));
+        if (Buffer.byteLength(JSON.stringify(value)) > 512 * 1024) throw Error('Private conversation response exceeds its limit.');
         return json(200, value);
       }
       if (req.method === 'POST' && route === 'api/research-review') {

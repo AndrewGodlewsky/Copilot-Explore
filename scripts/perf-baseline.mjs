@@ -18,6 +18,7 @@ import { Explorer, atomicWrite } from '../com.github.copilot/extensions/explorer
 import { GeometryCache, viewportBounds, intersects, layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
+import { ConversationClient } from '../com.github.copilot/extensions/explorer/web/research-conversations-client.mjs';
 import { CommentsClient } from '../com.github.copilot/extensions/explorer/web/comments-client.mjs';
 import { ReviewHandoffsClient } from '../com.github.copilot/extensions/explorer/web/review-handoffs-client.mjs';
 import { PortableReferenceClient } from '../com.github.copilot/extensions/explorer/web/portable-reference-client.mjs';
@@ -71,6 +72,7 @@ const imports = [
   "import { attachDashboard } from './dashboard.mjs';",
   "import { attachMinimap } from './minimap.mjs';",
   "import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';",
+  "import { ConversationClient } from './research-conversations-client.mjs';",
   "import { ResearchReviewClient } from './research-review-client.mjs';",
   "import { researchSettingsText, followupSourceLabel } from './research-policy.mjs';",
   "import { researchProfiles, profileLabel } from './research-guidance.mjs';",
@@ -117,7 +119,7 @@ export async function domFixture(document) {
       url === 'api/voice' ? { ready: false, error: 'Disabled in synthetic benchmark.' } : {};
     return new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
   };
-  Object.assign(window, { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice, DecisionImpact, impactPath, decisionImpactKey, criticalPaths, searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, attachDashboard, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, CleanupClient, QuestionHelpClient, attachNavigation,
+  Object.assign(window, { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice, DecisionImpact, impactPath, decisionImpactKey, criticalPaths, searchFilters, matchSearch, SEARCH_PAGE_SIZE, attachMinimap, attachDashboard, ResearchReviewClient, researchSettingsText, localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches, NextQuestion, GeometryCache, viewportBounds, intersects, layout, branchView, revealPath, attachVoice, DraftClient, ConversationClient, CleanupClient, QuestionHelpClient, attachNavigation,
     ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus, MODES, effectiveMode });
   Object.assign(window, { followupSourceLabel, ProjectModeClient, ProjectBriefClient, researchProfiles, profileLabel, reviewQueue, reviewContext, CommentsClient, ReviewHandoffsClient, PortableReferenceClient, AdrSourcesClient, ChangeSummaryClient });
   const source = imports.reduce((text, statement) => text.replace(statement, ''), appScript)

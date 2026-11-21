@@ -39,7 +39,7 @@ async function fixture(t) {
   const e = await new Explorer({ file, researcher: { models: fixtureResearchModels, run(context, options) { runs.push({ context, ...options }); return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(Error('Cancelled')))); } } }).load();
   t.after(async () => { await e.close(); await rm(dir, { recursive: true, force: true }); });
   let sequence = 0; const clientId = randomUUID();
-  const input = extra => ({ action: 'prepare', journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, ...extra });
+  const input = extra => ({ action: 'prepare', ...(extra?.followup ? { conversationScope: e.uiSnapshot().conversationScope } : {}), journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, ...extra });
   const review = extra => e.reviewResearch(input(extra));
   const start = value => e.command('research', { journey: doc.id, nodeId: doc.nodes[1].id, token: value.token });
   return { e, file, doc, runs, input, review, start };
@@ -214,7 +214,7 @@ test('expiry, destination changes, closed preparation and in-flight cancellation
   disk.revision++; await writeFile(f.file, JSON.stringify(disk));
   await assert.rejects(f.start(review), /saved research changed/); assert.equal(f.runs.length, 0);
   const state = new ResearchReview(); let resolve;
-  const explorer = { doc: f.doc, file: f.file, activeKey: null, readCurrent: () => new Promise(r => { resolve = r; }) };
+  const explorer = { conversations: f.e.conversations, doc: f.doc, file: f.file, activeKey: null, readCurrent: () => new Promise(r => { resolve = r; }) };
   const input = f.input(), preparing = state.prepare(explorer, input);
   await state.prepare(explorer, { ...input, action: 'cancel', sequence: input.sequence + 1 }); resolve(f.doc);
   await assert.rejects(preparing, /obsolete/); assert.equal(state.current, null);
@@ -291,7 +291,7 @@ test('transport response cap rejects escaped exclusion IDs without retaining a p
     const id = String(i).padStart(4, '0') + '\u0000'.repeat(96); excluded.push(id);
     doc.nodes.push({ ...doc.nodes[2], id });
   }
-  const review = new ResearchReview(), explorer = { doc, file: 'map', activeKey: null, readCurrent: async () => doc, captureResearchModel: async () => ({ mode: 'chat', revision: 0, model: (await fixtureResearchModels()).models[0], account: (await fixtureResearchModels()).account }), scenarioPolicy: async () => ({ label: { classification: 'unselected' } }), assertScenarioPolicy: async () => {} };
+  const review = new ResearchReview(), explorer = { conversations: { requireSaved() {} }, doc, file: 'map', activeKey: null, readCurrent: async () => doc, captureResearchModel: async () => ({ mode: 'chat', revision: 0, model: (await fixtureResearchModels()).models[0], account: (await fixtureResearchModels()).account }), scenarioPolicy: async () => ({ label: { classification: 'unselected' } }), assertScenarioPolicy: async () => {} };
   await assert.rejects(review.prepare(explorer, { action: 'prepare', clientId: randomUUID(), sequence: 1, journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded }), /1 MiB response limit/);
   assert.equal(review.current, null);
 });

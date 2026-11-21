@@ -48,6 +48,7 @@ import { startServer } from '../com.github.copilot/extensions/explorer/server.mj
 import { GeometryCache, viewportBounds, intersects, layout, branchView, revealPath } from '../com.github.copilot/extensions/explorer/web/layout.mjs';
 import { attachVoice } from '../com.github.copilot/extensions/explorer/web/voice.mjs';
 import { DraftClient } from '../com.github.copilot/extensions/explorer/web/drafts.mjs';
+import { ConversationClient } from '../com.github.copilot/extensions/explorer/web/research-conversations-client.mjs';
 import { CleanupClient } from '../com.github.copilot/extensions/explorer/web/cleanup.mjs';
 import { QuestionHelpClient } from '../com.github.copilot/extensions/explorer/web/question-help-client.mjs';
 import { ResearchReviewClient } from '../com.github.copilot/extensions/explorer/web/research-review-client.mjs';
@@ -109,7 +110,7 @@ test('project question explanations show reviewed provenance and correction navi
   $('navigation-open').click(); $('project-mode-open').click(); await until(() => !$('project-mode-prepare').disabled, 'scope ready');
   f.type('project-mode-paths', 'README.md'); $('project-mode-prepare').click(); await until(() => !$('project-mode-approve').disabled, 'scope review');
   $('project-mode-approve').click(); await until(() => !$('project-mode-read').disabled, 'read authorization');
-  $('project-mode-read').click(); await until(() => !$('project-brief-prepare').disabled, 'captured inputs');
+  await uiResponse(f, 'api/project-mode', 'read', () => $('project-mode-read').click()); await until(() => !$('project-brief-prepare').disabled, 'captured inputs');
   $('project-brief-prepare').click(); await until(() => !$('project-brief-start').disabled, 'brief review');
   await uiResponse(f, 'api/project-brief', 'start', () => $('project-brief-start').click());
   await f.explorer.projectBrief.work.task; assert.equal(f.explorer.projectBrief.work.status, 'result', f.explorer.projectBrief.error);
@@ -259,7 +260,8 @@ test('follow-up source mode requires new review and retry preserves captured mod
   $('research-review-close').click(); $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'new explanation');
   await uiResponse(f, 'api/action', 'research-follow-up', () => $('research-review-start').click()); await until(() => runs.length === 2, 'explanation started');
   runs[1].resolve({ answer: 'Existing material explanation.', uncertainty: 'Current facts are not verified.', sources: [], claims: [{ id: 'c1', text: 'Synthetic reasoning.', basis: 'reasoning', evidence: [], limitations: 'Fixture only.' }] });
-  await until(() => !f.explorer.pending, 'explanation completed'); await f.poll();
+  await until(() => !f.explorer.pending, 'explanation completed'); assert.equal(f.explorer.error, ''); await f.poll();
+  await until(() => $('followup-history').textContent.includes('Existing material explanation.'), 'saved private explanation recovered');
   assert.match($('followup-history').textContent, /Explain existing findings/); assert.equal($('answer').value, 'Private answer 🌿'); assert.equal($('followup-question').value, 'Newer question draft'); assert.equal(JSON.stringify(f.explorer.doc.nodes[1].research), original);
 });
 
@@ -501,9 +503,9 @@ test('critical view reports empty results, refreshes saved relationships and aba
   await f.explorer.command('add-dependency',{revision:f.explorer.doc.revision,nodeId:b.id,prerequisiteId:a.id});await f.poll();
   assert.match($('critical-status').textContent,/2 highlighted/);assert.equal($('answer'),editor);assert.equal(editor.value,'Keep through refresh');
   await until(()=>$('answer-status').textContent==='Draft saved locally','draft durable before removal');
-  const removed=structuredClone(f.explorer.snapshot());removed.document.nodes=removed.document.nodes.filter(n=>n.id!==a.id);delete removed.document.dependencies;removed.document.revision++;ui.apply(removed);
+  const removed=structuredClone(f.explorer.uiSnapshot());removed.document.nodes=removed.document.nodes.filter(n=>n.id!==a.id);delete removed.document.dependencies;removed.document.revision++;ui.apply(removed);
   $('critical-return').click();assert.equal(ui.scene().selected,removed.document.rootId);
-  $('critical-paths').click();const replacement=structuredClone(f.explorer.snapshot());replacement.document=createDocument('Another map');replacement.activeKey='another-map';ui.apply(replacement);
+  $('critical-paths').click();const replacement=structuredClone(f.explorer.uiSnapshot());replacement.document=createDocument('Another map');replacement.activeKey='another-map';ui.apply(replacement);
   assert.equal($('critical-return').hidden,true);assert.equal($('critical-paths').getAttribute('aria-pressed'),'false');assert.equal($('search').disabled,false);assert.equal(ui.scene().selected,replacement.document.rootId);
 });
 
@@ -542,7 +544,7 @@ test('critical decoration reuses retained card content while exposing reasons th
 test('return from critical view safely reveals a saved question moved outside its former branch focus', async t => {
   const f=await fixture(t,360,undefined,false,{before:async e=>{const doc=structuredClone(e.doc);doc.nodes.push({id:'moved-child',parentId:doc.nodes[1].id,question:'Moved question',category:'Choice',answer:'',research:null,review:false});await e.command('import',{revision:e.doc.revision,document:doc});}}), $=id=>f.document.getElementById(id), ui=f.window.__updates, [a,b]=f.explorer.doc.nodes.slice(1);
   f.open(a.id);$('focus-branch').click();ui.select('moved-child');f.type('answer','Preserve across reparent');$('critical-paths').click();
-  const changed=structuredClone(f.explorer.snapshot());changed.document.nodes.find(n=>n.id==='moved-child').parentId=b.id;changed.document.revision++;ui.apply(changed);
+  const changed=structuredClone(f.explorer.uiSnapshot());changed.document.nodes.find(n=>n.id==='moved-child').parentId=b.id;changed.document.revision++;ui.apply(changed);
   $('critical-return').click();assert.equal(ui.scene().selected,'moved-child');assert.equal(ui.scene().positions.has('moved-child'),true);assert.equal($('focus-status').textContent,'');assert.equal($('answer').value,'Preserve across reparent');
 });
 
@@ -578,7 +580,7 @@ test('connection impact mode labels child bands across folds and saved changes w
   assert.match(outline(medium.id).textContent, /Medium downstream impact/);
   await f.explorer.command('remove-dependency', { revision:f.explorer.doc.revision, nodeId:'band-low', prerequisiteId:medium.id }); await f.poll();
   assert.match(outline(medium.id).textContent, /Low downstream impact/); assert.equal($('answer'),editor); assert.equal(editor.value,'Private exact draft'); assert.equal(editor.selectionStart,2);
-  const replacement = f.explorer.snapshot(); replacement.document.dependencies = [{dependentId:'band-low', prerequisiteId:medium.id}]; f.window.__updates.apply(replacement);
+  const replacement = f.explorer.uiSnapshot(); replacement.document.dependencies = [{dependentId:'band-low', prerequisiteId:medium.id}]; f.window.__updates.apply(replacement);
   assert.match(outline(medium.id).textContent, /Medium downstream impact/);
   $('impact-display').value='normal'; $('impact-display').dispatchEvent(new f.window.Event('change'));
   assert.equal($('impact-legend').hidden,true); assert.equal($('workspace-impact').hidden,true); assert.doesNotMatch(outline(medium.id).textContent,/downstream impact/);
@@ -628,7 +630,7 @@ test('impact inspection pages affected questions and long paths while stable upd
   assert.equal($('impact-path').firstChild, first); assert.equal(analyses, count);
   assert.equal($('impact-affected').value, 'impact-099'); assert.match($('impact-page').textContent, /51–100 of 120/);
   $('impact-path-previous').click(); assert.match($('impact-path-page').textContent, /1–30 of 101/);
-  const replacement = f.explorer.snapshot(); replacement.document.nodes.find(n => n.id === 'impact-099').question = 'Externally replaced question';
+  const replacement = f.explorer.uiSnapshot(); replacement.document.nodes.find(n => n.id === 'impact-099').question = 'Externally replaced question';
   f.window.__updates.apply(replacement); assert.ok(analyses > count); assert.match($('impact-affected').selectedOptions[0].textContent, /Externally replaced question/);
 });
 
@@ -1363,7 +1365,7 @@ test('command palette shows current eligibility, preserves previews and opens he
 test('command palette falls back to its button when its origin is removed and stale rows never retarget', async t => {
   const f = await fixture(t), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id); $('answer').focus(); $('palette-open').click();
   const stale = $('palette-commands').querySelector('[data-command="research-request"]');
-  const next = structuredClone(f.explorer.snapshot()); next.document.nodes = next.document.nodes.filter(n => n.id !== node.id); next.document.revision++;
+  const next = structuredClone(f.explorer.uiSnapshot()); next.document.nodes = next.document.nodes.filter(n => n.id !== node.id); next.document.revision++;
   f.window.__updates.apply(next); assert.equal($('palette-dialog').open, false); assert.equal(f.document.activeElement, $('palette-open'));
   stale.click(); assert.equal($('research-review-dialog').open, false);
 });
@@ -1416,7 +1418,7 @@ for (const change of ['query', 'journey']) test(`command palette invalidates awa
   $('palette-open').click(); $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'Other destination');
   await until(() => $('palette-results').firstChild, 'destination found'); $('palette-results').firstChild.click();
   if (change === 'query') f.type('palette-query', 'Invalidated');
-  else { const next = f.explorer.snapshot(); next.activeKey = 'replacement-identity'; f.window.__updates.apply(next); }
+  else { const next = f.explorer.uiSnapshot(); next.activeKey = 'replacement-identity'; f.window.__updates.apply(next); }
   release(); await until(() => !$('workspace').inert, 'flush finishes'); assert.equal(f.actions.filter(a => a.action === 'open').length, 0); assert.equal(f.explorer.activeKey, original);
   if (change === 'query') { $('palette-scope').value = 'current'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'Show minimap'); $('palette-commands').firstChild.click(); assert.equal($('palette-dialog').open, false); assert.equal($('minimap').hidden, false); assert.equal($('answer').value, 'Do not lose draft'); }
   else assert.equal($('palette-dialog').open, false);
@@ -1426,7 +1428,7 @@ test('command palette respects missing directions, reminder conflicts and remove
   const f = await fixture(t, 340, undefined, true), $ = id => f.document.getElementById(id); await f.explorer.library.import(createDocument('Guarded destination'));
   const node = f.explorer.doc.nodes[1], original = f.explorer.activeKey; f.open(node.id); f.type('revisit-condition', 'Keep reminder'); f.type('manual-question', 'Keep direction');
   const reminder = $('revisit-condition'), manual = $('manual-question'), answer = $('answer');
-  const edited = f.explorer.snapshot(); edited.document.nodes[1].revisit = { date: '2030-01-01', condition: 'Saved replacement', acknowledgedAt: null }; edited.document.revision++;
+  const edited = f.explorer.uiSnapshot(); edited.document.nodes[1].revisit = { date: '2030-01-01', condition: 'Saved replacement', acknowledgedAt: null }; edited.document.revision++;
   f.window.__updates.apply(edited); const conflict = $('keep-revisit'); assert.ok(conflict && !conflict.hidden);
   $('palette-open').click(); $('palette-scope').value = 'library'; $('palette-scope').dispatchEvent(new f.window.Event('change')); f.type('palette-query', 'Guarded destination');
   await until(() => $('palette-results').firstChild, 'guarded destination'); $('palette-results').firstChild.click(); assert.match($('notice').textContent, /missing-direction drafts/);
@@ -1642,7 +1644,7 @@ test('minimap reflects folds, focus, history removal and source reveal without l
   const oldPath = $('minimap-nodes').getAttribute('d');
   miniPointer(f, $('minimap-map'), 'pointerdown');
   const replacement = createDocument('Replacement'); replacement.nodes.push({ ...f.explorer.doc.nodes[1], id: 'new-question', parentId: replacement.rootId });
-  ui.apply({ document: replacement, error: '', pending: null }, true);
+  ui.apply({ ...f.explorer.uiSnapshot(), document: replacement, error: '', pending: null }, true);
   assert.equal($('minimap').hidden, false); assert.notEqual($('minimap-nodes').getAttribute('d'), oldPath); assertOverview(f);
   const after = { ...ui.scene().view }; miniPointer(f, f.window, 'pointerup'); assert.deepEqual({ ...ui.scene().view }, after, 'journey reset rejects old pointer');
 });
@@ -1715,14 +1717,14 @@ test('journey actions allow bounded Git work while ordinary personal actions kee
   };
   const before = JSON.stringify(f.explorer.doc);
   let pending = f.window.api('open-project', { path: 'decisions/map.explore.json' });
-  advance(10001); assert.equal(signal.aborted, false); release(); assert.ok(await pending);
-  pending = f.window.api('guidance', { objective: 'Personal edit' }); advance(10000); await pending;
+  await until(() => calls === 1, 'journey request dispatched'); advance(10001); assert.equal(signal.aborted, false); release(); assert.ok(await pending);
+  pending = f.window.api('guidance', { objective: 'Personal edit' }); await until(() => calls === 2, 'personal request dispatched'); advance(10000); await pending;
   assert.equal(signal.aborted, true); assert.match(f.document.getElementById('notice').textContent, /timed out.*may have been saved/);
   pending = f.window.api('start', { topic: 'Project', storageScope: 'project' });
-  advance(29999); assert.equal(signal.aborted, false); advance(1); await pending;
+  await until(() => calls === 3, 'project start dispatched'); advance(29999); assert.equal(signal.aborted, false); advance(1); await pending;
   assert.equal(signal.aborted, true);
   f.window.__updates.apply({ ...f.explorer.uiSnapshot(), storage: { scope: 'project', path: 'decisions/map.explore.json' } });
-  pending = f.window.api('guidance', { objective: 'Project edit' }); advance(10001); assert.equal(signal.aborted, false); release(); assert.ok(await pending);
+  pending = f.window.api('guidance', { objective: 'Project edit' }); await until(() => calls === 4, 'project edit dispatched'); advance(10001); assert.equal(signal.aborted, false); release(); assert.ok(await pending);
   assert.equal(calls, 4); assert.equal(JSON.stringify(f.explorer.doc), before);
 });
 
@@ -2779,7 +2781,9 @@ test('reviewed previous answer reuse and explicit history clear preserve drafts,
   await until(() => $('followup-history').textContent.includes('Consider a pilot'), 'complete follow-up');
   const saved = await readFile(f.explorer.file, 'utf8'), exchangeId = f.explorer.followup.exchanges[0].id;
   const sourceDetail = $('followup-history').querySelector('details'); sourceDetail.open = true;
-  $('followup-review').click(); await until(() => $('research-review-reuse'), 'eligible previous answer');
+  await until(() => !$('followup-review').disabled, 'completed follow-up controls');
+  await uiResponse(f, 'api/research-review', 'prepare', () => $('followup-review').click());
+  await until(() => $('research-review-reuse'), 'eligible previous answer');
   assert.equal($('research-review-start').textContent, 'Research'); assert.equal($('research-review-reuse').textContent, 'Use previous answer');
   assert.match($('research-review-summary').textContent, /no new model or source request/i);
   $('research-review-reuse').click(); await until(() => f.explorer.followup.reuseNotice && $('research-review-inline').hidden, 'reused answer');
@@ -2791,7 +2795,7 @@ test('reviewed previous answer reuse and explicit history clear preserve drafts,
   const reusedText = $('followup-reused-' + exchangeId).firstChild; await delay(1400);
   assert.equal($('followup-reused-' + exchangeId).firstChild, reusedText, 'unchanged polling must not repeat the live announcement');
   type(question, 'Keep my next question draft'); $('followup-clear').click();
-  await until(() => f.explorer.followup === null && !$('followup-clear'), 'history cleared');
+  await until(() => f.explorer.followup === null && !$('followup-clear') && f.document.activeElement === question, 'history cleared and composer focus restored');
   assert.equal($('followup-question'), question); assert.equal(question.value, 'Keep my next question draft'); assert.equal(f.document.activeElement, question);
   assert.equal(answer.value, 'Keep my answer draft'); assert.equal(await readFile(f.explorer.file, 'utf8'), saved);
   $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'cleared history review'); assert.equal($('research-review-reuse'), null);
@@ -2828,7 +2832,7 @@ test('follow-up panel reload reconnects to one pending operation and history wit
   f.pauseState(async () => { arrived(); await held; }); const oldPoll = f.poll(); await pending;
   f.window.dispatchEvent(new f.window.Event('pagehide'));
   const reloaded = await fixture(t, 340, undefined, false, { explorer: f.explorer }); reloaded.open(id);
-  assert.equal(reloaded.document.getElementById('followup-question').value, ''); assert.equal(runs, 1); assert.ok(reloaded.document.getElementById('cancel-request'));
+  await until(() => reloaded.document.getElementById('followup-question').value === 'Why this?', 'private composer recovered without inference'); assert.equal(runs, 1); assert.ok(reloaded.document.getElementById('cancel-request'));
   finish({ answer: 'One completed follow-up', uncertainty: 'No external evidence', sources: [], claims: [{ id: 'c1', text: 'Reasoning', basis: 'reasoning', evidence: [], limitations: 'Fixture' }] });
   await until(() => reloaded.document.getElementById('followup-history').textContent.includes('One completed'), 'reconnected result');
   release(); await oldPoll; assert.equal(runs, 1); assert.equal(f.document.getElementById('followup-history').textContent.includes('One completed'), false);
@@ -3058,7 +3062,8 @@ test('portable reference UI respects unsaved-direction and draft-save guards bef
   let blocked = true; f.pauseDraftWrite(() => { if (blocked) throw Error('Draft disk unavailable'); }); f.type('answer', 'Newest personal draft'); $('portable-reference-go').click();
   await until(() => /Draft could not be saved/.test($('notice').textContent), 'draft failure blocked navigation'); assert.equal(f.explorer.activeKey, old); blocked = false;
   await uiResponse(f, 'api/action', 'open-reference', () => $('portable-reference-go').click()); await until(() => f.explorer.projectStore && !$('portable-reference-dialog').open, 'project target opened'); assert.equal(f.window.__updates.scene().selected, first.id);
-  await f.explorer.command('open', { revision: f.explorer.doc.revision, key: old }); await f.poll(); f.window.__updates.select(first.id); await until(() => $('answer').value === 'Newest personal draft', 'personal draft restored');
+  assert.ok(await f.window.api('open', { key: old }), 'personal journey reopened');
+  f.window.__updates.select(first.id); await until(() => $('answer').value === 'Newest personal draft', 'personal draft restored');
 });
 
 test('portable reference UI opens from a fresh welcome screen and requires acknowledgement of a changed saved target', async t => {
@@ -3243,7 +3248,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.branchView = branchView;
   window.revealPath = revealPath;
   window.attachVoice = attachVoice;
-  window.DraftClient = DraftClient;
+  window.DraftClient = DraftClient; window.ConversationClient = ConversationClient;
   window.CommentsClient = CommentsClient;
   window.ReviewHandoffsClient = ReviewHandoffsClient;
   window.PortableReferenceClient = PortableReferenceClient;
@@ -3265,8 +3270,8 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.DecisionImpact = DecisionImpact; window.impactPath = impactPath; window.decisionImpactKey = decisionImpactKey; window.criticalPaths = criticalPaths;
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
-  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, polling: () => !!pollFlight, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { ProjectBriefClient } from './project-brief-client.mjs';", "").replace("import { researchProfiles, profileLabel } from './research-guidance.mjs';", "").replace("import { ProjectModeClient } from './project-mode-client.mjs';", "").replace("import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './research-freshness.mjs';", "").replace("import { ChangeSummaryClient } from './change-summary-client.mjs';", '').replace("import { AdrSourcesClient } from './adr-sources-client.mjs';", '').replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText, followupSourceLabel } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { conversationClient, work: () => ({ followup: state.followup, followupTurn: state.followupTurn, researchOperation: state.researchOperation, researchAttempt: state.researchAttempt }), document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, polling: () => !!pollFlight, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
+  window.eval(script.replace("import { ConversationClient } from './research-conversations-client.mjs';", "").replace("import { ProjectBriefClient } from './project-brief-client.mjs';", "").replace("import { researchProfiles, profileLabel } from './research-guidance.mjs';", "").replace("import { ProjectModeClient } from './project-mode-client.mjs';", "").replace("import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './research-freshness.mjs';", "").replace("import { ChangeSummaryClient } from './change-summary-client.mjs';", '').replace("import { AdrSourcesClient } from './adr-sources-client.mjs';", '').replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText, followupSourceLabel } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.empty ? !document.getElementById('library-home').hidden : options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;
@@ -3610,6 +3615,7 @@ test('topic guidance is reviewable and keyboard reachable; changing it retains d
   assert.equal($('answer').value, 'Keep my private draft');
   await startReviewedResearch(f); await until(() => f.explorer.followup?.exchanges.length === 1 && $('followup-history').textContent.includes('concept-design v1'), 'recorded turn profile');
   const id = f.explorer.followup.exchanges[0].id;
+  await until(() => !$('followup-review').disabled, 'previous follow-up released');
   $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'next profile inherited');
   assert.equal($('research-profile').value, 'concept-design');
   const nextSelect = $('research-profile'); nextSelect.value = 'general'; nextSelect.dispatchEvent(new f.window.Event('change'));
@@ -6794,15 +6800,15 @@ test('large-map geometry invalidates on resize, fonts, expansion, history and jo
   assert.equal(ui.scene().positions.get('node-1').height, 220);
   const next = structuredClone(source); next.revision++;
   next.nodes = next.nodes.filter(n => Number(n.id.slice(5)) < 8);
-  ui.apply({ document: next, error: '', pending: null });
+  ui.apply({ ...f.explorer.uiSnapshot(), document: next, error: '', pending: null });
   assert.equal(d.getElementById('answer'), editor);
   assert.equal(ui.scene().positions.size, 8, 'history replacement drops stale geometry');
   const current = ui.scene().geometry;
-  ui.apply({ document: { ...structuredClone(next), id: 'replacement-journey' }, error: '', pending: null });
+  ui.apply({ ...f.explorer.uiSnapshot(), document: { ...structuredClone(next), id: 'replacement-journey' }, error: '', pending: null });
   assert.notEqual(ui.scene().geometry, current, 'new journey never reuses old cache');
   assert.equal(editor.isConnected, false);
   const focus = d.querySelector('#nodes [data-node-id="node-1"]'); focus.focus();
-  ui.apply({ document: { ...next, id: 'replacement-journey', revision: 3, nodes: [next.nodes[0]] }, error: '', pending: null });
+  ui.apply({ ...f.explorer.uiSnapshot(), document: { ...next, id: 'replacement-journey', revision: 3, nodes: [next.nodes[0]] }, error: '', pending: null });
   assert.notEqual(d.activeElement, d.body, 'logical removal transfers keyboard focus');
   f.window.dispatchEvent(new f.window.Event('pagehide'));
   assert.equal(ui.scene().geometry, null); assert.equal(ui.scene().positions.size, 0);
@@ -6865,7 +6871,7 @@ test('large-map journey replacement transfers a compact control focus to the new
   const f = await fixture(t), d = f.document, ui = f.window.__updates;
   const card = d.querySelector('#nodes [data-node-id]'); card.focus();
   const next = structuredClone(f.explorer.doc); next.id = 'new-journey';
-  ui.apply({ document: next, error: '', pending: null });
+  ui.apply({ ...f.explorer.uiSnapshot(), document: next, error: '', pending: null });
   assert.equal(card.isConnected, false);
   assert.equal(d.activeElement.id, 'map', 'removed compact owner has an explicit surviving focus target');
 });
@@ -7230,7 +7236,7 @@ test('ADR update UI compares literal baseline, manual file and proposal, keeps e
 });
 
 test('ADR update UI discloses legacy baseline and changed source scope before replacement', async t => {
-  const f = await adrUpdateFixture(t), $ = f.$, next = structuredClone(f.explorer.doc); delete next.adrFiles[0].generated; delete next.adrFiles[0].sources; await f.explorer.save(next); f.window.__updates.apply(f.explorer.snapshot());
+  const f = await adrUpdateFixture(t), $ = f.$, next = structuredClone(f.explorer.doc); delete next.adrFiles[0].generated; delete next.adrFiles[0].sources; await f.explorer.save(next); f.window.__updates.apply(f.explorer.uiSnapshot());
   await f.openUpdates(); assert.match($('adr-file-baseline').textContent, /unavailable/i); assert.match($('adr-file-freshness').textContent, /unavailable/i);
   $('adr-file-update').click(); await until(() => !$('adr-file-preview').hidden, 'legacy proposal');
   $('adr-file-replace').checked = true; $('adr-file-replace').dispatchEvent(new f.window.Event('change')); assert.equal($('adr-file-save').disabled, true);
@@ -7241,7 +7247,7 @@ test('ADR update UI discloses legacy baseline and changed source scope before re
 test('ADR update UI keeps missing files unresolved and routes accepted records to explicit successor review', async t => {
   const f = await adrUpdateFixture(t), $ = f.$, journey = f.explorer.doc.id;
   const prepare = await f.explorer.adrLifecycleRequest({ action: 'prepare', journey, clientId: randomUUID(), sequence: 1, selection: { kind: 'accept', id: f.record.id } });
-  await f.explorer.adrLifecycleRequest({ action: 'save', journey, token: prepare.token, revision: f.explorer.doc.revision }); f.window.__updates.apply(f.explorer.snapshot());
+  await f.explorer.adrLifecycleRequest({ action: 'save', journey, token: prepare.token, revision: f.explorer.doc.revision }); f.window.__updates.apply(f.explorer.uiSnapshot());
   await f.openUpdates(); assert.equal($('adr-file-update').disabled, true); assert.match($('adr-file-freshness').textContent, /accepted|successor/i);
   $('adr-lifecycle-from-file').click(); await until(() => !$('adr-lifecycle-review').disabled, 'lifecycle routing'); assert.equal($('adr-lifecycle-selection').value, f.record.id); assert.equal($('adr-lifecycle-kind').value, 'successor');
   $('adr-lifecycle-close').click(); await rm(join(f.root, f.record.path)); await f.openUpdates(); assert.match($('adr-file-freshness').textContent, /missing/i); assert.equal($('adr-file-update').disabled, true);
@@ -7261,7 +7267,7 @@ for (const leave of ['hide', 'switch', 'suspend']) test(`ADR update UI ignores l
   f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-file' && JSON.parse(options.body).action === 'inspect') await new Promise(resolve => { release = resolve; }); return response; };
   $('adr-file-inspect').click(); await until(() => release, 'inspection held');
   if (leave === 'hide') $('adr-file-close').click();
-  else if (leave === 'switch') { const next = structuredClone(f.explorer.snapshot()); next.document = createDocument('Different map'); f.window.__updates.apply(next); }
+  else if (leave === 'switch') { const next = structuredClone(f.explorer.uiSnapshot()); next.document = createDocument('Different map'); f.window.__updates.apply(next); }
   else f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
   release(); f.window.fetch = fetch; await delay(30); assert.equal($('adr-file-inspection').hidden, true); assert.equal($('adr-file-save').disabled, true); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ');
 });
@@ -7381,9 +7387,9 @@ for (const action of ['prepare', 'status']) for (const leave of ['hide', 'source
   f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-file' && JSON.parse(options.body).action === action) await new Promise(resolve => { release = resolve; }); return response; };
   $(action === 'prepare' ? 'adr-file-review' : 'adr-file-refresh').click(); await until(() => release, 'file response held');
   if (leave === 'hide') $('adr-file-close').click();
-  else if (leave === 'switch') { const next = structuredClone(f.explorer.snapshot()); next.document = createDocument('Another map'); f.window.__updates.apply(next); }
+  else if (leave === 'switch') { const next = structuredClone(f.explorer.uiSnapshot()); next.document = createDocument('Another map'); f.window.__updates.apply(next); }
   else if (leave === 'suspend') f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
-  else { const doc = structuredClone(f.explorer.doc); doc.nodes[1].answer += ' correction'; await f.explorer.save(doc); f.window.__updates.apply(f.explorer.snapshot()); }
+  else { const doc = structuredClone(f.explorer.doc); doc.nodes[1].answer += ' correction'; await f.explorer.save(doc); f.window.__updates.apply(f.explorer.uiSnapshot()); }
   release(); f.window.fetch = fetch; await delay(30); assert.equal($('adr-file-save').disabled, true); assert.equal($('adr-file-preview').hidden, true); assert.equal(f.explorer.doc.adrFiles, undefined); assert.equal(f.editor.value, 'PRIVATE ADR FILE ANSWER λ');
 });
 test('ADR file UI can explicitly discard an unpublished write and keep manual ADR proposal edits connected', async t => {
@@ -7454,9 +7460,9 @@ for (const action of ['prepare', 'status']) for (const leave of ['hide', 'source
   f.window.fetch = async (path, options) => { const response = await fetch(path, options); if (path === 'api/adr-lifecycle' && JSON.parse(options.body).action === action) await new Promise(resolve => { release = resolve; }); return response; };
   $(action === 'prepare' ? 'adr-lifecycle-review' : 'adr-lifecycle-refresh').click(); await until(() => release, 'lifecycle reply held');
   if (leave === 'hide') $('adr-lifecycle-close').click();
-  else if (leave === 'switch') { const next = structuredClone(f.explorer.snapshot()); next.document = createDocument('Another map'); f.window.__updates.apply(next); }
+  else if (leave === 'switch') { const next = structuredClone(f.explorer.uiSnapshot()); next.document = createDocument('Another map'); f.window.__updates.apply(next); }
   else if (leave === 'suspend') f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
-  else { const doc = structuredClone(f.explorer.doc); doc.nodes[1].answer += ' correction'; await f.explorer.save(doc); f.window.__updates.apply(f.explorer.snapshot()); }
+  else { const doc = structuredClone(f.explorer.doc); doc.nodes[1].answer += ' correction'; await f.explorer.save(doc); f.window.__updates.apply(f.explorer.uiSnapshot()); }
   release(); f.window.fetch = fetch; await delay(30); assert.equal($('adr-lifecycle-save').disabled, true); assert.equal($('adr-lifecycle-preview').hidden, true); assert.equal(f.explorer.doc.adrFiles[0].status, 'proposed');
 });
 
@@ -7690,7 +7696,7 @@ for (const action of ['view', 'poll']) for (const change of ['hide', 'source']) 
     if (action === 'poll') pending = f.poll(); else $('adr-draft-open').click();
     await until(() => release, `${action} response held`);
     if (change === 'hide') $('close-brief').click();
-    else { const next = structuredClone(f.explorer.doc); next.nodes[1].answer = 'Changed source'; await f.explorer.save(next); f.window.__updates.apply(f.explorer.snapshot()); }
+    else { const next = structuredClone(f.explorer.doc); next.nodes[1].answer = 'Changed source'; await f.explorer.save(next); f.window.__updates.apply(f.explorer.uiSnapshot()); }
     assert.equal($('adr-readiness').dataset.current, 'false');
     release(); f.window.fetch = fetch; await pending; await delay(20);
     assert.equal($('adr-readiness').dataset.current, 'false'); assert.equal($('accept-brief').hidden || $('accept-brief').disabled, true);
@@ -8341,4 +8347,94 @@ test('hyphenated limitation identities keep independent disclosure state and foc
   assert.equal(f.document.activeElement, nextSecond.querySelector('summary'));
   const ids = [...f.document.querySelectorAll('.research [id]')].map(element => element.id);
   assert.equal(ids.length, new Set(ids).size);
+});
+
+
+test('private draft failure after pagehide settles without stale notices or focus', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const next = structuredClone(e.doc); next.nodes[1].research = structuredClone(findings); await e.save(next); } });
+  const client = f.window.__updates.conversationClient; f.open(f.explorer.doc.nodes[1].id);
+  await until(() => client.current?.loaded, 'private draft loaded');
+  const entry = client.current, original = f.window.fetch; let release, staleNotices = 0, staleFocus = 0;
+  f.window.fetch = (path, options) => path === 'api/research-conversations' && JSON.parse(options.body).action === 'draft'
+    ? new Promise(resolve => { release = () => resolve(new Response(JSON.stringify({ error: 'Late synthetic save failure' }), { status: 500 })); }) : original(path, options);
+  f.type('followup-question', 'Keep failed private draft'); f.open(f.explorer.doc.nodes[2].id);
+  await until(() => release, 'navigation draft write dispatched');
+  f.window.dispatchEvent(new f.window.Event('pagehide'));
+  const read = f.document.getElementById.bind(f.document), focus = f.window.HTMLElement.prototype.focus;
+  f.document.getElementById = id => { if (id === 'notice') staleNotices++; return read(id); };
+  f.window.HTMLElement.prototype.focus = function (...args) { staleFocus++; return focus.apply(this, args); };
+  release(); await until(() => client.closed && !entry.saving, 'private save settled after close');
+  assert.equal(staleNotices, 0); assert.equal(staleFocus, 0); assert.equal(entry.draft.question, 'Keep failed private draft');
+  assert.equal(entry.dirty, true); assert.match(entry.error, /Late synthetic save failure/);
+});
+
+
+test('private conversation clear completion cannot focus a replacement editor after navigating away and back', async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { e.projectContext.readRoot = async () => dirname(e.file); const next = structuredClone(e.doc); next.nodes[1].research = structuredClone(findings); await e.save(next); }, runFollowup: async () => ({ answer: 'A private explanation.', uncertainty: 'Synthetic reasoning.', claims: [{ id: 'c1', text: 'Consider a pilot.', basis: 'reasoning', evidence: [], limitations: 'Not verified.' }], sources: [] }) });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1], client = f.window.__updates.conversationClient;
+  f.open(node.id); f.type('followup-question', 'Explain a pilot'); $('followup-review').click(); await startReviewedResearch(f);
+  await until(() => $('followup-clear') && !$('followup-clear').disabled, 'saved conversation ready to clear');
+  const entry = client.current, editor = $('followup-question'), original = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/research-conversations' && JSON.parse(options.body).action === 'clear') return new Promise(resolve => { release = () => resolve(response); });
+    return response;
+  };
+  $('followup-clear').click(); await until(() => release, 'clear committed with response held');
+  f.open(f.explorer.doc.nodes[2].id); f.open(node.id);
+  assert.notEqual($('followup-question'), editor); const focused = f.document.activeElement;
+  release(); await until(() => !entry.deleting && !entry.value.history, 'clear response settled');
+  assert.equal(f.document.activeElement, focused); assert.equal(editor.isConnected, false);
+  assert.equal($('followup-question').value, 'Explain a pilot');
+});
+
+for (const action of ['clear', 'delete']) test(`private conversation ${action} synchronizes answer review before a held old poll returns`, async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { e.projectContext.readRoot = async () => dirname(e.file); const next = structuredClone(e.doc); next.nodes[1].research = structuredClone(findings); await e.save(next); }, runFollowup: async () => ({ answer: 'A private explanation.', uncertainty: 'Synthetic reasoning.', claims: [{ id: 'c1', text: 'Consider a pilot.', basis: 'reasoning', evidence: [], limitations: 'Not verified.' }], sources: [] }) });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1], ui = f.window.__updates;
+  f.open(node.id); f.type('answer', 'Keep my exact answer'); f.type('followup-question', 'Explain a pilot'); $('followup-review').click(); await startReviewedResearch(f);
+  await until(() => $('followup-clear') && !$('followup-clear').disabled, 'saved conversation ready');
+  ui.apply(f.explorer.uiSnapshot());
+  const editor = $('answer'), entry = ui.conversationClient.current;
+  let releasePoll; f.pauseState(() => new Promise(resolve => { releasePoll = resolve; }));
+  t.after(() => releasePoll?.());
+  const oldPoll = f.poll(); await until(() => releasePoll, 'old public snapshot held');
+  $(action === 'clear' ? 'followup-clear' : 'conversation-delete').click();
+  await until(() => !entry.deleting && !entry.value.history && (action === 'clear' || entry.deleted), 'private mutation completed');
+  f.pauseState(null); releasePoll(); await oldPoll;
+  const original = f.window.fetch;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/answer-change' && JSON.parse(options.body).action === 'prepare') ui.apply(f.explorer.uiSnapshot());
+    return response;
+  };
+  $('save-answer').click();
+  await until(() => $('answer-change-dialog').open || /sources changed/.test($('notice').textContent), 'answer consequence review');
+  assert.equal($('answer-change-dialog').open, true, $('notice').textContent);
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep my exact answer');
+  $('answer-change-confirm').click(); await until(() => f.explorer.doc.nodes[1].answer === 'Keep my exact answer', 'answer saved');
+  assert.equal(f.explorer.pending, null); assert.equal(f.explorer.followup, null);
+});
+
+for (const change of ['newer-work', 'other-node', 'reattach', 'hide']) test(`private conversation mutation acknowledgment preserves ${change} state`, async t => {
+  const f = await fixture(t, 340, undefined, false, { before: async e => { e.projectContext.readRoot = async () => dirname(e.file); const next = structuredClone(e.doc); next.nodes[1].research = structuredClone(findings); await e.save(next); }, runFollowup: async () => ({ answer: 'A private explanation.', uncertainty: 'Synthetic reasoning.', claims: [{ id: 'c1', text: 'Consider a pilot.', basis: 'reasoning', evidence: [], limitations: 'Not verified.' }], sources: [] }) });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1], ui = f.window.__updates;
+  f.open(node.id); f.type('followup-question', 'Explain a pilot'); $('followup-review').click(); await startReviewedResearch(f);
+  await until(() => $('followup-clear') && !$('followup-clear').disabled, 'saved conversation ready');
+  const initial = f.explorer.uiSnapshot();
+  if (change === 'other-node') for (const field of ['followup', 'followupTurn', 'researchOperation', 'researchAttempt']) { if (initial[field]) initial[field].nodeId = f.explorer.doc.nodes[2].id; }
+  ui.apply(initial);
+  const entry = ui.conversationClient.current, original = f.window.fetch; let release;
+  f.window.fetch = async (path, options) => {
+    const response = await original(path, options);
+    if (path === 'api/research-conversations' && JSON.parse(options.body).action === 'clear') await new Promise(resolve => { release = resolve; });
+    return response;
+  };
+  t.after(() => release?.()); $('followup-clear').click(); await until(() => release, 'mutation response held');
+  if (change === 'newer-work') { const next = structuredClone(initial); for (const field of ['followup', 'followupTurn', 'researchOperation', 'researchAttempt']) { if (next[field]) next[field].id = 'newer-' + field; } ui.apply(next); }
+  else if (change === 'reattach') { ui.apply({ ...initial, conversationScope: 'd'.repeat(64) }); ui.apply(initial); }
+  else if (change === 'hide') f.window.dispatchEvent(new f.window.PageTransitionEvent('pagehide', { persisted: true }));
+  const expected = JSON.stringify(ui.work());
+  release(); await until(() => !entry.deleting, 'mutation acknowledgment settled');
+  assert.equal(JSON.stringify(ui.work()), expected);
+  assert.equal(f.explorer.followup, null); assert.equal(entry.value.history, null);
 });

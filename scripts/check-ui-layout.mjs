@@ -8,12 +8,14 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createDocument, addQuestions, answerNode, validateDocument, research } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
+import { ResearchConversationWorkspace } from '../com.github.copilot/extensions/explorer/research-conversation-workspace.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
 import { ResearchModelSettings } from '../com.github.copilot/extensions/explorer/research-model-settings.mjs';
 import { fixtureResearchModels } from '../test/helpers/research-model.mjs';
 import { parseProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
 import { viewerSnapshot, viewerArtifact } from '../com.github.copilot/extensions/explorer/offline-viewer.mjs';
 import { directoryState } from '../com.github.copilot/extensions/explorer/storage-context.mjs';
+import { checkConversationsUI } from './check-conversations-ui.mjs';
 
 if (!process.env.EXPLORER_PLAYWRIGHT_PATH) throw Error('Set EXPLORER_PLAYWRIGHT_PATH to an installed playwright/index.mjs; this check downloads nothing.');
 const { chromium } = await import(pathToFileURL(resolve(process.env.EXPLORER_PLAYWRIGHT_PATH)).href);
@@ -205,6 +207,12 @@ async function inspectCards(page, label) {
 try {
   for (const scenario of [{ name: 'wide', width: 1200, height: 900, colorScheme: 'dark' }, { name: 'narrow', width: 460, height: 780, colorScheme: 'light' }, { name: 'short', width: 360, height: 640, colorScheme: 'dark' }, { name: 'low-height', width: 720, height: 480, colorScheme: 'light' }, { name: 'minimum', width: 280, height: 640, colorScheme: 'light' }]) {
     voiceReady = false;
+    // Each viewport has a fresh browser client and private fixture store. Disk
+    // persistence, restart and writer conflicts are checked by checkConversationsUI.
+    await explorer.queue;
+    assert.equal(explorer.pending, null);
+    assert.equal(explorer.conversations.unsaved, null);
+    explorer.conversations = new ResearchConversationWorkspace();
     const context = await browser.newContext({ viewport: { width: scenario.width, height: scenario.height }, colorScheme: scenario.colorScheme });
     const page = await context.newPage(); page.setDefaultTimeout(10000); page.on('pageerror', error => failures.push({ message: `${scenario.name}: page error`, detail: error.message }));
     try {
@@ -677,6 +685,12 @@ try {
       await ageSummary.scrollIntoViewIfNeeded(); await inspectDrawer(page, scenario.name + '/freshness');
       if (screenshots) await page.screenshot({ path: join(output, scenario.name + '-freshness.png') });
       expect(requests === callsBeforeSupport && await editor.inputValue() === 'Keep this private draft', scenario.name + ': freshness inspection preserves draft and starts no retrieval', {});
+      // These viewport cases deliberately revisit earlier research hashes. Resolve the
+      // visible saved-composer choice before starting another explicit operation.
+      if (await page.locator('#conversation-keep').isVisible()) {
+        await page.locator('#conversation-keep').click();
+        await page.waitForFunction(() => document.getElementById('conversation-keep').hidden && !/Saving|unsaved/.test(document.getElementById('conversation-save-status').textContent));
+      }
       const savedBeforeRecovery = JSON.stringify(explorer.doc), recoveryBefore = recoveryRuns;
       recoveryFixture = true;
       await page.locator('#research-request').click(); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
@@ -771,8 +785,12 @@ try {
       await page.locator('#followup-review').click(); await page.locator('#research-review-reuse').waitFor();
       await page.locator('#research-review-start').click(); await page.waitForFunction(() => document.querySelectorAll('#followup-history > .research-claim').length === 2);
       expect(followupRuns === followupsBefore + 2, scenario.name + ': explicit Research bypasses reuse and starts exactly one new fixture helper', {});
+      await page.waitForFunction(() => !document.getElementById('followup-clear')?.disabled);
       await page.locator('#followup-clear').focus(); await page.keyboard.press('Enter'); await page.locator('#followup-clear').waitFor({ state: 'detached' });
       expect(followupRuns === followupsBefore + 2 && explorer.followup === null && JSON.stringify(explorer.doc) === savedBeforeReuse && await editor.evaluate(el => el === document.getElementById('answer') && el.value === 'Keep this private draft') && await composer.evaluate(el => el === document.getElementById('followup-question') && el.value === 'Keep my question 日本語 🌿' && document.activeElement === el), scenario.name + ': clear history preserves drafts, restores composer focus and starts no helper', {});
+      await page.locator('#conversation-delete').focus(); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.getElementById('followup-question').value === '');
+      expect(followupRuns === followupsBefore + 2 && explorer.followup === null, scenario.name + ': explicit conversation deletion clears its composer without inference', {});
       followupFixture = false;
       await page.locator('[data-tool-tab="details"]').click();
       await page.locator('#revisit-editor > summary').click(); await page.locator('#revisit-condition').fill('After our pilot');
@@ -857,6 +875,7 @@ try {
   assert.equal(effortRuns, 5, 'one explicit synthetic effort pass per viewport; no automatic deeper pass');
   assert.equal(recoveryRuns, 5, 'one explicitly cancelled synthetic request per viewport; review does not retry automatically');
   assert.equal(followupRuns, 10, 'two explicit synthetic follow-ups per viewport; reuse and clear start none');
+  await checkConversationsUI(browser, inspectDrawer, output);
   await writeFile(join(output, 'layout-results.json'), JSON.stringify({ samples, failures }, null, 2));
   console.log(`${samples.length} card samples; ${failures.length} layout failures. Evidence: ${output}`);
   for (const failure of failures.slice(0, 16)) console.log(failure.message);

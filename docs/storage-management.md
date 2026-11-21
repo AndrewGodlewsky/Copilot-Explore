@@ -2,7 +2,7 @@
 
 Open **Map settings → Local storage**, or **Local storage** on the library/welcome screen, including when a damaged bound journey cannot load. Inventory, preview, preference saving and removal are separate actions. Nothing is deleted by opening settings, refreshing, exceeding a target or saving a preference. Other settings and diagnostics remain available when storage inspection is partial.
 
-Cleanup intentionally manages only old unnamed history snapshots. All journey JSON and Markdown files, library metadata, recoverable drafts and clear-marker tombstones, usage receipts, recovery evidence, unknown files and preferences remain protected. Archive remains a reversible library operation, not deletion. Usage records have no trustworthy discard/reconciliation watermark yet, so even terminal helper records are retained. Temporary helper homes outside the owned root and legacy recovery-pointer targets are never followed or inventoried.
+Cleanup intentionally manages only old unnamed history snapshots. All journey JSON and Markdown files, library metadata, recoverable drafts and clear-marker tombstones, private research conversations, usage receipts, recovery evidence, unknown files and preferences remain protected. Archive remains a reversible library operation, not deletion. Usage records have no trustworthy discard/reconciliation watermark yet, so even terminal helper records are retained. Temporary helper homes outside the owned root and legacy recovery-pointer targets are never followed or inventoried.
 
 ## Owned inventory and accounting
 
@@ -11,6 +11,7 @@ Cleanup intentionally manages only old unnamed history snapshots. All journey JS
 | Journeys | Root `*.explore.json` | Always preserve, including active and archived journeys |
 | Saved Markdown | Root `*.md`, including Finish siblings | Always preserve; classification does not validate content |
 | Library metadata | `library.json` | Preserve pins, archive state and bindings |
+| Research conversations | `research-conversations.json` | Metadata-only size accounting; generic cleanup preserves it. Explicit conversation controls manage its 128-record / 8 MiB bound; see [private conversations](research-conversations.md). |
 | Drafts | `drafts.json` | Preserve every record, including tombstones; 8 MiB / 10,000 records |
 | History | `history/<key>/manifest.json` and content-addressed snapshots | Only explicitly previewed eligible snapshots |
 | Recovery/staging | `intent.json`, `.tmp`, `.lock`, `.lock.recover`, `.lock.abandoned`, `usage/recovery-*.json` | Preserve regardless of age |

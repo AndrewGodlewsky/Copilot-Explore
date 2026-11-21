@@ -91,7 +91,7 @@ export async function projectStorageContext({ checkoutDirectory, file, localDire
     await check(); const lock = await acquireLock(path, { attempts: 50 });
     try { await check(); return await work(); } finally { await lock.release(); }
   };
-  return Object.freeze({ scope: 'project', file: document.file, checkoutDirectory: checkout.path, checkoutIdentity: checkout.identity, journeyId, key,
+  return Object.freeze({ scope: 'project', file: document.file, relativePath: relative(checkout.path, document.file).split(sep).join('/'), checkoutDirectory: checkout.path, checkoutIdentity: checkout.identity, journeyId, key,
     directory: auxiliary.path, usageDirectory: join(auxiliary.path, 'usage'), lockFile, creationLockFile, assertCurrent, assertPrivate, read,
     withLock: work => locked(lockFile, work), withPrivateLock: work => locked(lockFile, work, assertPrivate), withCreationLock: work => locked(creationLockFile, work) });
 }

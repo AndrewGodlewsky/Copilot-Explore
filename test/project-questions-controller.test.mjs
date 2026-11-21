@@ -9,9 +9,10 @@ import { promisify } from 'node:util';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
 import { createDocument, toMarkdown } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { parseProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
+import { directoryState } from '../com.github.copilot/extensions/explorer/storage-context.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
 
-async function fixture(t, { hold = false, unavailable = false, approve = true, claimIds } = {}) {
+async function fixture(t, { hold = false, unavailable = false, approve = true, claimIds, controlledCheckout = true } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'explorer-project-questions-')), root = join(directory, 'project'), file = join(directory, 'map.json');
   await mkdir(root); await promisify(execFile)('git', ['init', '--quiet', root], { windowsHide: true });
   const canary = 'PRIVATE_PROJECT_QUESTION_FACT 🌿'; await writeFile(join(root, 'README.md'), canary);
@@ -22,6 +23,15 @@ async function fixture(t, { hold = false, unavailable = false, approve = true, c
   } };
   const projectBriefHelper = { close: async () => {}, run: async prepared => parseProjectBrief(JSON.stringify(Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: 'Unknown.', kind: 'unknown', sources: [] }]]))), prepared) };
   const explorer = await new Explorer({ file, projectRoot: () => working, projectBriefHelper, projectQuestionHelper: unavailable ? undefined : helper, send: async input => { ordinary.push(input); } }).load();
+  if (controlledCheckout) {
+    // Behavior cases retain real files and ignore policy; Git-identity cases opt into the real reader below.
+    explorer.projectMode.checkoutReader = async (reader, { expectedRoot, signal } = {}) => {
+      signal?.throwIfAborted(); const current = await reader.root();
+      if (expectedRoot && JSON.stringify(current) !== JSON.stringify(expectedRoot)) throw Error('Fixture project changed');
+      const checkout = await directoryState(current.path); signal?.throwIfAborted();
+      return { ...checkout, git: { branch: 'refs/heads/fixture', head: null } };
+    };
+  }
   t.after(async () => { explorer.clearPending(); release?.(); await explorer.close(); assert.equal(dirname(resolve(directory)), resolve(tmpdir())); assert.ok(basename(directory).startsWith('explorer-project-questions-')); await rm(directory, { recursive: true, force: true }); });
   let scopeSequence = 0, briefSequence = 0, sequence = 0; const scopeClient = randomUUID(), briefClient = randomUUID(), clientId = randomUUID();
   const scope = (action, extra = {}) => explorer.projectModeRequest({ action, purpose: 'project-questions', journey: doc.id, clientId: scopeClient, sequence: ++scopeSequence, ...extra });
@@ -204,7 +214,7 @@ test('unrelated unselected file edits do not discard a valid pending project que
 
 test('checkout changes invalidate project question review, queued execution, results and acceptance', async t => {
   for (const stage of ['review', 'queue', 'result', 'accept']) {
-    const f = await fixture(t, { hold: stage === 'result' }), before = await readFile(f.file, 'utf8');
+    const f = await fixture(t, { hold: stage === 'result', controlledCheckout: false }), before = await readFile(f.file, 'utf8');
     const change = () => promisify(execFile)('git', ['-C', f.root, 'symbolic-ref', 'HEAD', 'refs/heads/changed-checkout'], { windowsHide: true });
     const review = await f.review();
     if (stage === 'review') { await change(); await assert.rejects(f.start(review), /changed|scope|brief/i); }
@@ -222,7 +232,7 @@ test('checkout changes invalidate project question review, queued execution, res
 });
 
 test('observed checkout change expires accepted project provenance without changing saved answers', async t => {
-  const f = await fixture(t); await f.start(await f.review()); await f.finish(); await f.accept();
+  const f = await fixture(t, { controlledCheckout: false }); await f.start(await f.review()); await f.finish(); await f.accept();
   const node = f.explorer.doc.nodes[1]; await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Keep my decision', answerState: 'decided' });
   const before = await readFile(f.file, 'utf8'); await promisify(execFile)('git', ['-C', f.root, 'symbolic-ref', 'HEAD', 'refs/heads/changed-checkout'], { windowsHide: true });
   assert.equal((await f.scope('status')).state, 'stale'); assert.deepEqual(f.explorer.uiSnapshot().projectQuestions[node.id], { state: 'stale' });

@@ -86,7 +86,7 @@ for (const sourceMode of ['existing', 'retrieve']) test(`${sourceMode} follow-up
   const f = await fixture(t), before = await readFile(f.file, 'utf8');
   f.e.researcher.runFollowup = f.e.researcher.run;
   const followup = { question: 'What if the budget doubles? 中文 🌿', hypothetical: true, sourceMode };
-  const reviewed = await f.e.reviewResearch({ action: 'prepare', journey: f.doc.id, nodeId: f.doc.nodes[1].id, scope: 'decisions', excluded: [], clientId: randomUUID(), sequence: 1, followup });
+  const reviewed = await f.e.reviewResearch({ action: 'prepare', journey: f.doc.id, nodeId: f.doc.nodes[1].id, scope: 'decisions', excluded: [], clientId: randomUUID(), sequence: 1, followup, conversationScope: f.e.uiSnapshot().conversationScope });
   await f.e.command('research-follow-up', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, token: reviewed.token }); await waitFor(() => f.runs.length === 1);
   const partial = { answer: 'A pilot may still help; this answer is incomplete.', uncertainty: 'Hypothetical only.', sources: [], claims: [{ id: 'pilot', text: 'A pilot may help.', basis: 'reasoning', evidence: [], limitations: 'Unverified hypothetical judgment.' }] };
   const explanationReport = { sourceMode: 'existing', toolAttempts: 0, deliveredTextUnits: 0 };
@@ -94,7 +94,7 @@ for (const sourceMode of ['existing', 'retrieve']) test(`${sourceMode} follow-up
   f.runs[0].onReport(report(partial, sourceMode === 'existing' ? explanationReport : {})); f.runs[0].reject(Error('Deadline')); await f.settle();
   const view = f.e.uiSnapshot(); assert.deepEqual(view.researchAttempt.followup, followup); assert.deepEqual(view.researchAttempt.report.partial, partial);
   assert.equal(view.followup, null); assert.equal(await readFile(f.file, 'utf8'), before);
-  const next = await f.e.reviewResearch({ action: 'prepare', journey: f.doc.id, nodeId: f.doc.nodes[1].id, scope: 'decisions', excluded: [], clientId: randomUUID(), sequence: 1, followup });
+  const next = await f.e.reviewResearch({ action: 'prepare', journey: f.doc.id, nodeId: f.doc.nodes[1].id, scope: 'decisions', excluded: [], clientId: randomUUID(), sequence: 1, followup, conversationScope: f.e.uiSnapshot().conversationScope });
   assert.equal(next.prepared.followup.exchanges.length, 0); assert.ok(!next.prepared.prompt.includes(partial.answer));
 });
 

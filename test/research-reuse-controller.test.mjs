@@ -24,7 +24,7 @@ async function fixture(t) {
   const e = await make(), nodeId = doc.nodes[1].id, journey = doc.id;
   t.after(async () => { for (const run of runs) run.resolve(answer); for (const instance of instances) await instance.close(); assert.equal(dirname(directory), resolve(tmpdir())); await rm(directory, { recursive: true, force: true }); });
   let sequence = 0; const clientId = randomUUID();
-  const review = (question = 'Why?', options = {}) => e.reviewResearch({ action: 'prepare', journey, nodeId, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, followup: { question, hypothetical: true }, ...options });
+  const review = (question = 'Why?', options = {}) => e.reviewResearch({ action: 'prepare', conversationScope: e.uiSnapshot().conversationScope, journey, nodeId, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, followup: { question, hypothetical: true }, ...options });
   const start = value => e.command('research-follow-up', { journey, nodeId, token: value.token });
   const reuse = value => e.command('research-follow-up-reuse', { journey, nodeId, token: value.token });
   const settle = async () => { await new Promise(setImmediate); await Promise.all([...e.researchTasks]); };
@@ -65,7 +65,7 @@ test('changed project identity, saved constraint or model prevents reuse; other 
   f.e.researcher.models = async () => ({ ...await fixtureResearchModels(), selectedId: 'fixture-dedicated' });
   assert.equal((await f.review()).prepared.reuse, undefined); f.e.researcher.models = fixtureResearchModels;
   const other = await f.make(); assert.equal(other.followup, undefined);
-  const copied = await other.reviewResearch({ action: 'prepare', journey: f.journey, nodeId: f.nodeId, clientId: randomUUID(), sequence: 1, scope: 'decisions', excluded: [], followup: { question: 'Why?', hypothetical: true } });
+  const copied = await other.reviewResearch({ action: 'prepare', conversationScope: other.uiSnapshot().conversationScope, journey: f.journey, nodeId: f.nodeId, clientId: randomUUID(), sequence: 1, scope: 'decisions', excluded: [], followup: { question: 'Why?', hypothetical: true } });
   assert.equal(copied.prepared.reuse, undefined);
   const changed = structuredClone(f.e.doc); changed.nodes[1].question += ' for v2'; await writeFile(f.file, JSON.stringify(changed));
   await assert.rejects(f.review(), /changed/i); assert.equal(f.runs.length, 1);
@@ -101,11 +101,13 @@ test('clear waits for active work; cancellation and its late response cannot pop
   assert.equal((await f.review('Another?')).prepared.reuse, undefined); await f.clear(); assert.equal(f.e.followup, null);
 });
 
-test('eviction and unavailable project roots produce misses without blocking ordinary research', async t => {
+test('longer display retention preserves reusable prompt context while unavailable roots produce misses', async t => {
   const f = await fixture(t);
   for (let index = 0; index < 5; index++) await f.complete(`Question ${index}?`);
-  assert.equal(f.e.followup.exchanges.length, 4); assert.equal(f.e.followup.dropped, 1);
-  assert.equal((await f.review('Question 4?')).prepared.reuse, undefined);
+  assert.equal(f.e.followup.exchanges.length, 5); assert.equal(f.e.followup.dropped, 0);
+  assert.ok((await f.review('Question 4?')).prepared.reuse);
+  const different = await f.review('A different question?'); assert.equal(different.prepared.reuse, undefined);
+  assert.equal(different.prepared.followup.coverage.exchangesIncluded, 4); assert.equal(different.prepared.followup.coverage.exchangesOmitted, 1);
   f.root.path = join(f.directory, 'missing'); await f.complete('Unavailable root?');
   assert.equal((await f.review('Unavailable root?')).prepared.reuse, undefined); assert.equal(f.runs.length, 6);
 });

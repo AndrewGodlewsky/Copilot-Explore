@@ -1,6 +1,8 @@
 import { scenarioMarkdown, scenarioExportNote } from './scenario-export.mjs';
 import { handoffMarkdown, captureHandoff, handoffFreshness, acceptHandoff, validateHandoff } from './implementation-handoff.mjs';
-import { followupInput, followupResult, retainExchanges, sameFollowup } from './research-followup.mjs';
+import { followupInput, followupResult, sameFollowup } from './research-followup.mjs';
+import { retainConversation } from './research-conversations.mjs';
+import { ResearchConversationWorkspace } from './research-conversation-workspace.mjs';
 import { createReuseRecord, reusableFollowup, reuseNamespace } from './research-reuse.mjs';
 import { deadline, helperFailure, helperFailureReason } from './owned-helper.mjs';
 import { comparisonInput, comparisonResult } from './research-comparison.mjs';
@@ -75,6 +77,7 @@ export class Explorer {
     this.doc = null; this.pending = null; this.error = ''; this.queue = Promise.resolve();
     this.preview = null; this.questionSource = null; this.projectQuestionOrigins = new Map();
     this.researchReview = new ResearchReview();
+    this.conversations = new ResearchConversationWorkspace();
     this.reuseInstance = randomUUID();
     this.reconsideration = null; this.researchAttempt = null; this.researchOperation = null;
     this.portableReferences = new PortableReferences();
@@ -541,7 +544,7 @@ export class Explorer {
     // The only in-place public mutations are pending.progress and preview.stale.
     const stamp = [this.doc, this.activeKey, !!this.library, this.error, this.projectChange,
       JSON.stringify(this.pending), this.preview, this.preview?.stale,
-      this.questionSource, this.scenarioPreferences.observation, this.contextCoverage, this.recoveryNotice, this.exportObservation, this.followup, this.followupTurn, this.reconsideration, this.researchAttempt, this.researchOperation, this.unconfirmedResearchRelease, JSON.stringify(this.projectQuestionContexts())];
+      this.questionSource, this.scenarioPreferences.observation, this.contextCoverage, this.recoveryNotice, this.exportObservation, this.followup, this.followupTurn, this.reconsideration, this.researchAttempt, this.researchOperation, this.unconfirmedResearchRelease, this.conversations.unsaved, this.conversations.scope(this), JSON.stringify(this.projectQuestionContexts())];
     if (!this.pollStamp || stamp.some((value, index) => value !== this.pollStamp[index])) {
       this.pollStamp = stamp; this.pollCursor = randomUUID();
     }
@@ -563,7 +566,7 @@ export class Explorer {
     if (this.contributionView?.document !== this.doc) this.contributionView = { document: this.doc, value: contributionStatus(this.doc) };
     if (this.commentView?.document !== this.doc) this.commentView = { document: this.doc, value: commentStatuses(this.doc) };
     if (this.reviewHandoffView?.document !== this.doc) this.reviewHandoffView = { document: this.doc, value: handoffStatuses(this.doc) };
-    return { ...this.snapshot(), projectQuestions: this.projectQuestionContexts(), reviewHandoffs: structuredClone(this.reviewHandoffView.value), comments: structuredClone(this.commentView.value), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), followupTurn: this.followupTurnSnapshot(), reconsideration: this.reconsiderationSnapshot(), researchAttempt: this.researchAttemptSnapshot(), researchOperation: this.researchOperationSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
+    return { ...this.snapshot(), conversationScope: this.conversations.scope(this), unsavedConversation: this.conversations.pending(this), projectQuestions: this.projectQuestionContexts(), reviewHandoffs: structuredClone(this.reviewHandoffView.value), comments: structuredClone(this.commentView.value), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), followupTurn: this.followupTurnSnapshot(), reconsideration: this.reconsiderationSnapshot(), researchAttempt: this.researchAttemptSnapshot(), researchOperation: this.researchOperationSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
   }
   projectQuestionContexts() {
     if (!this.projectQuestionOrigins.size) return {};
@@ -1102,13 +1105,13 @@ export class Explorer {
   }
   currentFollowup(doc = this.doc, nodeId = this.followup?.nodeId) {
     const value = this.followup;
-    if (!value || value.historical || value.nodeId !== nodeId || value.journey !== (this.activeKey ?? doc?.id)) return null;
+    if (!value || value.historical || value.nodeId !== nodeId || value.journey !== (this.activeKey ?? doc?.id) || value.conversationScope !== this.conversations.scope(this, doc)) return null;
     if (this.scenarioPreferences.matches(value.scenarioPolicy) && sameFollowup(value.dependencies, doc, nodeId)) return value;
     this.followup = { ...value, historical: true }; return null;
   }
   followupSnapshot() {
     if (!this.followup) return null;
-    const { dependencies, scenarioPolicy, reuse, ...value } = this.followup;
+    const { dependencies, scenarioPolicy, reuse, policy, conversationScope, ...value } = this.followup;
     return structuredClone({ ...value, scenario: scenarioPolicy?.label, historical: !this.currentFollowup() });
   }
   followupTurnSnapshot() {
@@ -1201,6 +1204,7 @@ export class Explorer {
   }
   clearPending() { this.finishFollowupTurn(this.pending?.id, 'interrupted'); this.finishResearchOperation(this.pending?.id, 'interrupted'); clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; this.projectQuestionWork?.abort.abort(); this.projectQuestionWork = null; }
   reviewResearch(input) { return this.transact(() => this.researchReview.prepare(this, input)); }
+  conversationRequest(input) { return this.transact(() => this.conversations.request(this, input)); }
   adrFormatRequest(input) { return this.transact(() => this.adrFormats.request(this, input)); }
   adrFileRequest(input) { return this.transact(() => input?.action === 'sources' ? this.adrWriter.request(this, input) : this.withDocumentLock(() => this.adrWriter.request(this, input))); }
   adrLifecycleRequest(input) { return this.transact(() => this.withDocumentLock(() => this.adrLifecycle.request(this, input))); }
@@ -1241,6 +1245,7 @@ export class Explorer {
   async request(kind, nodeId, scope, reviewed) {
     this.dashboard?.invalidate();
     const id = reviewed?.requestId ?? randomUUID(), ownedResearch = ['research', 'research-follow-up', 'research-reconsideration'].includes(kind);
+    if (ownedResearch) this.conversations.requireSaved();
     if (ownedResearch && !reviewed) throw new Error('Review research context before starting.');
     const scenarioPolicy = reviewed?.scenarioPolicy ?? await this.scenarioPolicy();
     if (reviewed) await this.assertScenarioPolicy(scenarioPolicy);
@@ -1303,6 +1308,7 @@ export class Explorer {
         if (!active()) return;
         this.requireResearchRelease();
         await this.assertScenarioPolicy(scenarioPolicy);
+        if (prepared.followup) await this.conversations.assert(this, await this.readCurrent(), prepared.conversationCapture);
         if (!active()) return;
         if (!this.researcher) throw new Error('Research requires the installed Copilot desktop SDK.');
         if (!sameReviewedResearchFreshness(prepared)) throw helperFailure('Reviewed evidence freshness changed while queued. Refresh the review before starting.', 'stale-context');
@@ -1350,11 +1356,14 @@ export class Explorer {
           const previous = this.currentFollowup(current, nodeId);
           if ((previous?.id ?? null) !== prepared.historyId) throw helperFailure('Follow-up history changed. Review and ask again.', 'stale-context');
           const exchange = { id: randomUUID(), question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, sourceMode: prepared.followup.sourceMode, ...(prepared.followup.target ? { target: prepared.followup.target, targetLabel: prepared.followup.targetLabel } : {}), profile: prepared.settings.profile, result: followupResult(result) };
-          const all = [...previous?.exchanges ?? [], exchange], exchanges = retainExchanges(all);
+          const all = [...previous?.exchanges ?? [], exchange], exchanges = retainConversation(all);
           const dependencies = prepared.followupDependencies;
           const reuse = !findNode(current, nodeId).researchStale && createReuseRecord({ ...prepared, reuseNamespace: namespace === prepared.reuseNamespace ? namespace : null }, exchange);
           this.doc = current;
-          this.followup = { id: randomUUID(), journey: this.activeKey ?? current.id, nodeId, dependencies, scenarioPolicy, exchanges, dropped: (previous?.dropped ?? 0) + all.length - exchanges.length, historical: false, ...(reuse ? { reuse } : {}) };
+          const history = { id: randomUUID(), journey: this.activeKey ?? current.id, nodeId, conversationScope: prepared.conversationCapture.scope, dependencies, scenarioPolicy, exchanges, dropped: (previous?.dropped ?? 0) + all.length - exchanges.length, historical: false, ...(reuse ? { reuse } : {}) };
+          work.resultPhase = 'saving';
+          await this.conversations.save(this, current, prepared.conversationCapture, history);
+          this.followup = history;
           retainReport(current);
           this.finishFollowupTurn(id, 'completed', { exchangeId: exchange.id });
           this.finishResearchOperation(id, 'completed'); this.clearPending(); this.error = ''; return;
@@ -1363,6 +1372,8 @@ export class Explorer {
         work.resultPhase = 'saving'; this.pending.progress = 'Saving validated findings'; this.researchOperation = { ...this.researchOperation, phase: this.pending.progress };
         await this.commitCurrentLocked(current, next, 'Research replaced', async () => {
           await this.assertScenarioPolicy(scenarioPolicy);
+          if (!active()) throw new Error('Research was cancelled before saving.');
+          await this.conversations.invalidateReplacement(this, next, nodeId);
           if (!active()) throw new Error('Research was cancelled before saving.');
         });
         if (this.followup?.nodeId === nodeId) this.followup = { ...this.followup, historical: true };
@@ -1417,6 +1428,11 @@ export class Explorer {
         const value = this.followup;
         if (this.pending) throw Error('Wait for the current request or cancel it before clearing follow-up history.');
         if (this.closed || !value || input.historyId !== value.id || input.nodeId !== value.nodeId || input.journey !== value.journey || input.journey !== (this.activeKey ?? this.doc?.id) || input.revision !== this.doc?.revision) throw Error('This follow-up history is obsolete or changed.');
+        this.conversations.requireSaved();
+        const current = await this.readCurrent(), binding = this.conversations.binding(this, current), key = this.conversations.key(this, current, value.nodeId);
+        const saved = await binding.store.read(key);
+        if (saved.entry?.history?.id !== value.id) throw Error('This follow-up history changed in another canvas.');
+        await binding.store.clearHistory(key, saved.guard);
         this.researchReview.clear(); this.followup = null; this.followupTurn = null;
         if (this.researchOperation?.kind === 'research-follow-up' && this.researchOperation.nodeId === input.nodeId) this.researchOperation = null;
         if (this.researchAttempt?.kind === 'research-follow-up' && this.researchAttempt.nodeId === input.nodeId) this.researchAttempt = null;
@@ -1519,6 +1535,7 @@ export class Explorer {
         return this.uiSnapshot();
       }
       if (['research', 'research-follow-up', 'research-follow-up-reuse', 'research-reconsideration'].includes(action)) {
+        this.conversations.requireSaved();
         if (!isQuestion(findNode(this.doc, input.nodeId))) throw new Error('Select a question to research.');
         if (this.pending) throw new Error('Wait for Copilot or cancel the current request first.');
         this.requireResearchRelease();
@@ -1528,6 +1545,7 @@ export class Explorer {
             const namespace = await this.researchReuseNamespace(), current = await this.readCurrent();
             await this.assertScenarioPolicy(prepared.scenarioPolicy);
             const modelCapture = await this.captureResearchModel();
+            await this.conversations.assert(this, current, prepared.conversationCapture);
             const history = this.currentFollowup(current, input.nodeId);
             const reuse = !this.closed && prepared.reuse && reusableFollowup(current, input.nodeId, { question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, sourceMode: prepared.followup.sourceMode, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) }, { ...prepared.reusePolicy, settings: prepared.settings, scenario: prepared.scenarioPolicy.label, namespace, modelCapture, history });
             if (!reuse || history?.id !== prepared.historyId || reuse.exchangeId !== prepared.reuse.exchangeId) throw Error('The previous answer is no longer eligible for reuse. Refresh the review or choose Research.');

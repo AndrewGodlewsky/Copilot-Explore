@@ -1,0 +1,96 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, dirname, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+const base = 'com.github.copilot/extensions/explorer/';
+const { Explorer } = await import(pathToFileURL(resolve(base + 'controller.mjs')));
+const { Library } = await import(pathToFileURL(resolve(base + 'library.mjs')));
+const { ProjectRepository } = await import(pathToFileURL(resolve(base + 'project-repository.mjs')));
+const { ProjectJourney } = await import(pathToFileURL(resolve(base + 'project-journey.mjs')));
+const { projectStorageContext } = await import(pathToFileURL(resolve(base + 'storage-context.mjs')));
+const { createDocument, addQuestions } = await import(pathToFileURL(resolve(base + 'model.mjs')));
+const { fixtureResearchModels } = await import(pathToFileURL(resolve('test/helpers/research-model.mjs')));
+const execute = promisify(execFile);
+const findings = { basis: 'reasoning', summary: 'Compare', options: [{ title: 'Pilot', description: 'Small', pros: [], cons: [] }, { title: 'Launch', description: 'Large', pros: [], cons: [] }], recommendation: 'Pilot first', uncertainty: 'Unknown costs', sources: [], claims: [{ id: 'c1', text: 'A small pilot is an option.', basis: 'reasoning', evidence: [], limitations: 'Model judgment.' }] };
+const draft = question => ({ question, hypothetical: false, sourceMode: 'existing' });
+
+test('direct project storage exposes the canonical relative location and isolates same-ID copies across reopen', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'explorer-direct-conversation-')), checkout = join(root, 'checkout'), local = join(root, 'private');
+  const e = new Explorer({ target: {} }), other = new Explorer({ target: {} });
+  t.after(async () => { await e.close(); await other.close(); assert.equal(dirname(resolve(root)), resolve(tmpdir())); await rm(root, { recursive: true, force: true }); });
+  const file = join(checkout, 'nested', 'one.explore.json'); await mkdir(dirname(file), { recursive: true });
+  const doc = createDocument('Direct project identity'); addQuestions(doc, doc.rootId, [{ question: 'Which?', category: 'Choice' }]); doc.nodes[1].research = findings;
+  const makeContext = selected => projectStorageContext({ checkoutDirectory: checkout, file: selected, localDirectory: local, journeyId: doc.id });
+  const context = await makeContext(file), copy = await makeContext(join(dirname(file), 'two.explore.json'));
+  assert.equal(context.relativePath, 'nested/one.explore.json'); assert.equal(copy.relativePath, 'nested/two.explore.json'); assert.equal(context.key, copy.key);
+  const first = new ProjectJourney(context), second = new ProjectJourney(copy); await first.create(doc); await second.create(doc);
+  await e.attachProject(first); await other.attachProject(second);
+  const scope = e.uiSnapshot().conversationScope; assert.notEqual(other.uiSnapshot().conversationScope, scope);
+  const key = e.conversations.key(e, e.doc, doc.nodes[1].id), store = e.conversations.binding(e).store, original = await store.read(key);
+  assert.equal(original.durable, true); await store.saveDraft(key, draft('PRIVATE_DIRECT_DRAFT'), original.guard);
+  await e.attachProject(await new ProjectJourney(await makeContext(file)).load());
+  assert.equal(e.uiSnapshot().conversationScope, scope); assert.equal((await e.conversations.binding(e).store.read(key)).entry.draft.question, 'PRIVATE_DIRECT_DRAFT');
+  assert.equal((await other.conversations.binding(other).store.read(other.conversations.key(other, other.doc, doc.nodes[1].id))).entry, null);
+  e.projectStore.context = { ...e.projectStore.context, relativePath: 'nested/one.explore.json' }; assert.equal(e.uiSnapshot().conversationScope, scope);
+  assert.equal((await readFile(file, 'utf8')).includes('PRIVATE_DIRECT_DRAFT'), false);
+});
+
+test('fileless preview snapshots retain stable instance identity and memory-only conversations', async t => {
+  const doc = createDocument('Memory preview'); addQuestions(doc, doc.rootId, [{ question: 'Which?', category: 'Choice' }]); doc.nodes[1].research = findings;
+  const first = new Explorer({ target: {} }), second = new Explorer({ file: null, target: {} }); first.doc = structuredClone(doc); second.doc = structuredClone(doc);
+  t.after(async () => { await first.close(); await second.close(); });
+  const scope = first.uiSnapshot().conversationScope; assert.notEqual(second.uiSnapshot().conversationScope, scope);
+  first.doc.revision++; assert.equal(first.uiSnapshot().conversationScope, scope);
+  const { store } = first.conversations.binding(first), key = first.conversations.key(first, first.doc, doc.nodes[1].id);
+  store.write = () => { throw Error('Memory preview must not write a file'); };
+  const value = await store.read(key); assert.equal(value.durable, false);
+  await store.saveDraft(key, draft('MEMORY_ONLY'), value.guard); assert.equal((await store.read(key)).entry.draft.question, 'MEMORY_ONLY');
+  assert.equal(first.conversations.activeStore, null); assert.equal((await second.conversations.binding(second).store.list()).length, 0);
+});
+test('raw same-ID project copies isolate composers and reject delayed scoped reviews before mutation', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'explorer-conversation-location-')), checkout = join(root, 'checkout'), local = join(root, 'private');
+  await mkdir(checkout); await execute('git', ['-C', checkout, 'init', '-q'], { windowsHide: true });
+  const repository = new ProjectRepository({ readRoot: async () => checkout, localDirectory: local }), doc = createDocument('Location identity');
+  addQuestions(doc, doc.rootId, [{ question: 'Which?', category: 'Choice' }]); doc.nodes[1].research = findings;
+  const original = await repository.create(doc), copyPath = 'copies/same.explore.json';
+  await mkdir(dirname(join(checkout, copyPath)), { recursive: true }); await writeFile(join(checkout, copyPath), await readFile(original.context.file));
+  const e = await new Explorer({ library: new Library(local), binding: 'location-test', projectRoot: async () => checkout, researcher: { models: fixtureResearchModels, runFollowup() { throw Error('Unexpected helper call'); } } }).load();
+  t.after(async () => { await e.close(); assert.equal(dirname(resolve(root)), resolve(tmpdir())); await rm(root, { recursive: true, force: true }); });
+  const open = path => e.command('open-project', { revision: e.doc?.revision ?? 0, path });
+  const request = (action, extra = {}) => e.conversationRequest({ action, journey: e.activeKey, conversationScope: e.uiSnapshot().conversationScope, nodeId: doc.nodes[1].id, ...(action === 'read' ? { revision: e.doc.revision } : {}), ...extra });
+  await open(original.context.relativePath);
+  const scopeA = e.uiSnapshot().conversationScope, keyA = e.activeKey, a = await request('read');
+  await request('draft', { research: a.research, guard: a.guard, draft: draft('A_PRIVATE_CANARY') });
+  const delayed = { action: 'prepare', conversationScope: scopeA, journey: keyA, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId: randomUUID(), sequence: 1, followup: draft('A private question') };
+  await open(copyPath);
+  const scopeB = e.uiSnapshot().conversationScope; assert.equal(e.activeKey, keyA); assert.notEqual(scopeA, scopeB);
+  const b = await request('read'); assert.equal(b.draft.question, '');
+  await request('draft', { research: b.research, guard: b.guard, draft: draft('B_PRIVATE_CANARY') });
+  const reviewB = await e.reviewResearch({ ...delayed, conversationScope: scopeB, followup: draft('B question') });
+  const order = e.researchReview.order;
+  await assert.rejects(e.reviewResearch({ ...delayed, sequence: 2 }), /scope|changed|obsolete/i);
+  await assert.rejects(e.reviewResearch({ ...delayed, action: 'cancel', sequence: 3 }), /scope|changed|obsolete/i);
+  assert.equal(e.researchReview.order, order); assert.equal(e.researchReview.current.token, reviewB.token);
+  await assert.rejects(e.conversationRequest({ action: 'read', conversationScope: scopeA, journey: keyA, nodeId: doc.nodes[1].id, revision: e.doc.revision }), /scope|changed|obsolete/i);
+  assert.equal((await request('read')).draft.question, 'B_PRIVATE_CANARY');
+  await open(original.context.relativePath); assert.equal(e.uiSnapshot().conversationScope, scopeA); assert.equal((await request('read')).draft.question, 'A_PRIVATE_CANARY');
+  const native = await e.nativeSnapshot(); assert.equal(native.document.id, e.doc.id);
+  assert.equal(JSON.stringify([e.doc, e.snapshot(), native]).includes('PRIVATE_CANARY'), false);
+});
+
+
+test('namespace binds creation identity and normalized location, while ordinary revisions keep it stable', async () => {
+  const { ResearchConversationWorkspace } = await import(pathToFileURL(resolve(base + 'research-conversation-workspace.mjs')));
+  const workspace = new ResearchConversationWorkspace(), doc = createDocument('Stable identity');
+  const e = { doc, projectStore: { context: { key: 'checkout-id', relativePath: 'Journeys\\one.explore.json' } } };
+  const original = workspace.scope(e), saved = structuredClone(doc); saved.revision++; saved.updatedAt = new Date(Date.parse(doc.updatedAt) + 1000).toISOString();
+  assert.equal(workspace.scope(e, saved), original);
+  e.projectStore.context.relativePath = 'Journeys/one.explore.json'; assert.equal(workspace.scope(e), original);
+  e.projectStore.context.relativePath = 'Journeys/moved.explore.json'; assert.notEqual(workspace.scope(e), original);
+  e.projectStore.context.relativePath = 'Journeys/one.explore.json'; saved.createdAt = new Date(Date.parse(doc.createdAt) - 1).toISOString(); assert.notEqual(workspace.scope(e, saved), original);
+});

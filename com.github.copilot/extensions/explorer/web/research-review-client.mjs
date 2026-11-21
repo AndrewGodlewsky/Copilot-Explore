@@ -28,7 +28,7 @@ export class ResearchReviewClient {
       if (sequence !== this.sequence || !this.context) return;
       abort.signal.throwIfAborted();
       if (!response.ok) throw Error(value.error);
-      if (value.clientId !== this.clientId || value.sequence !== sequence || value.journey !== input.journey || value.nodeId !== input.nodeId) throw Error('Research review changed. Refresh context.');
+      if (value.clientId !== this.clientId || value.sequence !== sequence || value.journey !== input.journey || value.nodeId !== input.nodeId || input.followup && value.conversationScope !== input.conversationScope) throw Error('Research review changed. Refresh context.');
       this.value = value;
       if (project) this.projectDirty = false;
       if (this.projectDraft.trim() && !value.prepared.context.projectSources?.length) this.projectDirty = true;

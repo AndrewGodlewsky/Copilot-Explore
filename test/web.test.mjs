@@ -2579,6 +2579,57 @@ test('option comparison resets on observed research replacement even off-node an
   assert.match(css, /\.comparison-scroll\s*\{[^}]*overflow-x:\s*auto/);
 });
 
+test('research conversation targets and optional starters preserve drafts and reset obsolete references', async t => {
+  let calls = 0;
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.save(doc); }, runFollowup: async () => { calls++; return { answer: 'Explanation <script>literal</script>', uncertainty: 'Needs context', claims: [{ id: 'c1', text: 'A synthetic explanation', basis: 'reasoning', evidence: [], limitations: 'Fixture only' }], sources: [] }; } });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  const composer = $('followup-question'), editor = $('answer'), target = $('followup-target'); assert.ok(target);
+  assert.match($('followup-scope').textContent, /may retrieve new sources/i); f.type('answer', 'Preserved answer');
+  target.value = 'option:1'; target.dispatchEvent(new f.window.Event('change')); $('followup-starter').click();
+  assert.match(composer.value, /option.*tradeoffs/i); assert.equal(calls, 0);
+  f.type('followup-question', 'My private question 🌿'); composer.focus(); composer.setSelectionRange(2, 7);
+  target.value = 'recommendation'; target.dispatchEvent(new f.window.Event('change'));
+  assert.equal(composer.value, 'My private question 🌿'); assert.equal(composer.selectionStart, 2); assert.match($('followup-starter').textContent, /Append/);
+  const starter = $('followup-starter-text').textContent; $('followup-starter').click(); assert.equal(composer.value, 'My private question 🌿\n\n' + starter);
+  $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'targeted review');
+  assert.match($('research-review-followup-target').textContent, /Recommendation/); assert.equal(calls, 0);
+  target.value = 'option:1'; target.dispatchEvent(new f.window.Event('change')); assert.equal($('research-review-inline').hidden, true);
+  $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'updated target review');
+  assert.match($('research-review-followup-target').textContent, /Option 2/); await startReviewedResearch(f);
+  await until(() => calls === 1, 'targeted helper called'); await Promise.all([...f.explorer.researchTasks]); assert.equal(f.explorer.error, '');
+  await until(() => $('followup-history').textContent.includes('Explanation <script>literal</script>'), 'conversation completed');
+  assert.equal(calls, 1); assert.match($('followup-history').textContent, /You.*Explorer explanation.*Completed/s); assert.equal($('followup-history').querySelector('script'), null);
+  assert.ok($('followup-history').compareDocumentPosition(composer) & f.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  const text = composer.value; composer.focus(); composer.setSelectionRange(3, 8);
+  const changed = structuredClone(f.explorer.doc); changed.nodes[1].research.options[1].title += ' revised'; await f.explorer.save(changed); await f.poll();
+  assert.equal($('followup-target').value, ''); assert.match($('followup-target-status').textContent, /Research changed/);
+  assert.equal($('followup-question'), composer); assert.equal(composer.value, text); assert.equal(composer.selectionStart, 3); assert.equal($('answer'), editor); assert.equal(editor.value, 'Preserved answer');
+  f.type('followup-question', 'x'.repeat(3999)); $('followup-starter').click(); assert.equal(composer.value, 'x'.repeat(3999)); assert.equal(calls, 1);
+});
+
+test('research conversation retries captured failed and cancelled prompts without replacing newer composer text', async t => {
+  const runs = [];
+  t.after(() => { for (const run of runs) run.resolve({ answer: 'Late', uncertainty: 'Fixture', claims: [], sources: [] }); });
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.save(doc); }, runFollowup: (_, options) => new Promise((resolve, reject) => runs.push({ ...options, resolve, reject })) });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id);
+  $('followup-target').value = 'option:0'; $('followup-target').dispatchEvent(new f.window.Event('change'));
+  f.type('followup-question', 'Submitted original <img> 🌿'); $('followup-review').click(); await startReviewedResearch(f); await until(() => runs.length === 1, 'pending turn'); await f.poll();
+  assert.match($('followup-turn').textContent, /Pending.*Submitted original/s); assert.equal($('followup-turn').querySelector('img'), null);
+  const composer = $('followup-question'); f.type('followup-question', 'A newer question'); composer.focus(); composer.setSelectionRange(2, 6);
+  runs[0].reject(Error('Synthetic unavailable source')); await until(() => !f.explorer.pending, 'failed turn'); await f.poll();
+  assert.match($('followup-turn').textContent, /Failed.*Submitted original.*Synthetic unavailable source/s);
+  $('followup-turn-retry').click(); await until(() => !$('research-review-start').disabled, 'retry review');
+  assert.match($('research-review-followup').textContent, /Submitted original/); assert.match($('research-review-followup-target').textContent, /Option 1/);
+  assert.equal(composer.value, 'A newer question'); assert.equal(runs.length, 1); await startReviewedResearch(f); await until(() => runs.length === 2, 'retry started');
+  await uiResponse(f, 'api/action', 'cancel', () => $('cancel-request').click()); await f.poll(); assert.match($('followup-turn').textContent, /Cancelled.*Submitted original/s);
+  const turn = f.explorer.uiSnapshot().followupTurn;
+  const denied = await fetch(new URL('api/action', f.window.location.href), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'followup-turn-clear', id: turn.id, nodeId: node.id, journey: turn.journey, revision: f.explorer.doc.revision }) }); assert.equal(denied.status, 403);
+  runs[1].resolve({ answer: 'Discard this late answer', uncertainty: 'Fixture', claims: [], sources: [] }); await Promise.all([...f.explorer.researchTasks]); await f.poll();
+  assert.ok(!$('followup-history').textContent.includes('Discard this late answer')); assert.equal(composer.value, 'A newer question');
+  await uiResponse(f, 'api/action', 'followup-turn-clear', () => $('followup-turn-dismiss').click()); await f.poll();
+  assert.equal($('followup-turn').hidden, true); assert.equal($('followup-question'), composer); assert.equal(composer.value, 'A newer question');
+});
+
 test('research follow-up keeps typing and focus during polling, renders prior evidence and retains node-scoped history on navigation', async t => {
   let finish;
   const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.command('import', { revision: e.doc.revision, document: doc }); }, runFollowup: () => new Promise(resolve => { finish = resolve; }) });
@@ -3546,7 +3597,7 @@ for (const focus of ['research-review-advanced', 'research-review-exact', 'resea
   assert.equal(f.explorer.pending, null);
 });
 
-for (const pending of [false, true]) for (const input of ['question', 'hypothetical']) test(`inline Research review invalidates changed follow-up ${input} while ${pending ? 'preparing' : 'ready'}`, async t => {
+for (const pending of [false, true]) for (const input of ['question', 'hypothetical', 'target']) test(`inline Research review invalidates changed follow-up ${input} while ${pending ? 'preparing' : 'ready'}`, async t => {
   const f = await fixture(t, 340, undefined, false, { before: async e => {
     const doc = structuredClone(e.doc); doc.nodes[1].research = optionFindings();
     await e.command('import', { revision: e.doc.revision, document: doc });
@@ -3564,11 +3615,12 @@ for (const pending of [false, true]) for (const input of ['question', 'hypotheti
     composer.focus(); composer.dispatchEvent(new f.window.CompositionEvent('compositionstart', { bubbles: true }));
     composer.value = 'Changed follow-up?'; composer.setSelectionRange(2, 5);
     composer.dispatchEvent(new f.window.InputEvent('input', { bubbles: true, isComposing: true }));
-  } else { $('followup-hypothetical').focus(); $('followup-hypothetical').click(); }
+  } else if (input === 'target') { $('followup-target').focus(); $('followup-target').value = 'option:0'; $('followup-target').dispatchEvent(new f.window.Event('change')); }
+  else { $('followup-hypothetical').focus(); $('followup-hypothetical').click(); }
   assert.equal($('research-review-start').disabled, true);
   assert.ok($('research-review-dialog').contains($('research-review-panel')));
   assert.equal($('followup-question'), composer);
-  assert.equal(f.document.activeElement, input === 'question' ? composer : $('followup-hypothetical'));
+  assert.equal(f.document.activeElement, input === 'question' ? composer : $(`followup-${input}`));
   if (input === 'question') { assert.equal(composer.selectionStart, 2); assert.equal(composer.selectionEnd, 5); composer.dispatchEvent(new f.window.CompositionEvent('compositionend', { bubbles: true })); }
   release?.(); f.window.fetch = original;
   await until(() => !f.explorer.researchReview.current, 'old review cancelled'); await delay(25);
@@ -3576,6 +3628,7 @@ for (const pending of [false, true]) for (const input of ['question', 'hypotheti
   $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'new follow-up reviewed');
   assert.equal(f.explorer.researchReview.current.prepared.followup.question, composer.value);
   assert.equal(f.explorer.researchReview.current.prepared.followup.hypothetical, $('followup-hypothetical').checked);
+  if (input === 'target') assert.deepEqual(f.explorer.researchReview.current.prepared.followup.target, { kind: 'option', index: 0 });
 });
 
 test('inline Research review rejects edited replacement follow-up after an older start finishes', async t => {

@@ -167,6 +167,9 @@ select{font:inherit;color:inherit;background:var(--paper);border:1px solid #aebf
 .research-followup { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; font-size: 13px; overflow-wrap: anywhere; }
 .research-followup input[type="checkbox"] { width: auto; margin: 12px 6px 12px 0; cursor: pointer; }
 .research-followup textarea { max-height: 240px; }
+.research-followup select { width: 100%; min-width: 0; max-width: 100%; }
+#followup-turn { border-left: 2px solid var(--line); padding-left: 12px; margin: 16px 0; }
+#followup-turn button + button { margin-left: 8px; }
 .option-comparison { border-block: 1px solid var(--line); padding-block: 14px; margin-block: 14px; container-type: inline-size; }
 .comparison-controls { min-width: 0; margin-block: 12px; border: 1px solid var(--line); }
 .comparison-controls > div { margin-block: 12px; }

@@ -1,4 +1,5 @@
 import { fixtureResearchModels } from './helpers/research-model.mjs';
+import { recommendationFindings } from './helpers/research-recommendation.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
 import test from 'node:test';
 import { confirmAnswer } from './helpers/answer-change.mjs';
@@ -14,6 +15,36 @@ import { prepareFollowup, followupResult, retainExchanges, parseFollowup, captur
 const original = { basis: 'reasoning', summary: 'Compare', options: [{ title: 'Pilot', description: 'Small', pros: [], cons: [] }, { title: 'Launch', description: 'Large', pros: [], cons: [] }], recommendation: 'Pilot first', uncertainty: 'Unknown costs', sources: [], claims: [{ id: 'c1', text: 'Start small', basis: 'reasoning', evidence: [], limitations: 'Judgment' }] };
 const result = { answer: 'A smaller pilot tests the assumption.', uncertainty: 'Hypothetical only.', sources: [], claims: original.claims };
 function document() { const doc = createDocument('Garden'); addQuestions(doc, doc.rootId, [{ question: 'How big?', category: 'Size' }]); doc.nodes[1].research = structuredClone(original); return doc; }
+
+test('follow-up targets resolve current options, claims and recommendation without accepting caller labels', () => {
+  const doc = document(), node = doc.nodes[1], question = 'Explain this choice 🌿';
+  for (const [target, label] of [[{ kind: 'recommendation' }, 'Recommendation'], [{ kind: 'option', index: 1 }, 'Option 2: Launch'], [{ kind: 'claim', id: 'c1' }, 'Claim: Start small']]) {
+    const prepared = prepareFollowup(doc, node.id, { question, hypothetical: false, target });
+    assert.deepEqual(prepared.followup.target, target); assert.equal(prepared.followup.targetLabel, label);
+    assert.ok(Object.isFrozen(prepared.followup.target)); assert.ok(prepared.prompt.includes(JSON.stringify(target)));
+    if (target.kind === 'option') assert.deepEqual(prepared.followup.original.find(item => item.kind === 'option' && item.option.title === 'Launch').option, node.research.options[1]);
+    if (target.kind === 'claim') assert.deepEqual(prepared.followup.original.find(item => item.kind === 'evidence').claims, node.research.claims);
+  }
+  for (const target of [null, [], {}, { kind: 'all' }, { kind: 'option', index: -1 }, { kind: 'option', index: 2 }, { kind: 'option', index: 0.5 }, { kind: 'option', index: '1' }, { kind: 'option', index: 1, title: 'Caller label' }, { kind: 'claim', id: 'missing' }, { kind: 'claim', id: 'c1', extra: true }, { kind: 'recommendation', index: 0 }]) {
+    assert.throws(() => prepareFollowup(doc, node.id, { question, hypothetical: false, target }), /target|current research/i);
+  }
+  node.research = recommendationFindings();
+  const linked = prepareFollowup(doc, node.id, { question, hypothetical: false, target: { kind: 'recommendation' } });
+  assert.ok(linked.followup.original.some(item => item.kind === 'option' && item.option.id === node.research.recommendationAssessment.optionId));
+});
+
+test('targeted research records are mandatory while other whole records retain accurate omission counts', () => {
+  const doc = document(), node = doc.nodes[1]; node.answer = 'a'.repeat(20000);
+  node.research.sources = Array.from({ length: 15 }, (_, i) => ({ id: `s${i}`, title: 'x'.repeat(300), url: 'https://example.com/' + 'a'.repeat(1900) + i, provenance: 'imported', retrievedAt: null }));
+  node.research.claims = Array.from({ length: 10 }, (_, i) => ({ id: `c${i}`, text: '\0'.repeat(1000), basis: 'reasoning', evidence: [], limitations: '\0'.repeat(1000) }));
+  node.research.basis = 'sources'; research(node.research);
+  const input = { question: 'Explain this', hypothetical: false }, prepared = prepareFollowup(doc, node.id, { ...input, target: { kind: 'option', index: 1 } });
+  assert.deepEqual(prepared.followup.original.find(item => item.kind === 'option' && item.option.title === 'Launch').option, node.research.options[1]);
+  assert.ok(!prepared.followup.original.some(item => item.kind === 'evidence'));
+  assert.equal(prepared.followup.coverage.originalIncluded + prepared.followup.coverage.originalOmitted, 5);
+  assert.ok(prepared.bytes <= 131072); assert.equal(prepared.bytes, Buffer.byteLength(prepared.instructions) + Buffer.byteLength(prepared.prompt));
+  assert.throws(() => prepareFollowup(doc, node.id, { ...input, target: { kind: 'claim', id: 'c1' } }), /mandatory/i);
+});
 test('follow-up prepares complete question and recommendation, bounded whole history and optional evidence', () => {
   const doc = document(), text = '🌿'.repeat(2000), prepared = prepareFollowup(doc, doc.nodes[1].id, { question: text, hypothetical: true });
   assert.equal(prepared.followup.question, text); assert.equal(prepared.followup.hypothetical, true);
@@ -73,7 +104,7 @@ async function fixture(t) {
   const e = await new Explorer({ file, researcher: { models: fixtureResearchModels, runFollowup(context, options) { return new Promise((resolve, reject) => runs.push({ context, ...options, resolve, reject })); } } }).load();
   t.after(async () => { for (const run of runs) run.resolve(result); await e.close(); await rm(dir, { recursive: true, force: true }); });
   let sequence = 0; const clientId = randomUUID();
-  const review = question => e.reviewResearch({ action: 'prepare', journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, followup: { question, hypothetical: true } });
+  const review = (question, target) => e.reviewResearch({ action: 'prepare', journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, followup: { question, hypothetical: true, ...(target ? { target } : {}) } });
   const start = value => e.command('research-follow-up', { journey: doc.id, nodeId: doc.nodes[1].id, token: value.token });
   const settle = async () => { await new Promise(setImmediate); await Promise.all([...e.researchTasks]); };
   return { e, file, doc, runs, review, start, settle };
@@ -87,6 +118,49 @@ test('follow-up history is transient, exact reviewed work and completion preserv
   assert.equal(f.e.snapshot().followup, undefined);
   const again = await f.review('Why?'); assert.equal(again.prepared.followup.exchanges.length, 1);
   await assert.rejects(f.e.command('research', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, token: again.token }), /follow-up|purpose/i);
+});
+
+test('captured follow-up turns retain failed prompts for fresh review and keep private data out of saved/native state', async t => {
+  const f = await fixture(t), before = await readFile(f.file, 'utf8'), question = 'PRIVATE_SUBMITTED_PROMPT 🌿', target = { kind: 'option', index: 1 };
+  await f.start(await f.review(question, target)); await waitFor(() => f.runs.length === 1);
+  const first = f.e.uiSnapshot().followupTurn, cursor = f.e.pollSnapshot().cursor;
+  assert.equal(first.status, 'pending'); assert.deepEqual(first.input, { question, hypothetical: true, target }); assert.equal(first.targetLabel, 'Option 2: Launch');
+  assert.equal(f.e.snapshot().followupTurn, undefined); assert.ok(!JSON.stringify(f.e.nativeSnapshot()).includes(question));
+  f.runs[0].reject(Error('Synthetic helper failure' + '!'.repeat(3000))); await f.settle();
+  const failed = f.e.pollSnapshot(cursor).snapshot.followupTurn;
+  assert.equal(failed.status, 'failed'); assert.equal(failed.input.question, question); assert.match(failed.message, /Synthetic helper failure/); assert.equal(f.e.uiSnapshot().followup, null);
+  assert.ok(failed.message.length <= 2000);
+  await f.start(await f.review(question, target)); await waitFor(() => f.runs.length === 2);
+  assert.notEqual(f.e.uiSnapshot().followupTurn.id, first.id); f.runs[1].resolve(result); await f.settle();
+  const done = f.e.uiSnapshot(); assert.equal(done.followupTurn.status, 'completed'); assert.equal(done.followup.exchanges.length, 1);
+  assert.equal(done.followupTurn.exchangeId, done.followup.exchanges[0].id); assert.deepEqual(done.followup.exchanges[0].target, target); assert.equal(done.followup.exchanges[0].targetLabel, 'Option 2: Launch');
+  assert.equal(await readFile(f.file, 'utf8'), before); assert.ok(!JSON.stringify(f.e.nativeSnapshot()).includes(question));
+});
+
+test('cancelled captured turns cannot be replaced by late results and clearing rejects obsolete identities', async t => {
+  const f = await fixture(t); await f.start(await f.review('Cancelled original')); await waitFor(() => f.runs.length === 1);
+  const originalTurn = f.e.uiSnapshot().followupTurn;
+  await assert.rejects(f.e.command('followup-turn-clear', { id: originalTurn.id, journey: f.doc.id, nodeId: f.doc.nodes[1].id, revision: f.e.doc.revision }), /pending|cancel/i);
+  await f.e.command('cancel'); assert.equal(f.e.uiSnapshot().followupTurn.status, 'cancelled');
+  await f.start(await f.review('Replacement', { kind: 'claim', id: 'c1' })); const replacement = f.e.uiSnapshot().followupTurn;
+  f.runs[0].resolve(result); await waitFor(() => f.runs.length === 2);
+  assert.equal(f.e.uiSnapshot().followupTurn.id, replacement.id); assert.equal(f.e.uiSnapshot().followupTurn.status, 'pending');
+  f.runs[1].resolve(result); await f.settle(); assert.equal(f.e.uiSnapshot().followup.exchanges[0].question, 'Replacement');
+  await assert.rejects(f.e.command('followup-turn-clear', { id: originalTurn.id, journey: f.doc.id, nodeId: f.doc.nodes[1].id, revision: f.e.doc.revision }), /obsolete|changed/i);
+  await confirmAnswer(f.e, { nodeId: f.doc.nodes[1].id, answer: 'Changed saved answer', revision: f.e.doc.revision });
+  assert.equal(f.e.uiSnapshot().followupTurn.historical, true);
+  const history = f.e.uiSnapshot().followup;
+  await f.e.command('followup-clear', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, historyId: history.id, revision: f.e.doc.revision });
+  assert.equal(f.e.uiSnapshot().followupTurn, null); assert.equal(f.e.doc.nodes[1].answer, 'Changed saved answer');
+});
+
+test('interrupted follow-up prompts remain dismissible and canvas close clears them', async t => {
+  const f = await fixture(t); await f.start(await f.review('Interrupted prompt')); await waitFor(() => f.runs.length === 1);
+  f.e.clearPending(); f.runs[0].resolve(result); await f.settle();
+  const turn = f.e.uiSnapshot().followupTurn; assert.equal(turn.status, 'interrupted'); assert.equal(turn.input.question, 'Interrupted prompt');
+  await f.e.command('followup-turn-clear', { id: turn.id, journey: f.doc.id, nodeId: f.doc.nodes[1].id, revision: f.e.doc.revision }); assert.equal(f.e.uiSnapshot().followupTurn, null);
+  await f.start(await f.review('Close prompt')); await waitFor(() => f.runs.length === 2); f.runs[1].resolve(result); await f.e.close();
+  assert.equal(f.e.uiSnapshot().followupTurn, null);
 });
 test('late cancelled work cannot enter a replacement, relevant changes mark existing exchanges historical', async t => {
   const f = await fixture(t); await f.start(await f.review('Why?')); await waitFor(() => f.runs.length === 1);
@@ -198,10 +272,12 @@ test('source fingerprint union keeps earlier dependencies under its explicit cou
   assert.throws(() => prepareFollowup(doc, doc.nodes[1].id, { question: 'Overflow?', hypothetical: false }, { history: { exchanges: [], dependencies: tooMany } }), /source tracking exceeds/);
 });
 test('successful research rerun makes follow-ups historical even when the comparison is identical', async t => {
-  const f = await fixture(t), initial = structuredClone(f.e.doc); initial.nodes[1].research.settings = { depth: 'standard', sourceFocus: 'balanced', recency: 'any' }; await f.e.save(initial);
+  const f = await fixture(t), initial = structuredClone(f.e.doc); initial.nodes[1].research = research({ ...original, settings: { depth: 'standard', sourceFocus: 'balanced', recency: 'any', profile: { id: 'general', version: 1 } } }); await f.e.save(initial);
   await f.start(await f.review('Why?')); await waitFor(() => f.runs.length === 1); f.runs[0].resolve(result); await f.settle();
   f.e.researcher.run = async () => original;
   const value = await f.e.reviewResearch({ action: 'prepare', journey: f.doc.id, nodeId: f.doc.nodes[1].id, scope: 'decisions', excluded: [], clientId: randomUUID(), sequence: 1 });
   await f.e.command('research', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, token: value.token }); await f.settle();
+  assert.deepEqual(f.e.doc.nodes[1].research, initial.nodes[1].research);
   assert.equal(f.e.followup.historical, true);
+  assert.equal(f.e.uiSnapshot().followupTurn.historical, true);
 });

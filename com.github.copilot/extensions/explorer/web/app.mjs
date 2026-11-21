@@ -2624,8 +2624,10 @@ function renderWorkspace() {
       const children = doc.nodes.filter(n => n.parentId === node.id);
       if (children.length) return el('div', { class: 'followups' }, el('h3', {}, root ? 'Explore a direction' : 'Explore this branch'), el('p', { class: 'quiet' }, 'Connected below this node.'), children.map(child => button(child.question, () => select(child.id), { id: `followup-${child.id}`, class: 'followup' })));
     });
-    update('followup', !!node.research, () => node.research ? renderFollowup(node) : null);
+    update('followup', !!node.research, () => node.research ? renderFollowup(node, ui) : null);
+    ui.followupSync?.();
     updateFollowupHistory(node);
+    updateFollowupTurn(node);
     ui.comparisonSync?.();
     for (const id of ['research-request', 'followup-review', 'followup-clear', 'research-deeper-review', 'save-deeper', 'regenerate-followups']) if ($(id)) $(id).disabled = pending;
     if ($('research-save-note')) $('research-save-note').hidden = !['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending?.kind);
@@ -2886,6 +2888,7 @@ function researchReviewSummary(prepared) {
   const concise = text => [...text].length > 220 ? `${[...text].slice(0, 220).join('')}… (full text in Exact inputs)` : text;
   const summary = el('section', { id: 'research-review-summary' }, el('h3', { id: 'research-review-question' }, target.question));
   if (followup) summary.append(el('p', { id: 'research-review-followup' }, `Follow-up${followup.hypothetical ? ' (hypothetical)' : ''}: ${followup.question}`));
+  if (followup) summary.append(el('p', { id: 'research-review-followup-target' }, `Discuss: ${concise(followup.targetLabel ?? 'Whole research')}. ${followup.target ? 'The selected record is included in Exact inputs.' : 'Exact inputs lists included research records and omissions.'}`));
   if (comparison) summary.append(el('p', {}, `Hypothetical priorities: ${comparison.criteria.map(item => `${item.label} (${item.priority})`).join('; ')}. Compare ${comparison.options.length} existing options; prior claims are not rechecked.`));
   summary.append(el('p', {}, `Saved answer: ${ANSWER_STATES[target.answerState] ?? 'No answer'}${target.review ? ' · needs review' : ''}. Unsaved answer draft is excluded. Mode: ${MODES[context.mode].label}.`));
   if (context.objective) summary.append(el('p', {}, `Objective: ${concise(context.objective)}`));
@@ -3057,27 +3060,90 @@ $('research-review-start').addEventListener('click', async () => {
   else { researchReview.value = null; researchReview.error = $('notice').textContent || 'Refresh and review context before starting.'; renderResearchReview(); }
 });
 
-function renderFollowup(node) {
+function followupTargets(research) {
+  const short = text => [...text].length > 120 ? [...text].slice(0, 120).join('') + '…' : text;
+  return [{ key: '', label: 'Whole research', target: null }, { key: 'recommendation', label: 'Recommendation', target: { kind: 'recommendation' } },
+    ...research.options.map((option, index) => ({ key: `option:${index}`, label: `Option ${index + 1}: ${short(option.title)}`, target: { kind: 'option', index } })),
+    ...(research.claims ?? []).map(claim => ({ key: `claim:${claim.id}`, label: `Claim: ${short(claim.text)}`, target: { kind: 'claim', id: claim.id } }))];
+}
+function renderFollowup(node, ui) {
   const journey = state.activeKey ?? state.document.id;
   const draft = followupDraft?.journey === journey && followupDraft.nodeId === node.id ? followupDraft : null;
   const question = el('textarea', { id: 'followup-question', rows: '3', maxlength: '4000' }); question.value = draft?.question ?? '';
   const hypothetical = el('input', { id: 'followup-hypothetical', type: 'checkbox' }); hypothetical.checked = draft?.hypothetical ?? false;
+  const target = el('select', { id: 'followup-target' }), targetStatus = el('p', { id: 'followup-target-status', class: 'quiet', role: 'status' });
+  const scope = el('p', { id: 'followup-scope', class: 'quiet' }), starterText = el('p', { id: 'followup-starter-text', class: 'quiet' });
+  let researchKey = JSON.stringify(node.research), choices = followupTargets(node.research);
+  const fillTargets = () => target.replaceChildren(...choices.map(choice => el('option', { value: choice.key }, choice.label)));
+  fillTargets();
+  if (draft?.researchKey === researchKey) target.value = choices.find(choice => JSON.stringify(choice.target) === JSON.stringify(draft.target ?? null))?.key ?? '';
+  const current = () => question.isConnected && !closed && !suspended && selected === node.id && expanded && journey === referenceJourney();
+  const input = () => {
+    const selectedTarget = choices.find(choice => choice.key === target.value)?.target;
+    return { question: question.value, hypothetical: hypothetical.checked, ...(selectedTarget ? { target: selectedTarget } : {}) };
+  };
+  const starters = { recommendation: 'Why is this recommended, and what would change that recommendation?', option: 'What does this option mean, and what are its main tradeoffs?', claim: 'What supports this claim, and what is still uncertain?' };
+  const showStarter = () => {
+    starterText.textContent = starters[input().target?.kind] ?? 'What should I understand before choosing an answer?';
+    starter.textContent = question.value ? 'Append starter' : 'Use starter';
+  };
   const remember = () => {
-    if (!question.isConnected) return;
-    followupDraft = { journey, nodeId: node.id, question: question.value, hypothetical: hypothetical.checked };
+    if (!current()) return;
+    const value = input(); followupDraft = { journey, nodeId: node.id, researchKey, ...value }; showStarter();
     const context = researchReview.context;
-    if (inlineResearchReview && context?.journey === journey && context.nodeId === node.id && context.followup && (context.followup.question !== question.value || context.followup.hypothetical !== hypothetical.checked)) {
+    if (inlineResearchReview && context?.journey === journey && context.nodeId === node.id && context.followup && JSON.stringify(context.followup) !== JSON.stringify(value)) {
       closeResearchReview(false);
       notice('Follow-up changed. Review its context again before researching.');
     }
   };
-  question.addEventListener('input', remember); hypothetical.addEventListener('change', remember);
-  return el('section', { class: 'research-followup' }, el('h3', {}, 'Ask about this research'),
-    el('p', { class: 'quiet' }, 'Ask why, clarify a recommendation, or explore a changed assumption. Changes described here are hypothetical; saved answers and guidance stay unchanged. Up to four complete exchanges (64 KiB) stay in this canvas until it closes or restarts. Navigation hides this history; asking on another node replaces it. Reload clears the typed question but can reconnect to history while this canvas remains open. Started work continues until it finishes or you cancel; a reload never starts another request.'),
+  const starter = button('Use starter', () => {
+    if (!current()) return;
+    const text = question.value ? question.value + '\n\n' + starterText.textContent : starterText.textContent;
+    if (text.length > 4000) return notice('The starter would exceed 4,000 characters. Your question is unchanged.');
+    question.value = text; remember(); question.focus({ preventScroll: true }); question.setSelectionRange(text.length, text.length);
+  }, { id: 'followup-starter', 'aria-describedby': 'followup-starter-text' });
+  question.addEventListener('input', remember); hypothetical.addEventListener('change', remember); target.addEventListener('change', remember);
+  ui.followupSync = () => {
+    if (!current()) return;
+    const latest = state.document.nodes.find(item => item.id === node.id), key = JSON.stringify(latest?.research);
+    if (!latest?.research) return;
+    if (key !== researchKey) {
+      researchKey = key; choices = followupTargets(latest.research); fillTargets(); target.value = '';
+      targetStatus.textContent = 'Research changed. Choose a target from the current findings; your typed question is retained.';
+      if (inlineResearchReview && researchReview.context?.followup) closeResearchReview(false);
+      remember();
+    }
+    scope.textContent = `Discussing this question: ${latest.question} Original findings: ${latest.research.basis === 'sources' ? 'source-linked model interpretation' : latest.research.basis === 'reasoning' ? 'model reasoning' : 'basis not recorded'}. A follow-up may retrieve new sources; review its exact context and effort before Research.`;
+    showStarter();
+  };
+  const retention = el('details', {}, el('summary', {}, 'Discussion scope and retention'), el('p', { class: 'quiet' }, 'Up to four complete exchanges (64 KiB) and one latest submitted turn stay in this canvas until it closes or restarts. Navigation hides this history; asking on another node replaces it. Exact review reports any omitted history or research records. Reload clears the typed question but can reconnect to submitted work while this canvas remains open. Started work continues until it finishes or you cancel; a reload never starts another request.'));
+  showStarter();
+  return el('section', { class: 'research-followup' }, el('h3', {}, 'Discuss this research'), scope,
+    el('p', { class: 'quiet' }, 'Ask about terms, choices or assumptions. Discussion and hypothetical changes do not change your saved answer.'),
+    el('div', { id: 'followup-history', 'aria-live': 'polite' }), el('div', { id: 'followup-turn', hidden: '', 'aria-live': 'polite' }),
+    el('label', { for: 'followup-target' }, 'Discuss'), target, targetStatus, starterText, starter,
     el('label', { for: 'followup-question' }, 'Follow-up question (4,000 characters maximum)'), question,
     el('label', {}, hypothetical, ' Explore a hypothetical assumption'),
-    button('Review follow-up context', () => { remember(); if (!question.value.trim()) return notice('Enter a follow-up question.'); openResearchReview(node.id, { question: question.value, hypothetical: hypothetical.checked }); }, { id: 'followup-review' }),
-    el('div', { id: 'followup-history', 'aria-live': 'polite' }));
+    button('Review follow-up context', () => { if (!current()) return; remember(); if (!question.value.trim()) return notice('Enter a follow-up question.'); openResearchReview(node.id, input()); }, { id: 'followup-review' }), retention);
+}
+function updateFollowupTurn(node) {
+  const area = $('followup-turn'); if (!area) return;
+  const turn = state.followupTurn?.nodeId === node.id && state.followupTurn.journey === referenceJourney() && state.followupTurn.status !== 'completed' ? state.followupTurn : null;
+  const signature = JSON.stringify([turn, !!state.pending]); if (area.dataset.value === signature) return;
+  area.dataset.value = signature; area.hidden = !turn; area.replaceChildren(); if (!turn) return;
+  const current = () => area.isConnected && !closed && !suspended && selected === node.id && state.followupTurn?.id === turn.id && referenceJourney() === turn.journey;
+  const labels = { pending: 'Pending', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted' };
+  area.append(el('h4', {}, labels[turn.status]), el('p', { class: 'quiet' }, 'You · ' + turn.targetLabel), el('p', {}, turn.input.question));
+  if (turn.message) area.append(el('p', {}, turn.message));
+  if (turn.historical) area.append(el('p', { class: 'review-warning' }, 'The original research or saved context changed. Choose a current target and review a new question.'));
+  if (turn.status !== 'pending') area.append(button('Review retry', () => {
+    if (!current() || state.pending || state.followupTurn.historical) return;
+    openResearchReview(node.id, { ...turn.input, ...(turn.input.target ? { target: { ...turn.input.target } } : {}) });
+  }, { id: 'followup-turn-retry', disabled: !!state.pending || turn.historical }), button('Dismiss turn', async () => {
+    if (!current() || state.pending) return;
+    const result = await api('followup-turn-clear', { id: turn.id, journey: turn.journey, nodeId: node.id });
+    if (result && selected === node.id && referenceJourney() === turn.journey) $('followup-question')?.focus({ preventScroll: true });
+  }, { id: 'followup-turn-dismiss', disabled: !!state.pending }));
 }
 function updateFollowupHistory(node) {
   const area = $('followup-history'); if (!area) return;
@@ -3115,7 +3181,8 @@ function updateFollowupHistory(node) {
       }, { id: 'followup-clear', disabled: !!state.pending }));
     if (value.dropped) rows.push(el('p', { class: 'quiet' }, `${value.dropped} older complete exchanges omitted by the four-exchange / 64 KiB retention limit.`));
     for (const exchange of value.exchanges) {
-      const result = exchange.result, block = el('section', { class: 'research-claim', id: 'followup-exchange-' + exchange.id, tabindex: '-1' }, el('h4', {}, exchange.hypothetical ? 'Hypothetical follow-up' : 'Follow-up question'), el('p', { class: 'quiet', id: 'followup-reused-' + exchange.id, hidden: '' }), el('p', {}, exchange.question), el('p', { class: 'quiet', 'data-followup-profile': exchange.id }, profileLabel(exchange.profile)), el('p', {}, result.answer), el('p', {}, `Uncertainty: ${result.uncertainty}`));
+      const result = exchange.result, block = el('section', { class: 'research-claim', id: 'followup-exchange-' + exchange.id, tabindex: '-1' }, el('p', { class: 'quiet', id: 'followup-reused-' + exchange.id, hidden: '' }), el('h4', {}, exchange.hypothetical ? 'You · hypothetical question' : 'You'), el('p', { class: 'quiet' }, exchange.targetLabel ?? 'Whole research'), el('p', {}, exchange.question),
+        el('h4', {}, 'Explorer explanation'), el('p', { class: 'quiet' }, 'Completed · saved answers unchanged'), el('p', { class: 'quiet', 'data-followup-profile': exchange.id }, profileLabel(exchange.profile)), el('p', {}, result.answer), el('p', {}, el('strong', {}, 'Uncertainty: '), result.uncertainty));
       for (const claim of result.claims) {
         const detail = el('details', {}, el('summary', {}, `${claim.text} (${claim.basis === 'sources' ? 'source-linked model interpretation' : claim.basis})`), el('p', { class: 'quiet', 'data-followup-exchange': exchange.id, 'data-followup-claim': claim.id }, claimFreshnessText(claim, researchFreshness(result))), el('p', {}, `Limitations: ${claim.limitations}`));
         for (const reference of claim.evidence) {

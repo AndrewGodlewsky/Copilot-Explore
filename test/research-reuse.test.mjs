@@ -8,15 +8,15 @@ import { createReuseRecord, reusableFollowup, reuseNamespace, REUSE_TTL } from '
 const at = Date.parse('2026-11-20T12:00:00Z');
 const original = { basis: 'reasoning', summary: 'Compare', options: [{ title: 'Pilot', description: 'Small', pros: [], cons: [] }, { title: 'Launch', description: 'Large', pros: [], cons: [] }], recommendation: 'Pilot first', uncertainty: 'Unknown costs', sources: [], claims: [{ id: 'c1', text: 'Start small', basis: 'reasoning', evidence: [], limitations: 'Judgment' }] };
 const result = { answer: 'A smaller pilot tests the assumption.', uncertainty: 'Synthetic reasoning; not fresh verification.', sources: [], claims: original.claims };
-function fixture(count = 0) {
+function fixture(count = 0, target) {
   const doc = createDocument('Synthetic garden'); addQuestions(doc, doc.rootId, [{ question: 'How big?', category: 'Size' }]); doc.nodes[1].research = structuredClone(original);
-  const nodeId = doc.nodes[1].id, input = { question: 'Why a pilot? 🌿', hypothetical: true };
+  const nodeId = doc.nodes[1].id, input = { question: 'Why a pilot? 🌿', hypothetical: true, ...(target ? { target } : {}) };
   const namespace = reuseNamespace({ root: { path: 'C:/synthetic/project', ancestors: '1:2:3' }, binding: 'canvas-session', file: 'C:/synthetic/map.json', journey: doc.id });
   const modelCapture = { mode: 'chat', revision: 0, model: { id: 'fixture' }, account: { isAuthenticated: true, login: 'synthetic', host: 'github.com' } };
   const options = { namespace, modelCapture, scope: 'decisions', excluded: [], now: at };
   const before = count ? { id: randomUUID(), dropped: 0, exchanges: Array.from({ length: count }, (_, i) => ({ id: randomUUID(), question: `Earlier ${i}`, hypothetical: false, result })) } : null;
   const prepared = { ...prepareFollowup(doc, nodeId, input, { ...options, history: before }), preparedAt: at, reuseNamespace: namespace, reusePolicy: { scope: options.scope, excluded: [] }, modelCapture };
-  const exchange = { id: randomUUID(), ...input, result: structuredClone(result) };
+  const exchange = { id: randomUUID(), ...input, ...(target ? { targetLabel: prepared.followup.targetLabel } : {}), result: structuredClone(result) };
   const all = [...before?.exchanges ?? [], exchange], exchanges = retainExchanges(all);
   const history = { id: randomUUID(), nodeId, journey: doc.id, dependencies: prepared.followupDependencies, exchanges, dropped: all.length - exchanges.length, reuse: createReuseRecord(prepared, exchange, at + 1000) };
   const candidate = (changes = {}) => reusableFollowup(doc, nodeId, input, { ...options, history, now: at + 2000, ...changes });
@@ -29,6 +29,15 @@ test('a different selected profile or altered exchange provenance cannot reuse a
   assert.equal(f.candidate({ settings: { ...f.prepared.settings, profile } }), null);
   f.exchange.profile = profile;
   assert.equal(f.candidate(), null, 'changing provenance invalidates the private result hash');
+});
+
+test('targeted reuse binds the selected record and its displayed provenance', () => {
+  const f = fixture(0, { kind: 'option', index: 0 });
+  assert.ok(f.candidate());
+  assert.equal(reusableFollowup(f.doc, f.nodeId, { ...f.input, target: { kind: 'option', index: 1 } }, { ...f.options, history: f.history, now: at + 2000 }), null);
+  assert.equal(createReuseRecord(f.prepared, { ...f.exchange, target: { kind: 'claim', id: 'c1' } }, at + 1000), null);
+  assert.equal(createReuseRecord(f.prepared, { ...f.exchange, targetLabel: 'Unreviewed label' }, at + 1000), null);
+  f.exchange.targetLabel = 'Changed displayed target'; assert.equal(f.candidate(), null);
 });
 
 test('exact completed follow-up reuses original exchange and dates without retaining another prompt', () => {

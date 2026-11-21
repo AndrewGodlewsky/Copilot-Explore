@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.131",
+    "summary": "Discuss a recommendation, option or claim in the Research drawer. Optional starters and clearly labelled turns keep questions, explanations and sources readable. Failed or cancelled prompts can be reviewed again without losing newer text. Targets are bound to exact reviewed context; conversation remains bounded and private to the active canvas."
+  },
+  {
     "version": "0.1.130",
     "summary": "Project context now detects checkout changes and keeps stale or unavailable status visible. Explicit refresh compares file scope and brief claims before reuse, retaining same-project user corrections. Turn off remains available during pending scope work; private comparisons stay out of shared maps and exports."
   },

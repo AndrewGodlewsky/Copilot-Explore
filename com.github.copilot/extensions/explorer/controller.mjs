@@ -1,6 +1,6 @@
 import { scenarioMarkdown, scenarioExportNote } from './scenario-export.mjs';
 import { handoffMarkdown, captureHandoff, handoffFreshness, acceptHandoff, validateHandoff } from './implementation-handoff.mjs';
-import { followupResult, retainExchanges, sameFollowup } from './research-followup.mjs';
+import { followupInput, followupResult, retainExchanges, sameFollowup } from './research-followup.mjs';
 import { createReuseRecord, reusableFollowup, reuseNamespace } from './research-reuse.mjs';
 import { deadline } from './owned-helper.mjs';
 import { comparisonInput, comparisonResult } from './research-comparison.mjs';
@@ -204,7 +204,7 @@ export class Explorer {
     }
     this.replaceStorage(store);
     this.file = store.context.file; this.doc = store.document; this.activeKey = store.context.key;
-    this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.recoveryNotice = null; this.exportObservation = null;
+    this.researchReview.clear(); this.followup = null; this.followupTurn = null; this.reconsideration = null; this.researchAttempt = null; this.recoveryNotice = null; this.exportObservation = null;
     this.reconcileCleanup();
     await this.scenarioPreferences.observe(this);
   }
@@ -536,12 +536,12 @@ export class Explorer {
     });
   }
   pollSnapshot(cursor) {
-    this.researchAttemptSnapshot();
+    this.researchAttemptSnapshot(); this.followupTurnSnapshot();
     // Documents, candidate batches, captured sources and coverage are replaced, never edited.
     // The only in-place public mutations are pending.progress and preview.stale.
     const stamp = [this.doc, this.activeKey, !!this.library, this.error, this.projectChange,
       JSON.stringify(this.pending), this.preview, this.preview?.stale,
-      this.questionSource, this.scenarioPreferences.observation, this.contextCoverage, this.recoveryNotice, this.exportObservation, this.followup, this.reconsideration, this.researchAttempt, JSON.stringify(this.projectQuestionContexts())];
+      this.questionSource, this.scenarioPreferences.observation, this.contextCoverage, this.recoveryNotice, this.exportObservation, this.followup, this.followupTurn, this.reconsideration, this.researchAttempt, JSON.stringify(this.projectQuestionContexts())];
     if (!this.pollStamp || stamp.some((value, index) => value !== this.pollStamp[index])) {
       this.pollStamp = stamp; this.pollCursor = randomUUID();
     }
@@ -563,7 +563,7 @@ export class Explorer {
     if (this.contributionView?.document !== this.doc) this.contributionView = { document: this.doc, value: contributionStatus(this.doc) };
     if (this.commentView?.document !== this.doc) this.commentView = { document: this.doc, value: commentStatuses(this.doc) };
     if (this.reviewHandoffView?.document !== this.doc) this.reviewHandoffView = { document: this.doc, value: handoffStatuses(this.doc) };
-    return { ...this.snapshot(), projectQuestions: this.projectQuestionContexts(), reviewHandoffs: structuredClone(this.reviewHandoffView.value), comments: structuredClone(this.commentView.value), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), reconsideration: this.reconsiderationSnapshot(), researchAttempt: this.researchAttemptSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
+    return { ...this.snapshot(), projectQuestions: this.projectQuestionContexts(), reviewHandoffs: structuredClone(this.reviewHandoffView.value), comments: structuredClone(this.commentView.value), contributions: structuredClone(this.contributionView.value), scenario: structuredClone(this.scenarioPreferences.observation), followup: this.followupSnapshot(), followupTurn: this.followupTurnSnapshot(), reconsideration: this.reconsiderationSnapshot(), researchAttempt: this.researchAttemptSnapshot(), preview: structuredClone(preview), questionRetry, recoveryNotice: this.recoveryNotice ?? null, exportObservation: this.exportObservation ?? null, contextCoverage: this.contextCoverage?.journey === (this.activeKey ?? this.doc?.id) ? this.contextCoverage : null };
   }
   projectQuestionContexts() {
     if (!this.projectQuestionOrigins.size) return {};
@@ -593,7 +593,7 @@ export class Explorer {
   async attach(key, expected) {
     const record = await this.library.opened(key, this.binding, expected);
     await this.changeStorage(null);
-    this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null;
+    this.researchReview.clear(); this.followup = null; this.followupTurn = null; this.reconsideration = null; this.researchAttempt = null;
     this.file = record.file; this.doc = record.document; this.activeKey = key;
     this.recoveryNotice = null; this.exportObservation = null;
     this.reconcileCleanup();
@@ -840,7 +840,7 @@ export class Explorer {
     this.adrFormats.clear();
     this.projectChange = { path: this.projectStore.context.relativePath, message: 'The project file or Git checkout changed or became unavailable. Review project changes before editing. The displayed map and private drafts are preserved.' };
     this.projectReconciliation = new ProjectReconciliation(this.projectRepository, this.projectStore);
-    this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.clearPending();
+    this.researchReview.clear(); this.followup = null; this.followupTurn = null; this.reconsideration = null; this.researchAttempt = null; this.clearPending();
     if (this.preview) this.preview.stale = true;
     for (const work of [this.cleanup, this.help, this.briefWork, this.checkWork]) if (work) { work.abort.abort(); work.status = 'stale'; work.error = 'Project inputs changed. Review the project file, then explicitly retry.'; }
     this.helpContexts.clear();
@@ -1111,6 +1111,17 @@ export class Explorer {
     const { dependencies, scenarioPolicy, reuse, ...value } = this.followup;
     return structuredClone({ ...value, scenario: scenarioPolicy?.label, historical: !this.currentFollowup() });
   }
+  followupTurnSnapshot() {
+    let turn = this.followupTurn;
+    const node = this.doc?.nodes.find(node => node.id === turn?.nodeId);
+    if (this.closed || !turn || !node || turn.journey !== (this.activeKey ?? this.doc.id)) { this.followupTurn = null; return null; }
+    if (!turn.historical && (node.researchStale || !this.scenarioPreferences.matches(turn.scenarioPolicy) || !sameFollowup(turn.dependencies, this.doc, turn.nodeId))) this.followupTurn = turn = { ...turn, historical: true };
+    const { dependencies, scenarioPolicy, ...view } = turn;
+    return structuredClone(view);
+  }
+  finishFollowupTurn(id, status, extra = {}) {
+    if (this.followupTurn && this.followupTurn.id === id && this.followupTurn.status === 'pending') this.followupTurn = { ...this.followupTurn, status, ...extra };
+  }
   async researchReuseNamespace() {
     try {
       const root = await deadline(this.projectContext.root(), 2000);
@@ -1173,7 +1184,7 @@ export class Explorer {
       if (confirmed && this.unconfirmedResearchRelease === marker) this.unconfirmedResearchRelease = null;
     }).catch(() => {});
   }
-  clearPending() { clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; this.projectQuestionWork?.abort.abort(); this.projectQuestionWork = null; }
+  clearPending() { this.finishFollowupTurn(this.pending?.id, 'interrupted'); clearTimeout(this.timer); this.pending = null; this.researchAbort?.abort(); this.researchAbort = null; this.researchWork = null; this.projectQuestionWork?.abort.abort(); this.projectQuestionWork = null; }
   reviewResearch(input) { return this.transact(() => this.researchReview.prepare(this, input)); }
   adrFormatRequest(input) { return this.transact(() => this.adrFormats.request(this, input)); }
   adrFileRequest(input) { return this.transact(() => input?.action === 'sources' ? this.adrWriter.request(this, input) : this.withDocumentLock(() => this.adrWriter.request(this, input))); }
@@ -1224,6 +1235,8 @@ export class Explorer {
     if (ownedProject) this.requireToolFreeRelease();
     this.contextCoverage = { journey: this.activeKey ?? this.doc.id, kind, nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage };
     this.pending = { id, kind, nodeId, startedAt: new Date().toISOString(), ...(ownedProject ? { owner: 'project-questions' } : {}) };
+    if (prepared.followup) this.followupTurn = { id, journey: this.activeKey ?? this.doc.id, nodeId, input: followupInput({ question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) }),
+      targetLabel: prepared.followup.targetLabel ?? 'Whole research', status: 'pending', historical: false, dependencies: prepared.followupDependencies, scenarioPolicy };
     this.error = '';
     // Research owns its execution timer; waiting for release does not spend that allowance.
     this.timer = ownedResearch || ownedProject ? null : setTimeout(() => void this.transact(() => {
@@ -1260,7 +1273,7 @@ export class Explorer {
       const retainReport = current => {
         if (!work.report) return;
         this.researchAttempt = { id: randomUUID(), journey: this.activeKey ?? current.id, nodeId, kind, report: work.report, historical: false, finishedAt: new Date().toISOString(), scenarioPolicy,
-          followup: prepared.followup ? { question: prepared.followup.question, hypothetical: prepared.followup.hypothetical } : null,
+          followup: prepared.followup ? { question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) } : null,
           dependencies: { ...structuredClone(prepared.dependencies), destination: structuredClone(findNode(current, nodeId).research) },
           freshnessContext: prepared.followup ? { followup: structuredClone(prepared.followup) } : {} };
       };
@@ -1313,13 +1326,14 @@ export class Explorer {
         if (prepared.followup) {
           const previous = this.currentFollowup(current, nodeId);
           if ((previous?.id ?? null) !== prepared.historyId) throw new Error('Follow-up history changed. Review and ask again.');
-          const exchange = { id: randomUUID(), question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, profile: prepared.settings.profile, result: followupResult(result) };
+          const exchange = { id: randomUUID(), question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, ...(prepared.followup.target ? { target: prepared.followup.target, targetLabel: prepared.followup.targetLabel } : {}), profile: prepared.settings.profile, result: followupResult(result) };
           const all = [...previous?.exchanges ?? [], exchange], exchanges = retainExchanges(all);
           const dependencies = prepared.followupDependencies;
           const reuse = !findNode(current, nodeId).researchStale && createReuseRecord({ ...prepared, reuseNamespace: namespace === prepared.reuseNamespace ? namespace : null }, exchange);
           this.doc = current;
           this.followup = { id: randomUUID(), journey: this.activeKey ?? current.id, nodeId, dependencies, scenarioPolicy, exchanges, dropped: (previous?.dropped ?? 0) + all.length - exchanges.length, historical: false, ...(reuse ? { reuse } : {}) };
           retainReport(current);
+          this.finishFollowupTurn(id, 'completed', { exchangeId: exchange.id });
           this.clearPending(); this.error = ''; return;
         }
         const next = structuredClone(current); findNode(next, nodeId).research = research({ ...result, settings: prepared.settings }); delete findNode(next, nodeId).researchStale;
@@ -1328,6 +1342,7 @@ export class Explorer {
           if (!active()) throw new Error('Research was cancelled before saving.');
         });
         if (this.followup?.nodeId === nodeId) this.followup = { ...this.followup, historical: true };
+        if (this.followupTurn?.nodeId === nodeId) this.followupTurn = { ...this.followupTurn, historical: true };
         if (active()) { retainReport(this.doc); this.clearPending(); this.error = ''; }
       }))).catch(error => this.transact(async () => {
         if (active() && work.report && work.report.reason !== 'model-completed' && !error.releaseConfirmed) {
@@ -1340,7 +1355,7 @@ export class Explorer {
             });
           } catch { /* A failed or stale context check cannot publish a partial finding. */ }
         }
-        if (active()) { this.clearPending(); this.error = error.message; }
+        if (active()) { this.finishFollowupTurn(id, 'failed', { message: String(error.message ?? 'Follow-up failed.').slice(0, 2000) }); this.clearPending(); this.error = error.message; }
       }));
       this.researchTasks.add(task); void task.finally(() => this.researchTasks.delete(task));
       return;
@@ -1373,9 +1388,16 @@ export class Explorer {
         const value = this.followup;
         if (this.pending) throw Error('Wait for the current request or cancel it before clearing follow-up history.');
         if (this.closed || !value || input.historyId !== value.id || input.nodeId !== value.nodeId || input.journey !== value.journey || input.journey !== (this.activeKey ?? this.doc?.id) || input.revision !== this.doc?.revision) throw Error('This follow-up history is obsolete or changed.');
-        this.researchReview.clear(); this.followup = null;
+        this.researchReview.clear(); this.followup = null; this.followupTurn = null;
         if (this.researchAttempt?.kind === 'research-follow-up' && this.researchAttempt.nodeId === input.nodeId) this.researchAttempt = null;
         return this.uiSnapshot();
+      }
+      if (action === 'followup-turn-clear') {
+        const turn = this.followupTurnSnapshot();
+        if (this.pending) throw Error('Wait for the pending request or cancel it before dismissing this turn.');
+        if (!turn || input.id !== turn.id || input.nodeId !== turn.nodeId || input.journey !== turn.journey || input.revision !== this.doc.revision ||
+          Object.keys(input).some(key => !['action', 'id', 'nodeId', 'journey', 'revision', 'scope'].includes(key))) throw Error('This follow-up turn is obsolete or changed.');
+        this.researchReview.clear(); this.followupTurn = null; return this.uiSnapshot();
       }
       if (action === 'research-attempt-clear') {
         const attempt = this.researchAttemptSnapshot();
@@ -1446,7 +1468,7 @@ export class Explorer {
         await this.assertScenarioPolicy(policy);
         return { ...this.uiSnapshot(), contextCoverage: { scenario: policy.label, kind: input.kind, nodeId: input.nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage } };
       }
-      if (action === 'cancel') { this.researchReview.clear(); this.clearPending(); this.error = ''; return this.uiSnapshot(); }
+      if (action === 'cancel') { this.researchReview.clear(); this.finishFollowupTurn(this.pending?.id, 'cancelled'); this.clearPending(); this.error = ''; return this.uiSnapshot(); }
       if (action === 'regenerate-questions' || action === 'adr-questions' || action === 'project-questions') {
         if (this.pending || this.preview) throw Error('Finish or dismiss the current question request or preview before regenerating.');
         if (Object.keys(input).some(key => !['action', 'scope', 'revision', 'journey', 'nodeId', 'token'].includes(key)) || input.revision !== this.doc?.revision) throw Error('Invalid or changed regeneration selection. Review the saved context again.');
@@ -1467,7 +1489,7 @@ export class Explorer {
             await this.assertScenarioPolicy(prepared.scenarioPolicy);
             const modelCapture = await this.captureResearchModel();
             const history = this.currentFollowup(current, input.nodeId);
-            const reuse = !this.closed && prepared.reuse && reusableFollowup(current, input.nodeId, { question: prepared.followup.question, hypothetical: prepared.followup.hypothetical }, { ...prepared.reusePolicy, settings: prepared.settings, scenario: prepared.scenarioPolicy.label, namespace, modelCapture, history });
+            const reuse = !this.closed && prepared.reuse && reusableFollowup(current, input.nodeId, { question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) }, { ...prepared.reusePolicy, settings: prepared.settings, scenario: prepared.scenarioPolicy.label, namespace, modelCapture, history });
             if (!reuse || history?.id !== prepared.historyId || reuse.exchangeId !== prepared.reuse.exchangeId) throw Error('The previous answer is no longer eligible for reuse. Refresh the review or choose Research.');
             this.doc = current; this.followup = { ...history, reuseNotice: reuse }; this.error = '';
           } else await this.request(action, input.nodeId, undefined, prepared);
@@ -1755,5 +1777,5 @@ export class Explorer {
       return { saved: false, staged: true, candidateCount: questions.length, message: 'Questions are staged in an unsaved preview. Only the user can accept them in the canvas.' };
     });
   }
-  async close() { this.projectMode.clear(); this.projectBrief.clear(); this.projectQuestionOrigins.clear(); this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.reconsideration = null; this.researchAttempt = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close(), this.projectBriefHelper?.close(), this.projectQuestionHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
+  async close() { this.projectMode.clear(); this.projectBrief.clear(); this.projectQuestionOrigins.clear(); this.changeSummaries.clear(); this.portableReferences.clear(); this.adrFormats.clear(); this.adrWriter.clear(); this.adrLifecycle.clear(); this.branchRestoration.clear(); this.scenarioPreferences.clear(); this.pollStamp = null; this.pollCursor = null; this.closed = true; this.researchReview.clear(); this.followup = null; this.followupTurn = null; this.reconsideration = null; this.researchAttempt = null; this.briefWork?.abort.abort(); this.briefWork = null; this.checkWork?.abort.abort(); this.checkWork = null; this.cleanup?.abort.abort(); this.cleanup = null; this.help?.abort.abort(); this.help = null; this.helpContexts.clear(); this.clearPending(); await Promise.allSettled([...this.researchTasks, this.toolFreeTask]); await Promise.allSettled([this.cleaner?.close(), this.questionHelper?.close(), this.briefHelper?.close(), this.checkHelper?.close(), this.projectBriefHelper?.close(), this.projectQuestionHelper?.close()]); await this.queue; await this.analytics?.flush(); this.preview = null; this.questionSource = null; }
 }

@@ -191,11 +191,13 @@ try {
   followupMode = true;
   const doc = createDocument('Scoped follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why pilot?', category: 'Target' }]);
   doc.nodes[1].research = { ...completed, basis: 'sources', sources: [{ id: 's1', title: 'Earlier imported source', url: 'https://example.com/prior', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported', dateObservations: [{ kind: 'published', text: 'Published: 2019-12-01' }] }] };
-  const followup = { ...prepareFollowup(doc, doc.nodes[1].id, { question: 'What if the budget doubles? ??', hypothetical: true }, { settings }), modelCapture: captureResearchModel(await researcher.models(), { revision: 1, modelId: dedicated.id }) };
+  const followup = { ...prepareFollowup(doc, doc.nodes[1].id, { question: 'What if the budget doubles? ??', hypothetical: true, target: { kind: 'option', index: 0 } }, { settings }), modelCapture: captureResearchModel(await researcher.models(), { revision: 1, modelId: dedicated.id }) };
   selectedId = model.id;
   const startIndex = captured.length;
   const followupResult = await researcher.runFollowup(followup.context, { prepared: followup });
   assert.deepEqual(captured[startIndex], { instructions: followup.instructions, prompt: followup.prompt });
+  assert.deepEqual(followup.followup.target, { kind: 'option', index: 0 }); assert.ok(followup.followup.targetLabel.startsWith('Option 1:'));
+  assert.deepEqual(followup.followup.original.find(item => item.kind === 'option').option, doc.nodes[1].research.options[0]);
   assert.ok(sendTimeouts[startIndex] > 0 && sendTimeouts[startIndex] < 60000);
   assert.deepEqual(followupResult.sources[0].dateObservations, doc.nodes[1].research.sources[0].dateObservations);
   assert.ok(followup.followup.original.find(item => item.kind === 'evidence').freshness.evaluatedAt);

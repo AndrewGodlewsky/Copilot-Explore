@@ -8,9 +8,9 @@ import { createReuseRecord, reusableFollowup, reuseNamespace, REUSE_TTL } from '
 const at = Date.parse('2026-11-20T12:00:00Z');
 const original = { basis: 'reasoning', summary: 'Compare', options: [{ title: 'Pilot', description: 'Small', pros: [], cons: [] }, { title: 'Launch', description: 'Large', pros: [], cons: [] }], recommendation: 'Pilot first', uncertainty: 'Unknown costs', sources: [], claims: [{ id: 'c1', text: 'Start small', basis: 'reasoning', evidence: [], limitations: 'Judgment' }] };
 const result = { answer: 'A smaller pilot tests the assumption.', uncertainty: 'Synthetic reasoning; not fresh verification.', sources: [], claims: original.claims };
-function fixture(count = 0, target) {
+function fixture(count = 0, target, sourceMode = 'existing') {
   const doc = createDocument('Synthetic garden'); addQuestions(doc, doc.rootId, [{ question: 'How big?', category: 'Size' }]); doc.nodes[1].research = structuredClone(original);
-  const nodeId = doc.nodes[1].id, input = { question: 'Why a pilot? 🌿', hypothetical: true, ...(target ? { target } : {}) };
+  const nodeId = doc.nodes[1].id, input = { question: 'Why a pilot? 🌿', hypothetical: true, sourceMode, ...(target ? { target } : {}) };
   const namespace = reuseNamespace({ root: { path: 'C:/synthetic/project', ancestors: '1:2:3' }, binding: 'canvas-session', file: 'C:/synthetic/map.json', journey: doc.id });
   const modelCapture = { mode: 'chat', revision: 0, model: { id: 'fixture' }, account: { isAuthenticated: true, login: 'synthetic', host: 'github.com' } };
   const options = { namespace, modelCapture, scope: 'decisions', excluded: [], now: at };
@@ -22,6 +22,16 @@ function fixture(count = 0, target) {
   const candidate = (changes = {}) => reusableFollowup(doc, nodeId, input, { ...options, history, now: at + 2000, ...changes });
   return { doc, nodeId, input, options, prepared, exchange, history, candidate };
 }
+
+test('follow-up reuse binds source mode and rejects legacy or unknown mode receipts', () => {
+  for (const sourceMode of ['existing', 'retrieve']) {
+    const f = fixture(0, undefined, sourceMode); assert.ok(f.candidate());
+    assert.equal(reusableFollowup(f.doc, f.nodeId, { ...f.input, sourceMode: sourceMode === 'existing' ? 'retrieve' : 'existing' }, { ...f.options, history: f.history, now: at + 2000 }), null);
+    assert.equal(createReuseRecord(f.prepared, { ...f.exchange, sourceMode: undefined }, at + 1000), null);
+    const receipt = f.history.reuse; f.history.reuse = { ...receipt, version: 3 }; assert.equal(f.candidate(), null); f.history.reuse = receipt;
+    f.exchange.sourceMode = sourceMode === 'existing' ? 'retrieve' : 'existing'; assert.equal(f.candidate(), null);
+  }
+});
 
 test('a different selected profile or altered exchange provenance cannot reuse an answer', () => {
   const f = fixture(), profile = { id: 'product-service', version: 1 };

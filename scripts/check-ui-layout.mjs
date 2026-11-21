@@ -13,6 +13,7 @@ import { ResearchModelSettings } from '../com.github.copilot/extensions/explorer
 import { fixtureResearchModels } from '../test/helpers/research-model.mjs';
 import { parseProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
 import { viewerSnapshot, viewerArtifact } from '../com.github.copilot/extensions/explorer/offline-viewer.mjs';
+import { directoryState } from '../com.github.copilot/extensions/explorer/storage-context.mjs';
 
 if (!process.env.EXPLORER_PLAYWRIGHT_PATH) throw Error('Set EXPLORER_PLAYWRIGHT_PATH to an installed playwright/index.mjs; this check downloads nothing.');
 const { chromium } = await import(pathToFileURL(resolve(process.env.EXPLORER_PLAYWRIGHT_PATH)).href);
@@ -98,6 +99,13 @@ explorer.researcher.runFollowup = async (...args) => {
   followupRuns++;
   return { answer: 'Previous answer <img src=x onerror=bad()> 日本語 🌿. Keep the original evidence dates when considering this synthetic pilot.', uncertainty: 'Synthetic reasoning, not new verification.',
     claims: [structuredClone(parent.research.claims.find(claim => claim.id === 'judgment'))], sources: [{ ...structuredClone(parent.research.sources[0]), evidenceOrigin: { origin: 'original', sourceId: 'fixture-source' } }] };
+};
+// Layout checks keep checkout metadata stable; real Git changes have controller/runtime coverage.
+explorer.projectMode.checkoutReader = async (reader, { expectedRoot, signal } = {}) => {
+  signal?.throwIfAborted(); const current = await reader.root();
+  if (expectedRoot && JSON.stringify(current) !== JSON.stringify(expectedRoot)) throw Error('Fixture project changed');
+  const checkout = await directoryState(current.path); signal?.throwIfAborted();
+  return { ...checkout, git: { branch: 'refs/heads/fixture', head: null } };
 };
 const modelSettings = new ResearchModelSettings({ directory }); explorer.researchModelSettings = () => modelSettings;
 const server = await startServer(explorer, {
@@ -692,7 +700,8 @@ try {
       const savedBeforeEffort = JSON.stringify(explorer.doc), effortBefore = effortRuns;
       const followupEffort = ['wide', 'minimum'].includes(scenario.name);
       effortFixture = true;
-      if (followupEffort) await page.locator('#followup-hypothetical').check();
+      expect(await page.locator('#followup-source-mode').inputValue() === 'existing', scenario.name + ': follow-ups default to explanation without new retrieval', {});
+      if (followupEffort) { await page.locator('#followup-hypothetical').check(); await page.locator('#followup-source-mode').selectOption('retrieve'); }
       await page.locator(followupEffort ? '#followup-review' : '#research-request').click(); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
       await page.locator('#research-review-start').click(); await page.locator('#research-attempt').waitFor(); effortFixture = false;
       expect(effortRuns === effortBefore + 1 && JSON.stringify(explorer.doc) === savedBeforeEffort, scenario.name + ': a synthetic stopped pass preserves the complete map', {});
@@ -728,12 +737,23 @@ try {
       await page.locator('#followup-starter').focus(); await page.keyboard.press('Enter');
       expect((await composer.evaluate(el => el.value)).startsWith(composerBeforeStarter + '\n\n') && followupRuns === followupsBefore, scenario.name + ': optional starter appends without overwriting or starting a helper', {});
       await page.locator('#followup-question').fill(composerBeforeStarter);
+      const sourceMode = page.locator('#followup-source-mode');
+      await sourceMode.focus(); await page.keyboard.press('End'); await page.keyboard.press('Tab');
+      expect(await sourceMode.inputValue() === 'retrieve', scenario.name + ': source mode is keyboard selectable', {});
       await page.locator('#followup-hypothetical').check(); await page.locator('#followup-review').click();
       await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      expect((await page.locator('#research-review-source-mode').innerText()).includes('Find additional sources') && (await page.locator('#research-review-sources').innerText()).includes('external services'), scenario.name + ': retrieval is explicit in exact review', {});
+      await sourceMode.focus(); await page.keyboard.press('Home'); await page.keyboard.press('Tab');
+      await page.locator('#research-review-start').waitFor({ state: 'hidden' });
+      expect(await page.locator('#research-review-start').isDisabled(), scenario.name + ': obsolete source-mode review cannot start', {});
+      expect(followupRuns === followupsBefore && await sourceMode.inputValue() === 'existing', scenario.name + ': changing source mode invalidates unused review without inference', {});
+      await page.locator('#followup-review').click(); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      expect((await page.locator('#research-review-source-mode').innerText()).includes('Explain existing findings') && (await page.locator('#research-review-effort').innerText()).includes('0 tool attempts') && (await page.locator('#research-review-sources').innerText()).includes('Model provider: receives the reviewed inputs'), scenario.name + ': explanation review discloses zero tools and provider input', {});
       expect((await page.locator('#research-review-followup-target').innerText()).includes('Option 1:'), scenario.name + ': exact review identifies the selected discussion target', {});
       await page.locator('#research-review-start').click();
       await page.waitForFunction(() => document.getElementById('followup-history').textContent.includes('Previous answer <img'));
       const exchange = explorer.followup.exchanges.at(-1), sourceDetail = await page.locator('#followup-history details').first().elementHandle();
+      expect(exchange.sourceMode === 'existing' && (await page.locator('[data-followup-source-mode]').last().innerText()).includes('Explain existing findings'), scenario.name + ': conversation labels its captured source mode', {});
       expect(exchange.target?.kind === 'option' && exchange.target.index === 0 && /You[\s\S]*Explorer explanation[\s\S]*Completed/.test(await page.locator('#followup-history').innerText()) && await page.locator('#followup-history').evaluate(el => !!(el.compareDocumentPosition(document.getElementById('followup-question')) & Node.DOCUMENT_POSITION_FOLLOWING)), scenario.name + ': labelled conversation precedes the retained composer', {});
       await page.locator('#followup-history details summary').first().focus(); await page.keyboard.press('Enter');
       await page.locator('#followup-review').click(); await page.locator('#research-review-reuse').waitFor();

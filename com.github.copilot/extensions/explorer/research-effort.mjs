@@ -31,7 +31,7 @@ function toolKey(input) {
 
 export function createEffortTracker(limits) {
   const maximum = limits?.toolAttemptLimit;
-  if (![8, 24, 40].includes(maximum)) throw Error('Invalid research effort limit.');
+  if (![0, 8, 24, 40].includes(maximum)) throw Error('Invalid research effort limit.');
   const seen = new Map();
   let toolAttempts = 0, duplicateAttempts = 0, deliveredTextUnits = 0, truncatedResults = 0, stopped;
   const stop = reason => { stopped = reason; return { allowed: false, reason, stop: true }; };
@@ -76,8 +76,9 @@ export function effortAssessment(value, { partial = false } = {}) {
 
 export function effortReport(value, validatePartial) {
   const invalid = () => { throw Error('Invalid research effort report.'); };
-  if (!value || Array.isArray(value) || Object.keys(value).sort().join(',') !== 'assessment,deliveredTextUnits,duplicateAttempts,elapsedMs,partial,reason,settings,toolAttempts,truncatedResults') invalid();
-  const settings = researchSettings(value.settings), limit = researchLimits(settings).toolAttemptLimit;
+  const existing = value?.sourceMode === 'existing';
+  if (!value || Array.isArray(value) || Object.keys(value).sort().join(',') !== `assessment,deliveredTextUnits,duplicateAttempts,elapsedMs,partial,reason,settings,${existing ? 'sourceMode,' : ''}toolAttempts,truncatedResults`) invalid();
+  const settings = researchSettings(value.settings), limit = researchLimits(settings, existing ? 'existing' : undefined).toolAttemptLimit;
   const reasons = ['model-completed', 'deadline', 'attempt-limit', 'repeated-request', 'result-text-limit', 'tool-failure', 'helper-failure'];
   if (!reasons.includes(value.reason) || value.elapsedMs !== null && (!Number.isSafeInteger(value.elapsedMs) || value.elapsedMs < 0 || value.elapsedMs > 3600000)) invalid();
   for (const [key, max] of [['toolAttempts', limit + 1], ['duplicateAttempts', value.toolAttempts], ['deliveredTextUnits', MAX_TOOL_TEXT], ['truncatedResults', limit]]) {
@@ -86,7 +87,8 @@ export function effortReport(value, validatePartial) {
   if (value.reason === 'model-completed' && (value.partial !== null || value.toolAttempts > limit) ||
     value.reason === 'helper-failure' && value.partial !== null || value.reason === 'attempt-limit' && value.toolAttempts !== limit + 1 ||
     value.reason === 'repeated-request' && value.duplicateAttempts < 2 || value.partial === undefined) invalid();
-  return { settings, reason: value.reason, elapsedMs: value.elapsedMs, toolAttempts: value.toolAttempts, duplicateAttempts: value.duplicateAttempts,
+  if (existing && (value.deliveredTextUnits || value.duplicateAttempts || value.truncatedResults || ['repeated-request', 'result-text-limit', 'tool-failure'].includes(value.reason))) invalid();
+  return { settings, ...(existing ? { sourceMode: 'existing' } : {}), reason: value.reason, elapsedMs: value.elapsedMs, toolAttempts: value.toolAttempts, duplicateAttempts: value.duplicateAttempts,
     deliveredTextUnits: value.deliveredTextUnits, truncatedResults: value.truncatedResults,
     assessment: effortAssessment(value.assessment ?? undefined, { partial: value.reason !== 'model-completed' }), partial: value.partial === null ? null : validatePartial(value.partial) };
 }

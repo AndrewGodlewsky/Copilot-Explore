@@ -33,7 +33,8 @@ const client = new CopilotClient({ mode: 'empty', baseDirectory: join(temporary,
   connection: RuntimeConnection.forStdio({ path: cli, args: ['--no-auto-update'], env: environment }),
 });
 let session, secondSession;
-const deadline = setTimeout(() => { process.stderr.write('Explorer runtime fixture timed out.\n'); void client.forceStop(); }, 55000);
+// The full fixture includes sequential Git-backed project workflows; operation deadlines remain separate.
+const deadline = setTimeout(() => { process.stderr.write('Explorer runtime fixture timed out.\n'); void client.forceStop(); }, 120000);
 async function until(read, predicate, label) {
   for (let i = 0; i < 100; i++) { const value = await read(); if (predicate(value)) return value; await new Promise(resolve => setTimeout(resolve, 200)); }
   throw new Error(`Timed out: ${label}`);

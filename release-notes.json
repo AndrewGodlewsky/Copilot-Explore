@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.133",
+    "summary": "Follow-ups default to explaining existing findings without new retrieval. Choose Find additional sources and review before Research. The drawer discloses source mode and provider access; history, partials, retries and reuse retain that mode. Evidence dates and drafts stay intact. Project context opens reliably; Git-backed saves get a bounded response window."
+  },
+  {
     "version": "0.1.132",
     "summary": "Research now shows observed progress and its question, with Cancel available when the drawer is closed. Failed or cancelled work offers specific recovery advice and fresh review of the original request. Findings and drafts stay intact; stale follow-up targets cannot retry against replacement research, and no request retries automatically."
   },

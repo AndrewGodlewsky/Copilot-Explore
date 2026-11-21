@@ -1,10 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createEffortTracker, effortAssessment } from '../com.github.copilot/extensions/explorer/research-effort.mjs';
+import { createEffortTracker, effortAssessment, effortReport } from '../com.github.copilot/extensions/explorer/research-effort.mjs';
 import { researchLimits, researchSettings } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 const limits = depth => researchLimits(researchSettings({ depth, sourceFocus: 'balanced', recency: 'any' }));
 const search = (query, extra = {}) => ({ toolName: 'web_search', toolArgs: { query, ...extra } });
 const fetch = (url, extra = {}) => ({ toolName: 'web_fetch', toolArgs: { url, ...extra } });
+
+test('existing-material effort reports enforce zero retrieval with one recorded denied excess attempt', () => {
+  const settings = researchSettings(), effort = createEffortTracker(researchLimits(settings, 'existing'));
+  const complete = { settings, sourceMode: 'existing', reason: 'model-completed', elapsedMs: 12, ...effort.snapshot(), assessment: null, partial: null };
+  assert.equal(effortReport(complete).toolAttempts, 0);
+  assert.deepEqual(effort.attempt(fetch('https://example.com/')), { allowed: false, reason: 'attempt-limit', stop: true });
+  const stopped = { ...complete, reason: 'attempt-limit', ...effort.snapshot() };
+  assert.equal(effortReport(stopped).toolAttempts, 1);
+  for (const patch of [{ sourceMode: 'unknown' }, { deliveredTextUnits: 1 }, { duplicateAttempts: 1 }, { truncatedResults: 1 }, { toolAttempts: 2 }, { reason: 'tool-failure' }, { reason: 'model-completed' }]) assert.throws(() => effortReport({ ...stopped, ...patch }), /Invalid research effort/);
+});
 
 test('exact repeated queries are denied once and then stop without conflating case or internal whitespace', () => {
   const effort = createEffortTracker(limits('standard'));

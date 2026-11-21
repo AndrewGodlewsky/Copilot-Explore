@@ -28,13 +28,19 @@ async function fixture(t, { hold = false, unavailable = false, approve = true, c
   const brief = (action, extra = {}) => explorer.projectBriefRequest({ action, purpose: 'project-brief', journey: doc.id, clientId: briefClient, sequence: ++briefSequence, ...extra });
   if (approve) {
     await scope('status'); const preview = await scope('prepare', { paths: ['README.md'], exclusions: [] }); const enabled = await scope('approve', { token: preview.token }); await scope('read', { token: enabled.readToken });
-    await brief('status'); const review = await brief('prepare'); await brief('start', { id: randomUUID(), token: review.token }); await waitFor(() => explorer.projectBrief.work?.status !== 'pending');
+    await brief('status'); const review = await brief('prepare'); await brief('start', { id: randomUUID(), token: review.token });
+    await explorer.projectBrief.work.task; assert.equal(explorer.projectBrief.work.status, 'result', explorer.projectBrief.error);
     const draft = await brief('status'); await brief('approve', { revision: draft.revision, changes: { edits: [], remove: [], additions: [{ section: 'purpose', text: canary }] } });
   }
   const review = () => explorer.reviewResearch({ action: 'prepare', purpose: 'project-questions', journey: doc.id, nodeId: doc.rootId, scope: 'decisions', excluded: [], clientId, sequence: ++sequence });
   const start = value => explorer.command('project-questions', { revision: explorer.doc.revision, journey: doc.id, nodeId: doc.rootId, token: value.token });
   const accept = () => explorer.command('accept-questions', { revision: explorer.doc.revision, batchId: explorer.preview.id, selected: [{ index: 0, question: explorer.preview.questions[0].question }] });
-  return { explorer, root, file, doc, canary, ordinary, calls, scope, brief, review, start, accept, ready: () => release, release: () => release?.(), signal: () => signal, setRoot: value => { working = value; } };
+  const finish = async (preview = true) => {
+    await Promise.all([...explorer.researchTasks]);
+    assert.equal(explorer.pending, null, explorer.error);
+    if (preview) assert.ok(explorer.preview, explorer.error);
+  };
+  return { explorer, root, file, doc, canary, ordinary, calls, scope, brief, review, start, accept, finish, ready: () => release, release: () => release?.(), signal: () => signal, setRoot: value => { working = value; } };
 }
 
 test('project questions use only a purpose-reviewed helper and stage Unicode suggestions without saving answers', async t => {
@@ -46,7 +52,7 @@ test('project questions use only a purpose-reviewed helper and stage Unicode sug
   const requestId = f.explorer.pending.id;
   await assert.rejects(f.explorer.receive('questions', { requestId, questions: [] }), /owned|isolated/i);
   await assert.rejects(f.explorer.receive('fail', { requestId, message: 'Spoofed attached chat failure' }), /owned|isolated/i);
-  f.release(); await waitFor(() => !f.explorer.pending); assert.equal(f.explorer.preview.questions.length, 1);
+  f.release(); await f.finish(); assert.equal(f.explorer.preview.questions.length, 1);
   assert.equal(await readFile(f.file, 'utf8'), before); assert.ok(!JSON.stringify(await f.explorer.nativeSnapshot()).includes(f.canary));
   assert.ok(!JSON.stringify(f.explorer.uiSnapshot()).includes(f.canary)); await f.accept();
   assert.equal(f.explorer.doc.nodes.length, 2); assert.equal(f.explorer.doc.nodes[1].answer, ''); assert.match(f.explorer.doc.nodes[1].question, /café users 🌿/);
@@ -54,9 +60,9 @@ test('project questions use only a purpose-reviewed helper and stage Unicode sug
 });
 
 test('injected helpers cannot stage unreviewed provenance and accepted references remain private and expire', async t => {
-  const invalid = await fixture(t, { claimIds: ['README.md'] }); await invalid.start(await invalid.review()); await waitFor(() => !invalid.explorer.pending);
+  const invalid = await fixture(t, { claimIds: ['README.md'] }); await invalid.start(await invalid.review()); await invalid.finish(false);
   assert.equal(invalid.explorer.preview, null); assert.match(invalid.explorer.error, /invalid|review/i);
-  const f = await fixture(t); await f.start(await f.review()); await waitFor(() => !!f.explorer.preview);
+  const f = await fixture(t); await f.start(await f.review()); await f.finish();
   const captureId = f.explorer.projectBrief.draft.captureId, claimId = f.explorer.preview.questions[0].claimIds[0];
   assert.equal(f.explorer.uiSnapshot().preview.projectContext.captureId, captureId);
   await f.accept(); const node = f.explorer.doc.nodes[1];
@@ -82,7 +88,7 @@ test('edited subset keeps the original claim binding and moved files expire refe
     const [first] = await run(prepared, options);
     return [first, { ...first, question: 'Which unresolved constraint needs evidence?', claimIds: [prepared.projectBrief.claims[0].id] }];
   };
-  await f.start(await f.review()); await waitFor(() => !!f.explorer.preview);
+  await f.start(await f.review()); await f.finish();
   const batch = f.explorer.preview, expected = batch.questions[1].claimIds;
   const result = await f.explorer.command('accept-questions', { revision: f.explorer.doc.revision, batchId: batch.id, selected: [{ index: 1, question: 'Which constraint needs evidence first?' }] });
   const id = result.acceptedIds[0]; assert.deepEqual(result.projectQuestions[id].claimIds, expected);
@@ -94,7 +100,7 @@ test('edited subset keeps the original claim binding and moved files expire refe
 });
 
 test('brief correction changes only a later explicitly reviewed request and leaves accepted answers intact', async t => {
-  const f = await fixture(t); await f.start(await f.review()); await waitFor(() => !!f.explorer.preview); await f.accept();
+  const f = await fixture(t); await f.start(await f.review()); await f.finish(); await f.accept();
   const node = f.explorer.doc.nodes[1]; await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Keep my saved answer', answerState: 'decided' });
   await f.brief('revoke', { revision: f.explorer.projectBrief.revision });
   const current = await f.brief('status'), claim = current.draft.sections.purpose.find(claim => claim.kind === 'user');
@@ -105,7 +111,7 @@ test('brief correction changes only a later explicitly reviewed request and leav
   assert.deepEqual(f.explorer.uiSnapshot().projectQuestions[node.id], { state: 'stale' });
   const run = f.explorer.projectQuestionHelper.run;
   f.explorer.projectQuestionHelper.run = async (...args) => (await run(...args)).map(question => ({ ...question, question: 'What does the corrected purpose change?' }));
-  await f.start(review); await waitFor(() => !!f.explorer.preview); assert.equal(f.explorer.doc.nodes.length, 2);
+  await f.start(review); await f.finish(); assert.equal(f.explorer.doc.nodes.length, 2);
   await f.accept(); assert.equal(f.explorer.doc.nodes.length, 3); assert.equal(f.explorer.doc.nodes[1].answer, 'Keep my saved answer');
 });
 
@@ -113,14 +119,14 @@ test('revoking a brief or disabling scope aborts owned questions and cannot inst
   for (const action of ['revoke', 'disable']) {
     const f = await fixture(t, { hold: true }), review = await f.review(); await f.start(review); await waitFor(() => f.ready());
     if (action === 'disable') await f.scope('disable'); else await f.brief('revoke', { revision: f.explorer.projectBrief.revision });
-    assert.equal(f.signal().aborted, true); f.release(); await f.explorer.toolFreeTask; await waitFor(() => !f.explorer.pending);
+    assert.equal(f.signal().aborted, true); f.release(); await f.finish(false);
     assert.equal(f.explorer.preview, null); assert.equal(f.explorer.doc.nodes.length, 1);
   }
 });
 
 test('changed project content, root and saved map reject a completed project preview before acceptance', async t => {
   for (const change of ['content', 'root', 'map']) {
-    const f = await fixture(t), review = await f.review(); await f.start(review); await waitFor(() => !f.explorer.pending); assert.ok(f.explorer.preview);
+    const f = await fixture(t), review = await f.review(); await f.start(review); await f.finish();
     if (change === 'content') await writeFile(join(f.root, 'README.md'), 'Changed input');
     if (change === 'root') f.setRoot(join(dirname(f.root), 'another-project'));
     if (change === 'map') f.explorer.doc.objective = 'Changed goal';
@@ -147,7 +153,7 @@ test('cancelling a queued project request prevents helper invocation and retains
 });
 
 test('project approval revoked during the last asynchronous map read cannot pass source validation', async t => {
-  const f = await fixture(t), review = await f.review(); await f.start(review); await waitFor(() => !!f.explorer.preview);
+  const f = await fixture(t), review = await f.review(); await f.start(review); await f.finish();
   const read = f.explorer.readCurrent.bind(f.explorer), verify = f.explorer.projectBrief.assertApproval.bind(f.explorer.projectBrief); let verified = false;
   f.explorer.projectBrief.assertApproval = async (...args) => { await verify(...args); verified = true; };
   f.explorer.readCurrent = async () => { const current = await read(); if (verified) f.explorer.projectBrief.approval = null; return current; };
@@ -175,6 +181,8 @@ test('branch discovery rejects changed approval, root, target context or cancell
     const f = await fixture(t); let release, entered;
     const waiting = new Promise(resolve => { entered = resolve; }), discover = f.explorer.projectMode.discovery.discover.bind(f.explorer.projectMode.discovery);
     f.explorer.projectMode.discovery.discover = async (...args) => { const value = await discover(...args); entered(); await new Promise(resolve => { release = resolve; }); return value; };
+    // The deliberate hold tests invalidation; the work deadline has separate clock coverage.
+    t.mock.timers.enable({ apis: ['setTimeout'] });
     const pending = f.scope('target', { nodeId: f.doc.rootId, direction: '', exclusions: [] }); const rejected = assert.rejects(pending, /changed|obsolete|abort/i);
     try {
       await waiting;
@@ -184,12 +192,13 @@ test('branch discovery rejects changed approval, root, target context or cancell
       if (change === 'cancel') await f.scope('cancel');
     } finally { release?.(); }
     await rejected; assert.ok(!f.explorer.projectMode.inventory?.target); assert.equal(f.calls.length, 0);
+    t.mock.timers.reset();
   }
 });
 
 test('unrelated unselected file edits do not discard a valid pending project question result', async t => {
   const f = await fixture(t, { hold: true }); await f.start(await f.review()); await waitFor(() => f.ready());
-  await writeFile(join(f.root, 'unrelated.md'), 'Unselected file changed'); f.release(); await waitFor(() => !!f.explorer.preview);
+  await writeFile(join(f.root, 'unrelated.md'), 'Unselected file changed'); f.release(); await f.finish();
   await f.accept(); assert.equal(f.explorer.doc.nodes.length, 2); assert.equal(f.explorer.doc.nodes[1].answer, '');
 });
 
@@ -205,7 +214,7 @@ test('checkout changes invalidate project question review, queued execution, res
       await Promise.all([...f.explorer.researchTasks]);
     }
     if (stage === 'result') { await f.start(review); await waitFor(() => f.ready()); await change(); f.release(); await Promise.all([...f.explorer.researchTasks]); }
-    if (stage === 'accept') { await f.start(review); await waitFor(() => f.explorer.preview); await change(); await assert.rejects(f.accept(), /changed|scope|brief|stale/i); }
+    if (stage === 'accept') { await f.start(review); await f.finish(); await change(); await assert.rejects(f.accept(), /changed|scope|brief|stale/i); }
     assert.equal(f.explorer.doc.nodes.length, 1, stage); assert.equal(await readFile(f.file, 'utf8'), before, stage);
     assert.equal(f.explorer.projectBrief.approval, null, stage); assert.ok(!f.explorer.preview || f.explorer.preview.stale, stage);
     assert.equal(f.calls.length, ['review', 'queue'].includes(stage) ? 0 : 1, stage);
@@ -213,7 +222,7 @@ test('checkout changes invalidate project question review, queued execution, res
 });
 
 test('observed checkout change expires accepted project provenance without changing saved answers', async t => {
-  const f = await fixture(t); await f.start(await f.review()); await waitFor(() => f.explorer.preview); await f.accept();
+  const f = await fixture(t); await f.start(await f.review()); await f.finish(); await f.accept();
   const node = f.explorer.doc.nodes[1]; await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Keep my decision', answerState: 'decided' });
   const before = await readFile(f.file, 'utf8'); await promisify(execFile)('git', ['-C', f.root, 'symbolic-ref', 'HEAD', 'refs/heads/changed-checkout'], { windowsHide: true });
   assert.equal((await f.scope('status')).state, 'stale'); assert.deepEqual(f.explorer.uiSnapshot().projectQuestions[node.id], { state: 'stale' });

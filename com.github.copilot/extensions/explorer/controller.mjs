@@ -1250,7 +1250,7 @@ export class Explorer {
     if (ownedProject) this.requireToolFreeRelease();
     this.contextCoverage = { journey: this.activeKey ?? this.doc.id, kind, nodeId, bytes: prepared.bytes, limit: prepared.limit, ...prepared.coverage };
     this.pending = { id, kind, nodeId, startedAt: new Date().toISOString(), ...(ownedProject ? { owner: 'project-questions' } : {}) };
-    if (prepared.followup) this.followupTurn = { id, journey: this.activeKey ?? this.doc.id, nodeId, input: followupInput({ question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) }),
+    if (prepared.followup) this.followupTurn = { id, journey: this.activeKey ?? this.doc.id, nodeId, input: followupInput({ question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, sourceMode: prepared.followup.sourceMode, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) }),
       targetLabel: prepared.followup.targetLabel ?? 'Whole research', status: 'pending', historical: false, dependencies: prepared.followupDependencies, scenarioPolicy };
     this.error = '';
     // Research owns its execution timer; waiting for release does not spend that allowance.
@@ -1288,13 +1288,13 @@ export class Explorer {
         status: 'pending', phase: 'Preparing research', historical: false, dependencies: prepared.dependencies, scenarioPolicy,
         freshnessContext: prepared.followup ? { followup: prepared.followup } : prepared.comparison ? { comparison: prepared.comparison } : {},
         intent: { scope: prepared.retryPolicy.scope, excluded: [...prepared.retryPolicy.excluded], ...(prepared.settings ? { settings: structuredClone(prepared.settings) } : {}),
-          ...(prepared.followup ? { followup: followupInput({ question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) }) } : {}),
+          ...(prepared.followup ? { followup: followupInput({ question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, sourceMode: prepared.followup.sourceMode, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) }) } : {}),
           ...(prepared.comparison ? { comparison: comparisonInput({ criteria: prepared.comparison.criteria }) } : {}) } };
       const active = () => !this.closed && this.pending?.id === id && this.researchWork === work && !controller.signal.aborted;
       const retainReport = current => {
         if (!work.report) return;
         this.researchAttempt = { id: randomUUID(), journey: this.activeKey ?? current.id, nodeId, kind, report: work.report, historical: false, finishedAt: new Date().toISOString(), scenarioPolicy, policy: prepared.retryPolicy,
-          followup: prepared.followup ? { question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) } : null,
+          followup: prepared.followup ? { question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, sourceMode: prepared.followup.sourceMode, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) } : null,
           dependencies: { ...structuredClone(prepared.dependencies), destination: structuredClone(findNode(current, nodeId).research) },
           freshnessContext: prepared.followup ? { followup: structuredClone(prepared.followup) } : {} };
       };
@@ -1317,6 +1317,7 @@ export class Explorer {
             return result;
           });
           if (JSON.stringify(checked.settings) !== JSON.stringify(prepared.settings)) throw Error('Research effort settings differ from the reviewed request.');
+          if ((checked.sourceMode ?? 'retrieve') !== (prepared.followup?.sourceMode ?? 'retrieve')) throw Error('Research effort source mode differs from the reviewed request.');
           work.report = checked;
         } });
       });
@@ -1348,7 +1349,7 @@ export class Explorer {
         if (prepared.followup) {
           const previous = this.currentFollowup(current, nodeId);
           if ((previous?.id ?? null) !== prepared.historyId) throw helperFailure('Follow-up history changed. Review and ask again.', 'stale-context');
-          const exchange = { id: randomUUID(), question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, ...(prepared.followup.target ? { target: prepared.followup.target, targetLabel: prepared.followup.targetLabel } : {}), profile: prepared.settings.profile, result: followupResult(result) };
+          const exchange = { id: randomUUID(), question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, sourceMode: prepared.followup.sourceMode, ...(prepared.followup.target ? { target: prepared.followup.target, targetLabel: prepared.followup.targetLabel } : {}), profile: prepared.settings.profile, result: followupResult(result) };
           const all = [...previous?.exchanges ?? [], exchange], exchanges = retainExchanges(all);
           const dependencies = prepared.followupDependencies;
           const reuse = !findNode(current, nodeId).researchStale && createReuseRecord({ ...prepared, reuseNamespace: namespace === prepared.reuseNamespace ? namespace : null }, exchange);
@@ -1528,7 +1529,7 @@ export class Explorer {
             await this.assertScenarioPolicy(prepared.scenarioPolicy);
             const modelCapture = await this.captureResearchModel();
             const history = this.currentFollowup(current, input.nodeId);
-            const reuse = !this.closed && prepared.reuse && reusableFollowup(current, input.nodeId, { question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) }, { ...prepared.reusePolicy, settings: prepared.settings, scenario: prepared.scenarioPolicy.label, namespace, modelCapture, history });
+            const reuse = !this.closed && prepared.reuse && reusableFollowup(current, input.nodeId, { question: prepared.followup.question, hypothetical: prepared.followup.hypothetical, sourceMode: prepared.followup.sourceMode, ...(prepared.followup.target ? { target: prepared.followup.target } : {}) }, { ...prepared.reusePolicy, settings: prepared.settings, scenario: prepared.scenarioPolicy.label, namespace, modelCapture, history });
             if (!reuse || history?.id !== prepared.historyId || reuse.exchangeId !== prepared.reuse.exchangeId) throw Error('The previous answer is no longer eligible for reuse. Refresh the review or choose Research.');
             this.doc = current; this.followup = { ...history, reuseNotice: reuse }; this.error = '';
           } else await this.request(action, input.nodeId, undefined, prepared);

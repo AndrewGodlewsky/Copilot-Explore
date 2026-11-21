@@ -10,11 +10,25 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createDocument, addQuestions, research } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { Explorer } from '../com.github.copilot/extensions/explorer/controller.mjs';
-import { prepareFollowup, followupResult, retainExchanges, parseFollowup, captureFollowup, sameFollowup } from '../com.github.copilot/extensions/explorer/research-followup.mjs';
+import { followupInput, prepareFollowup, followupResult, retainExchanges, parseFollowup, captureFollowup, sameFollowup } from '../com.github.copilot/extensions/explorer/research-followup.mjs';
 
 const original = { basis: 'reasoning', summary: 'Compare', options: [{ title: 'Pilot', description: 'Small', pros: [], cons: [] }, { title: 'Launch', description: 'Large', pros: [], cons: [] }], recommendation: 'Pilot first', uncertainty: 'Unknown costs', sources: [], claims: [{ id: 'c1', text: 'Start small', basis: 'reasoning', evidence: [], limitations: 'Judgment' }] };
 const result = { answer: 'A smaller pilot tests the assumption.', uncertainty: 'Hypothetical only.', sources: [], claims: original.claims };
 function document() { const doc = createDocument('Garden'); addQuestions(doc, doc.rootId, [{ question: 'How big?', category: 'Size' }]); doc.nodes[1].research = structuredClone(original); return doc; }
+
+test('follow-up source mode defaults to existing findings and binds explicit retrieval to exact review', () => {
+  const input = { question: 'What does pilot mean here? 🌿', hypothetical: false }, doc = document(), nodeId = doc.nodes[1].id;
+  assert.deepEqual(followupInput(input), { ...input, sourceMode: 'existing' });
+  const existing = prepareFollowup(doc, nodeId, input), retrieval = prepareFollowup(doc, nodeId, { ...input, sourceMode: 'retrieve' });
+  assert.equal(existing.followup.sourceMode, 'existing'); assert.equal(existing.limits.toolAttemptLimit, 0);
+  assert.equal(retrieval.followup.sourceMode, 'retrieve'); assert.equal(retrieval.limits.toolAttemptLimit, 24);
+  assert.match(existing.instructions, /no new retrieval/i); assert.match(existing.instructions, /current.*unknown|unknown.*current/i);
+  assert.ok(existing.prompt.includes('"sourceMode":"existing"')); assert.ok(retrieval.prompt.includes('"sourceMode":"retrieve"'));
+  for (const value of [existing, retrieval]) { assert.equal(value.bytes, Buffer.byteLength(value.instructions) + Buffer.byteLength(value.prompt)); assert.ok(value.bytes <= 131072); }
+  for (const sourceMode of [null, 'automatic', 'web', '', 0, true]) assert.throws(() => followupInput({ ...input, sourceMode }), /source|mode/i);
+  assert.throws(() => followupInput({ ...input, sourceMode: 'existing', allowWeb: true }), /follow-up/i);
+  assert.throws(() => followupInput(Object.create(input)), /follow-up/i);
+});
 
 test('follow-up targets resolve current options, claims and recommendation without accepting caller labels', () => {
   const doc = document(), node = doc.nodes[1], question = 'Explain this choice 🌿';
@@ -72,8 +86,12 @@ test('prior sources require included origin and IDs, preserve old metadata and r
   assert.deepEqual(parsed.sources[0], { ...source, evidenceOrigin: { origin: 'original', sourceId: 's1' } });
   assert.throws(() => parseFollowup(JSON.stringify(raw), { followup: { original: [], exchanges: [] } }, new Map()), /not included/);
   raw.sources[0].prior.origin = randomUUID(); assert.throws(() => parseFollowup(JSON.stringify(raw), prepared, new Map()), /not included/);
-  raw.sources = [{ id: 's1', title: 'New', url: source.url }]; assert.throws(() => parseFollowup(JSON.stringify(raw), prepared, new Map()), /successfully read/);
-  const now = '2026-11-17T13:00:00.000Z'; const fetched = parseFollowup(JSON.stringify(raw), prepared, new Map([[source.url, now]]));
+  raw.sources = [{ id: 's1', title: 'New', url: source.url }];
+  const now = '2026-11-17T13:00:00.000Z';
+  assert.throws(() => parseFollowup(JSON.stringify(raw), prepared, new Map([[source.url, now]])), /cannot introduce a newly retrieved source/);
+  const retrieval = prepareFollowup(doc, doc.nodes[1].id, { question: 'Why?', hypothetical: false, sourceMode: 'retrieve' });
+  assert.throws(() => parseFollowup(JSON.stringify(raw), retrieval, new Map()), /successfully read/);
+  const fetched = parseFollowup(JSON.stringify(raw), retrieval, new Map([[source.url, now]]));
   assert.equal(fetched.sources[0].retrievedAt, now); assert.equal(fetched.sources[0].evidenceOrigin.origin, 'current');
   const exchange = { id: randomUUID(), question: 'Earlier?', hypothetical: true, result: parsed };
   const repeated = prepareFollowup(doc, doc.nodes[1].id, { question: 'Again?', hypothetical: false }, { history: { id: 'history', exchanges: [exchange], dropped: 2 } });
@@ -104,11 +122,28 @@ async function fixture(t) {
   const e = await new Explorer({ file, researcher: { models: fixtureResearchModels, runFollowup(context, options) { return new Promise((resolve, reject) => runs.push({ context, ...options, resolve, reject })); } } }).load();
   t.after(async () => { for (const run of runs) run.resolve(result); await e.close(); await rm(dir, { recursive: true, force: true }); });
   let sequence = 0; const clientId = randomUUID();
-  const review = (question, target) => e.reviewResearch({ action: 'prepare', journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, followup: { question, hypothetical: true, ...(target ? { target } : {}) } });
+  const review = (question, target, sourceMode = 'existing') => e.reviewResearch({ action: 'prepare', journey: doc.id, nodeId: doc.nodes[1].id, scope: 'decisions', excluded: [], clientId, sequence: ++sequence, followup: { question, hypothetical: true, sourceMode, ...(target ? { target } : {}) } });
   const start = value => e.command('research-follow-up', { journey: doc.id, nodeId: doc.nodes[1].id, token: value.token });
   const settle = async () => { await new Promise(setImmediate); await Promise.all([...e.researchTasks]); };
   return { e, file, doc, runs, review, start, settle };
 }
+test('follow-up source mode survives submitted turn, retry intent, partial, history and new review', async t => {
+  for (const sourceMode of ['existing', 'retrieve']) {
+    const f = await fixture(t), before = await readFile(f.file, 'utf8');
+    const obsolete = await f.review('Explain this.', undefined, sourceMode === 'existing' ? 'retrieve' : 'existing');
+    const review = await f.review('Explain this.', undefined, sourceMode); await assert.rejects(f.start(obsolete), /changed|expired|review/i);
+    await f.start(review); await waitFor(() => f.runs.length === 1);
+    const pending = f.e.uiSnapshot(); assert.equal(pending.followupTurn.input.sourceMode, sourceMode); assert.equal(pending.researchOperation.intent.followup.sourceMode, sourceMode);
+    f.runs[0].onReport({ settings: f.runs[0].prepared.settings, ...(sourceMode === 'existing' ? { sourceMode } : {}), reason: 'deadline', elapsedMs: 180001, toolAttempts: 0, duplicateAttempts: 0, deliveredTextUnits: 0, truncatedResults: 0, assessment: null, partial: result });
+    f.runs[0].reject(Error('Synthetic timeout')); await f.settle();
+    assert.equal(f.e.uiSnapshot().researchAttempt.followup.sourceMode, sourceMode);
+    await f.start(await f.review('Explain this.', undefined, sourceMode)); await waitFor(() => f.runs.length === 2); f.runs[1].resolve(result); await f.settle();
+    assert.equal(f.e.uiSnapshot().followup.exchanges[0].sourceMode, sourceMode);
+    const next = await f.review('What is missing?', undefined, sourceMode); assert.equal(next.prepared.followup.exchanges[0].sourceMode, sourceMode);
+    assert.equal(await readFile(f.file, 'utf8'), before); assert.equal(f.e.snapshot().followup, undefined);
+  }
+});
+
 test('follow-up history is transient, exact reviewed work and completion preserve saved document', async t => {
   const f = await fixture(t), before = await readFile(f.file, 'utf8'), review = await f.review('What if the budget doubles?');
   await f.start(review); await waitFor(() => f.runs.length === 1);
@@ -124,7 +159,7 @@ test('captured follow-up turns retain failed prompts for fresh review and keep p
   const f = await fixture(t), before = await readFile(f.file, 'utf8'), question = 'PRIVATE_SUBMITTED_PROMPT 🌿', target = { kind: 'option', index: 1 };
   await f.start(await f.review(question, target)); await waitFor(() => f.runs.length === 1);
   const first = f.e.uiSnapshot().followupTurn, cursor = f.e.pollSnapshot().cursor;
-  assert.equal(first.status, 'pending'); assert.deepEqual(first.input, { question, hypothetical: true, target }); assert.equal(first.targetLabel, 'Option 2: Launch');
+  assert.equal(first.status, 'pending'); assert.deepEqual(first.input, { question, hypothetical: true, sourceMode: 'existing', target }); assert.equal(first.targetLabel, 'Option 2: Launch');
   assert.equal(f.e.snapshot().followupTurn, undefined); assert.ok(!JSON.stringify(f.e.nativeSnapshot()).includes(question));
   f.runs[0].reject(Error('Synthetic helper failure' + '!'.repeat(3000))); await f.settle();
   const failed = f.e.pollSnapshot(cursor).snapshot.followupTurn;

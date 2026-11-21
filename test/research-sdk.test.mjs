@@ -35,7 +35,7 @@ test('each topic profile uses the same isolated helper and authoritative selecti
 test('owned research follow-up sends reviewed strings, credits prior and current sources separately and attributes retained receipts', async t => {
   const doc = createDocument('Follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Target' }]);
   doc.nodes[1].research = { ...result, sources: [{ id: 's1', title: 'Old', url: 'https://example.com/old', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported' }], basis: 'sources' };
-  const prepared = prepareFollowup(doc, doc.nodes[1].id, { question: 'What if 🌿 doubles?', hypothetical: true }, { settings: { depth: 'quick', sourceFocus: 'primary', recency: 'recent' } });
+  const prepared = prepareFollowup(doc, doc.nodes[1].id, { question: 'What if 🌿 doubles?', hypothetical: true, sourceMode: 'retrieve' }, { settings: { depth: 'quick', sourceFocus: 'primary', recency: 'recent' } });
   const content = { answer: 'Prior and new evidence remain separate.', uncertainty: 'Model interpretations.', claims: [{ id: 'c1', text: 'Consider both', basis: 'sources', evidence: [{ sourceId: 'old', paraphrase: 'Old' }, { sourceId: 'new', paraphrase: 'New' }], limitations: 'Unverified relevance' }], sources: [{ id: 'old', prior: { origin: 'original', sourceId: 's1' } }, { id: 'new', title: 'New', url: 'https://example.com/new' }] };
   const f = await fixture(t, { result: content, resolve: async () => [{ address: '93.184.216.34' }], send: async calls => {
     assert.deepEqual(await calls.config.hooks.onPreToolUse({ toolName: 'web_fetch', toolCallId: 'new', toolArgs: { url: 'https://example.com/new' } }), {});
@@ -53,7 +53,7 @@ test('owned research follow-up sends reviewed strings, credits prior and current
 
 test('follow-up attempt and startup budgets count denied attempts and startup time, with cancelled receipts', async t => {
   const doc = createDocument('Budget'); addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Target' }]); doc.nodes[1].research = result;
-  const prepared = prepareFollowup(doc, doc.nodes[1].id, { question: 'Why?', hypothetical: false }, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' } });
+  const prepared = prepareFollowup(doc, doc.nodes[1].id, { question: 'Why?', hypothetical: false, sourceMode: 'retrieve' }, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' } });
   let now = 0; const timers = []; const clock = { now: () => now, setTimeout(fn, ms) { timers.push(ms); return { unref() {} }; }, clearTimeout() {} };
   const f = await fixture(t, { clock, start: () => { now = 59000; }, send: async calls => { for (let i = 0; i < 9; i++) assert.equal((await calls.config.hooks.onPreToolUse({ toolName: 'denied' })).permissionDecision, 'deny'); } });
   await assert.rejects(f.researcher.runFollowup(prepared.context, { prepared }), /tool-attempt limit/);
@@ -139,7 +139,7 @@ async function fixture(t, options = {}) {
         model: { ...parent.rpc.model, getCurrent: async () => ({ modelId: options.actualId ?? config.model }) },
         gitHubAuth: { getStatus: async () => options.auth ?? auth },
         metadata: { snapshot: async () => ({ workingDirectory: calls.client.workingDirectory, isRemote: false }) },
-        tools: { initializeAndValidate: async () => {}, getCurrentMetadata: async () => ({ tools: options.tools ?? expectedTools }) },
+        tools: { initializeAndValidate: async () => {}, getCurrentMetadata: async () => ({ tools: options.tools ?? (Array.isArray(config.availableTools) && config.availableTools.length === 0 ? [] : expectedTools) }) },
       }, sendAndWait: async (input, timeout) => { calls.sends++; calls.prompt = input.prompt; calls.timeout = timeout; await options.send?.(calls); return { data: { content: options.content ?? JSON.stringify(options.result ?? result) } }; } };
     }
   } } });
@@ -151,6 +151,35 @@ async function fixture(t, options = {}) {
   });
   return { researcher, calls, dir, parent };
 }
+
+test('existing follow-up mode explains or reports evidence gaps with zero initialized retrieval tools', async t => {
+  const doc = createDocument('Synthetic pilot'); const [node] = addQuestions(doc, doc.rootId, [{ question: 'Who joins first?', category: 'Scope' }]); node.research = structuredClone(result);
+  for (const question of ['What does pilot mean here?', 'Compare the existing options.', 'Is this still supported today?', 'What else should I consider?']) {
+    const prepared = prepareFollowup(doc, node.id, { question, hypothetical: false }), reports = [];
+    const answer = { answer: 'The supplied pilot is a smaller initial group. Current support is not established by these findings.', uncertainty: 'Choose additional sources and review again to check current facts.', sources: [], claims: result.claims };
+    const f = await fixture(t, { tools: [], result: answer });
+    const output = await f.researcher.runFollowup(prepared.context, { prepared, onReport: report => reports.push(report) });
+    assert.deepEqual(output, answer); assert.equal(f.calls.sends, 1); assert.equal(f.calls.stops, 1);
+    assert.deepEqual(f.calls.config.availableTools, []); assert.equal(f.calls.config.enableConfigDiscovery, false);
+    assert.deepEqual(f.calls.config.githubMcpToolConfig, { enableAllTools: false, additionalToolsets: [], additionalTools: [] });
+    assert.equal((await f.calls.config.onPermissionRequest({ kind: 'url', url: 'https://example.com/' })).kind, 'denied-by-rules');
+    assert.equal(reports[0].sourceMode, 'existing'); assert.equal(reports[0].toolAttempts, 0); assert.equal(reports[0].deliveredTextUnits, 0);
+    assert.equal(f.calls.prompt, prepared.prompt); assert.ok(f.calls.timeout > 0 && f.calls.timeout <= 180000);
+  }
+  t.diagnostic('Four synthetic existing-material requests: four model-fixture calls, zero available retrieval tools or tool attempts. Authored responses demonstrate wiring and limits, not live factual quality or measured provider cost.');
+});
+
+test('existing follow-up mode rejects unexpected tools and stops an attempted tool without escalation', async t => {
+  const doc = createDocument('Synthetic scope'), [node] = addQuestions(doc, doc.rootId, [{ question: 'Who?', category: 'Scope' }]); node.research = structuredClone(result);
+  const prepared = prepareFollowup(doc, node.id, { question: 'Explain this.', hypothetical: false });
+  const unexpected = await fixture(t, { tools: expectedTools });
+  await assert.rejects(unexpected.researcher.runFollowup(prepared.context, { prepared }), /tool-free/i); assert.equal(unexpected.calls.sends, 0);
+  let decision; const reports = [];
+  const attempted = await fixture(t, { tools: [], send: async ({ config }) => { decision = await config.hooks.onPreToolUse({ toolName: 'web_fetch', toolCallId: 'forbidden', toolArgs: { url: 'https://example.com/' } }); } });
+  await assert.rejects(attempted.researcher.runFollowup(prepared.context, { prepared, onReport: report => reports.push(report) }), error => error.reason === 'attempt-limit');
+  assert.equal(decision.permissionDecision, 'deny'); assert.equal(attempted.calls.sends, 1); assert.equal(attempted.calls.stops, 1);
+  assert.equal(reports[0].sourceMode, 'existing'); assert.equal(reports[0].toolAttempts, 1); assert.equal(reports[0].deliveredTextUnits, 0);
+});
 
 test('research recovery exposes host-owned failure reasons without leaking SDK error text', async t => {
   for (const [reason, options] of [
@@ -541,7 +570,7 @@ test('research rejects a current winner grounded in an expired volatile premise 
 test('follow-up preserves prior date labels and validates only actually read new date observations', async t => {
   for (const observed of [true, false]) {
     const doc = createDocument('Date followup'); const [node] = addQuestions(doc, doc.rootId, [{ question: 'Why?', category: 'Access' }]); node.research = freshnessFindings('durable-concept');
-    const prepared = prepareFollowup(doc, node.id, { question: 'Explain the historical schedule.', hypothetical: false }, { now: FRESHNESS_NOW });
+    const prepared = prepareFollowup(doc, node.id, { question: 'Explain the historical schedule.', hypothetical: false, sourceMode: 'retrieve' }, { now: FRESHNESS_NOW });
     const raw = { answer: 'Historical schedules remain conditional.', uncertainty: 'Not current verification.', claims: [{ ...node.research.claims[0], evidence: [{ sourceId: 'old', paraphrase: 'Prior schedule' }, { sourceId: 'new', paraphrase: 'Another schedule' }] }],
       sources: [{ id: 'old', prior: { origin: 'original', sourceId: 'host' } }, { id: 'new', title: 'New read', url: 'https://example.com/new', dateObservations: [{ kind: 'published', text: 'Published: 2026-11-19' }] }] };
     const f = await fixture(t, { result: raw, now: () => FRESHNESS_NOW, resolve: async () => [{ address: '93.184.216.34' }], send: async ({ config }) => {

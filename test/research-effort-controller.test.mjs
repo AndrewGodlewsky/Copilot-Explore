@@ -82,14 +82,16 @@ test('observed context changes make retained partials historical and stale clear
   assert.equal(f.e.uiSnapshot().researchAttempt.id, current.id); await f.e.close(); assert.equal(f.e.uiSnapshot().researchAttempt, null);
 });
 
-test('follow-up partials retain the reviewed question without adding an incomplete exchange or saved research', async t => {
+for (const sourceMode of ['existing', 'retrieve']) test(`${sourceMode} follow-up partials retain the reviewed question without adding an incomplete exchange or saved research`, async t => {
   const f = await fixture(t), before = await readFile(f.file, 'utf8');
   f.e.researcher.runFollowup = f.e.researcher.run;
-  const followup = { question: 'What if the budget doubles? 中文 🌿', hypothetical: true };
+  const followup = { question: 'What if the budget doubles? 中文 🌿', hypothetical: true, sourceMode };
   const reviewed = await f.e.reviewResearch({ action: 'prepare', journey: f.doc.id, nodeId: f.doc.nodes[1].id, scope: 'decisions', excluded: [], clientId: randomUUID(), sequence: 1, followup });
   await f.e.command('research-follow-up', { journey: f.doc.id, nodeId: f.doc.nodes[1].id, token: reviewed.token }); await waitFor(() => f.runs.length === 1);
   const partial = { answer: 'A pilot may still help; this answer is incomplete.', uncertainty: 'Hypothetical only.', sources: [], claims: [{ id: 'pilot', text: 'A pilot may help.', basis: 'reasoning', evidence: [], limitations: 'Unverified hypothetical judgment.' }] };
-  f.runs[0].onReport(report(partial)); f.runs[0].reject(Error('Deadline')); await f.settle();
+  const explanationReport = { sourceMode: 'existing', toolAttempts: 0, deliveredTextUnits: 0 };
+  assert.throws(() => f.runs[0].onReport(report(partial, sourceMode === 'existing' ? {} : explanationReport)), /source mode/);
+  f.runs[0].onReport(report(partial, sourceMode === 'existing' ? explanationReport : {})); f.runs[0].reject(Error('Deadline')); await f.settle();
   const view = f.e.uiSnapshot(); assert.deepEqual(view.researchAttempt.followup, followup); assert.deepEqual(view.researchAttempt.report.partial, partial);
   assert.equal(view.followup, null); assert.equal(await readFile(f.file, 'utf8'), before);
   const next = await f.e.reviewResearch({ action: 'prepare', journey: f.doc.id, nodeId: f.doc.nodes[1].id, scope: 'decisions', excluded: [], clientId: randomUUID(), sequence: 1, followup });

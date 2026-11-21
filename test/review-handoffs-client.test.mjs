@@ -16,11 +16,29 @@ async function fixture(t, respond = (input, commit) => json(commit(input))) {
   const el = (tag, attrs = {}, children = []) => { const node = document.createElement(tag); for (const [key, value] of Object.entries(attrs)) { if (key.startsWith('on')) node[key] = value; else if (value === true) node.setAttribute(key, ''); else if (value !== false) node.setAttribute(key, value); } for (const child of [children].flat()) node.append(child instanceof dom.window.Node ? child : document.createTextNode(String(child))); return node; };
   const commit = fields => { const { action, revision, journey, ...input } = fields; saved = changeReviewHandoffs(saved, action.replace('review-handoff-', ''), input, { actor: null, at: '2026-11-18T12:00:00.000Z' }); saved.revision++; return { ...snapshot, document: saved, reviewHandoffs: handoffStatuses(saved) }; };
   client = new ReviewHandoffsClient({ $: id => document.getElementById(id), el, button: (text, onclick, attrs) => el('button', { ...attrs, onclick }, text), selected: () => doc.nodes[1].id, eventText: event => event.actor?.displayName ?? 'Anonymous contributor', active: () => active, canAct: () => !busy, begin: () => { busy = true; return () => { busy = false; }; }, state: () => snapshot,
-    copyText: async text => copied.push(text), apply: result => { snapshot = result; client.update(); }, fetch: async (_, options) => { const input = JSON.parse(options.body); requests.push(input); return respond(input, commit, requests.length); } });
+    copyText: async text => copied.push(text), apply: result => { snapshot = result; client.update(); }, fetch: async (_, options) => { const input = JSON.parse(options.body); requests.push(input); return respond(input, commit, requests.length, options); } });
   t.after(() => { client.close(false); dom.window.close(); }); client.open(doc.nodes[1].id);
   const input = (field, value, kind = 'input') => { $(field).value = value; $(field).dispatchEvent(new dom.window.Event(kind)); };
   return { $, dom, client, requests, copied, input, saved: () => saved, snapshot: () => snapshot, set: result => { snapshot = result; client.update(); }, active: value => { active = value; }, busy: () => busy };
 }
+
+test('project handoffs wait for bounded Git saves and preserve drafts and IDs after the response deadline', async t => {
+  let release, signal;
+  const f = await fixture(t, (input, commit, count, options) => {
+    signal = options.signal;
+    return new Promise((resolve, reject) => { release = () => resolve(json(commit(input))); signal.addEventListener('abort', () => reject(Error('Aborted')), { once: true }); });
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  f.input('note', 'Delayed handoff'); let pending = f.client.post('create');
+  t.mock.timers.tick(10001); assert.equal(signal.aborted, false); release(); await pending;
+  assert.equal(f.saved().reviewHandoffs.records.length, 1);
+  f.input('note', 'Taking this'); pending = f.client.post('take');
+  t.mock.timers.tick(29999); assert.equal(signal.aborted, false); t.mock.timers.tick(1); await pending;
+  assert.equal(signal.aborted, true); assert.equal(f.busy(), false); assert.match(f.$('status').textContent, /timed out.*may have saved/);
+  f.input('note', 'Newer note'); pending = f.client.post('retry'); release(); await pending;
+  assert.equal(f.requests[2].transitionId, f.requests[1].transitionId); assert.equal(f.requests[2].note, 'Taking this');
+  assert.equal(f.$('note').value, 'Newer note'); assert.equal(f.saved().reviewHandoffs.records[0].transitions.length, 2);
+});
 
 test('handoff composer creates a literal request, takes/completes/reassigns explicitly and copies only the selected record', async t => {
   const f = await fixture(t), before = structuredClone(f.saved().nodes);

@@ -2,11 +2,11 @@
 
 After a completed follow-up, enter the exact same question and choose **Review follow-up context**. When the earlier answer still qualifies, the inline review offers **Use previous answer**. This returns to the original response without a new helper, model inference, source request or usage receipt. Its question, hypothetical label, exchange ID, source provenance and dates stay unchanged. It does not add another exchange or certify the answer as current or correct. **Research** always requests a new answer through the ordinary reviewed path.
 
-The current question's completed conversation is already held transiently: at most four exchanges within 64 KiB. Reuse adds one small private record for the latest complete exchange. It retains hashes and timestamps, not another prompt, page archive or source body. A partial, failed or cancelled attempt cannot become reusable. Older visible answers can still be read when reuse is unavailable.
+The current question's completed conversation is already held transiently: at most four exchanges within 64 KiB. Reuse adds one small private record for the latest complete exchange. It retains hashes and timestamps, not another prompt, page archive or source body. A partial, failed or cancelled attempt cannot become reusable. Version 4 receipts bind the recorded source mode in both exact input and result hashes; legacy receipts or exchanges with unknown modes cannot authorize reuse. Older visible answers can still be read when reuse is unavailable.
 
 ## When reuse is available
 
-- The question is identical, including whitespace and case, with the same hypothetical flag. Paraphrases are not matched.
+- The question is identical, including whitespace and case, with the same hypothetical flag, discussion target and recorded source mode. Paraphrases are not matched.
 - The saved question, map branch, relevant committed context, scenario, original research, scope, exclusions and effort/source/recency settings still match. A saved `researchStale` marker prevents reuse.
 - The selected Research model, account and settings revision match. Reuse has its own one-use context review; a stale token or another history cannot authorize it.
 - The canvas instance, journey/file and currently observed canonical project-root identity match. The existing installed SDK metadata supplies the working root; directory identities are checked, without reading repository file contents. Missing, remote, changed, linked or unresponsive roots disable reuse. The optional root lookup is bounded to two seconds; ordinary Research remains available under its existing rules.

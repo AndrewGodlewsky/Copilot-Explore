@@ -129,3 +129,15 @@ test('failed freshness verification revokes an approved brief instead of retaini
   f.inspect(async () => { throw Error('Metadata unavailable'); }); await assert.rejects(f.request('status'));
   assert.equal(f.workspace.approval, null); assert.equal(f.workspace.draft, null);
 });
+
+test('project brief validation deadline aborts a held freshness check without granting review or invoking a helper', async t => {
+  const f = fixture(t); let release, entered, validationSignal;
+  const ready = new Promise(resolve => { entered = resolve; });
+  f.inspect((_capture, { signal }) => { validationSignal = signal; entered(); return new Promise(resolve => { release = resolve; }); });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const request = f.request('status'), rejected = assert.rejects(request, /timed out/i);
+  await ready; t.mock.timers.tick(5000); await rejected;
+  assert.equal(validationSignal.aborted, true); assert.equal(f.workspace.preview, null); assert.equal(f.workspace.approval, null); assert.equal(f.sends(), 0);
+  release(); await new Promise(setImmediate);
+  assert.equal(f.workspace.preview, null); assert.equal(f.sends(), 0);
+});

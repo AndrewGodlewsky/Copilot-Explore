@@ -78,7 +78,7 @@ test('independent branch answers remain editable and follow-up recovery retains 
   assert.equal(f.e.doc.nodes[3].answer, 'Independent answer'); assert.equal(f.e.pending.nodeId, f.doc.nodes[1].id);
   run.reject(helperFailure('Selected effort ended.', 'deadline')); await f.settle();
   const operation = f.e.uiSnapshot().researchOperation;
-  assert.deepEqual(operation.intent.followup, followup); assert.equal(operation.reason, 'deadline');
+  assert.deepEqual(operation.intent.followup, { ...followup, sourceMode: 'existing' }); assert.equal(operation.reason, 'deadline');
   assert.ok(!JSON.stringify(f.e.snapshot()).includes(followup.question)); assert.ok(!(await readFile(f.file, 'utf8')).includes(followup.question));
   const next = structuredClone(f.e.doc); next.nodes[1].research.summary = 'Replacement research'; await f.e.save(next);
   assert.equal(f.e.uiSnapshot().researchOperation.historical, true);

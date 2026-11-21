@@ -54,6 +54,7 @@ export class ProjectModeClient {
   }
   open(target = null) {
     if (!this.active() || !this.journey()) return;
+    if (this.loading && this.action === 'status') this.invalidate();
     this.observe(); if (target?.nodeId !== this.target?.nodeId) { this.control('direction').value = ''; this.inventory = null; } this.target = target;
     if (this.$('navigation-dialog').open) this.$('navigation-dialog').close(); this.control('dialog').showModal();
     this.control('close').focus(); void this.request('status');

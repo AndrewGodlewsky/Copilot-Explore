@@ -34,8 +34,7 @@ export function runtimeEnvironment(source = process.env) {
 // Only fixtures inject a runtime. Production resolves the pair supplied by the desktop bootstrap.
 export function createOwnedHelper(parent, operation, prepare, { usageDirectory, runtime = desktopRuntime, usageRecorder = createUsageRecorder, stopTimeoutMs = 10000, clock = { now: () => performance.now(), setTimeout, clearTimeout } } = {}) {
   if (!['research', 'research-follow-up', 'research-reconsideration', 'decision-brief', 'implementation-handoff', 'adr-draft', 'project-brief', 'project-questions', 'answer-check', 'challenge-review', 'cleanup', 'question-help-rephrase', 'question-help-example', 'question-help-terms'].includes(operation)) throw new Error('Invalid helper operation.');
-  const webResearch = operation === 'research' || operation === 'research-follow-up';
-  const reviewedResearch = webResearch || operation === 'research-reconsideration';
+  const reviewedResearch = ['research', 'research-follow-up', 'research-reconsideration'].includes(operation);
   const label = { 'decision-brief': 'Decision brief', 'implementation-handoff': 'Implementation handoff', 'adr-draft': 'ADR draft', 'project-brief': 'Project brief', 'project-questions': 'Project questions', 'answer-check': 'Answer check', 'challenge-review': 'Challenge review', research: 'Research', 'research-follow-up': 'Research follow-up', 'research-reconsideration': 'Research reconsideration', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
   const fail = (message, reason) => helperFailure(message.replaceAll('Research', label).replaceAll('research', label.toLowerCase()), reason);
   const cancelled = reason => fail(reason === 'deadline' ? 'Research timed out. Your answers are saved.' : 'Research was cancelled. Your answers are saved.', reason === 'deadline' ? 'deadline' : 'cancelled');
@@ -51,6 +50,7 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
     return task;
   }
   async function execute(context, controller, progress, usageDirectory, report) {
+    const webResearch = operation === 'research' || operation === 'research-follow-up' && context.followup?.sourceMode === 'retrieve';
     const timeLimitMs = reviewedResearch ? context.limits.timeLimitMs : 180000;
     const started = clock.now();
     const remaining = () => Math.max(0, timeLimitMs - (clock.now() - started));

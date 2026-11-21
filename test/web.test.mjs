@@ -55,7 +55,7 @@ import { researchProfiles, profileLabel } from '../com.github.copilot/extensions
 import { ProjectModeClient } from '../com.github.copilot/extensions/explorer/web/project-mode-client.mjs';
 import { ProjectBriefClient } from '../com.github.copilot/extensions/explorer/web/project-brief-client.mjs';
 import { parseProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
-import { researchSettingsText } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
+import { researchSettingsText, followupSourceLabel } from '../com.github.copilot/extensions/explorer/web/research-policy.mjs';
 import { attachNavigation } from '../com.github.copilot/extensions/explorer/web/navigation.mjs';
 import { NavigationPreferences } from '../com.github.copilot/extensions/explorer/navigation-preferences.mjs';
 import { draftHash, draftBase } from '../com.github.copilot/extensions/explorer/drafts.mjs';
@@ -111,23 +111,27 @@ test('project question explanations show reviewed provenance and correction navi
   $('project-mode-approve').click(); await until(() => !$('project-mode-read').disabled, 'read authorization');
   $('project-mode-read').click(); await until(() => !$('project-brief-prepare').disabled, 'captured inputs');
   $('project-brief-prepare').click(); await until(() => !$('project-brief-start').disabled, 'brief review');
-  $('project-brief-start').click(); await until(() => f.explorer.projectBrief.work?.status === 'result', 'brief result');
+  await uiResponse(f, 'api/project-brief', 'start', () => $('project-brief-start').click());
+  await f.explorer.projectBrief.work.task; assert.equal(f.explorer.projectBrief.work.status, 'result', f.explorer.projectBrief.error);
   await f.window.__updates.poll(); await until(() => !$('project-brief-approve').disabled, 'editable brief');
   f.type('project-brief-add-text', 'My local constraint');
   await uiResponse(f, 'api/project-brief', 'approve', () => $('project-brief-approve').click());
   await until(() => $('project-brief-state').textContent.startsWith('Approved for this project'), 'approval response rendered');
   $('project-mode-close').click(); $('project-questions').click(); await until(() => !$('research-review-start').disabled, 'project review');
-  $('research-review-start').click(); await until(() => !!f.explorer.preview, 'question preview'); f.window.__updates.apply(f.explorer.uiSnapshot());
+  await uiResponse(f, 'api/action', 'project-questions', () => $('research-review-start').click());
+  await Promise.all([...f.explorer.researchTasks]); assert.equal(f.explorer.pending, null, f.explorer.error); assert.ok(f.explorer.preview, f.explorer.error); f.window.__updates.apply(f.explorer.uiSnapshot());
   let why = $('candidate-rationale-0'); why.open = true; why.dispatchEvent(new f.window.Event('toggle'));
   assert.match(why.textContent, /File-backed interpretation.*Project café <img src=x> 🌿/s); assert.match(why.textContent, /README.md/);
   for (const label of ['Inference', 'Unknown', 'User assertion']) assert.ok(why.textContent.includes(label));
   assert.ok(!why.textContent.includes('SYNTHETIC_QUOTE_CANARY')); assert.equal(why.querySelector('img'), null);
-  $('accept-questions').click(); await until(() => !f.explorer.preview && f.explorer.doc.nodes.length === 4, 'accepted provenance');
+  await uiResponse(f, 'api/action', 'accept-questions', () => $('accept-questions').click());
+  assert.equal(f.explorer.preview, null); assert.equal(f.explorer.doc.nodes.length, 4);
   f.window.__updates.apply(f.explorer.uiSnapshot()); f.open(f.explorer.doc.nodes.at(-1).id);
   assert.match($('question-rationale').textContent, /current at the last check/); assert.match($('question-rationale').textContent, /README.md/);
   f.open(node.id); assert.equal($('answer').value, 'Private answer draft 🌿');
   const retainedEditor = $('answer'); $('project-questions').click(); await until(() => !$('research-review-start').disabled, 'second project review');
-  $('research-review-start').click(); await until(() => !!f.explorer.preview, 'second question preview'); f.window.__updates.apply(f.explorer.uiSnapshot());
+  await uiResponse(f, 'api/action', 'project-questions', () => $('research-review-start').click());
+  await Promise.all([...f.explorer.researchTasks]); assert.equal(f.explorer.pending, null, f.explorer.error); assert.ok(f.explorer.preview, f.explorer.error); f.window.__updates.apply(f.explorer.uiSnapshot());
   why = $('candidate-rationale-0'); why.open = true; why.dispatchEvent(new f.window.Event('toggle'));
   f.type('candidate-question-0', 'Which constraint should change first?'); const wording = $('candidate-question-0'); wording.focus(); wording.setSelectionRange(4, 8);
   f.explorer.projectBrief.invalidate('Synthetic expired scope'); f.window.__updates.apply(f.explorer.uiSnapshot());
@@ -234,6 +238,31 @@ test('research attempt partials stay separate and deeper review preserves drafts
   assert.equal($('research-attempt'), null); assert.equal(JSON.stringify(f.explorer.doc.nodes[1].research), originalResearch); assert.equal(sends, 1);
 });
 
+test('follow-up source mode requires new review and retry preserves captured mode without changing newer drafts', async t => {
+  const runs = []; t.after(() => { for (const run of runs) run.resolve({}); });
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.save(doc); }, runFollowup: (_, options) => new Promise((resolve, reject) => runs.push({ ...options, resolve, reject })) });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1], original = JSON.stringify(node.research); f.open(node.id);
+  f.type('answer', 'Private answer 🌿'); f.type('followup-question', 'What does this mean?');
+  assert.equal($('followup-source-mode').value, 'existing'); $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'explanation review');
+  assert.match($('research-review-sources').textContent, /No new retrieval/); assert.match($('research-review-sources').textContent, /model provider|Model provider/); assert.match($('research-review-effort').textContent, /0 tool attempts/);
+  const token = f.explorer.researchReview.current.token;
+  $('followup-source-mode').value = 'retrieve'; $('followup-source-mode').dispatchEvent(new f.window.Event('change'));
+  await until(() => !f.explorer.researchReview.current, 'old review cancelled'); assert.equal(runs.length, 0);
+  await assert.rejects(f.explorer.command('research-follow-up', { journey: f.explorer.doc.id, nodeId: node.id, token }), /review|expired|obsolete/i);
+  $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'retrieval review'); assert.match($('research-review-sources').textContent, /External sources/);
+  await uiResponse(f, 'api/action', 'research-follow-up', () => $('research-review-start').click()); await until(() => runs.length === 1, 'retrieval started');
+  assert.equal(runs[0].prepared.followup.sourceMode, 'retrieve'); f.type('followup-question', 'Newer question draft');
+  $('followup-source-mode').value = 'existing'; $('followup-source-mode').dispatchEvent(new f.window.Event('change'));
+  runs[0].reject(helperFailure('Research tools unavailable.', 'tools-unavailable')); await until(() => !f.explorer.pending, 'failed retrieval retained'); await f.poll();
+  assert.match($('followup-turn').textContent, /Find additional sources/); $('followup-turn-retry').click(); await until(() => !$('research-review-start').disabled, 'captured retry');
+  assert.equal(f.explorer.researchReview.current.prepared.followup.sourceMode, 'retrieve'); assert.equal(runs.length, 1); assert.equal($('followup-source-mode').value, 'existing'); assert.equal($('followup-question').value, 'Newer question draft');
+  $('research-review-close').click(); $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'new explanation');
+  await uiResponse(f, 'api/action', 'research-follow-up', () => $('research-review-start').click()); await until(() => runs.length === 2, 'explanation started');
+  runs[1].resolve({ answer: 'Existing material explanation.', uncertainty: 'Current facts are not verified.', sources: [], claims: [{ id: 'c1', text: 'Synthetic reasoning.', basis: 'reasoning', evidence: [], limitations: 'Fixture only.' }] });
+  await until(() => !f.explorer.pending, 'explanation completed'); await f.poll();
+  assert.match($('followup-history').textContent, /Explain existing findings/); assert.equal($('answer').value, 'Private answer 🌿'); assert.equal($('followup-question').value, 'Newer question draft'); assert.equal(JSON.stringify(f.explorer.doc.nodes[1].research), original);
+});
+
 test('historical partial follow-up cannot silently target replacement findings for a deeper pass', async t => {
   let run;
   t.after(() => run?.resolve({}));
@@ -242,7 +271,7 @@ test('historical partial follow-up cannot silently target replacement findings f
   $('followup-target').value = 'option:0'; $('followup-target').dispatchEvent(new f.window.Event('change')); f.type('followup-question', 'Explain this original option'); $('followup-review').click();
   await startReviewedResearch(f); await until(() => run, 'follow-up running'); f.type('followup-question', 'A newer composer draft');
   const partial = { answer: 'Incomplete explanation', uncertainty: 'Unfinished.', claims: [{ id: 'c1', text: 'An unverified possibility.', basis: 'reasoning', evidence: [], limitations: 'Synthetic fixture.' }], sources: [] };
-  run.onReport({ settings: run.prepared.settings, reason: 'deadline', elapsedMs: 180001, toolAttempts: 0, duplicateAttempts: 0, deliveredTextUnits: 0, truncatedResults: 0, assessment: null, partial });
+  run.onReport({ settings: run.prepared.settings, sourceMode: 'existing', reason: 'deadline', elapsedMs: 180001, toolAttempts: 0, duplicateAttempts: 0, deliveredTextUnits: 0, truncatedResults: 0, assessment: null, partial });
   run.reject(helperFailure('Time limit reached.', 'deadline')); await until(() => !f.explorer.pending, 'partial retained'); await f.poll();
   assert.equal($('research-deeper-review').disabled, false);
   const next = structuredClone(f.explorer.doc); next.nodes[1].research.summary = 'Replacement research'; await f.explorer.save(next); await f.poll();
@@ -264,13 +293,14 @@ test('research attempt without a checkpoint says none were retained and can revi
 
 test('research attempt follow-up partial keeps its captured hypothetical question after composer changes and rerender', async t => {
   let run;
+  t.after(() => run?.resolve({}));
   const f = await fixture(t, 340, undefined, false, { runFollowup: (_, options) => new Promise((resolve, reject) => { run = { ...options, resolve, reject }; }) }), $ = id => f.document.getElementById(id);
   const saved = structuredClone(f.explorer.doc); saved.nodes[1].research = recommendationFindings(); await f.explorer.save(saved); f.window.__updates.apply(f.explorer.uiSnapshot()); f.open(saved.nodes[1].id);
   const question = 'What if <img src=x> the budget doubles? 🌿'; f.type('followup-question', question);
   $('followup-hypothetical').checked = true; $('followup-hypothetical').dispatchEvent(new f.window.Event('change'));
   $('followup-review').click(); await until(() => !$('research-review-start').disabled, 'follow-up review'); $('research-review-start').click(); await until(() => run, 'follow-up starts');
   f.type('followup-question', 'A different question');
-  run.onReport({ settings: run.prepared.settings, reason: 'deadline', elapsedMs: 180001, toolAttempts: 0, duplicateAttempts: 0, deliveredTextUnits: 0, truncatedResults: 0, assessment: null,
+  run.onReport({ settings: run.prepared.settings, sourceMode: 'existing', reason: 'deadline', elapsedMs: 180001, toolAttempts: 0, duplicateAttempts: 0, deliveredTextUnits: 0, truncatedResults: 0, assessment: null,
     partial: { answer: 'A broader pilot may fit.', uncertainty: 'Incomplete judgment.', sources: [], claims: [{ id: 'c1', text: 'A broader pilot may fit.', basis: 'reasoning', evidence: [], limitations: 'Hypothetical only.' }] } });
   run.reject(Error('Deadline')); await until(() => !f.explorer.pending, 'follow-up released'); f.window.__updates.apply(f.explorer.uiSnapshot());
   for (let view = 0; view < 2; view++) {
@@ -1672,6 +1702,30 @@ async function uiResponse(f, route, action, invoke, expectedStatus = 200) {
   } finally { f.window.fetch = original; }
 }
 
+test('journey actions allow bounded Git work while ordinary personal actions keep their shorter deadline', async t => {
+  const f = await fixture(t), originalFetch = f.window.fetch, timer = f.window.setTimeout.bind(f.window), clear = f.window.clearTimeout.bind(f.window);
+  const timers = new Map(); let signal, release, calls = 0;
+  f.window.setTimeout = (fn, ms, ...args) => { if (![10000, 30000].includes(ms)) return timer(fn, ms, ...args); const id = Symbol(); timers.set(id, { fn, ms }); return id; };
+  f.window.clearTimeout = id => { if (typeof id === 'symbol') timers.delete(id); else clear(id); };
+  const advance = ms => { for (const [id, value] of timers) { value.ms -= ms; if (value.ms <= 0) { timers.delete(id); value.fn(); } } };
+  f.window.fetch = (path, options) => {
+    if (path !== 'api/action') return originalFetch(path, options);
+    calls++; signal = options.signal;
+    return new Promise((resolve, reject) => { release = () => resolve(new Response(JSON.stringify(f.explorer.uiSnapshot()), { status: 200 })); signal.addEventListener('abort', () => reject(Error('Aborted')), { once: true }); });
+  };
+  const before = JSON.stringify(f.explorer.doc);
+  let pending = f.window.api('open-project', { path: 'decisions/map.explore.json' });
+  advance(10001); assert.equal(signal.aborted, false); release(); assert.ok(await pending);
+  pending = f.window.api('guidance', { objective: 'Personal edit' }); advance(10000); await pending;
+  assert.equal(signal.aborted, true); assert.match(f.document.getElementById('notice').textContent, /timed out.*may have been saved/);
+  pending = f.window.api('start', { topic: 'Project', storageScope: 'project' });
+  advance(29999); assert.equal(signal.aborted, false); advance(1); await pending;
+  assert.equal(signal.aborted, true);
+  f.window.__updates.apply({ ...f.explorer.uiSnapshot(), storage: { scope: 'project', path: 'decisions/map.explore.json' } });
+  pending = f.window.api('guidance', { objective: 'Project edit' }); advance(10001); assert.equal(signal.aborted, false); release(); assert.ok(await pending);
+  assert.equal(calls, 4); assert.equal(JSON.stringify(f.explorer.doc), before);
+});
+
 test('project storage controls create and explicitly reopen a repository journey with a relative location', async t => {
   const project = await mkdtemp(join(tmpdir(), 'explorer-project-controls-'));
   let f;
@@ -2640,7 +2694,7 @@ test('research conversation targets and optional starters preserve drafts and re
   const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.save(doc); }, runFollowup: async () => { calls++; return { answer: 'Explanation <script>literal</script>', uncertainty: 'Needs context', claims: [{ id: 'c1', text: 'A synthetic explanation', basis: 'reasoning', evidence: [], limitations: 'Fixture only' }], sources: [] }; } });
   const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1]; f.open(node.id);
   const composer = $('followup-question'), editor = $('answer'), target = $('followup-target'); assert.ok(target);
-  assert.match($('followup-scope').textContent, /may retrieve new sources/i); f.type('answer', 'Preserved answer');
+  assert.match($('followup-scope').textContent, /choose the source mode and review exact context/i); assert.equal($('followup-source-mode').value, 'existing'); f.type('answer', 'Preserved answer');
   target.value = 'option:1'; target.dispatchEvent(new f.window.Event('change')); $('followup-starter').click();
   assert.match(composer.value, /option.*tradeoffs/i); assert.equal(calls, 0);
   f.type('followup-question', 'My private question 🌿'); composer.focus(); composer.setSelectionRange(2, 7);
@@ -3199,7 +3253,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   window.QuestionHelpClient = QuestionHelpClient;
   Object.assign(window, { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice });
   window.ResearchReviewClient = ResearchReviewClient;
-  window.researchSettingsText = researchSettingsText;
+  window.researchSettingsText = researchSettingsText; window.followupSourceLabel = followupSourceLabel;
   Object.assign(window, { ProjectModeClient, ProjectBriefClient, researchProfiles, profileLabel });
   window.attachDashboard = attachDashboard; window.attachNavigation = attachNavigation; window.attachMinimap = attachMinimap;
   const mini = document.getElementById('minimap-map');
@@ -3212,7 +3266,7 @@ async function fixture(t, width = 1100, voice = { status: async () => ({ ready: 
   Object.assign(window, { searchFilters, matchSearch, SEARCH_PAGE_SIZE });
   options.beforeApp?.(window);
   const script = (await readFile(new URL('../com.github.copilot/extensions/explorer/web/app.mjs', import.meta.url), 'utf8')).replace('void poll();', 'window.__updates = { document: () => state.document, workspace: renderWorkspace, zoom, fit, scene: () => ({ detail: typeof detailTier === "undefined" ? null : detailTier, positions, geometry: typeof geometryCache === "undefined" ? null : geometryCache.value, view: { ...view }, selected, expanded }), setView: next => { view = { ...next }; refreshScene(null); }, reveal: revealNode, select, refresh: refreshScene, apply, polling: () => !!pollFlight, poll: () => { clearTimeout(pollTimer); return poll(); } }; void poll();');
-  window.eval(script.replace("import { ProjectBriefClient } from './project-brief-client.mjs';", "").replace("import { researchProfiles, profileLabel } from './research-guidance.mjs';", "").replace("import { ProjectModeClient } from './project-mode-client.mjs';", "").replace("import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './research-freshness.mjs';", "").replace("import { ChangeSummaryClient } from './change-summary-client.mjs';", '').replace("import { AdrSourcesClient } from './adr-sources-client.mjs';", '').replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
+  window.eval(script.replace("import { ProjectBriefClient } from './project-brief-client.mjs';", "").replace("import { researchProfiles, profileLabel } from './research-guidance.mjs';", "").replace("import { ProjectModeClient } from './project-mode-client.mjs';", "").replace("import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from './research-freshness.mjs';", "").replace("import { ChangeSummaryClient } from './change-summary-client.mjs';", '').replace("import { AdrSourcesClient } from './adr-sources-client.mjs';", '').replace("import { PortableReferenceClient } from './portable-reference-client.mjs';", '').replace("import { ReviewHandoffsClient } from './review-handoffs-client.mjs';", '').replace("import { CommentsClient } from './comments-client.mjs';", '').replace("import { reviewQueue, reviewContext } from './review-queue.mjs';", '').replace("import { DecisionImpact, impactPath, decisionImpactKey, criticalPaths } from './decision-impact.mjs';", '').replace("import { attachDashboard } from './dashboard.mjs';", '').replace("import { searchFilters, matchSearch, SEARCH_PAGE_SIZE } from './search.mjs';", '').replace("import { attachMinimap } from './minimap.mjs';", '').replace("import { NextQuestion } from './next-question.mjs';", '').replace("import { localDate, REVISIT_FILTERS, revisitStatuses, revisitMatches } from './revisit.mjs';", '').replace("import { researchSettingsText, followupSourceLabel } from './research-policy.mjs';", '').replace("import { ResearchReviewClient } from './research-review-client.mjs';", '').replace("import { layout, branchView, revealPath } from './layout.mjs';", '').replace("import { CleanupClient } from './cleanup.mjs';", '').replace("import { QuestionHelpClient } from './question-help-client.mjs';", '').replace("import { GeometryCache, viewportBounds, intersects, branchView, revealPath } from './layout.mjs';", '').replace("import { attachVoice } from './voice.mjs';", '').replace("import { DraftClient } from './drafts.mjs';", '').replace("import { attachNavigation } from './navigation.mjs';", '').replace("import { ANSWER_STATES, effectiveAnswerState, answerStateError, questionCounts, isQuestion, nodeStatus } from './answer-state.mjs';", '').replace("import { effectiveMode, MODES } from './modes.mjs';", ''));
   await until(() => options.empty ? !document.getElementById('library-home').hidden : options.cold ? document.getElementById('notice').textContent : width && !options.preview ? document.querySelectorAll('#nodes button').length >= 3 : document.getElementById('map-title').textContent, 'initial map');
   const open = id => {
     const question = explorer.doc.nodes.find(n => n.id === id).question;

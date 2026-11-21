@@ -11,7 +11,7 @@ import { ChangeSummaryClient } from './change-summary-client.mjs';
 import { CleanupClient } from './cleanup.mjs';
 import { QuestionHelpClient } from './question-help-client.mjs';
 import { ResearchReviewClient } from './research-review-client.mjs';
-import { researchSettingsText } from './research-policy.mjs';
+import { researchSettingsText, followupSourceLabel } from './research-policy.mjs';
 import { researchProfiles, profileLabel } from './research-guidance.mjs';
 import { ProjectModeClient } from './project-mode-client.mjs';
 import { ProjectBriefClient } from './project-brief-client.mjs';
@@ -705,13 +705,14 @@ async function api(action, input = {}) {
   if (busy || closed || suspended) return null;
   busy = true; actionEpoch++; stateCursor = null; pollFlight?.abort.abort();
   const epoch = actionEpoch, page = pageEpoch, abort = new AbortController(); actionAbort = abort;
-  const timeout = setTimeout(() => abort.abort(), 10000);
+  const journeyAction = ['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'open-compared-source', 'open-preferred-source', 'import'].includes(action);
+  const timeout = setTimeout(() => abort.abort(), journeyAction || state.storage?.scope === 'project' ? 30000 : 10000);
   try {
     const response = await fetch('api/action', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action, revision: state.document?.revision, scope: action === 'start' ? $('start-scope').value : $('context-scope').value, ...input }) });
     const result = await response.json();
     if (closed || suspended || page !== pageEpoch || epoch !== actionEpoch) return null;
     if (!response.ok) throw new Error(result.error);
-    if (!result.importConflict && action !== 'context-coverage') apply(result, ['start', 'open', 'open-project', 'open-project-entry', 'open-project-copy', 'open-compared-source', 'open-preferred-source', 'import'].includes(action)); return result;
+    if (!result.importConflict && action !== 'context-coverage') apply(result, journeyAction); return result;
   } catch (error) {
     if (!closed && !suspended && page === pageEpoch && epoch === actionEpoch) notice(abort.signal.aborted ? 'The action response timed out. Refresh the saved map before retrying; it may have been saved. Your draft is still here.' : error.message);
     return null;
@@ -2860,7 +2861,7 @@ function renderResearchAttempt(node, attempt) {
     el('p', { class: 'quiet' }, 'Token and credit receipts are retained separately. No total cost is estimated here. Attempt details stay in this canvas only; switching journeys or closing Explorer clears them.'));
   const historical = el('p', { id: 'research-attempt-historical', class: 'review-warning', hidden: !attempt.historical }, 'Historical attempt: its saved context or reviewed evidence changed. Inspect it as earlier work, not current support.');
   section.append(historical);
-  if (attempt.followup) section.append(el('p', {}, el('strong', {}, attempt.followup.hypothetical ? 'Hypothetical follow-up: ' : 'Follow-up: '), attempt.followup.question));
+  if (attempt.followup) section.append(el('p', { class: 'quiet' }, followupSourceLabel(attempt.followup.sourceMode)), el('p', {}, el('strong', {}, attempt.followup.hypothetical ? 'Hypothetical follow-up: ' : 'Follow-up: '), attempt.followup.question));
   if (report.assessment) {
     const assessed = detail('research-effort-plan', 'Model-assessed plan and stopping reason');
     const labels = { 'sufficient-support': 'The model assessed that it had enough support.', 'evidence-unavailable': 'The model assessed that the remaining evidence was unavailable.', 'selected-budget': 'The model chose to conclude within the selected effort.', 'in-progress': 'This checklist was still in progress.' };
@@ -2942,7 +2943,7 @@ function researchReviewSummary(prepared) {
   const target = context.path.at(-1), prior = [...context.path.slice(0, -1), ...context.decisionsElsewhere];
   const concise = text => [...text].length > 220 ? `${[...text].slice(0, 220).join('')}… (full text in Exact inputs)` : text;
   const summary = el('section', { id: 'research-review-summary' }, el('h3', { id: 'research-review-question' }, target.question));
-  if (followup) summary.append(el('p', { id: 'research-review-followup' }, `Follow-up${followup.hypothetical ? ' (hypothetical)' : ''}: ${followup.question}`));
+  if (followup) summary.append(el('p', { id: 'research-review-followup' }, `Follow-up${followup.hypothetical ? ' (hypothetical)' : ''}: ${followup.question}`), el('p', { id: 'research-review-source-mode' }, followupSourceLabel(followup.sourceMode)));
   if (followup) summary.append(el('p', { id: 'research-review-followup-target' }, `Discuss: ${concise(followup.targetLabel ?? 'Whole research')}. ${followup.target ? 'The selected record is included in Exact inputs.' : 'Exact inputs lists included research records and omissions.'}`));
   if (comparison) summary.append(el('p', {}, `Hypothetical priorities: ${comparison.criteria.map(item => `${item.label} (${item.priority})`).join('; ')}. Compare ${comparison.options.length} existing options; prior claims are not rechecked.`));
   summary.append(el('p', {}, `Saved answer: ${ANSWER_STATES[target.answerState] ?? 'No answer'}${target.review ? ' · needs review' : ''}. Unsaved answer draft is excluded. Mode: ${MODES[context.mode].label}.`));
@@ -2952,7 +2953,7 @@ function researchReviewSummary(prepared) {
   if (prepared.guidance) summary.append(el('p', { id: 'research-review-guidance' }, `${profileLabel(settings.profile)} ${prepared.guidance.reason}`));
   if (model) summary.append(el('p', { id: 'research-review-model' }, modelDescription(model)));
   summary.append(el('p', { id: 'research-review-effort' }, `${comparison ? 'Reconsideration' : settings.depth[0].toUpperCase() + settings.depth.slice(1)}: up to ${limits.timeLimitMs / 1000} seconds including setup, and ${limits.toolAttemptLimit} tool attempts. This is an effort limit, not a completion or price estimate.`),
-    el('p', { id: 'research-review-sources' }, comparison ? 'Model provider: receives the reviewed inputs. No new retrieval: this tool-free reconsideration uses only the included saved context and prior research. Prior claims and sources remain historical, not newly verified evidence.' : 'Model provider: receives the reviewed inputs. External sources: search and page retrieval may send queries and page requests to external services, subject to host permissions.'));
+    el('p', { id: 'research-review-sources' }, comparison || followup?.sourceMode === 'existing' ? 'Model provider: receives the reviewed inputs. No new retrieval: this tool-free request uses only the included saved context and prior research. Prior claims and sources remain historical, not newly verified evidence. This is not offline execution. Checking current facts requires explicitly choosing additional sources and reviewing a new request.' : 'Model provider: receives the reviewed inputs. External sources: search and page retrieval may send queries and page requests to external services, subject to host permissions.'));
   if (prepared.reuse) {
     const reviewed = researchReview.value;
     summary.append(el('p', { id: 'research-reuse-summary' }, `Your last answer to this exact follow-up is eligible for reuse. It was completed ${prepared.reuse.completedAt}. Use previous answer sends no new model or source request and keeps the original source dates. Research sends the reviewed inputs for a new answer.`),
@@ -3048,7 +3049,7 @@ function renderResearchReview() {
     controls.append(el('label', {}, label, select));
   }
   if (value.prepared.guidance) controls.append(el('p', {}, value.prepared.guidance.applicability), el('details', { id: 'research-guidance-detail' }, el('summary', {}, 'Selected topic guidance'), el('pre', {}, value.prepared.guidance.text)), el('p', { class: 'quiet' }, 'Guidance changes the comparison criteria, not tool permissions or the effort limit. General handles mixed or unfamiliar topics.'));
-    const rows = [...(projectQuestions ? [el('p', {}, 'Uses the selected Copilot model in a separate helper with zero tools and a 180-second operation allowance. Cancellation stops only this helper. Model-provider input and normal Copilot usage apply; shutdown/accounting may continue afterward.'), display('Approved project brief: file-backed interpretations, inferences, unknowns and user assertions', value.prepared.projectBrief)] : challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : regeneration ? [el('p', {}, 'Question generation is queued in the attached chat. Cancellation rejects its result but does not stop the chat turn. No isolated research helper or web retrieval is started by this action.')] : reconsideration ? [] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. ${regeneration ? 'Needs-review answer text is withheld; required prerequisites and selected coverage are shown below.' : 'Saved journey records are complete; project prefixes are labeled separately.'}`),
+    const rows = [...(projectQuestions ? [el('p', {}, 'Uses the selected Copilot model in a separate helper with zero tools and a 180-second operation allowance. Cancellation stops only this helper. Model-provider input and normal Copilot usage apply; shutdown/accounting may continue afterward.'), display('Approved project brief: file-backed interpretations, inferences, unknowns and user assertions', value.prepared.projectBrief)] : challenge ? [el('p', {}, 'One owned helper; 180 seconds operation allowance; zero tools; up to 12 findings. Shutdown/accounting may continue afterward. Usage is retained as Explorer Challenge Review; no price estimate is available.'), ...(value.prepared.canStart ? [] : [el('p', { class: 'notice' }, 'Select at least one saved nonempty answer to challenge. Tentative answers remain tentative; guidance alone is not a decision.')])] : regeneration ? [el('p', {}, 'Question generation is queued in the attached chat. Cancellation rejects its result but does not stop the chat turn. No isolated research helper or web retrieval is started by this action.')] : reconsideration ? [] : [controls, el('p', { id: 'research-settings-summary' }, researchSettingsText(settings, value.prepared.followup?.sourceMode))]), el('p', {}, `${bytes.toLocaleString()} / ${limit.toLocaleString()} UTF-8 bytes for actual instructions plus prompt. Omitted ${coverage.omitted.path} ancestors and ${coverage.omitted.decisionsElsewhere} other answers: ${coverage.omitted.budget} for size, ${coverage.omitted.scope} by scope, ${coverage.omitted.excluded ?? 0} excluded. ${regeneration ? 'Needs-review answer text is withheld; required prerequisites and selected coverage are shown below.' : 'Saved journey records are complete; project prefixes are labeled separately.'}`),
     display('Required: committed journey guidance and mode', { topic, objective, successCriteria, mode, pins }),
       display(challenge ? 'Required: journey root' : 'Required: selected question and committed answer state', context.path.at(-1))];
   if (challenge) {
@@ -3126,6 +3127,8 @@ function renderFollowup(node, ui) {
   const draft = followupDraft?.journey === journey && followupDraft.nodeId === node.id ? followupDraft : null;
   const question = el('textarea', { id: 'followup-question', rows: '3', maxlength: '4000' }); question.value = draft?.question ?? '';
   const hypothetical = el('input', { id: 'followup-hypothetical', type: 'checkbox' }); hypothetical.checked = draft?.hypothetical ?? false;
+  const sourceMode = el('select', { id: 'followup-source-mode', 'aria-describedby': 'followup-source-mode-help' }, ...['existing', 'retrieve'].map(value => el('option', { value }, followupSourceLabel(value)))); sourceMode.value = draft?.sourceMode ?? 'existing';
+  const sourceHelp = el('p', { id: 'followup-source-mode-help', class: 'quiet' });
   const target = el('select', { id: 'followup-target' }), targetStatus = el('p', { id: 'followup-target-status', class: 'quiet', role: 'status' });
   const scope = el('p', { id: 'followup-scope', class: 'quiet' }), starterText = el('p', { id: 'followup-starter-text', class: 'quiet' });
   let researchKey = JSON.stringify(node.research), choices = followupTargets(node.research);
@@ -3135,12 +3138,13 @@ function renderFollowup(node, ui) {
   const current = () => question.isConnected && !closed && !suspended && selected === node.id && expanded && journey === referenceJourney();
   const input = () => {
     const selectedTarget = choices.find(choice => choice.key === target.value)?.target;
-    return { question: question.value, hypothetical: hypothetical.checked, ...(selectedTarget ? { target: selectedTarget } : {}) };
+    return { question: question.value, hypothetical: hypothetical.checked, sourceMode: sourceMode.value, ...(selectedTarget ? { target: selectedTarget } : {}) };
   };
   const starters = { recommendation: 'Why is this recommended, and what would change that recommendation?', option: 'What does this option mean, and what are its main tradeoffs?', claim: 'What supports this claim, and what is still uncertain?' };
   const showStarter = () => {
     starterText.textContent = starters[input().target?.kind] ?? 'What should I understand before choosing an answer?';
     starter.textContent = question.value ? 'Append starter' : 'Use starter';
+    sourceHelp.textContent = sourceMode.value === 'existing' ? 'No new retrieval. Explain or compare these findings; current facts may remain unknown. To check current support or fill an evidence gap, choose Find additional sources and review again. Both modes send reviewed context to the model provider.' : 'Search and page retrieval may contact external services under the existing permissions. Review the exact context and effort before Research; findings and saved answers remain unchanged.';
   };
   const remember = () => {
     if (!current()) return;
@@ -3157,7 +3161,7 @@ function renderFollowup(node, ui) {
     if (text.length > 4000) return notice('The starter would exceed 4,000 characters. Your question is unchanged.');
     question.value = text; remember(); question.focus({ preventScroll: true }); question.setSelectionRange(text.length, text.length);
   }, { id: 'followup-starter', 'aria-describedby': 'followup-starter-text' });
-  question.addEventListener('input', remember); hypothetical.addEventListener('change', remember); target.addEventListener('change', remember);
+  question.addEventListener('input', remember); hypothetical.addEventListener('change', remember); target.addEventListener('change', remember); sourceMode.addEventListener('change', remember);
   ui.followupSync = () => {
     if (!current()) return;
     const latest = state.document.nodes.find(item => item.id === node.id), key = JSON.stringify(latest?.research);
@@ -3168,7 +3172,7 @@ function renderFollowup(node, ui) {
       if (inlineResearchReview && researchReview.context?.followup) closeResearchReview(false);
       remember();
     }
-    scope.textContent = `Discussing this question: ${latest.question} Original findings: ${latest.research.basis === 'sources' ? 'source-linked model interpretation' : latest.research.basis === 'reasoning' ? 'model reasoning' : 'basis not recorded'}. A follow-up may retrieve new sources; review its exact context and effort before Research.`;
+    scope.textContent = `Discussing this question: ${latest.question} Original findings: ${latest.research.basis === 'sources' ? 'source-linked model interpretation' : latest.research.basis === 'reasoning' ? 'model reasoning' : 'basis not recorded'}. Choose the source mode and review exact context before Research.`;
     showStarter();
   };
   const retention = el('details', {}, el('summary', {}, 'Discussion scope and retention'), el('p', { class: 'quiet' }, 'Up to four complete exchanges (64 KiB) and one latest submitted turn stay in this canvas until it closes or restarts. Navigation hides this history; asking on another node replaces it. Exact review reports any omitted history or research records. Reload clears the typed question but can reconnect to submitted work while this canvas remains open. Started work continues until it finishes or you cancel; a reload never starts another request.'));
@@ -3177,6 +3181,7 @@ function renderFollowup(node, ui) {
     el('p', { class: 'quiet' }, 'Ask about terms, choices or assumptions. Discussion and hypothetical changes do not change your saved answer.'),
     el('div', { id: 'followup-history', 'aria-live': 'polite' }), el('div', { id: 'followup-turn', hidden: '', 'aria-live': 'polite' }),
     el('label', { for: 'followup-target' }, 'Discuss'), target, targetStatus, starterText, starter,
+    el('label', { for: 'followup-source-mode' }, 'Sources for this follow-up'), sourceMode, sourceHelp,
     el('label', { for: 'followup-question' }, 'Follow-up question (4,000 characters maximum)'), question,
     el('label', {}, hypothetical, ' Explore a hypothetical assumption'),
     button('Review follow-up context', () => { if (!current()) return; remember(); if (!question.value.trim()) return notice('Enter a follow-up question.'); openResearchReview(node.id, input()); }, { id: 'followup-review' }), retention);
@@ -3189,7 +3194,7 @@ function updateFollowupTurn(node) {
   area.dataset.value = signature; area.hidden = !turn; area.replaceChildren(); if (!turn) return;
   const current = () => area.isConnected && !closed && !suspended && selected === node.id && state.followupTurn?.id === turn.id && referenceJourney() === turn.journey;
   const labels = { pending: 'Pending', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted' };
-  area.append(el('h4', {}, labels[turn.status]), el('p', { class: 'quiet' }, 'You · ' + turn.targetLabel), el('p', {}, turn.input.question));
+  area.append(el('h4', {}, labels[turn.status]), el('p', { class: 'quiet' }, 'You · ' + turn.targetLabel), el('p', { class: 'quiet' }, followupSourceLabel(turn.input.sourceMode)), el('p', {}, turn.input.question));
   if (turn.message) area.append(el('p', {}, turn.message));
   if (operation && turn.status !== 'pending') area.append(el('p', {}, researchRecoveryAdvice(operation)));
   if (turn.historical) area.append(el('p', { class: 'review-warning' }, 'The original research or saved context changed. Choose a current target and review a new question.'));
@@ -3239,7 +3244,7 @@ function updateFollowupHistory(node) {
     if (value.dropped) rows.push(el('p', { class: 'quiet' }, `${value.dropped} older complete exchanges omitted by the four-exchange / 64 KiB retention limit.`));
     for (const exchange of value.exchanges) {
       const result = exchange.result, block = el('section', { class: 'research-claim', id: 'followup-exchange-' + exchange.id, tabindex: '-1' }, el('p', { class: 'quiet', id: 'followup-reused-' + exchange.id, hidden: '' }), el('h4', {}, exchange.hypothetical ? 'You · hypothetical question' : 'You'), el('p', { class: 'quiet' }, exchange.targetLabel ?? 'Whole research'), el('p', {}, exchange.question),
-        el('h4', {}, 'Explorer explanation'), el('p', { class: 'quiet' }, 'Completed · saved answers unchanged'), el('p', { class: 'quiet', 'data-followup-profile': exchange.id }, profileLabel(exchange.profile)), el('p', {}, result.answer), el('p', {}, el('strong', {}, 'Uncertainty: '), result.uncertainty));
+        el('h4', {}, 'Explorer explanation'), el('p', { class: 'quiet' }, 'Completed · saved answers unchanged'), el('p', { class: 'quiet', 'data-followup-source-mode': exchange.id }, followupSourceLabel(exchange.sourceMode)), el('p', { class: 'quiet', 'data-followup-profile': exchange.id }, profileLabel(exchange.profile)), el('p', {}, result.answer), el('p', {}, el('strong', {}, 'Uncertainty: '), result.uncertainty));
       for (const claim of result.claims) {
         const detail = el('details', {}, el('summary', {}, `${claim.text} (${claim.basis === 'sources' ? 'source-linked model interpretation' : claim.basis})`), el('p', { class: 'quiet', 'data-followup-exchange': exchange.id, 'data-followup-claim': claim.id }, claimFreshnessText(claim, researchFreshness(result))), el('p', {}, `Limitations: ${claim.limitations}`));
         for (const reference of claim.evidence) {

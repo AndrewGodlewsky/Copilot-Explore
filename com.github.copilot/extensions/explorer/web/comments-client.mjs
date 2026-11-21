@@ -107,7 +107,7 @@ export class CommentsClient {
     const identity = journey(state), epoch = ++this.epoch, abort = new AbortController(); this.flight = abort;
     const release = this.begin(); this.release = release;
     const current = () => this.active() && $('comments-dialog').open && epoch === this.epoch && identity === journey(this.state());
-    const timer = setTimeout(() => abort.abort(), 10000); $('comments-status').textContent = 'Saving discussion…'; this.update();
+    const timer = setTimeout(() => abort.abort(), 30000); $('comments-status').textContent = 'Saving discussion…'; this.update();
     try {
       const response = await this.fetch('api/action', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: `comment-${action}`, revision: state.document.revision, journey: identity, ...fields }) });
       const result = await response.json(); if (!current()) return;

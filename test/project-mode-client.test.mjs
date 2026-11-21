@@ -71,6 +71,20 @@ test('editing branch direction or leaving during discovery discards late suggest
   }
 });
 
+test('opening targeted scope during background status refresh renders the target and replaces the old request', async t => {
+  const f = await fixture(t); let release;
+  f.client.accept({ ...f.reply({ action: 'status' }), state: 'active' }, 'status');
+  f.intercept(input => !release ? new Promise(resolve => { release = () => resolve({ ...f.reply(input), message: 'Old background result' }); }) : { ...f.reply(input), message: 'Fresh dialog result' });
+  const background = f.tick();
+  assert.equal(f.client.loading, true); assert.equal(f.$('project-mode-dialog').open, false);
+  f.client.open({ nodeId: 'target-a', question: 'Who should borrow first?' });
+  const shown = f.$('project-mode-target-question').textContent;
+  release(); await background; await new Promise(setImmediate);
+  assert.equal(shown, 'Who should borrow first?'); assert.equal(f.client.loading, false);
+  assert.equal(f.client.value.message, 'Fresh dialog result');
+  assert.deepEqual(f.requests.map(request => request.action), ['status', 'status']);
+});
+
 test('opening a different branch does not adopt a previous branch inventory from delayed cancellation', async t => {
   const f = await fixture(t);
   f.intercept(input => ({ ...f.reply(input), inventory: { candidates: [{ name: 'old.ts', bytes: 1, reason: 'Old branch' }], target: { nodeId: 'old', direction: '', suggested: ['old.ts'] } } }));

@@ -10,6 +10,7 @@ import { Explorer } from '../com.github.copilot/extensions/explorer/controller.m
 import { createDocument } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { parseProjectBrief, PROJECT_BRIEF_SECTIONS } from '../com.github.copilot/extensions/explorer/project-brief.mjs';
 import { startServer } from '../com.github.copilot/extensions/explorer/server.mjs';
+import { directoryState } from '../com.github.copilot/extensions/explorer/storage-context.mjs';
 import { waitFor } from './helpers/wait-for.mjs';
 
 async function fixture(t, options = {}) {
@@ -23,7 +24,17 @@ async function fixture(t, options = {}) {
     output.purpose[0] = { id: 'purpose', text: canary, kind: 'file-backed', sources: [{ id: prepared.context.sources[0].id, quote: canary }] };
     return parseProjectBrief(JSON.stringify(output), prepared);
   } };
-  const explorer = await new Explorer({ file, projectRoot: () => working, projectBriefHelper: helper, send: async message => { ordinary.push(message); } }).load(), server = await startServer(explorer);
+  const explorer = await new Explorer({ file, projectRoot: () => working, projectBriefHelper: helper, send: async message => { ordinary.push(message); } }).load();
+  if (options.controlledCheckout) {
+    // This case tests project identity and correction ownership, independently of Git process speed.
+    explorer.projectMode.checkoutReader = async (reader, { expectedRoot, signal } = {}) => {
+      signal?.throwIfAborted(); const current = await reader.root();
+      if (expectedRoot && JSON.stringify(current) !== JSON.stringify(expectedRoot)) throw Error('Fixture project changed');
+      const checkout = await directoryState(current.path); signal?.throwIfAborted();
+      return { ...checkout, git: { branch: 'refs/heads/fixture', head: null } };
+    };
+  }
+  const server = await startServer(explorer);
   t.after(async () => { explorer.projectBrief?.clear(); release?.(); await server.close(); await explorer.close(); assert.equal(dirname(resolve(directory)), resolve(tmpdir())); assert.ok(basename(directory).startsWith('explorer-brief-controller-')); await rm(directory, { recursive: true, force: true }); });
   let scopeSequence = 0, sequence = 0; const scopeClient = randomUUID(), clientId = randomUUID();
   const scope = (action, extra = {}) => explorer.projectModeRequest({ action, purpose: 'project-questions', journey: doc.id, clientId: scopeClient, sequence: ++scopeSequence, ...extra });
@@ -71,8 +82,8 @@ test('project briefs share the cross-feature shutdown barrier and wait for confi
 
 test('metadata-only project changes clear saved corrections before recapture, including an already-off scope', async t => {
   for (const off of [false, true]) {
-    const f = await fixture(t); await f.request('status'); const preview = await f.request('prepare'); await f.request('start', { id: randomUUID(), token: preview.token });
-    await waitFor(() => f.explorer.projectBrief.work?.status !== 'pending'); const draft = await f.request('status');
+    const f = await fixture(t, { controlledCheckout: true }); await f.request('status'); const preview = await f.request('prepare'); await f.request('start', { id: randomUUID(), token: preview.token });
+    await f.explorer.projectBrief.work.task; assert.equal(f.explorer.projectBrief.work.status, 'result', f.explorer.projectBrief.error); const draft = await f.request('status');
     await f.request('edit', { revision: draft.revision, changes: { edits: [], remove: [], additions: [{ section: 'purpose', text: 'PROJECT_A_USER_CORRECTION' }] } });
     if (off) { await f.scope('disable'); assert.equal((await f.request('status')).corrections.length, 1, 'same-project off preserves corrections'); }
     const other = join(dirname(f.root), 'other-project'); await mkdir(other); await promisify(execFile)('git', ['init', '--quiet', other], { windowsHide: true }); f.setRoot(other);

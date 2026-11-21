@@ -223,7 +223,8 @@ test('expiry, destination changes, closed preparation and in-flight cancellation
 });
 test('review measures transport separately under escaping and rejects oversized exclusions', async t => {
   const f = await fixture(t), doc = structuredClone(f.doc);
-  doc.nodes[1].answer = '\u0000'.repeat(18000) + '\ud83c\udf3f';
+  const baseline = (await f.review()).prepared.bytes;
+  doc.nodes[1].answer = '\u0000'.repeat(Math.floor((131072 - baseline - 64) / 6)) + '\ud83c\udf3f';
   doc.revision++;
   await writeFile(f.file, JSON.stringify(doc)); const review = await f.review();
   assert.equal(review.prepared.context.path.at(-1).answer, doc.nodes[1].answer);

@@ -1,5 +1,12 @@
 import { researchProfile, profileDetails, profileText, profileLabel } from './research-guidance.mjs';
 const budgets = Object.freeze({ quick: [60000, 8], standard: [180000, 24], deeper: [300000, 40] });
+export function followupSourceMode(value = 'existing') {
+  if (!['existing', 'retrieve'].includes(value)) throw Error('Choose a valid follow-up source mode.');
+  return value;
+}
+export function followupSourceLabel(value) {
+  return value === 'existing' ? 'Explain existing findings' : value === 'retrieve' ? 'Find additional sources' : 'Source mode not recorded';
+}
 export function researchSettings(value = { depth: 'standard', sourceFocus: 'balanced', recency: 'any' }) {
   if (!value || Array.isArray(value) || !['depth,recency,sourceFocus', 'depth,profile,recency,sourceFocus'].includes(Object.keys(value).sort().join(',')) ||
     !Object.hasOwn(budgets, value.depth) || !['balanced', 'primary'].includes(value.sourceFocus) || !['any', 'recent'].includes(value.recency)) throw new Error('Invalid research settings.');
@@ -12,13 +19,14 @@ export function guidedResearchSettings(value, inherited) {
   const reason = settings.profile ? 'Selected in this review.' : inherited ? 'Retained from the latest recorded profile in this research discussion.' : 'General is the default; no topic classification was inferred.';
   return Object.freeze({ settings: Object.freeze({ ...settings, profile }), guidance: Object.freeze({ ...profile, title: details.title, applicability: details.applicability, reason, text: profileText(profile) }) });
 }
-export function researchLimits(settings) {
+export function researchLimits(settings, sourceMode) {
   const [timeLimitMs, toolAttemptLimit] = budgets[researchSettings(settings).depth];
-  return Object.freeze({ timeLimitMs, toolAttemptLimit });
+  return Object.freeze({ timeLimitMs, toolAttemptLimit: sourceMode !== undefined && followupSourceMode(sourceMode) === 'existing' ? 0 : toolAttemptLimit });
 }
-export function researchSettingsText(settings) {
+export function researchSettingsText(settings, sourceMode) {
   if (!settings) return 'Research settings unknown (older or imported result).';
-  const value = researchSettings(settings), limits = researchLimits(value);
+  const value = researchSettings(settings), limits = researchLimits(value, sourceMode);
+  if (sourceMode === 'existing') return `${profileLabel(value.profile)} ${value.depth[0].toUpperCase() + value.depth.slice(1)}: ${limits.timeLimitMs / 1000} seconds of operation time, including setup. No new retrieval or available tools. Explain the reviewed findings and identify gaps; current facts remain unknown unless supported by the included evidence. Source focus and recency preferences apply only to additional retrieval. Reviewed inputs still go to the model provider; this is not offline execution. Shutdown and usage accounting may continue afterward. No automatic deeper pass or retrieval escalation.`;
   const effort = { quick: 'A focused first pass for a small evidence gap.', standard: 'Room to compare the main decision criteria.', deeper: 'More room for difficult or conflicting evidence.' }[value.depth];
   return `${profileLabel(value.profile)} ${value.depth[0].toUpperCase() + value.depth.slice(1)}: ${limits.timeLimitMs / 1000} seconds of operation time, including setup; at most ${limits.toolAttemptLimit} tool attempts, including denied attempts. ${effort} Stop early when sufficient support is assessed or remaining evidence is unavailable; no automatic deeper pass. Source focus: ${value.sourceFocus === 'primary' ? 'prefer primary sources' : 'balanced evidence'}. Recency: ${value.recency === 'recent' ? 'prefer recent sources when relevant' : 'no recency preference'}. Shutdown and usage accounting may continue afterward. Preferences do not guarantee source availability, freshness or accuracy; unknown publication dates stay unknown.`;
 }

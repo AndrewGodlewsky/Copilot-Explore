@@ -162,3 +162,14 @@ test('ordinary questions never request project access or include an approved sco
   await waitFor(() => sent.length === 1);
   assert.equal(rootReads, 0); assert.equal(sent.length, 1); assert.ok(!JSON.stringify(sent).includes('notes.md')); assert.ok(!JSON.stringify(sent).includes('PRIVATE PROJECT CANARY'));
 });
+
+test('project work retains its five-second cancellation deadline', async t => {
+  const mode = new ProjectMode({}, () => 'fixture'); let captured, release;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const work = mode.work(signal => { captured = signal; return new Promise(resolve => { release = resolve; }); });
+  const rejected = assert.rejects(work, /time budget/i);
+  t.mock.timers.tick(4999); assert.equal(captured.aborted, false);
+  t.mock.timers.tick(1); assert.equal(captured.aborted, true);
+  release({ target: 'A late discovery must not be accepted' }); await rejected;
+  assert.equal(mode.pending, null); assert.equal(mode.inventory, null); assert.equal(mode.readConsent, null);
+});

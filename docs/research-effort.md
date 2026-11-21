@@ -1,8 +1,10 @@
 # Research effort and partial findings
 
-Research uses the depth chosen in the inline review. Quick is a focused pass (60 seconds, 8 tool attempts), Standard compares the material criteria (180 seconds, 24 attempts), and Deeper allows more investigation of difficult gaps (300 seconds, 40 attempts). These are ceilings, not targets or promises about quality, price or completion time. Setup counts; waiting for an earlier helper's release does not. Shutdown and retained usage accounting may finish later.
+Additional retrieval uses the depth chosen in the inline review. Quick is a focused pass (60 seconds, 8 tool attempts), Standard compares the material criteria (180 seconds, 24 attempts), and Deeper allows more investigation of difficult gaps (300 seconds, 40 attempts). These are ceilings, not targets or promises about quality, price or completion time. Setup counts; waiting for an earlier helper's release does not. Shutdown and retained usage accounting may finish later.
 
 The packaged research skill asks for a small public evidence checklist, enough applicable support for the decision, and an early conclusion when further evidence is unavailable. An optional `effortAssessment` contains 1–5 `{criterion,neededEvidence}` entries (200/300 UTF-16 units), a nonblank explanation of at most 600 units, and a model-assessed reason: `sufficient-support`, `evidence-unavailable` or `selected-budget`. A checkpoint may instead say `in-progress`. Missing assessments stay unreported. This is a public summary, not private reasoning or an independent accuracy judgment.
+
+**Explain existing findings** follow-ups use the same elapsed allowance with zero permitted tool attempts. The report records `sourceMode: existing`; completed explanations require zero attempts and delivered tool text. A first forbidden tool attempt is counted, denied and stops the helper. Source preferences do not enable tools. Partial checkpoints remain separate and retain the submitted mode; deeper review cannot silently switch to retrieval.
 
 ## Enforced bounds
 
@@ -29,7 +31,7 @@ The Research drawer shows a concise attempt summary, an expandable model-assesse
 
 A follow-up attempt displays its exact captured question and hypothetical status independently of the current composer draft. A completed result uses only its final optional assessment; a checkpoint's unfinished assessment cannot become the final stopping explanation.
 
-**Review deeper research** opens the existing inline review at the next depth. At Deeper it reads **Review another pass**. It never starts a helper by itself. A follow-up retry keeps its captured question and hypothetical flag; current context must still be reviewed. The existing **Research** action starts the new request explicitly. A previous attempt may remain visible while that pass runs.
+**Review deeper research** opens the existing inline review at the next depth. At Deeper it reads **Review another pass**. It never starts a helper by itself. A follow-up retry keeps its captured question, hypothetical flag and source mode; current context must still be reviewed. The existing **Research** action starts the new request explicitly. A previous attempt may remain visible while that pass runs.
 
 **Clear attempt details** removes only this transient attempt. Switching journeys or closing Explorer clears it; navigation to another node hides it. Reloading the page can reconnect while the canvas remains alive. Attempt details and partial text never enter the saved map, native snapshot, exports or later model prompts. They are not a persistent research cache. Copy anything needed before closing the canvas.
 

@@ -67,9 +67,10 @@ export async function runCase(item, { guidance = '' } = {}) {
     async createSession(config) {
       return { sessionId: config.sessionId, rpc: { ...parent.rpc,
         metadata: { snapshot: async () => ({ workingDirectory: this.config.workingDirectory, isRemote: false }) },
-        tools: { initializeAndValidate: async () => {}, getCurrentMetadata: async () => ({ tools: availableTools }) },
+        tools: { initializeAndValidate: async () => {}, getCurrentMetadata: async () => ({ tools: config.availableTools?.length === 0 ? [] : availableTools }) },
       }, sendAndWait: async input => {
         fixtureModelCalls++;
+        if (mode === 'followup') { assert.deepEqual(config.availableTools, []); assert.deepEqual(config.mcpServers, {}); }
         assert.equal(input.prompt, expected.prompt); assert.equal(config.systemMessage.content, expected.instructions);
         assert.equal(Buffer.byteLength(input.prompt) + Buffer.byteLength(config.systemMessage.content), expected.bytes);
         inputs.push({ prompt: input.prompt, instructions: config.systemMessage.content });

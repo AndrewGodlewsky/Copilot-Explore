@@ -156,7 +156,7 @@ export class ReviewHandoffsClient {
     const { action: submittedAction, ...fields } = draft.submission, submission = draft.submission, identity = journey(state), epoch = ++this.epoch, abort = new AbortController(); this.flight = abort;
     const release = this.begin(); this.release = release;
     const current = () => this.active() && this.control('dialog').open && epoch === this.epoch && identity === journey(this.state());
-    const timer = setTimeout(() => abort.abort(), 10000); this.control('status').textContent = 'Saving review handoff…'; this.update();
+    const timer = setTimeout(() => abort.abort(), 30000); this.control('status').textContent = 'Saving review handoff…'; this.update();
     try {
       const response = await this.fetch('api/action', { method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: `review-handoff-${submittedAction}`, revision: state.document.revision, journey: identity, ...fields }) });
       const result = await response.json(); if (!current()) return;

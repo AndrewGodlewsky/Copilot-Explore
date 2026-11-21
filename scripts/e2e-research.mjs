@@ -26,7 +26,7 @@ const findings = { optionsVersion: 1, basis: 'reasoning', summary: 'Synthetic lo
 ] };
 let hold = false, onHeld, falseCitation = false, followupMode = false, limitedCount = null;
 let checkpointMode = false, onCheckpointHeld, checkpointTextBounded = false;
-let reconsideration = null;
+let reconsideration = null, explanation = null;
 const comparisonOutput = prepared => ({ cells: prepared.comparison.criteria.flatMap(criterion => prepared.comparison.options.map(option => ({ criterionId: criterion.id, optionId: option.id, explanation: 'Historical model judgment only.', basis: 'prior-claim', claimIds: ['c1'] }))),
   recommendation: { optionId: 'pilot', reason: 'Fits the hypothetical priorities.', changed: 'Coordination is prioritized.', unchanged: 'Participation remains unknown.' }, uncertainty: 'No new retrieval or verification.' });
 function limitedFindings(count) {
@@ -63,13 +63,14 @@ const fixture = createServer(async (req, res) => {
       checkpointTextBounded = JSON.stringify(input.messages).includes('BOUNDED_SEARCH_PREFIX') && !JSON.stringify(input.messages).includes('OMITTED_TOOL_SUFFIX_CANARY');
       onCheckpointHeld(); return;
     }
-    const searchName = input.tools.find(t => t.function.name.includes('web_search')).function.name;
+    const searchName = explanation ? null : input.tools.find(t => t.function.name.includes('web_search')).function.name;
+    if (explanation) assert.equal(input.tools?.length ?? 0, 0);
     const output = followupMode ? { answer: 'A prior source can inform the hypothetical.', uncertainty: 'Prior imported metadata; no new read.', claims: [{ id: 'c1', text: 'Prior support only', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Previously recorded support' }], limitations: 'Historical evidence, not a new fetch' }], sources: falseCitation ? [{ id: 's1', title: 'Unread new source', url: 'https://example.com/unread' }] : [{ id: 's1', prior: { origin: 'original', sourceId: 's1' } }] } : falseCitation ? { ...findings, basis: 'sources', sources: [{ id: 's1', title: 'Unread search result', url: 'https://example.com/unread', retrievedAt: '1900-01-01T00:00:00.000Z', provenance: 'recorded-read' }], claims: [{ id: 'c1', text: 'Unsupported claim', basis: 'sources', evidence: [{ sourceId: 's1', paraphrase: 'Invented support' }], limitations: 'Fixture' }, ...findings.claims.slice(1)] } : findings;
-    const message = searched ? { role: 'assistant', content: JSON.stringify(limitedCount === null ? output : limitedFindings(limitedCount)) } : {
+    const message = searched || explanation ? { role: 'assistant', content: JSON.stringify(limitedCount === null ? output : limitedFindings(limitedCount)) } : {
       role: 'assistant', content: checkpointMode ? JSON.stringify({ checkpointVersion: 1, findings: limitedFindings(1) }) : null, tool_calls: [{ id: 'search-fixture', type: 'function', function: { name: searchName, arguments: JSON.stringify({ query: 'synthetic pilot options' }) } }],
     };
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ id: 'fixture-completion', object: 'chat.completion', choices: [{ index: 0, message, finish_reason: searched ? 'stop' : 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 } }));
+    res.end(JSON.stringify({ id: 'fixture-completion', object: 'chat.completion', choices: [{ index: 0, message, finish_reason: searched || explanation ? 'stop' : 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 } }));
   } catch { res.writeHead(500); res.end('Fixture failed'); }
 });
 await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
@@ -93,7 +94,7 @@ const runtime = async () => ({ path: cli, sdk: { RuntimeConnection: sdk.RuntimeC
     createdModels.push(config.model);
     const toolFree = config.availableTools?.length === 0;
     if (toolFree) {
-      assert.equal(config.systemMessage.content, reconsideration.instructions);
+      assert.equal(config.systemMessage.content, (explanation ?? reconsideration).instructions);
       assert.equal(config.enableConfigDiscovery, false); assert.deepEqual(config.pluginDirectories, []); assert.deepEqual(config.mcpServers, {});
       assert.deepEqual(config.githubMcpToolConfig, { enableAllTools: false, additionalToolsets: [], additionalTools: [] });
       for (const key of ['requestExtensions', 'requestCanvasRenderer', 'enableSkills', 'enableFileHooks', 'enableOnDemandInstructionDiscovery', 'enableSessionStore', 'enableHostGitOperations']) assert.equal(config[key], false);
@@ -191,7 +192,7 @@ try {
   followupMode = true;
   const doc = createDocument('Scoped follow-up fixture'); addQuestions(doc, doc.rootId, [{ question: 'Why pilot?', category: 'Target' }]);
   doc.nodes[1].research = { ...completed, basis: 'sources', sources: [{ id: 's1', title: 'Earlier imported source', url: 'https://example.com/prior', retrievedAt: '2020-01-01T00:00:00.000Z', provenance: 'imported', dateObservations: [{ kind: 'published', text: 'Published: 2019-12-01' }] }] };
-  const followup = { ...prepareFollowup(doc, doc.nodes[1].id, { question: 'What if the budget doubles? ??', hypothetical: true, target: { kind: 'option', index: 0 } }, { settings }), modelCapture: captureResearchModel(await researcher.models(), { revision: 1, modelId: dedicated.id }) };
+  const followup = { ...prepareFollowup(doc, doc.nodes[1].id, { question: 'What if the budget doubles? ??', hypothetical: true, sourceMode: 'retrieve', target: { kind: 'option', index: 0 } }, { settings }), modelCapture: captureResearchModel(await researcher.models(), { revision: 1, modelId: dedicated.id }) };
   selectedId = model.id;
   const startIndex = captured.length;
   const followupResult = await researcher.runFollowup(followup.context, { prepared: followup });
@@ -224,6 +225,32 @@ try {
     assert.deepEqual(await researcher.run(prepared.context, { prepared }), expected(limitedFindings(count)));
   }
   assert.equal((await readdir(join(temporary, 'usage', 'session-state'))).length, 7);
+  limitedCount = null; followupMode = true;
+  explanation = { ...prepareFollowup(doc, doc.nodes[1].id, { question: 'Explain the existing pilot evidence.', hypothetical: false }, { settings }), modelCapture: followup.modelCapture };
+  const beforeExplanation = { tools: toolCalls.length, mcp: calls.length, captured: captured.length }, explanationReports = [];
+  const explained = await researcher.runFollowup(explanation.context, { prepared: explanation, onReport: report => explanationReports.push(report) });
+  assert.deepEqual(explained, followupResult);
+  assert.deepEqual(captured[beforeExplanation.captured], { instructions: explanation.instructions, prompt: explanation.prompt });
+  assert.equal(createdModels[beforeExplanation.captured], dedicated.id);
+  assert.equal(explanationReports.length, 1); assert.equal(explanationReports[0].sourceMode, 'existing');
+  assert.equal(explanationReports[0].toolAttempts, 0); assert.equal(explanationReports[0].deliveredTextUnits, 0);
+  falseCitation = true;
+  await assert.rejects(researcher.runFollowup(explanation.context, { prepared: explanation }), /Explanation cannot introduce/);
+  falseCitation = false; hold = true;
+  const explainAbort = new AbortController(), explainHeld = new Promise(resolve => { onHeld = resolve; });
+  const explainCancelled = assert.rejects(researcher.runFollowup(explanation.context, { prepared: explanation, signal: explainAbort.signal }), /cancelled/);
+  await explainHeld; explainAbort.abort(); await explainCancelled;
+  assert.equal(toolCalls.length, beforeExplanation.tools); assert.equal(calls.length, beforeExplanation.mcp, 'Explanation initializes no MCP or source requests.');
+  const allFollowupReceipts = [];
+  for (const id of await readdir(join(temporary, 'usage', 'session-state'))) {
+    const receipt = JSON.parse(await readFile(join(temporary, 'usage', 'session-state', id, 'operation.json'), 'utf8'));
+    if (receipt.operation !== 'research-follow-up') continue;
+    allFollowupReceipts.push(receipt);
+    if (receipt.status === 'completed') assert.match(await readFile(join(temporary, 'usage', 'session-state', id, 'events.jsonl'), 'utf8'), /session.usage_record/);
+  }
+  assert.deepEqual(allFollowupReceipts.map(item => item.status).sort(), ['cancelled', 'cancelled', 'completed', 'completed', 'failed', 'failed']);
+  assert.ok(allFollowupReceipts.every(item => item.model === dedicated.id));
+  hold = false; explanation = null; followupMode = false;
   const toolCount = toolCalls.length, mcpCount = calls.length;
   for (const modelId of [null, dedicated.id]) {
     selectedId = model.id;
@@ -265,6 +292,7 @@ try {
   } finally { await checkpointResearcher.close(); }
   console.log('PASS effort: actual installed complete-message checkpoint retained separately after a simulated setup-inclusive deadline and confirmed cleanup; successful search text capped before the next model input, omitted suffix absent, observed tool count/time retained. Local deterministic transport only, no live quality or cost claim.');
   console.log('PASS reconsideration: exact reviewed Unicode criteria/options/prior research, selected and dedicated models, zero initialized tools/MCP/retrieval, completed and cancelled attributed receipts; anonymous installed runtime only.');
+  console.log('PASS explanation follow-up: zero initialized tools, MCP and external tool calls; exact reviewed inputs and dedicated model retained, prior provenance preserved, new source rejected, cancellation released, completed/failed/cancelled usage receipts retained. Deterministic local responses only.');
   console.log('PASS Research model discovery starts no inference; captured selected-chat model and dedicated follow-up model survive later chat changes; actual installed helper models and retained operation receipts match both captures.');
   console.log('PASS isolated research and scoped follow-up: linked recommendation with captured prior-context state, honest null recommendations and zero/one-option results; historical imported evidence unchanged, unread new source rejected, separate completed/failed/cancelled operation receipts, real installed MCP search, reasoning/unknown claims, rejection of search-only fabricated source/time, exact reviewed inputs, retained completed/failed receipts and cancellation/release. Successful builtin web_fetch is NOT exercised; deterministic hook tests separately cover successful read provenance. No paid provider or user session.');
 } finally {

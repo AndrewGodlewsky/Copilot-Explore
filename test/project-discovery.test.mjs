@@ -73,7 +73,7 @@ test('Git ignores, nested negation and explicit exclusions also reject manual ad
 });
 
 test('large and deep trees stop at server bounds and never traverse generated or linked content', async t => {
-  const f = await fixture(t, { 'README.md': 'root', 'docs/a/b/c/design.md': 'too deep', 'dist/README.md': 'generated' });
+  const f = await fixture(t, { 'README.md': 'root', 'docs/a/b/c/design.md': 'too deep', 'dist/README.md': 'generated' }, { now: () => 0 });
   for (let index = 0; index < 330; index++) await writeFile(join(f.root, `README-${index}.md`), 'small');
   await mkdir(join(f.directory, 'outside')); await writeFile(join(f.directory, 'outside', 'README.md'), 'outside');
   await symlink(join(f.directory, 'outside'), join(f.root, 'alias'), 'junction');

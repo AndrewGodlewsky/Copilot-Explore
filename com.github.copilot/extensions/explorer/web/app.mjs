@@ -868,13 +868,19 @@ function apply(next, reset = false) {
   $('current-mode').textContent = `Mode: ${MODES[effectiveMode(doc)].label}`;
   const { answered, resolved, deferred, unresolved } = questionCounts(doc);
   $('progress').textContent = `${answered} answered · ${resolved} resolved · ${deferred} deferred · ${unresolved} unresolved · Saved locally`;
+  const returnRequestFocus = !state.pending && !state.preview && [$('request-status'), $('request-cancel')].includes(document.activeElement);
   $('request-status').hidden = !state.pending && !state.preview;
+  const researchPending = ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending?.kind);
+  $('request-cancel').hidden = !researchPending; $('request-cancel').dataset.request = researchPending ? state.pending.id : '';
   if (state.preview) $('request-status').textContent = `${state.preview.questions.length} questions to review (not saved)`;
   if (state.pending) {
     const work = doc.nodes.find(n => n.id === state.pending.nodeId);
-    $('request-status').textContent = `${['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? 'Researching' : 'Finding questions for'} ${work?.category ?? 'this map'}…`;
+    const question = work?.question ?? 'this map', short = [...question].slice(0, 90).join('') + ([...question].length > 90 ? '…' : '');
+    $('request-status').textContent = researchPending ? `${state.pending.progress ?? 'Preparing research'} · ${short}` : `Finding questions for ${work?.category ?? 'this map'}…`;
+    $('request-status').title = question;
   }
   renderWorkspace(); refreshScene(anchor); renderOutline();
+  if (returnRequestFocus) (expanded ? $('expanded-title') : $('map'))?.focus({ preventScroll: true });
   if (compactFocused && changedDocument) $('map').focus({ preventScroll: true });
   if (workspaceFocused && (changedDocument || previousSelection !== selected)) {
     const target = expanded ? $('expanded-title') : outlineMode ? [...$('outline-list').querySelectorAll('[data-node-id]')].find(e => e.dataset.nodeId === selected) ?? $('outline-selected') : [...$('nodes').children].find(e => e.dataset.nodeId === selected) ?? $('map');
@@ -2458,9 +2464,11 @@ function renderWorkspace() {
     section.addEventListener('toggle', () => { if (current()) { ui.impactOpen = section.open; updateImpact(); } });
   }
   toolPanels.research.append(el('div', { id: 'research-review-inline', hidden: true }));
+  region('researchOperation', toolPanels.research);
   region('researchAttempt', toolPanels.research);
   region('research', toolPanels.research);
   region('followup', toolPanels.research);
+  regions.get('researchOperation').area.id = 'research-operation-region';
   regions.get('researchAttempt').area.id = 'research-attempt-region';
   regions.get('research').area.id = 'research-results-region';
   regions.get('followup').area.id = 'research-conversation-region';
@@ -2561,8 +2569,8 @@ function renderWorkspace() {
     update('references', [references.journey, references.revision, references.loading, references.saving, references.error, references.retryIds, references.nodeIds.map(id => { const n = byId.get(id); return [id, n?.question, n?.answer, n?.answerState, n?.review, n?.kind]; }), isQuestion(node)], () => renderReferences(node));
     update('pending', [state.pending, byId.get(state.pending?.nodeId)?.category], () => {
       if (pending) {
-        const workNode = byId.get(state.pending.nodeId);
-        return el('div', { class: 'pending', role: 'status' }, el('strong', {}, ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? `${state.pending.progress ?? 'Researching'}…` : state.pending.owner === 'project-questions' ? `${state.pending.progress ?? 'Considering project questions'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.category}. You can continue browsing.`), button('Cancel request', () => api('cancel'), { id: 'cancel-request' }), el('div', { class: 'quiet' }, ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? 'Research runs separately from your chat. Cancelling stops its helper.' : state.pending.owner === 'project-questions' ? 'Project questions run separately from your chat. Cancelling stops only this helper.' : 'Cancelling discards the result; the chat turn may still finish.'));
+        const workNode = byId.get(state.pending.nodeId), requestId = state.pending.id;
+        return el('div', { class: 'pending', role: 'status' }, el('strong', {}, ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? `${state.pending.progress ?? 'Researching'}…` : state.pending.owner === 'project-questions' ? `${state.pending.progress ?? 'Considering project questions'}…` : 'Copilot is finding the next questions…'), el('div', {}, workNode?.id === node.id ? 'The result will appear in this node. You can keep writing or browse the map.' : `Working on: ${workNode?.question ?? 'the original question'}. You can continue browsing.`), button('Cancel request', () => api('cancel', { id: requestId }), { id: 'cancel-request' }), el('div', { class: 'quiet' }, ['research', 'research-follow-up', 'research-reconsideration'].includes(state.pending.kind) ? 'Cancelling stops only Explorer’s helper. Shutdown and usage accounting may continue; prior findings and drafts stay available.' : state.pending.owner === 'project-questions' ? 'Project questions run separately from your chat. Cancelling stops only this helper.' : 'Cancelling discards the result; the chat turn may still finish.'));
       }
     });
     update('review', [node.review, isQuestion(node), pending], () => node.review ? el('div', { class: 'note' },
@@ -2604,6 +2612,8 @@ function renderWorkspace() {
       else if (retry?.purpose === 'project-questions') openResearchReview(retry.nodeId, undefined, 'project-questions');
       else await api('questions', { nodeId: retry?.nodeId ?? node.id });
     }, { id: 'refresh-question-context' }) : null);
+    const operation = state.researchOperation?.nodeId === node.id && state.researchOperation.kind !== 'research-follow-up' && !['pending', 'completed'].includes(state.researchOperation.status) ? state.researchOperation : null;
+    update('researchOperation', [operation, !!state.pending], () => operation ? renderResearchOperation(node, operation) : null);
     const attempt = state.researchAttempt?.nodeId === node.id ? state.researchAttempt : null;
     update('researchAttempt', attempt?.id ?? null, () => { ui.effortSync = null; return attempt ? renderResearchAttempt(node, attempt) : null; });
     ui.effortSync?.();
@@ -2774,7 +2784,7 @@ function renderQuestionPreview() {
   }
   return section;
 }
-function openResearchReview(nodeId, followup, purpose, comparison, settings) {
+function openResearchReview(nodeId, followup, purpose, comparison, settings, policy) {
   const inline = !purpose || purpose === 'research-reconsideration';
   if (inline && (!expanded || libraryView || nodeId !== selected || !$('research-review-inline'))) return;
   const returnTarget = document.activeElement;
@@ -2790,7 +2800,49 @@ function openResearchReview(nodeId, followup, purpose, comparison, settings) {
     revealQuestionTool($('research-review-panel'));
   }
   $(inline ? 'research-review-title' : 'research-review-close').focus({ preventScroll: true });
-  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: purpose === 'challenge-review' ? 'decisions' : $('context-scope').value, ...(purpose ? { purpose } : {}), ...(followup ? { followup } : {}), ...(comparison ? { comparison } : {}), ...(settings ? { settings } : {}) });
+  researchReview.open({ journey: state.activeKey ?? state.document.id, nodeId, scope: purpose === 'challenge-review' ? 'decisions' : policy?.scope ?? $('context-scope').value, ...(policy ? { excluded: [...policy.excluded] } : {}), ...(purpose ? { purpose } : {}), ...(followup ? { followup } : {}), ...(comparison ? { comparison } : {}), ...(settings ? { settings } : {}) });
+}
+
+function researchRecoveryAdvice(operation) {
+  if (operation.releasePending) return 'Earlier research has not confirmed shutdown. New research is blocked until release is confirmed. Retained recovery evidence remains local.';
+  return ({
+    'access-unavailable': 'Check Copilot sign-in and account access, then review this request again.',
+    'model-unavailable': 'Review Research model settings and Copilot model availability. No replacement model was selected.',
+    'tools-unavailable': 'Update Copilot and check that GitHub web search is enabled, then review again. Explorer will not silently use another chat or tool.',
+    'permission-denied': 'This request was denied. Check your organization’s Copilot policy before retrying; Explorer will not bypass it.',
+    deadline: 'The time limit was reached. Review before another attempt; a different effort limit is an explicit choice.',
+    'invalid-result': 'The result failed validation. Review a new attempt; incomplete or invalid output has not replaced prior findings.',
+    'stale-context': 'Saved context changed. Refresh the saved map and review current inputs. Use Research to choose new scope if an earlier exclusion no longer exists.',
+    'cleanup-failure': 'Helper cleanup or usage accounting failed. Inspect File → Recovery if needed, then review before another attempt. Do not assume no usage occurred.',
+    'save-failure': 'Saving or history finalization failed. Refresh the saved map or inspect File → Recovery before starting new research; a save may have committed.',
+    cancelled: 'Cancelled by request. Shutdown and usage accounting may continue. Review again only when you want another attempt.',
+    'attempt-limit': 'The selected tool-attempt limit was reached. Review the retained effort details before choosing another pass.',
+    'repeated-request': 'Repeated source requests were stopped. Review the evidence gaps before trying again.',
+    'result-text-limit': 'The evidence-text limit was reached. Review the partial findings and remaining gaps before another pass.',
+    'tool-failure': 'A source lookup failed. Review before another attempt; prior findings remain available.',
+  })[operation.reason] ?? 'The request did not complete. Check Copilot and review current inputs before another attempt. No automatic retry was made.';
+}
+function reviewResearchOperation(operation) {
+  if (closed || suspended || state.pending || selected !== operation.nodeId || referenceJourney() !== operation.journey || state.researchOperation?.id !== operation.id || operation.releasePending) return;
+  const input = operation.intent;
+  if (operation.historical && (input.followup || input.comparison)) return notice('The original findings changed. Choose a current target or comparison and review a new request.');
+  openResearchReview(operation.nodeId, input.followup, input.comparison ? 'research-reconsideration' : undefined, input.comparison, input.settings, input);
+}
+function renderResearchOperation(node, operation) {
+  const current = () => !closed && !suspended && selected === node.id && referenceJourney() === operation.journey && state.researchOperation?.id === operation.id;
+  const labels = { failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted' };
+  const blocked = !!state.pending || operation.releasePending || operation.historical && !!(operation.intent.followup || operation.intent.comparison);
+  const section = el('section', { id: 'research-operation', class: 'research-attempt', 'aria-labelledby': 'research-operation-title' },
+    el('h3', { id: 'research-operation-title' }, `${labels[operation.status]} research`), el('p', {}, operation.question), el('p', {}, researchRecoveryAdvice(operation)),
+    el('p', { class: 'quiet' }, 'Previous findings and drafts stay available. Only validated complete research replaces findings; partial findings remain separate and unsaved.'));
+  if (operation.message) section.append(el('p', {}, operation.message));
+  if (operation.historical) section.append(el('p', { class: 'review-warning' }, 'The captured context is historical. A fresh review must show the current inputs; no old approval is reused.'));
+  section.append(el('div', { class: 'actions' }, button(operation.historical ? 'Review current context' : 'Review retry', () => { if (current()) reviewResearchOperation(operation); }, { id: 'research-operation-retry', disabled: blocked }),
+    button('Clear status', async () => {
+      if (!current() || state.pending) return;
+      if (await api('research-operation-clear', { id: operation.id, nodeId: node.id, journey: operation.journey }) && selected === node.id && referenceJourney() === operation.journey) $('research-request')?.focus({ preventScroll: true });
+    }, { id: 'research-operation-clear', disabled: !!state.pending })));
+  return section;
 }
 
 function renderResearchAttempt(node, attempt) {
@@ -2862,14 +2914,17 @@ function renderResearchAttempt(node, attempt) {
   ui.effortSync = () => {
     if (state.researchAttempt?.id !== attempt.id) return;
     historical.hidden = !state.researchAttempt.historical;
+    const retry = section.querySelector('#research-deeper-review');
+    if (retry) retry.disabled = !!state.pending || !!attempt.followup && state.researchAttempt.historical;
     if (partial) { const age = researchFreshness(partial); for (const item of section.querySelectorAll('[data-partial-freshness]')) item.textContent = claimFreshnessText(partial.claims.find(claim => claim.id === item.dataset.partialFreshness), age); }
   };
   ui.effortSync();
   section.append(el('div', { class: 'actions' }, button(report.settings.depth === 'deeper' ? 'Review another pass' : 'Review deeper research', () => {
     if (state.researchAttempt?.id !== attempt.id || selected !== node.id || state.pending) return;
+    if (attempt.followup && state.researchAttempt.historical) return notice('Original findings changed. Choose a current target and review a new follow-up.');
     const depth = report.settings.depth === 'quick' ? 'standard' : 'deeper';
-    openResearchReview(node.id, attempt.followup, undefined, undefined, { ...report.settings, depth });
-  }, { id: 'research-deeper-review', disabled: !!state.pending }), button('Clear attempt details', () => api('research-attempt-clear', { id: attempt.id, journey: attempt.journey, nodeId: node.id }), { id: 'research-attempt-clear' })));
+    openResearchReview(node.id, attempt.followup, undefined, undefined, { ...report.settings, depth }, attempt.policy);
+  }, { id: 'research-deeper-review', disabled: !!state.pending || !!attempt.followup && attempt.historical }), button('Clear attempt details', () => api('research-attempt-clear', { id: attempt.id, journey: attempt.journey, nodeId: node.id }), { id: 'research-attempt-clear' })));
   return section;
 }
 function closeResearchReview(restoreFocus = true) {
@@ -3129,17 +3184,19 @@ function renderFollowup(node, ui) {
 function updateFollowupTurn(node) {
   const area = $('followup-turn'); if (!area) return;
   const turn = state.followupTurn?.nodeId === node.id && state.followupTurn.journey === referenceJourney() && state.followupTurn.status !== 'completed' ? state.followupTurn : null;
-  const signature = JSON.stringify([turn, !!state.pending]); if (area.dataset.value === signature) return;
+  const operation = state.researchOperation?.id === turn?.id ? state.researchOperation : null;
+  const signature = JSON.stringify([turn, !!state.pending, operation]); if (area.dataset.value === signature) return;
   area.dataset.value = signature; area.hidden = !turn; area.replaceChildren(); if (!turn) return;
   const current = () => area.isConnected && !closed && !suspended && selected === node.id && state.followupTurn?.id === turn.id && referenceJourney() === turn.journey;
   const labels = { pending: 'Pending', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted' };
   area.append(el('h4', {}, labels[turn.status]), el('p', { class: 'quiet' }, 'You · ' + turn.targetLabel), el('p', {}, turn.input.question));
   if (turn.message) area.append(el('p', {}, turn.message));
+  if (operation && turn.status !== 'pending') area.append(el('p', {}, researchRecoveryAdvice(operation)));
   if (turn.historical) area.append(el('p', { class: 'review-warning' }, 'The original research or saved context changed. Choose a current target and review a new question.'));
   if (turn.status !== 'pending') area.append(button('Review retry', () => {
     if (!current() || state.pending || state.followupTurn.historical) return;
-    openResearchReview(node.id, { ...turn.input, ...(turn.input.target ? { target: { ...turn.input.target } } : {}) });
-  }, { id: 'followup-turn-retry', disabled: !!state.pending || turn.historical }), button('Dismiss turn', async () => {
+    if (operation) reviewResearchOperation(operation); else openResearchReview(node.id, { ...turn.input, ...(turn.input.target ? { target: { ...turn.input.target } } : {}) });
+  }, { id: 'followup-turn-retry', disabled: !!state.pending || turn.historical || operation?.historical || operation?.releasePending }), button('Dismiss turn', async () => {
     if (!current() || state.pending) return;
     const result = await api('followup-turn-clear', { id: turn.id, journey: turn.journey, nodeId: node.id });
     if (result && selected === node.id && referenceJourney() === turn.journey) $('followup-question')?.focus({ preventScroll: true });
@@ -5080,6 +5137,9 @@ $('outline').addEventListener('keydown', event => {
 $('search').addEventListener('input', renderOutline);
 $('revisit-filter').addEventListener('change', renderOutline);
 $('importance-filter').addEventListener('change', renderOutline);
+$('request-status').after(button('Cancel research', () => {
+  const id = $('request-cancel').dataset.request; if (id && !closed && !suspended) void api('cancel', { id });
+}, { id: 'request-cancel', hidden: true, title: 'Cancel only Explorer’s research helper; shutdown and usage accounting may continue.' }));
 $('request-status').addEventListener('click', () => {
   if (state.pending || state.preview) {
     const id = (state.pending ?? state.preview).nodeId;

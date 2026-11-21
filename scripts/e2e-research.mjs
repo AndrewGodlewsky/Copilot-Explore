@@ -158,7 +158,7 @@ try {
   assert.ok(JSON.stringify(prompts).includes('direction'));
   assert.ok(calls.includes('initialize')); assert.equal(toolCalls.length, 1);
   assert.equal(toolCalls[0].name, 'web_search');
-  assert.ok(progress.includes('Searching the web'));
+  assert.ok(progress.includes('Search requested'));
   assert.ok(JSON.stringify(prompts).includes('explorer-research'));
   assert.ok(JSON.stringify(prompts).includes('software-version v1'));
   assert.ok(JSON.stringify(prompts).includes('official versioned documentation'));

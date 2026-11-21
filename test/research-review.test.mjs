@@ -16,6 +16,17 @@ import { ResearchReview, REVIEW_TTL } from '../com.github.copilot/extensions/exp
 import { createResearcher } from '../com.github.copilot/extensions/explorer/research.mjs';
 import { freshnessFindings, FRESHNESS_NOW } from './helpers/research-freshness.mjs';
 
+test('a fresh retry review preserves explicit scope and exclusions without starting inference', async () => {
+  const requests = [];
+  const client = new ResearchReviewClient({ changed() {}, fetch: async (_, options) => {
+    const input = JSON.parse(options.body); requests.push(input); return { ok: true, json: async () => ({ ...input, token: 'fresh-review' }) };
+  } });
+  client.open({ journey: 'journey', nodeId: 'question', scope: 'decisions', excluded: ['omit-this-decision'], settings: { depth: 'quick', sourceFocus: 'primary', recency: 'recent' } });
+  await waitFor(() => client.value);
+  assert.deepEqual(requests[0].excluded, ['omit-this-decision']); assert.equal(requests[0].scope, 'decisions'); assert.equal(requests[0].settings.depth, 'quick');
+  assert.equal(requests.length, 1); assert.equal(requests[0].action, 'prepare'); client.close();
+});
+
 function document() {
   const doc = createDocument('Review \ud83c\udf3f');
   addQuestions(doc, doc.rootId, [{ question: 'Selected?', category: 'Target' }, { question: 'Optional?', category: 'Other' }]);

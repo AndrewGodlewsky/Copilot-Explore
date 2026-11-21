@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createResearcher } from '../com.github.copilot/extensions/explorer/research.mjs';
 import { operationEvidence } from '../com.github.copilot/extensions/explorer/operation-recovery.mjs';
+import { freshnessFindings, FRESHNESS_NOW } from './helpers/research-freshness.mjs';
 import { createDocument, addQuestions } from '../com.github.copilot/extensions/explorer/model.mjs';
 import { sameResearchSources, sameResearchDestination } from '../com.github.copilot/extensions/explorer/research-context.mjs';
 import { comparisonInput, prepareReconsideration, comparisonResult, parseReconsideration, COMPARISON_RESULT_LIMIT } from '../com.github.copilot/extensions/explorer/research-comparison.mjs';
@@ -128,7 +129,7 @@ test('comparison parsing rejects oversized, malformed and unknown payload fields
 });
 
 async function helperFixture(t, options = {}) {
-  const dir = await mkdtemp(join(tmpdir(), 'explorer-comparison-test-')), prepared = ready(), calls = { sends: 0, stops: 0 };
+  const dir = await mkdtemp(join(tmpdir(), 'explorer-comparison-test-')), prepared = options.prepared ?? ready(), calls = { sends: 0, stops: 0 };
   const auth = { isAuthenticated: true, login: 'fixture', host: 'github.com' };
   const models = ['fixture-chat', 'fixture-dedicated'].map(id => ({ id, provider: { kind: 'copilot' }, policy: { state: 'enabled' } }));
   const mode = options.mode ?? 'dedicated', selected = mode === 'chat' ? models[0] : models[1];
@@ -149,11 +150,12 @@ async function helperFixture(t, options = {}) {
         assert.equal(calls.initialized, true); calls.sends++; calls.prompt = input.prompt; calls.timeout = timeout;
         config.onEvent({ id: 'receipt1', type: 'assistant.usage', timestamp: new Date().toISOString(), data: { inputTokens: 12, accounting: { sourceSessionId: config.sessionId, usageId: 'u1', sequence: 1 } } });
         if (options.hold) await new Promise(resolve => { finish = resolve; options.started?.(); });
+        options.beforeReturn?.();
         return { data: { content: options.content ?? JSON.stringify(result(prepared)) } };
       } };
     }
   } } });
-  const helper = createResearcher(parent, { runtime, usageDirectory: join(dir, 'usage') });
+  const helper = createResearcher(parent, { runtime, usageDirectory: join(dir, 'usage'), now: options.now });
   t.after(async () => {
     await helper.close();
     if (calls.client) { const owned = dirname(calls.client.workingDirectory); assert.equal(dirname(resolve(owned)), resolve(tmpdir())); await rm(owned, { recursive: true, force: true }); }
@@ -203,4 +205,18 @@ test('failed reconsideration remains attributed in recovery without exposing com
   const evidence = await operationEvidence(f.dir);
   assert.equal(evidence.length, 1); assert.equal(evidence[0].kind, 'research-reconsideration'); assert.equal(evidence[0].status, 'failed');
   assert.deepEqual(Object.keys(evidence[0]).sort(), ['id', 'kind', 'status']); assert.equal(f.calls.sends, 1);
+});
+
+test('reconsideration recovery classifies malformed results without hiding changed evidence freshness', async t => {
+  for (const content of ['{', '{"unexpected":"result"}']) {
+    const f = await helperFixture(t, { content });
+    await assert.rejects(f.helper.runReconsideration(f.prepared.context, { prepared: f.prepared }), error => error.reason === 'invalid-result');
+    assert.equal(f.calls.sends, 1); assert.equal(f.calls.stops, 1);
+  }
+  const doc = document(); doc.nodes[1].research = freshnessFindings();
+  let now = FRESHNESS_NOW + 86400000 - 1;
+  const prepared = prepareReconsideration(doc, doc.nodes[1].id, { criteria }, { now });
+  const f = await helperFixture(t, { prepared, now: () => now, beforeReturn: () => { now += 2; } });
+  await assert.rejects(f.helper.runReconsideration(f.prepared.context, { prepared: f.prepared }), error => error.reason === 'stale-context');
+  assert.equal(f.calls.sends, 1); assert.equal(f.calls.stops, 1);
 });

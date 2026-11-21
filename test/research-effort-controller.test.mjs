@@ -35,6 +35,7 @@ test('a released research partial stays separate from completed research, native
   run.onReport(report(checkpoint())); run.reject(Error('Research stopped at the deadline.')); await f.settle();
   const view = f.e.uiSnapshot().researchAttempt;
   assert.equal(view.nodeId, f.doc.nodes[1].id); assert.equal(view.report.partial.summary, 'Incomplete useful findings 🌿');
+  assert.deepEqual(view.policy, { scope: 'decisions', excluded: [] });
   assert.equal(view.historical, false); assert.equal(view.dependencies, undefined); assert.equal(view.scenarioPolicy, undefined);
   assert.equal(f.e.snapshot().researchAttempt, undefined); assert.equal(await readFile(f.file, 'utf8'), before); assert.equal(f.e.pending, null);
   const poll = f.e.pollSnapshot(); assert.ok(poll.snapshot.researchAttempt);

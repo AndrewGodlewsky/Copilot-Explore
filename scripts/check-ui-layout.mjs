@@ -61,7 +61,7 @@ validateDocument(doc); await writeFile(file, JSON.stringify(doc));
 const offlineDoc = structuredClone(doc), offlineFile = join(directory, 'support.html');
 offlineDoc.nodes.find(node => node.id === parent.id).research.sources[0].title = 'X'.repeat(300);
 await writeFile(offlineFile, viewerArtifact(viewerSnapshot(validateDocument(offlineDoc), [{ nodeId: parent.id, answer: false, research: true }])).content);
-let requests = 0, comparisons = 0, briefRuns = 0, projectQuestionRuns = 0, projectQuestionDraft = '', effortRuns = 0, effortFixture = false, followupRuns = 0, followupFixture = false, voiceReady = false, voiceJob, modelCatalogError = false;
+let requests = 0, comparisons = 0, briefRuns = 0, projectQuestionRuns = 0, projectQuestionDraft = '', effortRuns = 0, effortFixture = false, recoveryRuns = 0, recoveryFixture = false, followupRuns = 0, followupFixture = false, voiceReady = false, voiceJob, modelCatalogError = false;
 const explorer = await new Explorer({ file, projectRoot: async () => directory, projectBriefHelper: { close: async () => {}, run: async prepared => {
   briefRuns++;
   const output = Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: `${section}: not established by this fixture.`, kind: 'unknown', sources: [] }]]));
@@ -73,7 +73,11 @@ const explorer = await new Explorer({ file, projectRoot: async () => directory, 
   return [{ question: 'Should the current design change for café users 🌿?', category: 'Design', rationale: 'The future choice remains open.', importance: 'high', importanceReason: 'It affects later decisions.', claimIds: prepared.projectBrief.claims.slice(0, 2).map(claim => claim.id) }];
 } }, target: { instanceId: 'ui-layout-check' }, send: async () => { requests++; }, researcher: {
   models: async () => { if (modelCatalogError) throw Error('Synthetic catalog failure'); return fixtureResearchModels(); },
-  run: async (_, { prepared, onReport }) => {
+  run: async (_, { prepared, onReport, onProgress, signal }) => {
+    if (recoveryFixture) {
+      recoveryRuns++; onProgress('Source read requested');
+      return new Promise(resolve => { if (signal.aborted) resolve(null); else signal.addEventListener('abort', () => resolve(null), { once: true }); });
+    }
     if (!effortFixture) { requests++; throw Error('Layout checks must not start inference'); }
     effortRuns++;
     const partial = structuredClone(parent.research); partial.recommendationAssessment.optionId = null;
@@ -665,6 +669,26 @@ try {
       await ageSummary.scrollIntoViewIfNeeded(); await inspectDrawer(page, scenario.name + '/freshness');
       if (screenshots) await page.screenshot({ path: join(output, scenario.name + '-freshness.png') });
       expect(requests === callsBeforeSupport && await editor.inputValue() === 'Keep this private draft', scenario.name + ': freshness inspection preserves draft and starts no retrieval', {});
+      const savedBeforeRecovery = JSON.stringify(explorer.doc), recoveryBefore = recoveryRuns;
+      recoveryFixture = true;
+      await page.locator('#research-request').click(); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      await page.locator('#research-review-start').click();
+      await page.waitForFunction(() => document.getElementById('request-status').textContent.includes('Source read requested'));
+      await page.locator('#question-drawer-close').click(); await settle(page);
+      const cancelResearch = page.locator('#request-cancel');
+      await cancelResearch.focus();
+      const cancelBounds = await cancelResearch.evaluate(el => { const rect = el.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: innerWidth, height: innerHeight, focused: document.activeElement === el }; });
+      expect(cancelBounds.focused && cancelBounds.left >= 0 && cancelBounds.right <= cancelBounds.width && cancelBounds.top >= 0 && cancelBounds.bottom <= cancelBounds.height, scenario.name + ': cancel remains keyboard reachable with research drawer closed', cancelBounds);
+      expect((await page.locator('#request-status').innerText()).includes('Where will the tools') && await page.locator('#request-status').getAttribute('title') === parent.question, scenario.name + ': observed progress identifies its original question', {});
+      await page.keyboard.press('Enter'); await cancelResearch.waitFor({ state: 'hidden' }); await Promise.allSettled([...explorer.researchTasks]); recoveryFixture = false;
+      expect(await page.evaluate(() => document.activeElement.id !== 'request-cancel') && recoveryRuns === recoveryBefore + 1 && JSON.stringify(explorer.doc) === savedBeforeRecovery, scenario.name + ': cancellation restores visible focus and preserves the map', {});
+      await page.locator('#question-help-open').click(); await page.locator('#research-operation').waitFor();
+      const recoveryBounds = await page.locator('#research-operation').evaluate(el => ({ client: el.clientWidth, scroll: el.scrollWidth, available: document.getElementById('question-tools-research').clientWidth }));
+      expect(recoveryBounds.scroll <= recoveryBounds.client + 1 && recoveryBounds.client >= recoveryBounds.available - 1, scenario.name + ': recovery spans the research workspace without overflow', recoveryBounds);
+      await page.locator('#research-operation-retry').focus(); await page.keyboard.press('Enter'); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
+      expect(recoveryRuns === recoveryBefore + 1, scenario.name + ': retry opens explicit review without starting inference', {});
+      await page.keyboard.press('Escape'); await page.locator('#research-operation-clear').focus(); await page.keyboard.press('Enter'); await page.locator('#research-operation').waitFor({ state: 'detached' });
+      expect(await editor.inputValue() === 'Keep this private draft' && await composer.inputValue() === 'Keep my question 日本語 🌿' && JSON.stringify(explorer.doc) === savedBeforeRecovery, scenario.name + ': recovery preserves answer and discussion drafts', {});
       const savedBeforeEffort = JSON.stringify(explorer.doc), effortBefore = effortRuns;
       const followupEffort = ['wide', 'minimum'].includes(scenario.name);
       effortFixture = true;
@@ -811,6 +835,7 @@ try {
   }
   assert.equal(requests, 1, 'only the explicit Explore deeper check reaches the local send fixture; no provider is called');
   assert.equal(effortRuns, 5, 'one explicit synthetic effort pass per viewport; no automatic deeper pass');
+  assert.equal(recoveryRuns, 5, 'one explicitly cancelled synthetic request per viewport; review does not retry automatically');
   assert.equal(followupRuns, 10, 'two explicit synthetic follow-ups per viewport; reuse and clear start none');
   await writeFile(join(output, 'layout-results.json'), JSON.stringify({ samples, failures }, null, 2));
   console.log(`${samples.length} card samples; ${failures.length} layout failures. Evidence: ${output}`);

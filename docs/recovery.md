@@ -40,6 +40,14 @@ Export evidence is canvas-local, immutable `{id,route,status,downloadSaved:"unkn
 
 `recoveryNotice` and `exportObservation` are explicit public transient references in the conditional polling stamp. They are replaced on changes. Unchanged polling still avoids map traversal/cloning/serialization; native `snapshot()` stays complete with its previous shape. Operation discovery remains a private explicit recovery read.
 
+## Research request outcomes
+
+The Research drawer retains one private latest operation outcome, bound to request, journey, question and reviewed source/destination identities. Pending progress and failed/cancelled/interrupted status can survive browsing another question in the same canvas. A source change marks captured context historical; late callbacks cannot adopt it or overwrite a newer operation. Setup failures can be recovered even when no effort checkpoint exists. The bounded reviewed retry intent contains scope, exclusions, preferences and submitted follow-up/comparison fields, never an approval token or raw SDK error. It stays out of native context, shared maps and exports and clears on journey changes or close.
+
+**Review retry** obtains new exact review and permission/model/context checks without overwriting either draft. **Clear status** removes only the matching completed outcome and requires the normal write Origin, journey and revision checks. Neither action retries inference automatically or deletes usage evidence. An unconfirmed helper release blocks new work until confirmed; cleanup/accounting failures retain their existing recovery files. A save/finalization failure may occur after the document commit point, so refresh the saved map or inspect **File → Recovery** before another request rather than assuming the old findings are still authoritative.
+
+Only fully validated results can replace saved findings. Validated partial checkpoints are explicitly incomplete, transient and unsaved; they remain separate from both the prior result and the private follow-up conversation. Closing clears transient outcomes and partials, while saved findings, durable answer drafts and retained usage evidence follow their existing contracts. This UI outcome is distinct from the on-disk helper lifecycle receipt described above.
+
 ## Verification limits
 
 Disposable filesystem/child-process fixtures cover killed writers and save boundaries, claim/new-writer races, metadata publication failure, malformed and linked evidence, drafts/tombstones, protected HTTP actions, export interruption, and actual shipped jsdom controls. Installed local canvas, research and cleanup fixtures exercise the shared helper lifecycle with no paid providers, existing sessions, browser automation or real microphone.

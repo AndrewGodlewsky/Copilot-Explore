@@ -5,8 +5,13 @@ import { randomUUID } from 'node:crypto';
 import { createUsageRecorder, reconcileUsageJournal } from './research-usage.mjs';
 import { eligibleCopilotModel as eligible, sameCopilotAccount as sameAccount, validResearchModelId } from './research-model.mjs';
 
-class HelperError extends Error {}
-const fail = message => new HelperError(message);
+const failureReasons = new Set(['helper-failure', 'access-unavailable', 'model-unavailable', 'tools-unavailable', 'permission-denied', 'deadline', 'cancelled', 'invalid-result', 'stale-context', 'cleanup-failure', 'save-failure', 'attempt-limit', 'repeated-request', 'result-text-limit', 'tool-failure']);
+class HelperError extends Error {
+  constructor(message, reason) { super(message); this.reason = failureReasons.has(reason) ? reason : 'helper-failure'; }
+}
+export const helperFailure = (message, reason) => new HelperError(message, reason);
+export const helperFailureReason = error => error instanceof HelperError ? error.reason : 'helper-failure';
+const fail = helperFailure;
 export function hostRuntime(executable = process.execPath, argv = process.argv, parentPid = process.ppid, env = process.env) {
   if (!isAbsolute(executable) || !['copilot.exe', 'copilot', 'copilot-runtime.exe', 'copilot-runtime'].includes(basename(executable).toLowerCase()) ||
     !argv.some(arg => arg === 'extension_bootstrap.mjs' || (isAbsolute(arg) && basename(arg) === 'extension_bootstrap.mjs')) ||
@@ -32,8 +37,8 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
   const webResearch = operation === 'research' || operation === 'research-follow-up';
   const reviewedResearch = webResearch || operation === 'research-reconsideration';
   const label = { 'decision-brief': 'Decision brief', 'implementation-handoff': 'Implementation handoff', 'adr-draft': 'ADR draft', 'project-brief': 'Project brief', 'project-questions': 'Project questions', 'answer-check': 'Answer check', 'challenge-review': 'Challenge review', research: 'Research', 'research-follow-up': 'Research follow-up', 'research-reconsideration': 'Research reconsideration', cleanup: 'Answer cleanup', 'question-help-rephrase': 'Question rephrase', 'question-help-example': 'Question example', 'question-help-terms': 'Question terms' }[operation];
-  const fail = message => new HelperError(message.replaceAll('Research', label).replaceAll('research', label.toLowerCase()));
-  const cancelled = () => fail('Research was cancelled or timed out. Your answers are saved.');
+  const fail = (message, reason) => helperFailure(message.replaceAll('Research', label).replaceAll('research', label.toLowerCase()), reason);
+  const cancelled = reason => fail(reason === 'deadline' ? 'Research timed out. Your answers are saved.' : 'Research was cancelled. Your answers are saved.', reason === 'deadline' ? 'deadline' : 'cancelled');
   const active = new Map();
   function run(context, { signal, onProgress = () => {}, onReport = () => {} } = {}) {
     const controller = new AbortController();
@@ -55,8 +60,8 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
     let client, directory, usage, stop, stopAttempt, phase = 'preparing the SDK', outcome = 'failed';
     const sessionId = randomUUID();
     let terminalFailure;
-    const stopWith = (message, reason = 'helper-failure') => { terminalFailure ??= fail(message); terminalReason ??= reason; controller.abort(); };
-    const check = () => { if (terminalFailure) throw terminalFailure; if (!operationEligible()) throw cancelled(); };
+    const stopWith = (message, reason = 'helper-failure', failureReason = reason) => { terminalFailure ??= fail(message, failureReason); terminalReason ??= reason; controller.abort(); };
+    const check = () => { if (terminalFailure) throw terminalFailure; if (!operationEligible()) throw cancelled(terminalReason); };
     const stopClient = () => {
       if (client && !stop) {
         stopAttempt = Promise.resolve().then(() => client.forceStop()).then(() => true, () => false);
@@ -76,10 +81,10 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
         captured ? { modelId: captured.model.id } : parent.rpc.model.getCurrent(), parent.rpc.model.list({ skipCache: true }), parent.rpc.gitHubAuth.getStatus(),
       ]), 20000); check();
       const model = catalog.list?.find(m => eligible(m) && m.id === selected.modelId);
-      if (!auth.isAuthenticated) throw fail('Sign in to Copilot before using this helper.');
-      if (captured && !sameAccount(captured.account, auth)) throw fail('The Copilot account changed after review. Refresh the Research review before starting.');
-      if (captured && !model) throw fail('The reviewed Research model is unavailable for this account or policy. Review Research model settings; no replacement was selected.');
-      if (!model) throw fail('Research needs an enabled Copilot model. Select one in the main chat and try again.');
+      if (!auth.isAuthenticated) throw fail('Sign in to Copilot before using this helper.', 'access-unavailable');
+      if (captured && !sameAccount(captured.account, auth)) throw fail('The Copilot account changed after review. Refresh the Research review before starting.', 'access-unavailable');
+      if (captured && !model) throw fail('The reviewed Research model is unavailable for this account or policy. Review Research model settings; no replacement was selected.', 'model-unavailable');
+      if (!model) throw fail('Research needs an enabled Copilot model. Select one in the main chat and try again.', 'model-unavailable');
       work = await prepare(context, { controller, progress, stopWith, fail, eligible: operationEligible, remaining });
       directory = await mkdtemp(join(tmpdir(), `explorer-${operation}-`));
       const workspace = join(directory, 'workspace'), home = join(directory, 'home');
@@ -105,8 +110,8 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       const [helperAuth, helperModels, metadata] = await deadline(Promise.all([
         session.rpc.gitHubAuth.getStatus(), session.rpc.model.list({ skipCache: true }), session.rpc.metadata.snapshot(),
       ]), 20000); check();
-      if (!sameAccount(auth, helperAuth)) throw fail('The research account differs from the main Copilot account. Check your Copilot sign-in.');
-      if (!helperModels.list?.some(m => eligible(m) && m.id === model.id)) throw fail('The selected model is unavailable for research. Choose an enabled Copilot model.');
+      if (!sameAccount(auth, helperAuth)) throw fail('The research account differs from the main Copilot account. Check your Copilot sign-in.', 'access-unavailable');
+      if (!helperModels.list?.some(m => eligible(m) && m.id === model.id)) throw fail('The selected model is unavailable for research. Choose an enabled Copilot model.', 'model-unavailable');
       if (metadata.isRemote !== false || await realpath(metadata.workingDirectory) !== await realpath(workspace)) throw fail('Copilot could not isolate the research workspace.');
       stage(webResearch ? 'Checking web research tools' : `Verifying ${label.toLowerCase()} has no tools`);
       await deadline(session.rpc.tools.initializeAndValidate(), 30000); check();
@@ -124,17 +129,20 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
       const result = work.parse(response?.data?.content); outcome = 'completed'; return result;
     } catch (error) {
       if (terminalFailure) { if (['attempt-limit', 'repeated-request', 'result-text-limit'].includes(terminalReason)) outcome = 'cancelled'; throw terminalFailure; }
-      if (controller.signal.aborted) { outcome = 'cancelled'; throw cancelled(); }
-      if (error instanceof HelperError) throw fail(error.message);
+      if (controller.signal.aborted) { outcome = 'cancelled'; throw cancelled(terminalReason); }
+      if (error instanceof HelperError) throw fail(error.message, error.reason);
       // SDK errors may contain prompts or credentials; only our stage labels reach the UI.
       throw fail(`Research could not finish: ${phase}. Your answers are saved; try again after checking Copilot.`);
     } finally {
       ended = true;
       const elapsed = Math.floor(clock.now() - started);
       clock.clearTimeout(timer);
+      // Progress is observational; a failed observer must never interrupt shutdown/accounting.
+      if (client) { try { progress('Stopping isolated helper'); } catch {} }
       const stopped = await stopClient();
       try {
         if (usage) {
+          try { progress('Retaining usage receipts'); } catch {}
           if (stopped !== false && directory) await reconcileUsageJournal(join(directory, 'home', 'session-state', sessionId, 'events.jsonl'), usage);
           await usage.flush();
         }
@@ -146,14 +154,14 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
           await mkdir(usageDirectory, { recursive: true }).then(() => writeFile(join(usageDirectory, `recovery-${sessionId}.json`), JSON.stringify({ sessionId, directory }), { mode: 0o600 })).catch(() => {});
         }
         await usage?.finish?.('failed').catch(() => {});
-        const error = fail('Helper cleanup or usage accounting failed. Recovery files were retained locally; no additional model call was made.');
+        const error = fail('Helper cleanup or usage accounting failed. Recovery files were retained locally; no additional model call was made.', 'cleanup-failure');
         if (stopped === false) error.releaseConfirmed = stopAttempt;
         throw error;
       }
       if (directory) {
         const inside = relative(tmpdir(), directory);
         if (!inside || isAbsolute(inside) || inside.startsWith('..') || !basename(directory).startsWith(`explorer-${operation}-`)) throw fail('Research cleanup path could not be verified.');
-        await rm(directory, { recursive: true, force: true, maxRetries: 3 }).catch(() => { throw fail('Research finished but temporary files could not be removed.'); });
+        await rm(directory, { recursive: true, force: true, maxRetries: 3 }).catch(() => { throw fail('Research finished but temporary files could not be removed.', 'cleanup-failure'); });
       }
       if (work?.report && (outcome === 'completed' || terminalReason)) {
         try { report(work.report({ reason: outcome === 'completed' ? 'model-completed' : terminalReason, elapsedMs: Number.isSafeInteger(elapsed) && elapsed >= 0 && elapsed <= 3600000 ? elapsed : null })); }
@@ -166,6 +174,6 @@ export function createOwnedHelper(parent, operation, prepare, { usageDirectory, 
 
 export async function deadline(promise, ms) {
   let timer;
-  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(fail('Research setup timed out. Try again after checking Copilot.')), ms); })]); }
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(fail('Research setup timed out. Try again after checking Copilot.', 'deadline')), ms); })]); }
   finally { clearTimeout(timer); }
 }

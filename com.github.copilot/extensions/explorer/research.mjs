@@ -47,7 +47,7 @@ const validCallId = id => typeof id === 'string' && !!id.trim() && id.length <= 
 
 export function createResearcher(parent, options = {}) {
   const now = options.now ?? Date.now;
-  const validateFreshness = (prepared, fail) => { if (!sameReviewedResearchFreshness(prepared, now())) throw fail('Reviewed evidence freshness changed. Refresh the evidence review before starting.'); };
+  const validateFreshness = (prepared, fail, time = now()) => { if (!sameReviewedResearchFreshness(prepared, time)) throw fail('Reviewed evidence freshness changed. Refresh the evidence review before starting.', 'stale-context'); };
   const prepare = async (prepared, { progress, stopWith, fail, eligible, remaining }) => {
     validateFreshness(prepared, fail);
     if (Buffer.byteLength(prepared.instructions) + Buffer.byteLength(prepared.prompt) > RESEARCH_CONTEXT_LIMIT) throw fail('The prepared research request exceeds its limit.');
@@ -55,12 +55,13 @@ export function createResearcher(parent, options = {}) {
     const checkpointIds = new Set(); let checkpoint = null, assessment = null;
     const chars = prepared.followup ? FOLLOWUP_OUTPUT_CHARS : 80000, bytes = prepared.followup ? FOLLOWUP_OUTPUT_BYTES : MAX_RESEARCH_BYTES;
     const parse = (content, partial = false) => {
+      const time = now(); validateFreshness(prepared, fail, time);
       let result, assessed;
       try {
         if (typeof content !== 'string' || content.length > chars || Buffer.byteLength(content) > bytes) throw new Error();
         const { effortAssessment: proposedAssessment, ...raw } = JSON.parse(content.trim().replace(/^```(?:json)?\s*\n([\s\S]*)\n```$/, '$1'));
         assessed = effortAssessment(proposedAssessment, { partial });
-        if (prepared.followup) return { result: parseFollowup(JSON.stringify(raw), prepared, pages, dateEvidence, now()), assessment: assessed };
+        if (prepared.followup) return { result: parseFollowup(JSON.stringify(raw), prepared, pages, dateEvidence, time), assessment: assessed };
         if (raw.optionsVersion !== 1 || !Object.hasOwn(raw, 'claims') || !Array.isArray(raw.sources) || raw.sources.length > 15) throw new Error();
         if (!raw.recommendationAssessment || !Array.isArray(raw.recommendationAssessment.decisionRefs) || raw.recommendationAssessment.decisionRefs.length > 8 || partial && raw.recommendationAssessment.optionId !== null) throw new Error();
         const decisions = new Map([...prepared.context.path, ...prepared.context.decisionsElsewhere].filter(node => node.parentId != null && isQuestion(node) && typeof node.answer === 'string' && node.answer.trim() && effectiveAnswerState(node) !== 'unanswered').map(node => [node.id, node]));
@@ -74,9 +75,9 @@ export function createResearcher(parent, options = {}) {
           return { ...source, retrievedAt: retrievedAt ?? null, provenance: retrievedAt ? 'recorded-read' : 'imported',
             ...(Object.hasOwn(source, 'dateObservations') ? { dateObservations: checkedSourceDateObservations(source.dateObservations, dateEvidence.get(url)) } : {}) };
         }) });
-      } catch (error) { throw fail(prepared.followup ? error.message : 'The researcher returned an invalid comparison. Your answers are saved; try research again.'); }
-      if (result.sources.some(s => !pages.has(sourceKey(s.url))) || (result.basis === 'reasoning' && result.sources.length)) throw fail('Research included sources it did not successfully read. The result was not saved. Try again.');
-      if (result.recommendationAssessment.optionId !== null && researchFreshness(result, now()).recommendation.needsReview) throw fail('Research proposed a current recommendation using a time-sensitive premise whose freshness needs review. The previous findings were kept; obtain current evidence or an explicitly qualified result without a winner.');
+      } catch (error) { throw fail(prepared.followup ? error.message : 'The researcher returned an invalid comparison. Your answers are saved; try research again.', 'invalid-result'); }
+      if (result.sources.some(s => !pages.has(sourceKey(s.url))) || (result.basis === 'reasoning' && result.sources.length)) throw fail('Research included sources it did not successfully read. The result was not saved. Try again.', 'invalid-result');
+      if (result.recommendationAssessment.optionId !== null && researchFreshness(result, time).recommendation.needsReview) throw fail('Research proposed a current recommendation using a time-sensitive premise whose freshness needs review. The previous findings were kept; obtain current evidence or an explicitly qualified result without a winner.', 'invalid-result');
       return { result, assessment: assessed };
     };
     const guidance = truncated => `Explorer effort: ${Math.max(0, Math.floor(remaining()))}ms remaining; ${Math.max(0, prepared.limits.toolAttemptLimit - effort.snapshot().toolAttempts)} attempts remain. ${truncated ? 'Only a bounded text prefix was delivered; do not infer omitted content. ' : ''}Avoid repeated requests. If the material criteria are supported, evidence is unavailable, or remaining effort is low, return the bounded final result now. Sufficiency is your assessment, not a host verification.`;
@@ -88,9 +89,9 @@ export function createResearcher(parent, options = {}) {
         onPermissionRequest: async (request, invocation) => {
           if (!eligible()) return denied();
           if (request.managedApprovalRequired || invocation?.promptRequest?.managedApprovalRequired) {
-            stopWith('Research requires managed permission approval. Explorer cannot approve it automatically; check your organization’s Copilot policy.'); return denied();
+            stopWith('Research requires managed permission approval. Explorer cannot approve it automatically; check your organization’s Copilot policy.', 'helper-failure', 'permission-denied'); return denied();
           }
-          if (request.requestSandboxBypass) { stopWith('Research requested sandbox access that Explorer does not allow.'); return denied(); }
+          if (request.requestSandboxBypass) { stopWith('Research requested sandbox access that Explorer does not allow.', 'helper-failure', 'permission-denied'); return denied(); }
           const allowed = request.kind === 'mcp' && request.serverName === 'github-mcp-server' && request.toolName === 'web_search' ||
             request.kind === 'url' && await publicUrl(request.url, options.resolve);
           return allowed && eligible() ? { kind: 'approved' } : denied();
@@ -110,7 +111,7 @@ export function createResearcher(parent, options = {}) {
             if (!eligible() || (!fetch && !search) || (fetch && !await publicUrl(input.toolArgs?.url, options.resolve)) || !eligible()) return { permissionDecision: 'deny', permissionDecisionReason: 'Only public web research within the request limits is allowed.' };
             if (callIds.has(input.toolCallId)) { stopWith('Research source tracking IDs were reused. The result was not saved.'); return { permissionDecision: 'deny' }; }
             callIds.add(input.toolCallId); pendingCalls.set(input.toolCallId, { kind, url: fetch ? sourceKey(input.toolArgs.url) : null });
-            progress(fetch ? 'Reading sources' : 'Searching the web');
+            progress(fetch ? 'Source read requested' : 'Search requested');
             return {};
           },
           onPostToolUse: input => {
@@ -131,7 +132,7 @@ export function createResearcher(parent, options = {}) {
                 dateEvidence.set(url, delivered.text);
               }
             }
-            progress('Comparing options');
+            progress('Source result received');
             return { modifiedResult: { resultType: 'success', textResultForLlm: delivered.text }, additionalContext: guidance(delivered.truncated) };
           },
           onPostToolUseFailure: input => {
@@ -146,9 +147,9 @@ export function createResearcher(parent, options = {}) {
       validateTools(tools) {
         const fetch = tools.tools?.find(t => t.name === 'web_fetch' && !t.mcpServerName && !t.mcpToolName);
         const search = tools.tools?.find(t => t.name === 'web_search' && t.mcpServerName === 'github-mcp-server' && t.mcpToolName === 'web_search');
-        if (!Array.isArray(tools.tools) || tools.tools.length !== 2 || !fetch || !search) throw fail('Web research is unavailable in this Copilot runtime or account. Update Copilot and check that GitHub web search is enabled.');
+        if (!Array.isArray(tools.tools) || tools.tools.length !== 2 || !fetch || !search) throw fail('Web research is unavailable in this Copilot runtime or account. Update Copilot and check that GitHub web search is enabled.', 'tools-unavailable');
       },
-      stage: 'Researching this question',
+      stage: 'Waiting for research response',
       validateBeforeSend: () => validateFreshness(prepared, fail),
       prompt: prepared.prompt,
       parse(content) { const parsed = parse(content); assessment = parsed.assessment; return parsed.result; },
@@ -179,7 +180,10 @@ export function createResearcher(parent, options = {}) {
     return { instructions: prepared.instructions, prompt: prepared.prompt, config: toolFreeConfig,
       validateTools: value => validateNoTools(value, fail), stage: 'Reconsidering the reviewed priorities',
       validateBeforeSend: () => validateFreshness(prepared, fail),
-      parse: content => { try { return parseReconsideration(content, prepared, now()); } catch (error) { throw fail(error.message); } },
+      parse: content => {
+        const time = now(); validateFreshness(prepared, fail, time);
+        try { return parseReconsideration(content, prepared, time); } catch (error) { throw fail(error.message, 'invalid-result'); }
+      },
     };
   }, options);
   return { async models() {

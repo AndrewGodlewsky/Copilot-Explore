@@ -2,6 +2,7 @@ import { fixtureResearchModels } from './helpers/research-model.mjs';
 import { attachDashboard } from '../com.github.copilot/extensions/explorer/web/dashboard.mjs';
 import { optionFindings } from './helpers/research-options.mjs';
 import { recommendationFindings } from './helpers/research-recommendation.mjs';
+import { helperFailure } from '../com.github.copilot/extensions/explorer/owned-helper.mjs';
 import { supportFindings } from './helpers/research-support.mjs';
 import { limitationFindings } from './helpers/research-limitations.mjs';
 import { researchFreshness, sourceDateText, claimFreshnessText, freshnessNotice } from '../com.github.copilot/extensions/explorer/web/research-freshness.mjs';
@@ -167,6 +168,46 @@ test('project question file selection opens for the selected branch and returns 
   assert.equal(f.explorer.pending, null); assert.equal(f.explorer.doc.nodes[1].answer, '');
 });
 
+test('research progress identifies the original question and cancel stays reachable outside the drawer', async t => {
+  let run;
+  t.after(() => run?.resolve(recommendationFindings()));
+  const f = await fixture(t, 340, undefined, false, { runResearch: (_, options) => new Promise((resolve, reject) => { run = { ...options, resolve, reject }; }) });
+  const $ = id => f.document.getElementById(id), [origin, other] = f.explorer.doc.nodes.slice(1); f.open(origin.id); f.type('answer', 'Keep original draft 🌿');
+  $('research-request').click(); await until(() => !$('research-review-start').disabled, 'review ready'); await uiResponse(f, 'api/action', 'research', () => $('research-review-start').click()); await until(() => run, 'research running');
+  run.onProgress('Source read requested'); await f.poll();
+  assert.match($('request-status').textContent, /Source read requested/); assert.ok($('request-status').textContent.includes(origin.question));
+  f.open(other.id); f.type('answer', 'Keep independent draft'); $('question-drawer-close').click();
+  assert.equal($('question-drawer').hidden, true); assert.equal($('request-cancel').hidden, false); $('request-cancel').focus();
+  assert.equal(f.document.activeElement.id, 'request-cancel');
+  await uiResponse(f, 'api/action', 'cancel', () => $('request-cancel').click()); await f.poll();
+  assert.equal(run.signal.aborted, true); assert.equal($('answer').value, 'Keep independent draft'); assert.equal(f.explorer.uiSnapshot().researchOperation.nodeId, origin.id);
+  assert.notEqual(f.document.activeElement.id, 'request-cancel');
+  run.resolve(recommendationFindings()); await Promise.all([...f.explorer.researchTasks]); await f.poll();
+  f.open(origin.id); assert.equal($('answer').value, 'Keep original draft 🌿'); assert.match($('research-operation').textContent, /Cancelled/);
+  assert.equal(f.explorer.doc.nodes[1].research, null);
+});
+
+test('research recovery reviews original preferences after failure and preserves prior findings and newer drafts', async t => {
+  const runs = [];
+  t.after(() => { for (const run of runs) run.resolve(recommendationFindings()); });
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.save(doc); }, runResearch: (_, options) => new Promise((resolve, reject) => runs.push({ ...options, resolve, reject })) });
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1], prior = JSON.stringify(node.research); f.open(node.id);
+  f.type('answer', 'Keep the answer draft'); f.type('followup-question', 'Keep the next discussion'); const editor = $('answer'), composer = $('followup-question');
+  $('research-request').click(); await until(() => !$('research-review-start').disabled, 'initial review');
+  $('research-depth').value = 'quick'; $('research-depth').dispatchEvent(new f.window.Event('change')); await until(() => !$('research-review-start').disabled, 'quick reviewed');
+  await uiResponse(f, 'api/action', 'research', () => $('research-review-start').click()); await until(() => runs.length === 1, 'run captured');
+  runs[0].reject(helperFailure('Synthetic unavailable tools', 'tools-unavailable')); await until(() => !f.explorer.pending, 'failed operation'); await f.poll();
+  assert.match($('research-operation').textContent, /Failed/); assert.match($('research-operation').textContent, /Copilot.*web search/i);
+  $('context-scope').value = 'path'; $('context-scope').dispatchEvent(new f.window.Event('change'));
+  $('research-operation-retry').click(); await until(() => !$('research-review-start').disabled, 'fresh retry review');
+  assert.equal($('research-depth').value, 'quick'); assert.equal(f.explorer.researchReview.current.prepared.retryPolicy.scope, runs[0].prepared.retryPolicy.scope); assert.equal(runs.length, 1);
+  assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep the answer draft'); assert.equal($('followup-question'), composer); assert.equal(composer.value, 'Keep the next discussion');
+  $('research-review-close').click(); const operation = f.explorer.uiSnapshot().researchOperation;
+  const denied = await fetch(new URL('api/action', f.window.location.href), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify({ action: 'research-operation-clear', id: operation.id, nodeId: node.id, journey: operation.journey, revision: f.explorer.doc.revision }) }); assert.equal(denied.status, 403);
+  await uiResponse(f, 'api/action', 'research-operation-clear', () => $('research-operation-clear').click()); await f.poll();
+  assert.equal($('research-operation'), null); assert.equal(JSON.stringify(f.explorer.doc.nodes[1].research), prior); assert.equal(composer.value, 'Keep the next discussion');
+});
+
 test('research attempt partials stay separate and deeper review preserves drafts, disclosures and focus', async t => {
   let run; let sends = 0;
   const f = await fixture(t, 340, undefined, false, { runResearch: (_, options) => { sends++; return new Promise((resolve, reject) => { run = { ...options, resolve, reject }; }); } });
@@ -191,6 +232,21 @@ test('research attempt partials stay separate and deeper review preserves drafts
   assert.equal($('answer'), editor); assert.equal(editor.value, 'Keep my answer 🌿'); assert.equal($('followup-question'), composer); assert.equal(composer.value, 'Keep the next question');
   $('research-review-close').click(); $('research-attempt-clear').click(); await until(() => !f.explorer.uiSnapshot().researchAttempt, 'attempt cleared'); f.window.__updates.apply(f.explorer.uiSnapshot());
   assert.equal($('research-attempt'), null); assert.equal(JSON.stringify(f.explorer.doc.nodes[1].research), originalResearch); assert.equal(sends, 1);
+});
+
+test('historical partial follow-up cannot silently target replacement findings for a deeper pass', async t => {
+  let run;
+  t.after(() => run?.resolve({}));
+  const f = await fixture(t, 340, undefined, false, { before: async e => { const doc = structuredClone(e.doc); doc.nodes[1].research = comparisonFindings; await e.save(doc); }, runFollowup: (_, options) => new Promise((resolve, reject) => { run = { ...options, resolve, reject }; }) });
+  const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id);
+  $('followup-target').value = 'option:0'; $('followup-target').dispatchEvent(new f.window.Event('change')); f.type('followup-question', 'Explain this original option'); $('followup-review').click();
+  await startReviewedResearch(f); await until(() => run, 'follow-up running'); f.type('followup-question', 'A newer composer draft');
+  const partial = { answer: 'Incomplete explanation', uncertainty: 'Unfinished.', claims: [{ id: 'c1', text: 'An unverified possibility.', basis: 'reasoning', evidence: [], limitations: 'Synthetic fixture.' }], sources: [] };
+  run.onReport({ settings: run.prepared.settings, reason: 'deadline', elapsedMs: 180001, toolAttempts: 0, duplicateAttempts: 0, deliveredTextUnits: 0, truncatedResults: 0, assessment: null, partial });
+  run.reject(helperFailure('Time limit reached.', 'deadline')); await until(() => !f.explorer.pending, 'partial retained'); await f.poll();
+  assert.equal($('research-deeper-review').disabled, false);
+  const next = structuredClone(f.explorer.doc); next.nodes[1].research.summary = 'Replacement research'; await f.explorer.save(next); await f.poll();
+  assert.equal($('research-deeper-review').disabled, true); assert.equal($('followup-turn-retry').disabled, true); assert.equal($('followup-question').value, 'A newer composer draft');
 });
 
 test('research attempt without a checkpoint says none were retained and can review another maximum-depth pass', async t => {

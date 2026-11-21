@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.132",
+    "summary": "Research now shows observed progress and its question, with Cancel available when the drawer is closed. Failed or cancelled work offers specific recovery advice and fresh review of the original request. Findings and drafts stay intact; stale follow-up targets cannot retry against replacement research, and no request retries automatically."
+  },
+  {
     "version": "0.1.131",
     "summary": "Discuss a recommendation, option or claim in the Research drawer. Optional starters and clearly labelled turns keep questions, explanations and sources readable. Failed or cancelled prompts can be reviewed again without losing newer text. Targets are bound to exact reviewed context; conversation remains bounded and private to the active canvas."
   },

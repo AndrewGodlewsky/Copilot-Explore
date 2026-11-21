@@ -152,6 +152,48 @@ async function fixture(t, options = {}) {
   return { researcher, calls, dir, parent };
 }
 
+test('research recovery exposes host-owned failure reasons without leaking SDK error text', async t => {
+  for (const [reason, options] of [
+    ['access-unavailable', { parentAuth: { isAuthenticated: false } }],
+    ['model-unavailable', { models: [] }],
+    ['tools-unavailable', { tools: [] }],
+    ['permission-denied', { send: calls => calls.config.onPermissionRequest({ kind: 'url', managedApprovalRequired: true, url: 'https://example.com/' }) }],
+    ['invalid-result', { content: '{unfinished' }],
+    ['helper-failure', { send: () => { throw Error('PRIVATE_SDK_ERROR_CANARY'); } }],
+    ['cleanup-failure', { stop: () => { throw Error('PRIVATE_STOP_CANARY'); } }],
+  ]) {
+    const f = await fixture(t, options);
+    await assert.rejects(f.researcher.run(context), error => {
+      assert.equal(error.reason, reason); assert.doesNotMatch(error.message, /PRIVATE_.*CANARY/); return true;
+    });
+    assert.ok(f.calls.sends <= 1, 'recovery never automatically retries');
+  }
+});
+
+test('research progress describes observed source and cleanup events without invented comparison stages', async t => {
+  const stages = [];
+  const f = await fixture(t, { send: async calls => {
+    await calls.config.hooks.onPreToolUse({ toolName: 'web_search', toolCallId: 'observed-search', toolArgs: { query: 'synthetic evidence' } });
+    calls.config.hooks.onPostToolUse({ toolName: 'web_search', toolCallId: 'observed-search', toolResult: { resultType: 'success', textResultForLlm: 'Synthetic evidence.' } });
+  } });
+  await f.researcher.run(context, { onProgress: stage => stages.push(stage) });
+  for (const label of ['Checking Copilot access', 'Starting isolated helper', 'Checking web research tools', 'Waiting for research response', 'Search requested', 'Source result received', 'Checking result', 'Stopping isolated helper', 'Retaining usage receipts']) assert.ok(stages.includes(label), label);
+  assert.ok(stages.indexOf('Search requested') < stages.indexOf('Source result received'));
+  assert.ok(stages.indexOf('Checking result') < stages.indexOf('Stopping isolated helper'));
+  assert.equal(stages.includes('Comparing options'), false);
+  assert.ok(stages.every(stage => !/\d+%/.test(stage)));
+});
+
+test('research deadline and cancellation remain distinct typed outcomes with no retry', async t => {
+  let now = 0; const abort = new AbortController();
+  const clock = { now: () => now, setTimeout: () => ({ unref() {} }), clearTimeout() {} };
+  const expired = await fixture(t, { clock, send: () => { now = 181000; } });
+  await assert.rejects(expired.researcher.run(context), error => error.reason === 'deadline');
+  const cancelled = await fixture(t, { send: () => abort.abort() });
+  await assert.rejects(cancelled.researcher.run(context, { signal: abort.signal }), error => error.reason === 'cancelled');
+  assert.equal(expired.calls.sends, 1); assert.equal(cancelled.calls.sends, 1);
+});
+
 test('effort stops repeated exact queries, counts denied attempts and reports only after shutdown', async t => {
   let allowed = 0; const reports = [];
   const f = await fixture(t, { send: async calls => {
@@ -445,7 +487,7 @@ test('evidence age changing during startup or awaited model accounting stops bef
     const prepared = prepareFollowup(doc, node.id, { question: 'Why?', hypothetical: false }, { now });
     const f = await fixture(t, { now: () => now, start: () => { if (phase === 'startup') now++; },
       usageRecorder: async (...args) => { const recorder = await createUsageRecorder(...args); return { ...recorder, async captureModel(id) { await recorder.captureModel(id); if (phase === 'accounting') now++; } }; } });
-    await assert.rejects(f.researcher.runFollowup(prepared.context, { prepared }), /freshness.*changed/i);
+    await assert.rejects(f.researcher.runFollowup(prepared.context, { prepared }), error => error.reason === 'stale-context' && /freshness.*changed/i.test(error.message));
     assert.equal(f.calls.sends, 0); assert.equal(f.calls.stops, 1);
   }
 });
@@ -491,7 +533,7 @@ test('research rejects a current winner grounded in an expired volatile premise 
       const input = { toolName: 'web_fetch', toolCallId: 'old-page', toolArgs: { url: raw.sources[0].url } }; await config.hooks.onPreToolUse(input);
       config.hooks.onPostToolUse({ ...input, toolResult: { resultType: 'success', textResultForLlm: raw.sources[0].dateObservations[0].text } });
     } });
-    if (!abstain) await assert.rejects(f.researcher.run(context), /freshness|current|outdated/i);
+    if (!abstain) await assert.rejects(f.researcher.run(context), error => error.reason === 'invalid-result' && /freshness|current|outdated/i.test(error.message));
     else { const output = await f.researcher.run(context); assert.equal(output.recommendationAssessment.optionId, null); assert.equal(output.claims.length, 1); assert.deepEqual(output.limitations, raw.limitations); }
   }
 });
@@ -729,7 +771,7 @@ test('held DNS callbacks cannot approve after deadline, explicit cancellation or
       releases.forEach(release => release());
       assert.equal((await fetch).permissionDecision, 'deny'); assert.equal((await permission).kind, 'denied-by-rules');
     } });
-    await assert.rejects(f.researcher.run(context, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' }, signal: controller.signal }), reason === 'attempts' ? /tool-attempt limit/ : /cancelled/);
+    await assert.rejects(f.researcher.run(context, { settings: { depth: 'quick', sourceFocus: 'balanced', recency: 'any' }, signal: controller.signal }), error => error.reason === ({ timeout: 'deadline', cancel: 'cancelled', attempts: 'attempt-limit' })[reason]);
     assert.equal(f.calls.sends, 1); assert.equal(f.calls.stops, 1);
   }
 });

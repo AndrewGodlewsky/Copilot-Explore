@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 export const PROJECT_LIMITS = Object.freeze({ files: 5, pathCharacters: 240, fileBytes: 65536, totalBytes: 131072, excerptBytes: 8192, totalExcerptBytes: 32768 });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+export const projectRootKey = root => hash(JSON.stringify(root));
 const identity = stat => [stat.dev, stat.ino, stat.birthtimeNs].join(':');
 const stamp = stat => [identity(stat), stat.size, stat.mtimeNs, stat.ctimeNs, stat.nlink].join(':');
 const reliable = stat => stat.ino > 0n && stat.dev >= 0n;

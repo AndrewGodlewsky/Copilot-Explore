@@ -2,32 +2,38 @@ import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { deadline } from './owned-helper.mjs';
 import { prepareProjectBrief, validateProjectBrief, editProjectBrief, projectCorrections } from './project-brief.mjs';
+import { projectRootKey } from './project-context.mjs';
 
 const purpose = 'project-brief', lifetime = 600000, same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const validId = value => typeof value === 'string' && /^[a-zA-Z0-9-]{20,80}$/.test(value);
 const changed = () => Error('Project brief or captured files changed. Review the current scope and brief again.');
+const claimSummary = draft => Object.fromEntries(Object.entries(draft.sections).map(([section, claims]) => [section, claims.map(({ text, kind }) => ({ text, kind }))]));
 
 export class ProjectBriefWorkspace {
   constructor({ mode, journey, execute, now = Date.now }) { Object.assign(this, { mode, journey, execute, now }); this.epoch = 0; this.clear(); }
   clear() {
     this.epoch++; this.validation?.abort(); this.work?.abort.abort(); this.validation = this.work = this.preview = this.draft = this.approval = null;
-    this.assertions = []; this.root = null; this.observedCaptureId = this.checkedCaptureId = null; this.clientId = this.boundJourney = null; this.sequence = this.revision = 0; this.error = '';
+    this.assertions = []; this.root = this.previous = null; this.observedCaptureId = this.checkedCaptureId = null; this.clientId = this.boundJourney = null; this.sequence = this.revision = 0; this.error = '';
   }
-  invalidate(message = '') {
+  invalidate(message = '', retainComparison = false) {
     const changed = this.preview || this.work || this.draft || this.approval;
+    if (retainComparison && this.draft) this.previous = claimSummary(this.draft);
+    if (!retainComparison) this.previous = null;
     if (this.draft) this.assertions = projectCorrections(this.draft);
     this.validation?.abort(); this.work?.abort.abort(); this.preview = this.work = this.draft = this.approval = null; this.checkedCaptureId = null;
     if (changed) this.revision++; this.error = message;
   }
   observe() {
     const capture = this.mode.capture();
+    const compare = !['off', 'unavailable'].includes(this.mode.contextState?.());
+    if (!compare) this.previous = null;
     const project = this.mode.projectIdentity?.() ?? capture?.root;
     if (project && this.root && !same(project, this.root)) {
       this.invalidate('The working project changed. Its previous brief and corrections were cleared.');
       this.assertions = []; this.root = structuredClone(project); this.observedCaptureId = null;
     }
     if (capture?.id !== this.observedCaptureId && (capture || this.observedCaptureId)) {
-      this.invalidate(capture ? '' : 'Project scope is off or changed. User corrections remain local until discarded or the project changes.');
+      this.invalidate(capture ? '' : 'Project scope is off or changed. User corrections remain local until discarded or the project changes.', compare);
       if (capture && this.root && !same(this.root, capture.root)) this.assertions = [];
       if (capture) this.root = structuredClone(capture.root);
       this.observedCaptureId = capture?.id ?? null;
@@ -50,7 +56,7 @@ export class ProjectBriefWorkspace {
     try {
       if (!await this.verify(guard.capture, true, signal) || !this.approvalCurrent(guard)) throw changed();
     } catch (error) {
-      if (this.approvalCurrent(guard) && !signal?.aborted) this.invalidate('Project files or scope changed or could not be verified. Review and approve a current brief again.');
+      if (this.approvalCurrent(guard) && !signal?.aborted) this.invalidate('Project files or scope changed or could not be verified. Review and approve a current brief again.', !['off', 'unavailable'].includes(this.mode.contextState?.()));
       throw error;
     }
   }
@@ -66,7 +72,8 @@ export class ProjectBriefWorkspace {
     const capture = this.mode.capture(), state = this.work?.status === 'pending' ? 'pending' : this.preview ? 'review' : this.error ? 'error' : this.approval ? 'approved' : this.draft ? 'draft' : capture ? 'ready' : 'off';
     return structuredClone({ purpose, clientId: input.clientId, sequence: input.sequence, journey: input.journey, state, revision: this.revision,
       captureAvailable: !!capture && this.checkedCaptureId === capture.id, approved: !!this.approval,
-      project: this.root ? { root: this.root.path, name: basename(this.root.path) } : null, corrections: this.assertions, error: this.error,
+      project: this.root ? { root: this.root.path, name: basename(this.root.path), identity: projectRootKey(this.root) } : null, corrections: this.assertions, error: this.error,
+      ...(this.previous ? { comparison: { previous: this.previous, current: this.draft ? claimSummary(this.draft) : null } } : {}),
       ...(this.draft ? { draft: this.draft } : {}), ...(this.work ? { id: this.work.id, progress: this.work.progress } : {}),
       ...(this.preview ? { token: this.preview.token, expires: this.preview.expires, prepared: { instructions: this.preview.prepared.instructions, prompt: this.preview.prepared.prompt, bytes: this.preview.prepared.bytes, limit: this.preview.prepared.limit } } : {}),
     });
@@ -114,11 +121,12 @@ export class ProjectBriefWorkspace {
     const abort = new AbortController(); this.validation = abort;
     let fresh;
     try { fresh = await this.verify(capture, action === 'approve', abort.signal); current(); abort.signal.throwIfAborted(); }
-    catch (error) { current(); if (!abort.signal.aborted) this.invalidate('Project freshness could not be verified. Review the current scope again.'); throw error; }
+    catch (error) { current(); if (!abort.signal.aborted) this.invalidate('Project freshness could not be verified. Review the current scope again.', !['off', 'unavailable'].includes(this.mode.contextState?.())); throw error; }
     finally { if (this.validation === abort) this.validation = null; }
-    if (!fresh) { this.invalidate('Project files or ignore policy changed. Review and explicitly read the current scope again.'); if (action !== 'status') throw changed(); return this.view(input); }
+    if (!fresh) { this.invalidate('Project files, checkout or ignore policy changed. Review and explicitly read the current scope again.', !['off', 'unavailable'].includes(this.mode.contextState?.())); if (action !== 'status') throw changed(); return this.view(input); }
     this.checkedCaptureId = capture.id;
     if (action === 'prepare') {
+      if (this.draft) this.previous = claimSummary(this.draft);
       if (this.approval) { this.approval = null; this.revision++; }
       this.error = ''; this.work = null;
       this.preview = { token: randomUUID(), expires: this.now() + lifetime, capture, revision: this.revision, prepared: prepareProjectBrief(capture, this.assertions) };
@@ -127,7 +135,7 @@ export class ProjectBriefWorkspace {
       if (this.draft?.captureId !== capture.id) throw changed();
       const draft = editProjectBrief(this.draft, input.changes);
       if (!Object.values(draft.sections).some(claims => claims.length)) throw Error('A project brief needs at least one reviewed claim or user assertion.');
-      this.draft = draft; this.assertions = projectCorrections(draft); this.preview = null; this.revision++; this.approval = { captureId: capture.id, revision: this.revision }; this.error = '';
+      this.draft = draft; this.assertions = projectCorrections(draft); this.previous = null; this.preview = null; this.revision++; this.approval = { captureId: capture.id, revision: this.revision }; this.error = '';
     }
     if (action === 'start') {
       if (!preview || preview.revision !== this.revision || this.now() > preview.expires) throw changed();

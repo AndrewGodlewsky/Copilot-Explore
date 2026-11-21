@@ -1,5 +1,9 @@
 [
   {
+    "version": "0.1.130",
+    "summary": "Project context now detects checkout changes and keeps stale or unavailable status visible. Explicit refresh compares file scope and brief claims before reuse, retaining same-project user corrections. Turn off remains available during pending scope work; private comparisons stay out of shared maps and exports."
+  },
+  {
     "version": "0.1.129",
     "summary": "See which reviewed project claims motivated each suggested question, with file-backed interpretation, inference, unknown and user-assertion labels and source filenames. Correct the brief before explicitly generating again. Expired context is labeled honestly; private references stay out of shared files and existing answers and drafts stay intact."
   },

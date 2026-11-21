@@ -12,7 +12,7 @@ async function fixture(t) {
   window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   window.HTMLDialogElement.prototype.close = function () { this.open = false; };
   const reply = input => ({ ...input, state: input.action === 'prepare' ? 'review' : input.action === 'approve' ? 'active' : 'off',
-    project: { name: '<script>project 🌿</script>', root: 'C:/synthetic/project' }, scope: ['status', 'disable', 'discover'].includes(input.action) ? null : { files: [{ name: 'notes.md', bytes: 32 }], bytes: 32 },
+    project: { name: '<script>project 🌿</script>', root: 'C:/synthetic/project' }, scope: ['status', 'disable', 'revise', 'discover'].includes(input.action) ? null : { files: [{ name: 'notes.md', bytes: 32 }], bytes: 32 },
     ...(input.action === 'prepare' ? { token: randomUUID() } : {}), ...(input.action === 'approve' ? { readToken: randomUUID() } : {}), message: input.action === 'approve' ? 'Scope ready; project brief required.' : '' });
   const fetch = async (_, options) => { const input = JSON.parse(options.body); requests.push(input); const value = intercept ? await intercept(input) : reply(input); return { ok: true, json: async () => value }; };
   const client = new ProjectModeClient({ $, fetch, journey: () => journey, active: () => active, now: () => now });
@@ -20,10 +20,30 @@ async function fixture(t) {
   return { $, window, client, requests, reply, tick: (milliseconds = 10000) => { now += milliseconds; return client.checkStatus(); }, setJourney: value => { journey = value; }, setActive: value => { active = value; }, intercept: value => { intercept = value; } };
 }
 
+test('stale and unavailable context remains visible with explicit refresh and disable controls', async t => {
+  const f = await fixture(t);
+  for (const state of ['stale', 'unavailable']) {
+    f.client.accept({ ...f.reply({ action: 'status' }), state, message: `Project context is ${state}.` }, 'status'); f.client.render();
+    assert.equal(f.$('project-mode-indicator').hidden, false); assert.match(f.$('project-mode-settings-status').textContent, new RegExp(state, 'i'));
+    assert.equal(f.$('project-mode-disable').disabled, false); assert.equal(f.$('project-mode-refresh').disabled, false);
+  }
+});
+
+test('scope review displays literal file, exclusion and checkout differences before approval', async t => {
+  const f = await fixture(t);
+  f.client.accept({ ...f.reply({ action: 'prepare' }), comparison: { files: { added: ['new 🌿.md'], removed: ['old.md'], changed: ['README.md'], unchanged: [] }, exclusions: { added: ['docs/'], removed: [] }, checkoutChanged: true,
+    previousCheckout: { branch: 'refs/heads/before', head: null }, currentCheckout: { branch: 'refs/heads/after', head: 'a'.repeat(40) } } }, 'prepare'); f.client.render();
+  assert.equal(f.$('project-mode-changes').hidden, false);
+  const content = f.$('project-mode-changes').textContent;
+  for (const text of ['new 🌿.md', 'old.md', 'README.md', 'Metadata', 'docs/', 'before', 'after']) assert.ok(content.includes(text), text);
+  assert.equal(f.$('project-mode-changes').querySelector('a,script'), null);
+  f.client.accept({ ...f.reply({ action: 'disable' }), state: 'off' }, 'disable'); f.client.render(); assert.equal(f.$('project-mode-changes').hidden, true);
+});
+
 test('branch suggestions require explicit selection and show omissions without reading or changing the answer', async t => {
   const f = await fixture(t); f.client.briefState = () => ({ approved: true }); let returned;
   f.client.onReturn = nodeId => { returned = nodeId; };
-  f.intercept(input => ({ ...f.reply(input), state: input.action === 'disable' ? 'off' : 'active', ...(input.action === 'target' ? { inventory: {
+  f.intercept(input => ({ ...f.reply(input), state: ['disable', 'revise'].includes(input.action) ? 'off' : 'active', ...(input.action === 'target' ? { inventory: {
     candidates: [{ name: 'src/billing.ts', bytes: 20, reason: 'Saved question filename matches: billing' }], skipped: [], examined: 5, directories: 2, truncated: false,
     target: { nodeId: 'question-a', question: 'Billing <script>literal</script>', direction: input.direction, briefRevision: 4, suggested: ['src/billing.ts'], omitted: 1, omittedShared: ['docs/constraints.md'] },
   } } : {}) }));
@@ -33,7 +53,7 @@ test('branch suggestions require explicit selection and show omissions without r
   assert.equal(f.requests.some(request => request.action === 'read'), false); assert.equal(f.$('project-mode-paths').value, 'notes.md');
   assert.match(f.$('project-mode-target-summary').textContent, /brief revision 4/); assert.match(f.$('project-mode-target-summary').textContent, /docs\/constraints.md/);
   assert.equal(f.$('project-mode-target').querySelector('script'), null);
-  f.$('project-mode-use-suggestions').click(); await waitFor(() => f.requests.at(-1).action === 'disable');
+  f.$('project-mode-use-suggestions').click(); await waitFor(() => f.requests.at(-1).action === 'revise');
   assert.equal(f.$('project-mode-paths').value, 'src/billing.ts'); assert.equal(f.$('project-mode-read').disabled, true);
   f.$('project-mode-return').click(); assert.equal(returned, 'question-a'); assert.equal(f.$('project-mode-dialog').open, false);
 });
@@ -122,6 +142,15 @@ test('closing a pending read revokes it and rejects its late receipt; failed rec
   assert.equal(f.client.value.state, 'uncertain'); assert.equal(f.client.value.receipt, undefined); assert.equal(f.client.value.readToken, undefined);
 });
 
+test('Turn off remains usable during a pending read and ignores its late receipt', async t => {
+  const f = await fixture(t); f.client.open(); await waitFor(() => !f.client.loading);
+  await f.client.request('prepare', { paths: ['notes.md'], exclusions: [] }); await f.client.request('approve', { token: f.client.value.token });
+  let release; f.intercept(input => input.action === 'read' ? new Promise(resolve => { release = () => resolve({ ...f.reply(input), state: 'active', receipt: { id: randomUUID(), sources: [] } }); }) : f.reply(input));
+  f.$('project-mode-read').click(); await waitFor(() => release); assert.equal(f.$('project-mode-disable').disabled, false);
+  f.$('project-mode-disable').click(); await waitFor(() => f.client.value.state === 'off' && !f.client.loading); release(); await new Promise(setImmediate);
+  assert.equal(f.client.value.state, 'off'); assert.equal(f.client.value.receipt, undefined); assert.equal(f.$('project-mode-capture').hidden, true);
+});
+
 test('lost revocation after editing paths or exclusions cannot restore old read tokens or excerpts', async t => {
   for (const edited of ['paths', 'exclusions']) {
     const f = await fixture(t); f.$('project-mode-open').click(); await waitFor(() => !f.client.loading);
@@ -129,7 +158,7 @@ test('lost revocation after editing paths or exclusions cannot restore old read 
     f.$('project-mode-approve').click(); await waitFor(() => !!f.client.value?.readToken);
     const old = structuredClone(f.client.value); let loseDisable = true;
     f.intercept(input => {
-      if (input.action === 'disable' && loseDisable) throw Error('Lost disable request');
+      if (input.action === 'revise' && loseDisable) throw Error('Lost scope revision request');
       return input.action === 'status' ? { ...old, ...input, receipt: { id: randomUUID(), sources: [] } } : f.reply(input);
     });
     f.$(`project-mode-${edited}`).value = edited === 'paths' ? 'new.md' : 'notes.md';
@@ -172,7 +201,7 @@ test('closing or editing during approval explicitly revokes scope instead of acc
     f.$('project-mode-approve').click(); await waitFor(() => release);
     if (change === 'close') f.$('project-mode-close').click();
     else { f.$('project-mode-paths').value = 'other.md'; f.$('project-mode-paths').dispatchEvent(new f.window.Event('input')); }
-    assert.equal(f.requests.at(-1).action, 'disable'); release(); await new Promise(setImmediate);
+    assert.equal(f.requests.at(-1).action, change === 'close' ? 'disable' : 'revise'); release(); await new Promise(setImmediate);
     assert.equal(f.$('project-mode-indicator').hidden, true); assert.equal(f.$('project-mode-approve').disabled, true);
   }
 });

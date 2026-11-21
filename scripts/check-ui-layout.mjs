@@ -541,14 +541,22 @@ try {
         expect(bounds.left >= 0 && bounds.right <= bounds.width + 1 && bounds.scroll <= bounds.client + 1, `${scenario.name}: branch file controls fit the pane`, bounds);
       }
       await page.locator('#project-mode-use-suggestions').focus(); await page.keyboard.press('Enter');
-      await page.waitForFunction(() => document.getElementById('project-mode-indicator').hidden);
+      await page.waitForFunction(() => document.getElementById('project-mode-indicator-text').textContent.includes('stale'));
       expect(await page.locator('#project-mode-paths').inputValue() === 'billing.ts' && !explorer.projectBrief.approval && await editor.inputValue() === projectQuestionDraft, `${scenario.name}: changing scope revokes approval and preserves the draft`, {});
       await page.locator('#project-mode-prepare').click(); await page.waitForFunction(() => !document.getElementById('project-mode-approve').disabled);
+      expect(await page.locator('#project-mode-changes').isVisible() && (await page.locator('#project-mode-changes-content').textContent()).includes('Removed files: README.md'), `${scenario.name}: replacement scope shows added and removed files before enablement`, {});
+      await page.locator('#project-mode-changes-content').focus();
+      expect(await page.locator('#project-mode-changes-content').evaluate(el => el === document.activeElement), `${scenario.name}: scope comparison has keyboard access`, {});
       await page.locator('#project-mode-approve').click(); await page.waitForFunction(() => !document.getElementById('project-mode-read').disabled);
       await page.locator('#project-mode-read').click(); await page.waitForFunction(() => !document.getElementById('project-brief-prepare').disabled);
       await page.locator('#project-brief-prepare').click(); await page.waitForFunction(() => !document.getElementById('project-brief-start').disabled);
       expect((await page.locator('#project-brief-input').textContent()).includes('Synthetic billing branch'), `${scenario.name}: new file appears only in the new reviewed brief request`, {});
       await page.locator('#project-brief-start').click(); await page.waitForFunction(() => !document.getElementById('project-brief-approve').disabled);
+      expect(await page.locator('#project-brief-changes').isVisible() && (await page.locator('#project-brief-changes-content').textContent()).includes('unchanged claims'), `${scenario.name}: replacement brief shows claim differences before approval`, {});
+      for (const id of ['project-mode-changes', 'project-brief-changes']) {
+        const bounds = await page.locator('#' + id).evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth, paneScroll: el.closest('dialog').scrollWidth, paneClient: el.closest('dialog').clientWidth }));
+        expect(bounds.scroll <= bounds.client + 1 && bounds.paneScroll <= bounds.paneClient + 1, `${scenario.name}: refresh comparisons fit the pane`, bounds);
+      }
       await page.locator('#project-brief-approve').click(); await page.waitForFunction(() => document.getElementById('project-mode-indicator-text').textContent.includes('brief approved'));
       await page.locator('#project-mode-return').focus(); await page.keyboard.press('Enter'); await page.waitForFunction(() => !document.getElementById('research-review-start').disabled);
       expect(await editor.inputValue() === projectQuestionDraft && (await page.locator('#research-review-content').textContent()).includes('Reviewed user correction 🌿'), `${scenario.name}: refreshed branch brief retains corrections and the answer draft`, {});

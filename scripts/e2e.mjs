@@ -197,7 +197,9 @@ try {
   assert.ok(!(await (await fetch(opened.url + 'export.json')).text()).includes(projectCanary));
   const otherProject = join(temporary, 'other-project'); await mkdir(otherProject);
   await session.rpc.metadata.setWorkingDirectory({ workingDirectory: otherProject });
-  assert.equal((await scopeRequest('status')).state, 'stale');
+  const unavailableScope = await scopeRequest('status');
+  assert.equal(unavailableScope.state, 'unavailable', 'the replacement directory is not a Git checkout');
+  assert.equal(unavailableScope.readToken, undefined); assert.equal(unavailableScope.receipt, undefined);
   const staleBrief = await briefRequest('status'); assert.equal(staleBrief.captureAvailable, false); assert.equal(staleBrief.approved, false); assert.equal(staleBrief.prepared, undefined);
   const { project: ignoredProjectSelection, ...existingProjectReview } = projectReviewInput;
   const changedRootResponse = await fetch(opened.url + 'api/research-review', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1', Origin: new URL(opened.url).origin }, body: JSON.stringify({ ...existingProjectReview, sequence: 2 }) });
@@ -206,6 +208,10 @@ try {
   assert.equal(changedRootReview.prepared.context.projectSources[0].excerpt, projectCanary);
   await session.rpc.metadata.setWorkingDirectory({ workingDirectory: project });
   console.log('Installed metadata cwd selected the explicit project file; artifact workspace, native context and exports excluded it.');
+  const recoveredScope = await scopeRequest('status');
+  assert.equal(recoveredScope.state, 'stale', 'returning to the original checkout does not restore approval');
+  assert.equal(recoveredScope.readToken, undefined); assert.equal(recoveredScope.receipt, undefined);
+  assert.equal((await scopeRequest('disable')).state, 'off');
   assert.equal((await scopeRequest('status')).state, 'off');
   console.log('Installed metadata bound discovery and an explicit local read to reviewed scope; changing the root revoked it without a model call or export/native disclosure.');
   const templateCanary = 'INSTALLED-ADR-TEMPLATE-BODY-CANARY';

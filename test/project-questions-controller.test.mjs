@@ -192,3 +192,42 @@ test('unrelated unselected file edits do not discard a valid pending project que
   await writeFile(join(f.root, 'unrelated.md'), 'Unselected file changed'); f.release(); await waitFor(() => !!f.explorer.preview);
   await f.accept(); assert.equal(f.explorer.doc.nodes.length, 2); assert.equal(f.explorer.doc.nodes[1].answer, '');
 });
+
+test('checkout changes invalidate project question review, queued execution, results and acceptance', async t => {
+  for (const stage of ['review', 'queue', 'result', 'accept']) {
+    const f = await fixture(t, { hold: stage === 'result' }), before = await readFile(f.file, 'utf8');
+    const change = () => promisify(execFile)('git', ['-C', f.root, 'symbolic-ref', 'HEAD', 'refs/heads/changed-checkout'], { windowsHide: true });
+    const review = await f.review();
+    if (stage === 'review') { await change(); await assert.rejects(f.start(review), /changed|scope|brief/i); }
+    if (stage === 'queue') {
+      let release; f.explorer.toolFreeTask = new Promise(resolve => { release = resolve; });
+      try { await f.start(review); await change(); } finally { release(); }
+      await Promise.all([...f.explorer.researchTasks]);
+    }
+    if (stage === 'result') { await f.start(review); await waitFor(() => f.ready()); await change(); f.release(); await Promise.all([...f.explorer.researchTasks]); }
+    if (stage === 'accept') { await f.start(review); await waitFor(() => f.explorer.preview); await change(); await assert.rejects(f.accept(), /changed|scope|brief|stale/i); }
+    assert.equal(f.explorer.doc.nodes.length, 1, stage); assert.equal(await readFile(f.file, 'utf8'), before, stage);
+    assert.equal(f.explorer.projectBrief.approval, null, stage); assert.ok(!f.explorer.preview || f.explorer.preview.stale, stage);
+    assert.equal(f.calls.length, ['review', 'queue'].includes(stage) ? 0 : 1, stage);
+  }
+});
+
+test('observed checkout change expires accepted project provenance without changing saved answers', async t => {
+  const f = await fixture(t); await f.start(await f.review()); await waitFor(() => f.explorer.preview); await f.accept();
+  const node = f.explorer.doc.nodes[1]; await f.explorer.command('answer', { revision: f.explorer.doc.revision, nodeId: node.id, answer: 'Keep my decision', answerState: 'decided' });
+  const before = await readFile(f.file, 'utf8'); await promisify(execFile)('git', ['-C', f.root, 'symbolic-ref', 'HEAD', 'refs/heads/changed-checkout'], { windowsHide: true });
+  assert.equal((await f.scope('status')).state, 'stale'); assert.deepEqual(f.explorer.uiSnapshot().projectQuestions[node.id], { state: 'stale' });
+  assert.equal(await readFile(f.file, 'utf8'), before); assert.equal(f.explorer.projectQuestionOrigins.get(node.id).guard, null);
+});
+
+test('scope and brief refresh comparisons stay private and explicit Off clears file-derived summaries', async t => {
+  const f = await fixture(t), before = await readFile(f.file, 'utf8');
+  await f.scope('revise'); const brief = await f.brief('status'); assert.ok(JSON.stringify(brief.comparison).includes(f.canary));
+  const scope = await f.scope('prepare', { paths: ['README.md'], exclusions: [] }); assert.ok(scope.comparison); assert.ok(JSON.stringify(scope).includes('README.md'));
+  const native = await f.explorer.nativeSnapshot(); assert.equal(native.document.id, f.doc.id);
+  for (const output of [JSON.stringify(native), JSON.stringify(f.explorer.uiSnapshot()), toMarkdown(f.explorer.doc), JSON.stringify(await f.explorer.readHistory(f.doc.id)), await readFile(f.file, 'utf8')]) {
+    for (const value of [f.canary, f.root, 'README.md']) assert.ok(!output.includes(value), 'private comparison escaped its local endpoint');
+  }
+  await f.scope('disable'); assert.equal(f.explorer.projectMode.comparison, null); assert.equal(f.explorer.projectBrief.previous, null);
+  assert.equal(await readFile(f.file, 'utf8'), before); assert.ok(f.explorer.projectBrief.assertions.some(claim => claim.text === f.canary));
+});

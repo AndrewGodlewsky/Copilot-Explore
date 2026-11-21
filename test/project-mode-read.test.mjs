@@ -76,7 +76,7 @@ test('an older status cannot replace the cancellation handle of a newer read', a
     select: async (_paths, _previous, { signal }) => { readSignal = signal; await new Promise(resolve => { releaseRead = resolve; }); signal.throwIfAborted(); readsAfterDisable++; return { root, entries: [entry], sources: [] }; },
     fresh: async () => true,
   };
-  const mode = new ProjectMode(reader, () => 'journey-a', Date.now, { assertAllowed: async () => {} }); t.after(() => mode.clear());
+  const mode = new ProjectMode(reader, () => 'journey-a', Date.now, { assertAllowed: async () => {} }, null, async () => ({ path: root.path, git: { branch: 'refs/heads/fixture', head: null } })); t.after(() => mode.clear());
   const request = (action, extra = {}) => mode.request({ action, purpose: 'project-questions', journey: 'journey-a', clientId: randomClient, sequence: ++sequence, ...extra }), randomClient = randomUUID();
   await request('status'); const preview = await request('prepare', { paths: ['README.md'], exclusions: [] }); const approved = await request('approve', { token: preview.token });
   holdStatus = true; const oldStatus = request('status'), rejectedStatus = assert.rejects(oldStatus);
@@ -84,6 +84,28 @@ test('an older status cannot replace the cancellation handle of a newer read', a
   await waitFor(() => readSignal); releaseStatus(); await rejectedStatus; await request('disable');
   const aborted = readSignal.aborted; releaseRead(); await rejectedRead;
   assert.equal(aborted, true); assert.equal(readsAfterDisable, 0); assert.equal(mode.receipt, null);
+});
+
+test('checkout changes before and during an explicit read cannot install a receipt or retain its authority', async t => {
+  for (const timing of ['before', 'during']) {
+    const f = await fixture(t), approved = await f.approve(), original = f.reader.read.bind(f.reader);
+    const change = () => exec('git', ['-C', f.root, 'symbolic-ref', 'HEAD', 'refs/heads/changed'], { windowsHide: true });
+    if (timing === 'before') await change();
+    else f.reader.read = async (...args) => { const value = await original(...args); await change(); return value; };
+    await assert.rejects(f.request('read', { token: approved.readToken }), /changed|scope/i);
+    assert.equal(f.mode.capture(), null); assert.equal((await f.request('status')).state, 'stale');
+    assert.equal(f.reads(), timing === 'before' ? 0 : 1);
+  }
+});
+
+test('capture freshness detects checkout changes without rereading files and permanently revokes the old capture', async t => {
+  const f = await fixture(t), approved = await f.approve(); await f.request('read', { token: approved.readToken });
+  const capture = f.mode.capture(), reads = f.reads();
+  await exec('git', ['-C', f.root, 'symbolic-ref', 'HEAD', 'refs/heads/changed'], { windowsHide: true });
+  assert.equal(await f.mode.captureCurrent(capture, { content: true }), false); assert.equal(f.reads(), reads);
+  assert.equal(f.mode.capture(), null); assert.equal((await f.request('status')).state, 'stale');
+  await exec('git', ['-C', f.root, 'symbolic-ref', 'HEAD', capture.checkout.git.branch], { windowsHide: true });
+  assert.equal(await f.mode.captureCurrent(capture), false); assert.equal((await f.request('status')).state, 'stale');
 });
 
 test('root, journey and source changes clear retained receipts; binary text never produces a receipt', async t => {

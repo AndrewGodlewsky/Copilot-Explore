@@ -65,10 +65,10 @@ export class ProjectBriefClient {
     this.scopeChanged();
   }
   scopeChanged() {
-    const project = this.scope()?.project?.root, key = `${project ?? ''}:${this.scope()?.state ?? ''}:${this.captureId() ?? ''}`;
+    const project = this.scope()?.project, key = `${project?.identity ?? project?.root ?? ''}:${this.scope()?.state ?? ''}:${this.captureId() ?? ''}`;
     if (key === this.scopeKey) return;
     this.scopeKey = key; this.invalidate(); this.uncertainState = true;
-    if (project && this.value?.project?.root && project !== this.value.project.root) {
+    if (project && this.value?.project && (project.root !== this.value.project.root || project.identity && this.value.project.identity && project.identity !== this.value.project.identity)) {
       this.dirty = false; this.formKey = undefined; this.value = null; this.cancelDraft = null;
     }
     this.value = { ...this.value, approved: false, token: undefined, prepared: undefined };
@@ -135,7 +135,7 @@ export class ProjectBriefClient {
     this.control('save').disabled = !editable || !this.dirty;
     this.control('approve').disabled = !editable;
     this.control('revoke').disabled = !!this.cancelId || this.loading || !draft || !value?.approved && !this.uncertainState;
-    this.control('clear').disabled = !!this.cancelId || this.loading || pending || !draft && !value?.corrections?.length || this.dirty;
+    this.control('clear').disabled = !!this.cancelId || this.loading || pending || !draft && !value?.corrections?.length && !value?.comparison || this.dirty;
     this.control('discard-changes').disabled = !this.dirty;
     this.control('review').hidden = !value?.prepared;
     this.control('input').textContent = value?.prepared ? `${value.prepared.instructions}\n\n${value.prepared.prompt}` : '';
@@ -144,7 +144,27 @@ export class ProjectBriefClient {
     for (const row of this.rows) { row.input.readOnly = !editable; row.remove.disabled = !editable; }
     this.control('add-text').readOnly = !editable; this.control('add-section').disabled = !editable;
     this.control('corrections').textContent = !draft && value?.corrections?.length ? `Saved user assertions retained for the next brief:\n${value.corrections.map(c => `${title(c.section)}: ${c.text}`).join('\n')}` : '';
+    this.renderComparison();
     this.changed();
+  }
+  renderComparison() {
+    const comparison = this.uncertainState || ['off', 'unavailable'].includes(this.scope()?.state) ? null : this.value?.comparison;
+    this.control('changes').hidden = !comparison;
+    const key = JSON.stringify(comparison ?? null); if (key === this.comparisonKey) return; this.comparisonKey = key;
+    const content = this.control('changes-content'); content.replaceChildren();
+    if (!comparison) return;
+    if (!comparison.current) { content.append(this.element('p', 'Previous claim text is retained locally for comparison. Explicitly read the reviewed files and generate a new brief to compare it.')); return; }
+    for (const section of sections) {
+      const added = [...comparison.current[section]], removed = []; let unchanged = 0;
+      for (const claim of comparison.previous[section]) {
+        const index = added.findIndex(value => value.text === claim.text && value.kind === claim.kind);
+        if (index < 0) removed.push(claim); else { added.splice(index, 1); unchanged++; }
+      }
+      const group = this.element('section'); group.append(this.element('h5', title(section)), this.element('p', `${added.length} added, ${removed.length} removed, ${unchanged} unchanged claims.`));
+      const list = this.element('ul');
+      for (const [label, claims] of [['Added', added], ['Removed', removed]]) for (const claim of claims) list.append(this.element('li', `${label} — ${labels[claim.kind]}: ${claim.text}`));
+      group.append(list); content.append(group);
+    }
   }
   renderClaims(draft) {
     this.rows = []; this.control('claims').replaceChildren(); this.control('add-text').value = '';

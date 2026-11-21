@@ -8,17 +8,44 @@ import { waitFor } from './helpers/wait-for.mjs';
 function fixture(t) {
   const excerpt = 'A project for community tools 🌿.', fingerprint = createHash('sha256').update(excerpt).digest('hex');
   const initial = { id: randomUUID(), root: { path: 'C:/project', ancestors: 'identity-a' }, sources: [{ id: randomUUID(), name: 'README.md', fingerprint, excerptFingerprint: fingerprint, bytes: Buffer.byteLength(excerpt), excerptBytes: Buffer.byteLength(excerpt), truncated: false, excerpt }] };
-  let capture = initial, fresh = true, journey = 'journey-a', now = 1000, sequence = 0, sends = 0, queued, hold = false, release, signal, inspect;
+  let capture = initial, fresh = true, journey = 'journey-a', now = 1000, sequence = 0, sends = 0, queued, hold = false, release, signal, inspect, modeState = 'active';
   const output = Object.fromEntries(PROJECT_BRIEF_SECTIONS.map(section => [section, [{ id: section, text: `${section} is not established.`, kind: 'unknown', sources: [] }]]));
-  const mode = { capture: () => capture && structuredClone(capture), captureCurrent: async (value, options) => { if (inspect) await inspect(value, options); options.signal?.throwIfAborted(); return fresh && value?.id === capture?.id; } };
+  const mode = { contextState: () => modeState, capture: () => capture && structuredClone(capture), captureCurrent: async (value, options) => { if (inspect) await inspect(value, options); options.signal?.throwIfAborted(); return fresh && value?.id === capture?.id; } };
   const helper = { run: async (prepared, options) => { sends++; signal = options.signal; if (hold) await new Promise(resolve => { release = resolve; }); signal.throwIfAborted(); return parseProjectBrief(JSON.stringify(output), prepared); } };
   const workspace = new ProjectBriefWorkspace({ mode, journey: () => journey, now: () => now, execute: task => queued ? queued(task, helper) : task(helper) });
   t.after(() => { workspace.clear(); release?.(); }); const clientId = randomUUID();
   const request = (action, extra = {}) => workspace.request({ action, purpose: 'project-brief', journey, clientId, sequence: ++sequence, ...extra });
   const generate = async () => { await request('status'); const preview = await request('prepare'); const id = randomUUID(); await request('start', { token: preview.token, id }); await waitFor(() => workspace.work?.status !== 'pending'); return request('status'); };
-  return { workspace, request, generate, initial, sends: () => sends, signal: () => signal, ready: () => release, release: () => release?.(), hold: () => { hold = true; }, setCapture: value => { capture = value; }, setFresh: value => { fresh = value; }, setJourney: value => { journey = value; }, advance: value => { now += value; }, inspect: value => { inspect = value; }, queue: value => { queued = value; } };
+  return { workspace, request, generate, initial, output, setModeState: value => { modeState = value; }, sends: () => sends, signal: () => signal, ready: () => release, release: () => release?.(), hold: () => { hold = true; }, setCapture: value => { capture = value; modeState = value ? 'active' : 'stale'; }, setFresh: value => { fresh = value; }, setJourney: value => { journey = value; }, advance: value => { now += value; }, inspect: value => { inspect = value; }, queue: value => { queued = value; } };
 }
 const noChanges = () => ({ edits: [], remove: [], additions: [] });
+
+test('explicit brief refresh compares old and proposed claims without retaining old quotes or reusing approval', async t => {
+  const f = fixture(t); f.output.purpose = [{ id: 'old-purpose', text: 'Old reviewed purpose', kind: 'file-backed', sources: [{ id: f.initial.sources[0].id, quote: f.initial.sources[0].excerpt }] }];
+  const first = await f.generate(); await f.request('approve', { revision: first.revision, changes: { ...noChanges(), additions: [{ section: 'constraints', text: 'Keep the user correction.' }] } });
+  f.setCapture(null); const stale = await f.request('status');
+  assert.equal(stale.approved, false); assert.equal(stale.draft, undefined);
+  assert.equal(stale.comparison.previous.purpose[0].text, 'Old reviewed purpose'); assert.equal(stale.comparison.current, null);
+  const retained = JSON.stringify(stale.comparison); for (const privateValue of [f.initial.sources[0].excerpt, f.initial.sources[0].fingerprint, f.initial.sources[0].id, f.initial.root.path]) assert.ok(!retained.includes(privateValue));
+  f.output.purpose = [{ id: 'old-purpose', text: 'New proposed interpretation', kind: 'inference', sources: [] }];
+  f.setCapture({ ...f.initial, id: randomUUID() }); const next = await f.generate();
+  assert.equal(next.comparison.previous.purpose[0].text, 'Old reviewed purpose'); assert.equal(next.comparison.current.purpose[0].text, 'New proposed interpretation');
+  assert.ok(next.draft.sections.constraints.some(claim => claim.kind === 'user' && claim.text === 'Keep the user correction.'));
+  await assert.rejects(f.workspace.approvedInput());
+  const approved = await f.request('approve', { revision: next.revision, changes: noChanges() }); assert.equal(approved.comparison, undefined);
+});
+
+test('Off, discard and project replacement clear file-derived refresh summaries while only same-project assertions survive', async t => {
+  for (const action of ['off', 'discard', 'root']) {
+    const f = fixture(t), draft = await f.generate();
+    await f.request('approve', { revision: draft.revision, changes: { ...noChanges(), additions: [{ section: 'purpose', text: 'User correction' }] } });
+    f.setCapture(null); let stale = await f.request('status'); assert.ok(stale.comparison);
+    if (action === 'off') f.setModeState('off');
+    if (action === 'root') f.setCapture({ ...f.initial, id: randomUUID(), root: { path: 'C:/other', ancestors: 'other' } });
+    stale = action === 'discard' ? await f.request('discard', { revision: stale.revision }) : await f.request('status');
+    assert.equal(stale.comparison, undefined); assert.equal(stale.corrections.length, action === 'off' ? 1 : 0);
+  }
+});
 
 test('project question input requires approval and guards revision, capture and content without disclosing raw sources', async t => {
   const f = fixture(t); await assert.rejects(f.workspace.approvedInput(), /approve|brief/i);

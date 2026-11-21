@@ -17,13 +17,13 @@ export class ProjectModeClient {
     this.control('prepare').addEventListener('click', () => void this.request('prepare', { paths: this.lines('paths'), exclusions: this.lines('exclusions') }));
     this.control('approve').addEventListener('click', () => { if (this.value?.token) void this.request('approve', { token: this.value.token }); });
     this.control('read').addEventListener('click', () => { if (this.value?.readToken) void this.request('read', { token: this.value.readToken }); });
-    this.control('disable').addEventListener('click', () => { this.inventory = null; void this.request('disable'); });
+    this.control('disable').addEventListener('click', () => { this.inventory = null; if (this.loading) this.invalidate(); void this.request('disable'); });
     this.control('refresh').addEventListener('click', () => void this.request('status'));
     this.render();
   }
   control(id) { return this.$(`project-mode-${id}`); }
   lines(id) { return this.control(id).value.split(/\r?\n/).filter(line => line.trim()); }
-  edit() { this.invalidate(); this.error = 'Scope changed. Review the selected files again.'; this.notify('disable'); this.render(); }
+  edit() { this.invalidate(); this.error = 'Scope changed. Review the selected files again.'; this.notify('revise'); this.render(); }
   accept(value, action) {
     if (['unavailable', 'stale'].includes(value.state) || value.project && this.inventory?.root !== value.project.root) this.inventory = null;
     if (value.inventory) this.inventory = !value.inventory.target || value.inventory.target.nodeId === this.target?.nodeId && value.inventory.target.direction === this.control('direction').value ? { ...value.inventory, root: value.project?.root } : null;
@@ -34,15 +34,15 @@ export class ProjectModeClient {
   }
   invalidate() { this.generation++; this.abort?.abort(); this.abort = null; this.loading = false; }
   input(action, extra) { return { action, journey: this.boundJourney, clientId: this.clientId, sequence: ++this.sequence, purpose: 'project-questions', ...extra }; }
-  uncertain() { this.value = { ...this.value, state: 'uncertain', token: undefined, readToken: undefined, receipt: undefined, message: this.revoking ? 'Scope changes are not confirmed. Turn off or review the edited scope.' : 'Project scope status is uncertain. Refresh or turn it off.' }; this.onChange(); }
+  uncertain() { this.value = { ...this.value, state: 'uncertain', token: undefined, readToken: undefined, receipt: undefined, comparison: undefined, message: this.revoking ? 'Scope changes are not confirmed. Turn off or review the edited scope.' : 'Project scope status is uncertain. Check freshness or turn it off.' }; this.onChange(); }
   matches(value, input) { return value.clientId === input.clientId && value.sequence === input.sequence && value.journey === input.journey && value.purpose === input.purpose; }
   notify(action) {
     if (!this.boundJourney) return;
     const input = this.input(action), generation = this.generation;
-    if (action === 'disable') { this.revoking = true; this.uncertain(); }
+    if (['disable', 'revise'].includes(action)) { this.revoking = true; this.uncertain(); }
     void this.fetch('api/project-mode', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', 'X-Explorer-Client': '1' }, body: JSON.stringify(input) }).then(async response => {
       const value = await response.json();
-      if (action === 'disable' && response.ok && this.matches(value, input) && generation === this.generation && input.sequence === this.sequence &&
+      if (['disable', 'revise'].includes(action) && response.ok && this.matches(value, input) && generation === this.generation && input.sequence === this.sequence &&
         input.clientId === this.clientId && input.journey === this.journey() && !this.paused) { this.accept(value, action); this.render(); }
     }).catch(() => {});
   }
@@ -100,31 +100,44 @@ export class ProjectModeClient {
     }
   }
   render() {
-    const value = this.value, active = value?.state === 'active', uncertain = value?.state === 'uncertain', project = value?.project;
+    const value = this.value, active = value?.state === 'active', uncertain = value?.state === 'uncertain', stale = value?.state === 'stale', unavailable = value?.state === 'unavailable', project = value?.project;
     const brief = this.briefState(), approved = active && value.receipt && brief?.approved && brief.draft?.captureId === value.receipt.id;
     const briefStatus = approved ? 'project brief approved; ordinary questions unchanged.' : 'scope ready; project brief required.';
     this.control('open').disabled = !this.active() || !this.journey();
-    this.control('settings-status').textContent = uncertain ? 'Project scope status is uncertain. Refresh or turn it off.' : active ? `${project.name}: ${briefStatus}` : 'Off. Ordinary questions use no project files.';
-    this.control('indicator').hidden = this.paused || !active && !uncertain;
-    this.control('indicator-text').textContent = uncertain ? 'Project scope status is uncertain. Open scope settings to refresh or turn it off.' : active ? `${project.name}: ${briefStatus}` : '';
+    const status = uncertain ? 'Project scope status is uncertain. Check freshness or turn it off.' : stale ? 'Project context is stale. Review scope, read the reviewed files and approve an updated brief.' : unavailable ? 'Project context is unavailable. Check freshness or turn it off.' : active ? `${project.name}: ${briefStatus}` : 'Off. Ordinary questions use no project files.';
+    this.control('settings-status').textContent = status;
+    this.control('indicator').hidden = this.paused || !active && !uncertain && !stale && !unavailable;
+    this.control('indicator-text').textContent = status;
     this.control('project').textContent = project?.root ?? 'Refresh to check the current local project.';
     this.control('state').textContent = this.error || (this.loading ? 'Checking project scope…' : value?.message || (value?.state === 'review' ? 'Review this exact scope, then enable it.' : 'Off. Select relative files and review their scope.'));
-    this.control('scope').textContent = value?.scope ? value.scope.files.map(file => `${file.name} — ${file.bytes} bytes`).join('\n') + `\nTotal: ${value.scope.bytes} bytes\nExcluded paths: ${(value.scope.exclusions ?? []).join(', ') || 'none added'}` : '';
+    this.control('scope').textContent = value?.scope ? value.scope.files.map(file => `${file.name} — ${file.bytes} bytes`).join('\n') + `\nTotal: ${value.scope.bytes} bytes\nExcluded paths: ${(value.scope.exclusions ?? []).join(', ') || 'none added'}` +
+      (value.scope.checkout ? `\nCheckout: ${value.scope.checkout.branch ?? 'Detached HEAD'} (${value.scope.checkout.head?.slice(0, 12) ?? 'unborn branch'})` : '') : '';
     this.control('approve').disabled = this.loading || !value?.token;
     this.control('prepare').disabled = this.loading || value?.state === 'unavailable';
     this.control('refresh').disabled = this.loading;
     this.control('discover').disabled = this.loading || value?.state === 'unavailable';
     this.control('read').disabled = this.loading || !value?.readToken;
-    this.control('disable').disabled = this.loading || !active && !uncertain && value?.state !== 'review';
+    this.control('disable').disabled = !this.loading && !active && !uncertain && !stale && !unavailable && value?.state !== 'review';
     this.control('target').hidden = !this.target;
     this.control('target-question').textContent = this.target?.question ?? '';
     this.control('target-find').disabled = this.loading || !this.target || !brief?.approved || this.revoking;
     const suggestions = this.inventory?.target;
     this.control('use-suggestions').disabled = this.loading || !suggestions?.suggested.length || suggestions.nodeId !== this.target?.nodeId || suggestions.direction !== this.control('direction').value;
     this.control('target-summary').textContent = suggestions ? `Suggestions from brief revision ${suggestions.briefRevision}: ${suggestions.suggested.length} files. ${suggestions.omitted} other candidates omitted from the suggested selection. ${suggestions.omittedShared.length ? `Shared constraint sources not selected: ${suggestions.omittedShared.join(', ')}. Review any lost constraints in the replacement brief.` : 'No reviewed shared-source names were omitted.'} ${!suggestions.suggested.length ? 'No useful files found. You can return to ordinary questions or enter validated paths manually.' : ''}` : '';
-    this.renderInventory(); this.renderReceipt();
+    this.renderInventory(); this.renderReceipt(); this.renderComparison();
   }
   element(tag, text) { const node = this.window.document.createElement(tag); if (text !== undefined) node.textContent = text; return node; }
+  renderComparison() {
+    const value = this.value?.comparison; this.control('changes').hidden = !value;
+    const lines = [];
+    if (value) {
+      for (const [key, label] of Object.entries({ added: 'Added files', removed: 'Removed files', changed: 'Metadata changed', unchanged: 'Unchanged file metadata' })) lines.push(`${label}: ${value.files[key].join(', ') || 'none'}`);
+      for (const key of ['added', 'removed']) lines.push(`${key === 'added' ? 'Added' : 'Removed'} exclusions: ${value.exclusions[key].join(', ') || 'none'}`);
+      const checkout = value => `${value.branch ?? 'Detached HEAD'} (${value.head?.slice(0, 12) ?? 'unborn branch'})`;
+      lines.push(value.checkoutChanged ? `Checkout changed:\nPrevious: ${checkout(value.previousCheckout)}\nCurrent: ${checkout(value.currentCheckout)}` : `Checkout unchanged: ${checkout(value.currentCheckout)}`);
+    }
+    this.control('changes-content').textContent = lines.join('\n');
+  }
   renderInventory() {
     const inventory = this.inventory, signature = JSON.stringify(inventory ?? null), selected = this.lines('paths');
     if (signature !== this.inventorySignature) {

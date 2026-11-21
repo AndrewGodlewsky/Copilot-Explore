@@ -112,7 +112,9 @@ test('project question explanations show reviewed provenance and correction navi
   $('project-brief-prepare').click(); await until(() => !$('project-brief-start').disabled, 'brief review');
   $('project-brief-start').click(); await until(() => f.explorer.projectBrief.work?.status === 'result', 'brief result');
   await f.window.__updates.poll(); await until(() => !$('project-brief-approve').disabled, 'editable brief');
-  f.type('project-brief-add-text', 'My local constraint'); $('project-brief-approve').click(); await until(() => f.explorer.projectBrief.approval && $('project-brief-approve').disabled, 'approved brief');
+  f.type('project-brief-add-text', 'My local constraint');
+  await uiResponse(f, 'api/project-brief', 'approve', () => $('project-brief-approve').click());
+  await until(() => $('project-brief-state').textContent.startsWith('Approved for this project'), 'approval response rendered');
   $('project-mode-close').click(); $('project-questions').click(); await until(() => !$('research-review-start').disabled, 'project review');
   $('research-review-start').click(); await until(() => !!f.explorer.preview, 'question preview'); f.window.__updates.apply(f.explorer.uiSnapshot());
   let why = $('candidate-rationale-0'); why.open = true; why.dispatchEvent(new f.window.Event('toggle'));
@@ -1615,9 +1617,15 @@ async function uiResponse(f, route, action, invoke, expectedStatus = 200) {
 }
 
 test('project storage controls create and explicitly reopen a repository journey with a relative location', async t => {
-  const project = await mkdtemp(join(tmpdir(), 'explorer-project-controls-')); t.after(() => rm(project, { recursive: true, force: true }));
-  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
-  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project }), $ = id => f.document.getElementById(id);
+  const project = await mkdtemp(join(tmpdir(), 'explorer-project-controls-'));
+  let f;
+  try {
+    await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+    f = await fixture(t, 340, undefined, true, { projectRoot: async () => project });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(project)), resolve(tmpdir())); await rm(project, { recursive: true, force: true }); });
+  }
+  const $ = id => f.document.getElementById(id);
   const personalKey = f.explorer.activeKey, personalTopic = f.explorer.doc.topic;
   $('library-toggle').click();
   assert.equal($('start-storage').value, 'personal');
@@ -1643,9 +1651,14 @@ test('project storage controls create and explicitly reopen a repository journey
   assert.equal($('workspace').hidden, false); assert.match($('journey-storage').textContent, /Project/);
 });
 test('project library refresh and pin preserve an answer draft, and listed opening uses the current canvas', async t => {
-  const project = await mkdtemp(join(tmpdir(), 'explorer-project-list-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
-  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
-  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => { await e.projectRepository.create(createDocument('Shared from teammate')); } });
+  const project = await mkdtemp(join(tmpdir(), 'explorer-project-list-ui-'));
+  let f;
+  try {
+    await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+    f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => { await e.projectRepository.create(createDocument('Shared from teammate')); } });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(project)), resolve(tmpdir())); await rm(project, { recursive: true, force: true }); });
+  }
   const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
   f.open(node.id); f.type('answer', 'Keep my personal draft'); const editor = $('answer');
   $('library-toggle').click(); $('library-scope').value = 'project'; await uiResponse(f, 'api/project-library', 'refresh', () => $('library-scope').dispatchEvent(new f.window.Event('change')));
@@ -1771,10 +1784,15 @@ test('scenario comparison explains pending work, rejects changed current context
 });
 
 test('scenario comparison selects a project library source without rebinding or replacing the existing draft', async t => {
-  const root=await mkdtemp(join(tmpdir(),'comparison-dom-project-')); t.after(()=>rm(root,{recursive:true,force:true}));
-  await promisify(execFile)('git',['-C',root,'init','-q'],{windowsHide:true});
-  let project;
-  const f=await fixture(t,340,undefined,true,{projectRoot:async()=>root,before:async e=>{project=await e.projectRepository.create(buildScenario(e.doc,{nodeId:e.doc.nodes[1].id,answer:'Shared alternative',answerState:'assumption'}).document);}}), $=id=>f.document.getElementById(id), key=f.explorer.activeKey;
+  const root=await mkdtemp(join(tmpdir(),'comparison-dom-project-'));
+  let f, project;
+  try {
+    await promisify(execFile)('git',['-C',root,'init','-q'],{windowsHide:true});
+    f = await fixture(t,340,undefined,true,{projectRoot:async()=>root,before:async e=>{project=await e.projectRepository.create(buildScenario(e.doc,{nodeId:e.doc.nodes[1].id,answer:'Shared alternative',answerState:'assumption'}).document);}});
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(root)), resolve(tmpdir())); await rm(root, { recursive: true, force: true }); });
+  }
+  const $=id=>f.document.getElementById(id), key=f.explorer.activeKey;
   f.open(f.explorer.doc.nodes[1].id); f.type('answer','Private project comparison draft'); $('library-toggle').click(); $('library-scope').value='project'; $('library-scope').dispatchEvent(new f.window.Event('change'));
   await until(()=>f.document.querySelector('#project-library-list [data-action="compare"]'),'project comparison entry',1000); f.document.querySelector('#project-library-list [data-action="compare"]').click(); assert.match($('comparison-identities').textContent,/project file/);
   $('comparison-start').click(); await until(()=>!$('comparison-results').hidden,'project compared',1000); assert.equal(f.explorer.activeKey,key);
@@ -1918,9 +1936,15 @@ test('scenario fork suspension during preview or save reopens editable controls 
 });
 
 test('reviewed project copy shows exact content, excludes drafts, saves once and continues only by choice', async t => {
-  const project = await mkdtemp(join(tmpdir(), 'explorer-copy-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
-  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
-  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project }), $ = id => f.document.getElementById(id);
+  const project = await mkdtemp(join(tmpdir(), 'explorer-copy-ui-'));
+  let f;
+  try {
+    await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+    f = await fixture(t, 340, undefined, true, { projectRoot: async () => project });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(project)), resolve(tmpdir())); await rm(project, { recursive: true, force: true }); });
+  }
+  const $ = id => f.document.getElementById(id);
   const key = f.explorer.activeKey, file = f.explorer.file, original = await readFile(file), node = f.explorer.doc.nodes[1];
   f.open(node.id); f.type('answer', 'PRIVATE draft must stay here'); const editor = $('answer');
   assert.equal($('project-copy-open').hidden, false); $('project-copy-open').click();
@@ -1943,11 +1967,17 @@ test('reviewed project copy shows exact content, excludes drafts, saves once and
 });
 
 test('Git status refresh separates private drafts from file and Git state without replacing editors or pending work', async t => {
-  const project = await mkdtemp(join(tmpdir(), 'explorer-git-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
-  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
-  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-git-ui-'));
+  let f;
+  try {
+    await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+    f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
     const store = await e.projectRepository.create(e.doc); await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
-  } }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+    } });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(project)), resolve(tmpdir())); await rm(project, { recursive: true, force: true }); });
+  }
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
   f.open(node.id); f.type('answer', '  Private draft 日本語  '); const editor = $('answer'); editor.focus(); editor.setSelectionRange(2, 8);
   await f.explorer.command('questions', { revision: f.explorer.doc.revision, nodeId: f.explorer.doc.rootId }); const pending = f.explorer.pending.id;
   assert.equal($('project-git-panel').hidden, false); $('project-git-panel').open = true; await uiResponse(f, 'api/project-git-status', undefined, () => $('project-git-refresh').click());
@@ -1976,16 +2006,22 @@ test('Git status refresh separates private drafts from file and Git state withou
 });
 
 test('project merge requires candidate review and acknowledgment, saves through history and preserves private drafts', async t => {
-  const project = await mkdtemp(join(tmpdir(), 'explorer-merge-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
-  const git = (...args) => promisify(execFile)('git', ['-C', project, ...args], { windowsHide: true });
-  await git('init', '-qb', 'main'); await git('config', 'user.name', 'Fixture'); await git('config', 'user.email', 'fixture@example.invalid');
-  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-merge-ui-'));
+  let f;
+  try {
+    const git = (...args) => promisify(execFile)('git', ['-C', project, ...args], { windowsHide: true });
+    await git('init', '-qb', 'main'); await git('config', 'user.name', 'Fixture'); await git('config', 'user.email', 'fixture@example.invalid');
+    f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
     const store = await e.projectRepository.create(e.doc); await git('add', '.'); await git('commit', '-qm', 'Base'); await git('switch', '-qc', 'incoming');
     const incoming = JSON.parse(await readFile(store.context.file)); incoming.journey.nodes[1].answer = 'Incoming decision';
     await writeFile(store.context.file, JSON.stringify(incoming)); await git('add', '.'); await git('commit', '-qm', 'Incoming'); await git('switch', '-q', 'main');
     await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
     await e.command('answer', { revision: e.doc.revision, nodeId: e.doc.nodes[1].id, answer: 'Local decision', answerState: 'tentative' });
-  } }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
+    } });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(project)), resolve(tmpdir())); await rm(project, { recursive: true, force: true }); });
+  }
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1];
   assert.ok($('project-merge-open'), 'project merge entry is available');
   f.open(node.id); f.type('answer', '  Private draft 日本語  '); const editor = $('answer'); editor.focus(); editor.setSelectionRange(3, 8);
   $('project-merge-open').click(); f.type('project-merge-ref', 'incoming'); $('project-merge-preview').click();
@@ -2002,11 +2038,17 @@ test('project merge requires candidate review and acknowledgment, saves through 
 });
 
 test('project reconciliation reload keeps exact draft text and source bases while preserving incoming bytes', async t => {
-  const project = await mkdtemp(join(tmpdir(), 'explorer-reconcile-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
-  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
-  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-reconcile-ui-'));
+  let f;
+  try {
+    await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+    f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
     const store = await e.projectRepository.create(e.doc); await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
-  } }), $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1], key = f.explorer.activeKey;
+    } });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(project)), resolve(tmpdir())); await rm(project, { recursive: true, force: true }); });
+  }
+  const $ = id => f.document.getElementById(id), node = f.explorer.doc.nodes[1], key = f.explorer.activeKey;
   f.open(node.id); f.type('answer', '  Keep my unsent 日本語 draft  '); const editor = $('answer');
   const incoming = JSON.parse(await readFile(f.explorer.file)); incoming.journey.nodes[1].answer = 'Teammate answer'; const text = JSON.stringify(incoming);
   await writeFile(f.explorer.file, text); f.explorer.projectObservedAt = 0; await f.poll();
@@ -2026,11 +2068,17 @@ test('project reconciliation reload keeps exact draft text and source bases whil
 });
 
 test('closing or suspending a merge preview rejects late responses and keeps the current draft', async t => {
-  const project = await mkdtemp(join(tmpdir(), 'explorer-merge-late-')); t.after(() => rm(project, { recursive: true, force: true }));
-  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
-  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
+  const project = await mkdtemp(join(tmpdir(), 'explorer-merge-late-'));
+  let f;
+  try {
+    await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+    f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
     const store = await e.projectRepository.create(e.doc); await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
-  } }), $ = id => f.document.getElementById(id);
+    } });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(project)), resolve(tmpdir())); await rm(project, { recursive: true, force: true }); });
+  }
+  const $ = id => f.document.getElementById(id);
   const content = JSON.stringify(f.explorer.projectStore.shared), reply = { id: 'preview', plan: { token: 'token', conflicts: [], unresolved: [], affected: [], content }, sources: { local: content, incoming: content, base: content } };
   let release; f.explorer.projectMergeRequest = input => input.action === 'preview' ? new Promise(resolve => { release = () => resolve(reply); }) : Promise.resolve({ status: 'cancelled' });
   f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep private draft'); const editor = $('answer');
@@ -2653,13 +2701,18 @@ test('claim evidence disclosure shows literal support, source navigation and imp
 });
 
 async function commentFixture(t, before) {
-  const project = await mkdtemp(join(tmpdir(), 'explorer-comment-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
-  await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
-  return fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
-    const store = await e.projectRepository.create(e.doc); await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
-    await e.contributorSettingsRequest({ action: 'save', revision: 0, displayName: 'Alice <script> λ' });
-    await before?.(e);
-  } });
+  const project = await mkdtemp(join(tmpdir(), 'explorer-comment-ui-'));
+  try {
+    await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+    return await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => {
+      const store = await e.projectRepository.create(e.doc); await e.command('open-project', { revision: e.doc.revision, path: store.context.relativePath });
+      await e.contributorSettingsRequest({ action: 'save', revision: 0, displayName: 'Alice <script> λ' });
+      await before?.(e);
+    } });
+  } finally {
+    // Register after the fixture's shutdown: a resumed poll may still be reading Git.
+    t.after(async () => { assert.equal(dirname(resolve(project)), resolve(tmpdir())); await rm(project, { recursive: true, force: true }); });
+  }
 }
 
 test('comments UI posts literal discussions, replies, resolves and reopens without changing the answer editor', async t => {
@@ -2827,8 +2880,15 @@ test('portable reference UI opens an exact same-journey target through focus and
 });
 
 test('portable reference UI respects unsaved-direction and draft-save guards before switching to a different saved journey', async t => {
-  const project = await mkdtemp(join(tmpdir(), 'explorer-reference-ui-')); t.after(() => rm(project, { recursive: true, force: true })); await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true }); let target;
-  const f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => { target = await e.projectRepository.create(e.doc); } }), $ = id => f.document.getElementById(id), old = f.explorer.activeKey, first = f.explorer.doc.nodes[1];
+  const project = await mkdtemp(join(tmpdir(), 'explorer-reference-ui-'));
+  let f, target;
+  try {
+    await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+    f = await fixture(t, 340, undefined, true, { projectRoot: async () => project, before: async e => { target = await e.projectRepository.create(e.doc); } });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(project)), resolve(tmpdir())); await rm(project, { recursive: true, force: true }); });
+  }
+  const $ = id => f.document.getElementById(id), old = f.explorer.activeKey, first = f.explorer.doc.nodes[1];
   f.open(first.id); f.type('answer', 'Keep personal draft'); f.type('manual-question', 'Unposted direction');
   const ref = formatPortableReference(createPortableReference(target.document, target.context.relativePath, first.id));
   $('portable-reference-open').click(); f.type('portable-reference-text', ref); await uiResponse(f, 'api/portable-reference', 'inspect', () => $('portable-reference-inspect').click()); await until(() => !$('portable-reference-go').disabled, 'cross journey inspected');
@@ -2842,12 +2902,18 @@ test('portable reference UI respects unsaved-direction and draft-save guards bef
 
 test('portable reference UI opens from a fresh welcome screen and requires acknowledgement of a changed saved target', async t => {
   const project = await mkdtemp(join(tmpdir(), 'explorer-reference-welcome-')), local = await mkdtemp(join(tmpdir(), 'explorer-reference-local-'));
-  t.after(async () => { await rm(project, { recursive: true, force: true }); await rm(local, { recursive: true, force: true }); }); await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
-  const explorer = await new Explorer({ library: new Library(local), binding: 'fresh-reference-canvas', projectRoot: async () => project, send() { throw Error('Reference navigation must not send'); } }).load();
-  const doc = createDocument('Shared welcome'); doc.nodes.push({ id: 'saved-question', parentId: doc.rootId, question: 'Question to review?', category: 'Choice', answer: 'Earlier answer', research: null, review: false });
-  const path = `.explorer/journeys/${doc.id}.explore.json`, reference = formatPortableReference(createPortableReference(doc, path, 'saved-question'));
-  doc.nodes[1].answer = 'Changed answer'; await explorer.projectRepository.create(doc);
-  const f = await fixture(t, 340, undefined, false, { explorer, empty: true }), $ = id => f.document.getElementById(id);
+  let f, explorer, reference;
+  try {
+    await promisify(execFile)('git', ['-C', project, 'init', '-q'], { windowsHide: true });
+    explorer = await new Explorer({ library: new Library(local), binding: 'fresh-reference-canvas', projectRoot: async () => project, send() { throw Error('Reference navigation must not send'); } }).load();
+    const doc = createDocument('Shared welcome'); doc.nodes.push({ id: 'saved-question', parentId: doc.rootId, question: 'Question to review?', category: 'Choice', answer: 'Earlier answer', research: null, review: false });
+    const path = `.explorer/journeys/${doc.id}.explore.json`; reference = formatPortableReference(createPortableReference(doc, path, 'saved-question'));
+    doc.nodes[1].answer = 'Changed answer'; await explorer.projectRepository.create(doc);
+    f = await fixture(t, 340, undefined, false, { explorer, empty: true });
+  } finally {
+    t.after(async () => { for (const path of [project, local]) { assert.equal(dirname(resolve(path)), resolve(tmpdir())); await rm(path, { recursive: true, force: true }); } });
+  }
+  const $ = id => f.document.getElementById(id);
   $('portable-reference-welcome').click(); f.type('portable-reference-text', reference); await uiResponse(f, 'api/portable-reference', 'inspect', () => $('portable-reference-inspect').click());
   await until(() => /changed/.test($('portable-reference-preview').textContent), 'changed target shown'); assert.equal(explorer.doc, null); assert.equal($('portable-reference-go').disabled, true);
   $('portable-reference-ack').checked = true; $('portable-reference-ack').dispatchEvent(new f.window.Event('change'));
@@ -6219,8 +6285,10 @@ test('direction lightweight form preserves dirty answer and renders user seed wi
 
 test('direction-only branches retain folding focus and exact question counts', async t => {
   const f = await fixture(t, 340, undefined, false, { preview: true }), d = f.document;
-  d.getElementById('dismiss-questions').click(); await until(() => !f.explorer.preview, 'dismiss root preview');
-  f.type('manual-question', 'Seed only'); d.getElementById('add-direction').click();
+  await uiResponse(f, 'api/action', 'dismiss-questions', () => d.getElementById('dismiss-questions').click());
+  await until(() => !d.getElementById('add-direction').disabled, 'dismiss response rendered');
+  f.type('manual-question', 'Seed only');
+  await uiResponse(f, 'api/action', 'add-direction', () => d.getElementById('add-direction').click());
   await until(() => f.explorer.doc.nodes.length === 2 && d.getElementById('branch-workspace'), 'direction-only fold control');
   const seed = f.explorer.doc.nodes[1]; d.getElementById('cancel-request').click(); await until(() => !f.explorer.pending && !d.getElementById('cancel-request'), 'cancel');
   d.getElementById('branch-workspace').click(); assert.match(d.getElementById('node-workspace').textContent, /1 hidden node.*0 questions/);
@@ -6280,12 +6348,17 @@ test('challenge empty context explains absence locally and never starts inferenc
 });
 
 test('selected project challenge UI requires explicit reads and refresh, reveals original source and preserves drafts', async t => {
-  const project = await mkdtemp(join(tmpdir(), 'explorer-project-ui-')); t.after(() => rm(project, { recursive: true, force: true }));
-  const canary = 'PROJECT-UI-CANARY <script>λ</script>'; await writeFile(join(project, 'design.md'), canary);
-  let captured;
-  const f = await fixture(t, 340, undefined, false, { projectRoot: async () => project, checkHelper: { async run(prepared) {
-    captured = prepared; return { findings: [{ id: 'file', category: 'assumption', explanation: 'Check the quoted input.', resolution: 'Ask its owner.', sources: [{ kind: 'project', id: prepared.context.projectSources[0].id }] }] };
-  }, close() {} }, before: async explorer => { const doc = structuredClone(explorer.doc); doc.nodes[1].answer = 'Saved design'; await explorer.save(doc); } });
+  const project = await mkdtemp(join(tmpdir(), 'explorer-project-ui-'));
+  const canary = 'PROJECT-UI-CANARY <script>λ</script>';
+  let f, captured;
+  try {
+    await writeFile(join(project, 'design.md'), canary);
+    f = await fixture(t, 340, undefined, false, { projectRoot: async () => project, checkHelper: { async run(prepared) {
+      captured = prepared; return { findings: [{ id: 'file', category: 'assumption', explanation: 'Check the quoted input.', resolution: 'Ask its owner.', sources: [{ kind: 'project', id: prepared.context.projectSources[0].id }] }] };
+    }, close() {} }, before: async explorer => { const doc = structuredClone(explorer.doc); doc.nodes[1].answer = 'Saved design'; await explorer.save(doc); } });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(project)), resolve(tmpdir())); await rm(project, { recursive: true, force: true }); });
+  }
   const $ = id => f.document.getElementById(id); f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Keep my draft'); const editor = $('answer');
   $('challenge-decisions').click(); await until(() => $('project-paths') && !$('project-read').disabled, 'project selector');
   assert.ok(!$('research-review-prompt').textContent.includes(canary)); assert.equal(captured, undefined);
@@ -6956,11 +7029,17 @@ test('ADR questions UI ignores closed or suspended review responses and requires
 });
 
 async function adrFileFixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'explorer-adr-write-ui-')); t.after(() => rm(root, { recursive: true, force: true }));
-  const f = await fixture(t, 340, undefined, false, { projectRoot: async () => root, before: async e => {
+  const root = await mkdtemp(join(tmpdir(), 'explorer-adr-write-ui-'));
+  let f;
+  try {
+    f = await fixture(t, 340, undefined, false, { projectRoot: async () => root, before: async e => {
     const doc = structuredClone(e.doc); doc.nodes[1].answer = 'Use <script>literal</script> storage λ'; doc.nodes[1].answerState = 'decided';
     await e.save(saveAdrFixture(doc, (await e.scenarioPolicy()).label));
-  } }), $ = id => f.document.getElementById(id);
+    } });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(root)), resolve(tmpdir())); await rm(root, { recursive: true, force: true }); });
+  }
+  const $ = id => f.document.getElementById(id);
   f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'PRIVATE ADR FILE ANSWER λ'); const editor = $('answer'); editor.setSelectionRange(2, 7);
   const openFile = async () => { assert.ok($('adr-file-open')); $('adr-file-open').click(); await until(() => !$('adr-file-review').disabled, 'ADR file status'); };
   const reviewFile = async () => { $('adr-file-review').click(); await until(() => !$('adr-file-save').disabled, 'ADR file preview'); };
@@ -7228,9 +7307,14 @@ test('ADR lifecycle UI invalidates changed selections and rediscovers a saved op
 });
 
 async function adrFormatFixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'explorer-format-ui-')); t.after(() => rm(root, { recursive: true, force: true })); let reads = 0;
-  await writeFile(join(root, 'template.md'), '# Example\n## Context\nFORMAT_BODY_CANARY <script> λ\n## Decision\nExample decision\n## Consequences\n');
-  const f = await fixture(t, 340, undefined, false, { projectRoot: async () => { reads++; return root; } }), $ = id => f.document.getElementById(id);
+  const root = await mkdtemp(join(tmpdir(), 'explorer-format-ui-')); let reads = 0, f;
+  try {
+    await writeFile(join(root, 'template.md'), '# Example\n## Context\nFORMAT_BODY_CANARY <script> λ\n## Decision\nExample decision\n## Consequences\n');
+    f = await fixture(t, 340, undefined, false, { projectRoot: async () => { reads++; return root; } });
+  } finally {
+    t.after(async () => { assert.equal(dirname(resolve(root)), resolve(tmpdir())); await rm(root, { recursive: true, force: true }); });
+  }
+  const $ = id => f.document.getElementById(id);
   f.open(f.explorer.doc.nodes[1].id); f.type('answer', 'Private format draft λ'); const editor = $('answer'); editor.focus(); editor.setSelectionRange(2, 7);
   const open = async () => { $('adr-format-open').click(); await until(() => !$('adr-format-review').disabled, 'format preferences loaded'); };
   const change = (id, value) => { $(id).value = value; $(id).dispatchEvent(new f.window.Event('change', { bubbles: true })); };

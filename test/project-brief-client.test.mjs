@@ -34,9 +34,29 @@ async function fixture(t) {
   const generate = async () => { await click('prepare'); await click('start'); await waitFor(() => workspace.work?.status !== 'pending'); await client.request('status'); };
   return { $, window, client, workspace, requests, click, generate, sends: () => sends, signal: () => signal, ready: () => release, release: () => release?.(), hold: () => { hold = true; },
     intercept: fn => { intercept = fn; }, scope: value => { scope = value; client.scopeChanged(); }, recapture: () => { capture = { ...original, id: randomUUID() }; scope = { state: 'active', receipt: { id: capture.id } }; client.scopeChanged(); },
-    root: path => { capture = null; projectIdentity = { ...original.root, path }; scope = { state: 'off', project: { root: path } }; workspace.observe(); client.scopeChanged(); },
+    root: (path, ancestors = original.root.ancestors) => { capture = null; projectIdentity = { path, ancestors }; scope = { state: 'off', project: { root: path, identity: createHash('sha256').update(JSON.stringify(projectIdentity)).digest('hex') } }; workspace.observe(); client.scopeChanged(); },
     journey: value => { journey = value; client.observe(); }, tick: async () => { now += 10000; await client.checkStatus(); await waitFor(() => !client.loading); } };
 }
+
+test('brief refresh displays changed claims before approval and preserves editor focus across status polling', async t => {
+  const f = await fixture(t); await f.generate();
+  const field = f.$('project-brief-claims').querySelector('textarea');
+  field.value = 'Reviewed user correction 🌿'; field.dispatchEvent(new f.window.Event('input')); await f.click('approve');
+  f.recapture(); await waitFor(() => !f.client.loading); await f.generate();
+  assert.equal(f.$('project-brief-changes').hidden, false);
+  const content = f.$('project-brief-changes').textContent;
+  assert.match(content, /Added/); assert.match(content, /File-backed claim/); assert.match(content, /unchanged/i); assert.equal(f.$('project-brief-changes').querySelector('script,a'), null);
+  const current = f.$('project-brief-claims').querySelector('textarea'); current.focus(); current.setSelectionRange(2, 4); await f.client.request('status');
+  assert.equal(f.window.document.activeElement, current); assert.equal(current.selectionStart, 2);
+  await f.click('approve'); assert.equal(f.$('project-brief-changes').hidden, true);
+});
+
+test('replacing the canonical project at the same path clears old unsaved brief text', async t => {
+  const f = await fixture(t); await f.generate(); const field = f.$('project-brief-claims').querySelector('textarea');
+  field.value = 'Private unsaved old-project wording'; field.dispatchEvent(new f.window.Event('input')); assert.equal(f.client.dirty, true);
+  f.root('C:/project', 'replacement-directory'); await waitFor(() => !f.client.loading);
+  assert.equal(f.client.dirty, false); assert.equal(f.$('project-brief-claims').querySelector('textarea'), null); assert.equal(f.client.value.comparison, undefined);
+});
 
 test('question explanations resolve only the exact approved local brief without network or supporting quotes', async t => {
   const f = await fixture(t); await f.generate(); await f.click('approve');
